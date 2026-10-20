@@ -3013,6 +3013,42 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
+TEST_P(ConvTritonEmitterTest, TritonConvFusionIsAutotunedAndExecutesCorrectly) {
+  if (!EnableTilingPropagation()) {
+    GTEST_SKIP() << "Triton convolution autotuning requires experimental "
+                    "tiling propagation.";
+  }
+  constexpr absl::string_view kHlo = R"(
+conv_computation {
+  input = f32[1,16,16,32] parameter(0)
+  kernel = f32[3,3,32,16] parameter(1)
+  ROOT conv = f32[1,14,14,16] convolution(input, kernel),
+    window={size=3x3}, dim_labels=b01f_01io->b01f
+}
+
+ENTRY entry {
+  p0 = f32[1,16,16,32] parameter(0)
+  p1 = f32[3,3,32,16] parameter(1)
+  ROOT fusion = f32[1,14,14,16] fusion(p0, p1), kind=kCustom,
+    calls=conv_computation, backend_config={
+      "fusion_backend_config": {"kind":"__triton_conv"}
+    }
+})";
+
+  ASSERT_OK_AND_ASSIGN(auto optimized_module, GetOptimizedModule(kHlo));
+  const HloInstruction* root =
+      optimized_module->entry_computation()->root_instruction();
+  ASSERT_OK_AND_ASSIGN(GpuBackendConfig gpu_config,
+                       root->backend_config<GpuBackendConfig>());
+  const FusionBackendConfig& fusion_backend_config =
+      gpu_config.fusion_backend_config();
+  EXPECT_EQ(fusion_backend_config.kind(), "__triton");
+  EXPECT_TRUE(fusion_backend_config.has_block_level_fusion_config());
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      std::move(optimized_module), ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
 }  // namespace
 }  // namespace gpu
 }  // namespace xla
