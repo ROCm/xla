@@ -111,7 +111,8 @@ AutotuneDecision AllowRegSpillsForGpuInstruction(
           gpu_config->fusion_backend_config();
       if (backend_config.kind() == kTritonGemmFusionKind ||
           backend_config.kind() == kCuDnnFusionKind ||
-          backend_config.kind() == kCustomFusionKind) {
+          backend_config.kind() == kCustomFusionKind ||
+          backend_config.kind() == kTritonConvFusionKind) {
         return AutotuneDecision::Forbid(
             "Register spilling is not allowed for GEMM/Conv fusions");
       }
@@ -183,6 +184,13 @@ AutotuneDecision ShouldAssignConfigToGemmFusion(
   if (backend_config.kind() == kCustomFusionKind) {
     if (backend_config.has_custom_fusion_config()) {
       return AutotuneDecision::Forbid("Custom fusion already has a config");
+    }
+    return AutotuneDecision::Allow();
+  }
+  if (backend_config.kind() == kTritonConvFusionKind) {
+    if (backend_config.has_triton_conv_config()) {
+      return AutotuneDecision::Forbid(
+          "Triton convolution fusion already has a config");
     }
     return AutotuneDecision::Allow();
   }
@@ -259,7 +267,8 @@ AutotuneDecision ShouldAssignConfigToInstruction(
         gpu_config->fusion_backend_config();
     if (backend_config.kind() == kTritonGemmFusionKind ||
         backend_config.kind() == kCuDnnFusionKind ||
-        backend_config.kind() == kCustomFusionKind) {
+        backend_config.kind() == kCustomFusionKind ||
+        backend_config.kind() == kTritonConvFusionKind) {
       return ShouldAssignConfigToGemmFusion(instruction);
     }
     // 3. Generic Triton-only fusions. These are expected to only be tuned by
