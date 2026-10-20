@@ -364,11 +364,12 @@ absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetHipBlasLtMatmulPlan(
     }
   }
 
+  static int64_t dummy_pointer = 0xACEBALL;
+
   // hipBlasLt requires setting the bias pointer (even a dummy one), otherwise
   // no algorithms can be found for "bias epilogues". This is to be removed
   // later when this limitation is gone.
   if (op_desc.has_bias_epilogue()) {
-    static int64_t dummy_pointer = 0xACEBALL;
     ABSL_RETURN_IF_ERROR(SetAttr(
         op_desc.get(), HIPBLASLT_MATMUL_DESC_BIAS_POINTER, &dummy_pointer));
   }
@@ -380,7 +381,6 @@ absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetHipBlasLtMatmulPlan(
     case gpu::ScaleMode::kNone:
       break;
     case gpu::ScaleMode::kTensorScaling: {
-      static int64_t dummy_pointer = 0xACEBALL;
       ABSL_RETURN_IF_ERROR(SetAttr(op_desc.get(),
                                    HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
                                    &dummy_pointer));
@@ -390,7 +390,6 @@ absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetHipBlasLtMatmulPlan(
       break;
     }
     case gpu::ScaleMode::kBlockScaling: {
-      static int64_t dummy_pointer = 0xACEBALL;
       ABSL_RETURN_IF_ERROR(SetAttr(op_desc.get(),
                                    HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
                                    &dummy_pointer));
@@ -411,7 +410,6 @@ absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetHipBlasLtMatmulPlan(
   // set before the heuristic query. Otherwise it may return algorithms that
   // silently ignore the D scale at execution time.
   if (cfg.has_d_scale) {
-    static int64_t dummy_pointer = 0xACEBALL;
     ABSL_RETURN_IF_ERROR(SetAttr(
         op_desc.get(), HIPBLASLT_MATMUL_DESC_D_SCALE_POINTER, &dummy_pointer));
   }
