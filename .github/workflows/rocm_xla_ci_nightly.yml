@@ -158,11 +158,11 @@ jobs:
             --config=ci_multi_gpu \
             --local_test_jobs=1 \
             --test_strategy=exclusive \
-            --spawn_strategy=local \
-            --strategy=TestRunner=local \
             --bes_keywords=multi_gpu \
             ${COMMON_ARGS} \
             ${ROCM_DISTRO_ARGS} \
+            --spawn_strategy=local \
+            --strategy=TestRunner=local \
             -- \
             //xla/...
 
@@ -173,10 +173,10 @@ jobs:
             --config=rocm_rbe_dynamic \
             --config=ci_rocm_cpu \
             --local_test_jobs=70 \
-            --spawn_strategy=local \
             --bes_keywords=cpu \
             ${COMMON_ARGS} \
             ${ROCM_DISTRO_ARGS} \
+            --spawn_strategy=local \
             -- \
             //xla/...
 
