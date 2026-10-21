@@ -2527,19 +2527,7 @@ ENTRY entry_computation {
   RunAndCompareScan(kHloText);
 }
 
-class ConvTritonEmitterTest : public TritonEmitterTest,
-                              public ::testing::WithParamInterface<bool> {
- public:
-  bool EnableTilingPropagation() const override { return GetParam(); }
-};
-
-INSTANTIATE_TEST_SUITE_P(ConvTritonEmitterTestSuite, ConvTritonEmitterTest,
-                         ::testing::Bool(),
-                         [](const ::testing::TestParamInfo<bool>& info) {
-                           return TilingParametersToString(info.param);
-                         });
-
-TEST_P(ConvTritonEmitterTest, Conv1DMultiChannelIsEmittedCorrectly) {
+TEST_F(TritonEmitterTest, Conv1DMultiChannelIsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 
@@ -2569,7 +2557,7 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
-TEST_P(ConvTritonEmitterTest, Conv2DFullTilingIsEmittedCorrectly) {
+TEST_F(TritonEmitterTest, Conv2DFullTilingIsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 
@@ -2623,26 +2611,19 @@ std::vector<ConvLayoutTestCase> GetConvLayoutTestCases() {
 class ConvLayoutAndTileCInTest
     : public TritonEmitterTest,
       public ::testing::WithParamInterface<
-          std::tuple<ConvLayoutTestCase, /*tile_c_in=*/int64_t,
-                     /*tiling_propagation=*/bool>> {
- public:
-  bool EnableTilingPropagation() const override {
-    return std::get<2>(GetParam());
-  }
-};
+          std::tuple<ConvLayoutTestCase, /*tile_c_in=*/int64_t>> {};
 
 std::string ConvLayoutAndTileCInTestParamToString(
     const ::testing::TestParamInfo<
-        std::tuple<ConvLayoutTestCase, int64_t, bool>>& info) {
-  const auto& [layout, tile_c_in, tiling] = info.param;
-  return absl::StrCat(layout.name, "_tile_c_in_", tile_c_in, "_",
-                      TilingParametersToString(tiling));
+        std::tuple<ConvLayoutTestCase, int64_t>>& info) {
+  const auto& [layout, tile_c_in] = info.param;
+  return absl::StrCat(layout.name, "_tile_c_in_", tile_c_in);
 }
 
 INSTANTIATE_TEST_SUITE_P(
     ConvLayoutAndTileCInTestSuite, ConvLayoutAndTileCInTest,
     ::testing::Combine(::testing::ValuesIn(GetConvLayoutTestCases()),
-                       ::testing::Values(32, 16, 1), ::testing::Bool()),
+                       ::testing::Values(32, 16, 1)),
     ConvLayoutAndTileCInTestParamToString);
 
 TEST_P(ConvLayoutAndTileCInTest, Conv2DIsEmittedCorrectly) {
@@ -2672,7 +2653,7 @@ ENTRY entry {
           "num_stages":"1"}}}
 })";
 
-  const auto& [layout, tile_c_in, tiling] = GetParam();
+  const auto& [layout, tile_c_in] = GetParam();
   const std::string hlo_text = absl::Substitute(
       kHloTextTemplate, layout.input_shape, layout.kernel_shape,
       layout.output_shape, layout.dim_labels, tile_c_in, layout.output_tile);
@@ -2680,7 +2661,7 @@ ENTRY entry {
       hlo_text, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
-TEST_P(ConvTritonEmitterTest, Conv3DNoPaddingIsEmittedCorrectly) {
+TEST_F(TritonEmitterTest, Conv3DNoPaddingIsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 
@@ -2710,7 +2691,7 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
-TEST_P(ConvTritonEmitterTest, IntegerConv2DIsEmittedCorrectly) {
+TEST_F(TritonEmitterTest, IntegerConv2DIsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 
@@ -2739,11 +2720,7 @@ ENTRY entry {
   EXPECT_TRUE(RunAndCompareNoHloPasses(kHloText, kExactMatch));
 }
 
-TEST_P(ConvTritonEmitterTest, Conv2DWindowDilationIsEmittedCorrectly) {
-  if (!EnableTilingPropagation()) {
-    GTEST_SKIP()
-        << "Non-unit dilation supported only with experimental tiling.";
-  }
+TEST_F(TritonEmitterTest, Conv2DWindowDilationIsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 
@@ -2774,10 +2751,7 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
-TEST_P(ConvTritonEmitterTest, Conv2DStride2IsEmittedCorrectly) {
-  if (!EnableTilingPropagation()) {
-    GTEST_SKIP() << "Non-unit stride supported only with experimental tiling.";
-  }
+TEST_F(TritonEmitterTest, Conv2DStride2IsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 
@@ -2808,10 +2782,7 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
-TEST_P(ConvTritonEmitterTest, Conv2DStride2NonDivisibleCInIsEmittedCorrectly) {
-  if (!EnableTilingPropagation()) {
-    GTEST_SKIP() << "Non-unit stride supported only with experimental tiling.";
-  }
+TEST_F(TritonEmitterTest, Conv2DStride2NonDivisibleCInIsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 
@@ -2842,10 +2813,7 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
-TEST_P(ConvTritonEmitterTest, Conv2DSamePaddingIsEmittedCorrectly) {
-  if (!EnableTilingPropagation()) {
-    GTEST_SKIP() << "Padding supported only with experimental tiling.";
-  }
+TEST_F(TritonEmitterTest, Conv2DSamePaddingIsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 
@@ -2876,10 +2844,7 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
-TEST_P(ConvTritonEmitterTest, Conv2DAsymmetricPaddingIsEmittedCorrectly) {
-  if (!EnableTilingPropagation()) {
-    GTEST_SKIP() << "Padding supported only with experimental tiling.";
-  }
+TEST_F(TritonEmitterTest, Conv2DAsymmetricPaddingIsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 
@@ -2910,10 +2875,7 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
-TEST_P(ConvTritonEmitterTest, Conv2DValidPaddingIsEmittedCorrectly) {
-  if (!EnableTilingPropagation()) {
-    GTEST_SKIP() << "Padding supported only with experimental tiling.";
-  }
+TEST_F(TritonEmitterTest, Conv2DValidPaddingIsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 
@@ -2944,10 +2906,7 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
-TEST_P(ConvTritonEmitterTest, Conv2DSamePaddingStride2IsEmittedCorrectly) {
-  if (!EnableTilingPropagation()) {
-    GTEST_SKIP() << "Padding supported only with experimental tiling.";
-  }
+TEST_F(TritonEmitterTest, Conv2DSamePaddingStride2IsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m
 
@@ -2978,11 +2937,8 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
-TEST_P(ConvTritonEmitterTest,
+TEST_F(TritonEmitterTest,
        Conv2DSamePaddingNonDivisibleCInIsEmittedCorrectly) {
-  if (!EnableTilingPropagation()) {
-    GTEST_SKIP() << "Padding supported only with experimental tiling.";
-  }
   const std::string kHloText = R"(
 HloModule m
 
@@ -3013,11 +2969,7 @@ ENTRY entry {
       kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
-TEST_P(ConvTritonEmitterTest, TritonConvFusionIsAutotunedAndExecutesCorrectly) {
-  if (!EnableTilingPropagation()) {
-    GTEST_SKIP() << "Triton convolution autotuning requires experimental "
-                    "tiling propagation.";
-  }
+TEST_F(TritonEmitterTest, TritonConvFusionIsAutotunedAndExecutesCorrectly) {
   constexpr absl::string_view kHlo = R"(
 conv_computation {
   input = f32[1,16,16,32] parameter(0)
