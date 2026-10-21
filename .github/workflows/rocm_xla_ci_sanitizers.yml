@@ -87,6 +87,8 @@ jobs:
         --config=rocm_ci_hermetic
         --config=rocm_rbe_dev
         --local_test_jobs=1
+        --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu
+        --repo_env=TF_ROCM_RBE_MULTI_GPU_POOL=default
         --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950
         --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ needs.rocm-config.outputs.docker-image }}
         --bes_keywords=xla
