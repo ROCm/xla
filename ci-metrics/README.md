@@ -1,9 +1,8 @@
-# ci-metrics: weekly CI report for upstream JAX and OpenXLA (ROCm vs NV)
+# ci-metrics: Nightly CI report for upstream JAX and OpenXLA
 
-Builds a one-page HTML report of presubmit CI health over a 7-day window: time to
+Builds a one-page HTML report of presubmit CI health over a 1-day window: time to
 signal, queue wait, job and test-step execution, where every second of time to
-signal goes, ROCm next to the NVIDIA reference lane at peak and nominal hours,
-tail percentiles, same-commit ROCm/NV comparison, runner pools and test coverage.
+signal goes, at peak and nominal hours, tail percentiles for PR same-commit on various runner pools and test coverage.
 
 Everything comes from the public GitHub Actions API and job logs. Nothing reads
 EngFlow, DO dashboards or other internal systems.
@@ -34,6 +33,8 @@ python3 report.py         --data $D --since $S --until $U --html report.html
 `report.py` only reads the data directory (plus a few cached API lookups for
 fork-PR numbers), so you can re-run it as often as you like while editing.
 
+For this nightly previous day to current timestamp is used as time window
+
 ## What each script does
 
 | Script | Role | Writes to the data dir |
@@ -46,8 +47,8 @@ fork-PR numbers), so you can re-run it as often as you like while editing.
 
 ## How the numbers are defined
 
-- **Lanes.** One per repo and vendor, in `PRESUBMIT_LANES`: JAX ROCm, JAX NV,
-  OpenXLA ROCm, OpenXLA NV. Presubmit means `pull_request` runs only; one commit
+- **Lanes.** One per repo and vendor, in `PRESUBMIT_LANES`:
+  Presubmit means `pull_request` runs only; one commit
   is one PR head SHA.
 - **Time to signal.** From the SHA's first trigger to the last lane job
   finishing, in the run that completed a full signal earliest (every lane job
@@ -59,10 +60,8 @@ fork-PR numbers), so you can re-run it as often as you like while editing.
   close, and runner teardown (wall time minus the sum of steps). The phases add up
   to the total, and the code asserts it.
 - **Peak and nominal hours.** The 8 busiest and 8 quietest hours of the day by
-  ROCm (DO) job arrivals. NV is measured over the same hours.
-- **Like-for-like.** ROCm/NV duration comparisons use matched job types (`PAIRS`
-  in `report.py`). ROCm is only highlighted as faster when its suite is at least
-  90% of NV's test count.
+- **Like-for-like.* comparisons use matched job types (`PAIRS`
+  in `report.py`).
 - **Re-runs.** When "re-run failed jobs" copies finished jobs into a new attempt,
   the copy keeps the old start/end but gets a new creation time. Those copies are
   dropped (`carried_over()` in `metrics_lib.py`).
@@ -88,5 +87,5 @@ fork-PR numbers), so you can re-run it as often as you like while editing.
 
 - GitHub expires job logs (its default retention is 90 days), so `sample_logs.py`
   only works on recent windows. Run and job metadata last longer.
-- The NV lanes run on Google-hosted runners and Google RBE. The report sees them
+- The venodr lanes run on Google-hosted runners and Google RBE. The report sees them
   only through GitHub job and step timestamps and their logs.
