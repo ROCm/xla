@@ -9,6 +9,10 @@ load("//xla:lit.bzl", "enforce_glob", "lit_test_suite_for_gpus")
 load("//xla:xla.default.bzl", "xla_cc_test")
 load("//xla/tests:build_defs.bzl", "xla_test")
 load("//xla/tsl:tsl.bzl", "if_google", "if_oss")
+load(
+    "@local_config_rocm//rocm:build_defs.bzl",
+    "if_rocm_is_configured",
+)
 load("//xla/tsl:tsl.default.bzl", "filegroup")
 load(
     "//xla/tsl/platform/default:cuda_build_defs.bzl",
@@ -1818,6 +1822,10 @@ xla_test(
     backends = [
         "gpu",
     ],
+    # RCCL symmetric memory (NCCL windows) requires NCCL_CUMEM_ENABLE=1 on ROCm,
+    # where it defaults to 0. Without it the one-shot collective kernel path fails
+    # at runtime.
+    env = {"NCCL_CUMEM_ENABLE": "1"},
     deps = [
         ":multi_process_gpu_test_base",
         ":multi_process_gpu_test_main",
@@ -1838,6 +1846,7 @@ xla_test(
         "//xla/service/gpu:backend_configs_cc",
         "//xla/stream_executor:device_description",
         "//xla/stream_executor:platform",
+        "//xla/stream_executor:semantic_version",
         "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor/cuda:cuda_compute_capability",
         "//xla/tests:literal_test_util",
@@ -1891,6 +1900,10 @@ xla_test(
     backends = [
         "gpu",
     ],
+    # RCCL symmetric memory (NCCL windows) requires NCCL_CUMEM_ENABLE=1 on ROCm,
+    # where it defaults to 0. Without it the one-shot collective kernel path fails
+    # at runtime.
+    env = {"NCCL_CUMEM_ENABLE": "1"},
     deps = [
         ":multi_process_gpu_test_base",
         ":multi_process_gpu_test_main",
@@ -1911,6 +1924,7 @@ xla_test(
         "//xla/service/gpu:backend_configs_cc",
         "//xla/stream_executor:device_description",
         "//xla/stream_executor:platform",
+        "//xla/stream_executor:semantic_version",
         "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor/cuda:cuda_compute_capability",
         "//xla/tests:literal_test_util",
@@ -1932,6 +1946,10 @@ xla_test(
     backends = [
         "gpu",
     ],
+    # RCCL symmetric memory (NCCL windows) requires NCCL_CUMEM_ENABLE=1 on ROCm,
+    # where it defaults to 0. Without it the one-shot collective kernel path fails
+    # at runtime.
+    env = {"NCCL_CUMEM_ENABLE": "1"},
     deps = [
         ":multi_process_gpu_test_base",
         ":multi_process_gpu_test_main",
@@ -1952,6 +1970,7 @@ xla_test(
         "//xla/service/gpu:backend_configs_cc",
         "//xla/stream_executor:device_description",
         "//xla/stream_executor:platform",
+        "//xla/stream_executor:semantic_version",
         "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor/cuda:cuda_compute_capability",
         "//xla/tests:literal_test_util",
