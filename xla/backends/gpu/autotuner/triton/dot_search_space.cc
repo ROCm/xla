@@ -148,14 +148,13 @@ std::vector<TritonGemmConfig> TritonDotFusionSearchSpace::GenerateConfigs(
   if (device_description_.gpu_compute_capability().IsRocm()) {
     ExtendConfigs(configs, &TritonDotFusionSearchSpace::AddWavesPerEuParameter);
     // The default path keeps only configs listed in the hint tables, and only
-    // mi300.txtpb lists the variants.
+    // mi300.txtpb lists the mfma_size and kpack variants.
     const stream_executor::RocmComputeCapability& rocm_cc =
         *device_description_.gpu_compute_capability().rocm_compute_capability();
     if (rocm_cc.has_mfma_instr_support()) {
       ExtendConfigs(configs, &TritonDotFusionSearchSpace::AddMfmaSizeParameter);
     }
-    // No hint table lists kpack variants, so only exhaustive search tries
-    // them. gfx950 always runs with kpack 1.
+    // gfx950 always runs with kpack 1.
     if (rocm_cc.has_mfma_instr_support() && !rocm_cc.gfx9_mi350()) {
       ExtendConfigs(configs, &TritonDotFusionSearchSpace::AddKpackParameter);
     }

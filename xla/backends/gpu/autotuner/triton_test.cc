@@ -298,10 +298,11 @@ TEST_F(TritonBackendTest, KpackDependsOnArchAndSearchMode) {
   const se::DeviceDescription mi210 = TestGpuDeviceInfo::AMDMI210DeviceInfo();
   const se::DeviceDescription rx7900 = TestGpuDeviceInfo::AMDRX7900DeviceInfo();
 
-  // No hint table lists kpack variants, so only exhaustive search tries them,
-  // and never on gfx950 where Triton forces kpack 1.
+  // Only mi300.txtpb lists kpack variants, so the default search tries them
+  // only on MI300. Neither search tries them on gfx950, where Triton forces
+  // kpack 1.
   debug_options_.set_xla_gpu_exhaustive_tiling_search(false);
-  EXPECT_THAT(GetKpacks(kHlo, mi300), IsOkAndHolds(ElementsAre(1)));
+  EXPECT_THAT(GetKpacks(kHlo, mi300), IsOkAndHolds(ElementsAre(1, 2)));
   EXPECT_THAT(GetKpacks(kHlo, mi350), IsOkAndHolds(ElementsAre(1)));
   EXPECT_THAT(GetKpacks(kHlo, mi210), IsOkAndHolds(ElementsAre(1)));
   EXPECT_THAT(GetKpacks(kHlo, rx7900), IsOkAndHolds(ElementsAre(1)));
