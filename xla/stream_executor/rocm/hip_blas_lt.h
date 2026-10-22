@@ -71,13 +71,11 @@ class BlasLt : public gpu::BlasLt {
         blas::Transpose trans_a = blas::Transpose::kNoTranspose,
         blas::Transpose trans_b = blas::Transpose::kNoTranspose,
         Epilogue epilogue = Epilogue::kDefault,
-        PointerMode pointer_mode = PointerMode::kHost,
-        gpu::ScaleMode scale_mode = gpu::ScaleMode::kNone);
+        PointerMode pointer_mode = PointerMode::kHost);
 
     hipblasComputeType_t compute_type() const { return compute_type_; }
     hipDataType scale_type() const { return datatype_; }
     bool has_bias_epilogue() const { return has_bias_epilogue_; }
-    gpu::ScaleMode scale_mode() const { return scale_mode_; }
     hipblasPointerMode_t pointer_mode() const {
       return HIPBLAS_POINTER_MODE_HOST;
     }
@@ -85,19 +83,16 @@ class BlasLt : public gpu::BlasLt {
 
    private:
     MatmulDesc(hipblasLtMatmulDesc_t handle, hipblasComputeType_t compute_type,
-               hipDataType datatype, bool bias_epilogue,
-               gpu::ScaleMode scale_mode)
+               hipDataType datatype, bool bias_epilogue)
         : handle_(handle, hipblasLtMatmulDescDestroy),
           compute_type_(compute_type),
           datatype_(datatype),
-          has_bias_epilogue_(bias_epilogue),
-          scale_mode_(scale_mode) {}
+          has_bias_epilogue_(bias_epilogue) {}
 
     Owned<hipblasLtMatmulDesc_t> handle_;
     hipblasComputeType_t compute_type_;
     hipDataType datatype_;
     bool has_bias_epilogue_;
-    gpu::ScaleMode scale_mode_;
   };
 
   class RegularMatmulPlan : public gpu::BlasLt::MatmulPlan {
@@ -110,15 +105,14 @@ class BlasLt : public gpu::BlasLt {
     RegularMatmulPlan(const BlasLt& blas_lt, MatmulDesc&& op_desc,
                       MatrixLayout&& a_desc, MatrixLayout&& b_desc,
                       MatrixLayout&& c_desc, MatrixLayout&& d_desc,
-                      bool must_swap_operands, bool has_d_scale)
+                      bool must_swap_operands)
         : blas_lt_(blas_lt),
           op_desc_(std::move(op_desc)),
           a_desc_(std::move(a_desc)),
           b_desc_(std::move(b_desc)),
           c_desc_(std::move(c_desc)),
           d_desc_(std::move(d_desc)),
-          must_swap_operands_(must_swap_operands),
-          has_d_scale_(has_d_scale) {}
+          must_swap_operands_(must_swap_operands) {}
 
     ~RegularMatmulPlan() override = default;
 
@@ -148,7 +142,6 @@ class BlasLt : public gpu::BlasLt {
     MatrixLayout d_desc_;
     alignas(16) std::array<uint8_t, kMaxScaleBytes> alpha_, beta_;
     bool must_swap_operands_;
-    bool has_d_scale_;
     mutable std::optional<hipblasLtMatmulAlgo_t> algorithm_;
     size_t workspace_size_ = 0;
   };  // class RegularMatmulPlan
