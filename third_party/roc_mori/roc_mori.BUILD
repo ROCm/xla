@@ -34,8 +34,8 @@ licenses(["notice"])  # MIT
 #     this shim only carries the vendored @rdma_core headers.
 #   * libdrm/libdrm_amdgpu, libnuma: exposed as @local_config_rocm//rocm:{drm,
 #     drm_amdgpu,numa}. These resolve to the copies bundled by therock ROCm
-#     under rocm_dist/lib/rocm_sysdeps/lib, or to the host libraries (-ldrm,
-#     -ldrm_amdgpu, -lnuma) on classic ROCm installs without rocm_sysdeps.
+#     under rocm_dist/lib/rocm_sysdeps/lib, or to the host libraries linked
+#     by path on classic ROCm installs without rocm_sysdeps.
 #
 # They are hosted here (not under xla/third_party/ as separate repos) because
 # right now only @roc_mori references them. If a future ROCm release bundles
@@ -57,8 +57,8 @@ alias(
 #
 # @local_config_rocm//rocm:{drm,drm_amdgpu,numa} resolve to the therock copies
 # under rocm_dist/lib/rocm_sysdeps/lib when present (hermetic dist or a local
-# therock /opt/rocm), and to the host -ldrm/-ldrm_amdgpu/-lnuma on classic ROCm,
-# whose libhsakmt.a was built against the host libraries.
+# therock /opt/rocm), and to the host libdrm, libdrm_amdgpu and libnuma on
+# classic ROCm, whose libhsakmt.a was built against the host libraries.
 cc_library(
     name = "libdrm",
     deps = [

@@ -560,18 +560,34 @@ cc_library(
 # System libraries needed by consumers like MORI's libhsakmt.a (drm/numa
 # symbols), exposed as real link targets (not just runtime data). On TheRock
 # 7.10+ they resolve to the copies bundled under lib/rocm_sysdeps/lib. Classic
-# ROCm 7.2.x does not ship rocm_sysdeps, so those installs also pass -ldrm etc.
-# to the host linker.
+# ROCm 7.2.x does not ship rocm_sysdeps, so rocm_configure symlinks the host
+# copies into host_sysdeps and they are linked by path. Hermetic toolchains
+# do not search the host library directories, so -ldrm etc. is only the
+# fallback when a host copy was not found.
+#
+# The host copies may need a newer glibc than a hermetic sysroot provides
+# (Ubuntu 22.04 libdrm uses stat64@GLIBC_2.33). The host glibc resolves those
+# at runtime, so the link must not reject them.
 _USE_HOST_SYSDEPS = rocm_version_number() < 71000
+
+_HOST_SYSDEPS_LINKOPTS = ["-Wl,--allow-shlib-undefined"]
+
+_HOST_DRM = glob(["host_sysdeps/libdrm.so"], allow_empty = True)
+
+_HOST_DRM_AMDGPU = glob(["host_sysdeps/libdrm_amdgpu.so"], allow_empty = True)
+
+_HOST_NUMA = glob(["host_sysdeps/libnuma.so"], allow_empty = True)
 
 cc_library(
     name = "drm",
     srcs = glob(
         ["%{rocm_root}/lib/rocm_sysdeps/lib/libdrm.so"],
         allow_empty = True,
-    ),
+    ) + _HOST_DRM,
     data = [":system_libs_data"],
-    linkopts = ["-ldrm"] if _USE_HOST_SYSDEPS else [],
+    linkopts = _HOST_SYSDEPS_LINKOPTS if _HOST_DRM else (
+        ["-ldrm"] if _USE_HOST_SYSDEPS else []
+    ),
     visibility = ["//visibility:public"],
     deps = [":system_libs"],
 )
@@ -581,9 +597,11 @@ cc_library(
     srcs = glob(
         ["%{rocm_root}/lib/rocm_sysdeps/lib/libdrm_amdgpu.so"],
         allow_empty = True,
-    ),
+    ) + _HOST_DRM_AMDGPU,
     data = [":system_libs_data"],
-    linkopts = ["-ldrm_amdgpu"] if _USE_HOST_SYSDEPS else [],
+    linkopts = _HOST_SYSDEPS_LINKOPTS if _HOST_DRM_AMDGPU else (
+        ["-ldrm_amdgpu"] if _USE_HOST_SYSDEPS else []
+    ),
     visibility = ["//visibility:public"],
     deps = [":system_libs"],
 )
@@ -593,9 +611,11 @@ cc_library(
     srcs = glob(
         ["%{rocm_root}/lib/rocm_sysdeps/lib/libnuma.so"],
         allow_empty = True,
-    ),
+    ) + _HOST_NUMA,
     data = [":system_libs_data"],
-    linkopts = ["-lnuma"] if _USE_HOST_SYSDEPS else [],
+    linkopts = _HOST_SYSDEPS_LINKOPTS if _HOST_NUMA else (
+        ["-lnuma"] if _USE_HOST_SYSDEPS else []
+    ),
     visibility = ["//visibility:public"],
     deps = [":system_libs"],
 )

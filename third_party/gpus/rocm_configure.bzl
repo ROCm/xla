@@ -402,6 +402,37 @@ def _setup_rocm_distro_dir(repository_ctx):
     repository_ctx.report_progress("Downloading hermetic ROCm distribution: {}".format(rocm_distro_version))
     return _setup_rocm_distro_dir_impl(repository_ctx, rocm_redist[rocm_distro_version])
 
+# Host copies of the system libraries that TheRock bundles under
+# lib/rocm_sysdeps/lib, keyed by the link name used in rocm/BUILD.
+_HOST_SYSDEPS = {
+    "libdrm.so": "libdrm.so.2",
+    "libdrm_amdgpu.so": "libdrm_amdgpu.so.1",
+    "libnuma.so": "libnuma.so.1",
+}
+
+_HOST_SYSDEPS_DIRS = [
+    "/usr/lib/x86_64-linux-gnu",
+    "/lib/x86_64-linux-gnu",
+    "/usr/lib64",
+    "/lib64",
+    "/usr/lib",
+]
+
+def _setup_host_sysdeps(repository_ctx):
+    """Symlinks host drm and numa libraries into rocm/host_sysdeps.
+
+    Classic ROCm (before 7.10) does not ship rocm_sysdeps and its libhsakmt.a
+    is built against the host libraries. Linking them by path instead of with
+    -l keeps them visible to hermetic toolchains whose sysroot lacks them.
+    Libraries that are not found are skipped and rocm/BUILD falls back to -l.
+    """
+    for link_name, soname in _HOST_SYSDEPS.items():
+        for lib_dir in _HOST_SYSDEPS_DIRS:
+            lib_path = repository_ctx.path(lib_dir + "/" + soname)
+            if lib_path.exists:
+                repository_ctx.symlink(lib_path, "rocm/host_sysdeps/" + link_name)
+                break
+
 def _create_local_rocm_repository(repository_ctx):
     """Creates the repository containing files set up to build with ROCm."""
 
@@ -416,6 +447,8 @@ def _create_local_rocm_repository(repository_ctx):
 
     rocm_config = _setup_rocm_distro_dir(repository_ctx)
     rocm_version_number = int(rocm_config.rocm_version_number)
+    if rocm_version_number < 71000:
+        _setup_host_sysdeps(repository_ctx)
 
     # Copy header and library files to execroot.
     # rocm_toolkit_path
