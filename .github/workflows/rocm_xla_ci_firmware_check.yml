@@ -20,6 +20,7 @@ jobs:
       matrix:
         pool:
           - linux_x64_gpu
+    # custom_10_0, rocm-jax@68f3fad
     container:
       image: ghcr.io/rocm/jax-base-ubu24.therock-10.0@sha256:df45a407a38c7b2cdf02beb15a37f5a227f19f3c6629f0b7a2da57138a4fa549
     steps:
