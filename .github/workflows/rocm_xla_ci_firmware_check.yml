@@ -36,6 +36,7 @@ jobs:
             --config=rocm_ci_hermetic \
             --config=rocm_rbe_dynamic \
             --config=ci_single_gpu \
+            --test_env=HSA_CO_DMACOPY_SIZE=-1 \
             --strategy=TestRunner=remote \
             --runs_per_test=10 \
             --cache_test_results=no \
