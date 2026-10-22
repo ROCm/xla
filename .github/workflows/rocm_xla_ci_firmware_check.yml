@@ -21,7 +21,7 @@ jobs:
         pool:
           - linux_x64_gpu
     container:
-      image: ghcr.io/rocm/jax-base-ubu24.therock-latest@sha256:b97ba4a0b5eea809806da706ddd3372ef3a60d47f6475bf9024fb8eb8b662a1e
+      image: ghcr.io/rocm/jax-base-ubu24.therock-10.0@sha256:df45a407a38c7b2cdf02beb15a37f5a227f19f3c6629f0b7a2da57138a4fa549
     steps:
       - name: Install git
         run: apt-get update && apt-get install -y --no-install-recommends git
@@ -45,7 +45,7 @@ jobs:
             --cache_test_results=no \
             --keep_going \
             --local_test_jobs=1 \
-            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=ghcr.io/rocm/jax-base-ubu24.therock-latest@sha256:b97ba4a0b5eea809806da706ddd3372ef3a60d47f6475bf9024fb8eb8b662a1e \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=ghcr.io/rocm/jax-base-ubu24.therock-10.0@sha256:df45a407a38c7b2cdf02beb15a37f5a227f19f3c6629f0b7a2da57138a4fa549 \
             --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
             --repo_env=ROCM_PATH="${ROCM_SDK_ROOT}" \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=${{ matrix.pool }} \
