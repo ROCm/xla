@@ -30,7 +30,7 @@ jobs:
           ref: main
           persist-credentials: false
 
-      - name: fusion_emitter_int4 on ${{ matrix.pool }}
+      - name: sorting_test and fusion_emitter_int4 on ${{ matrix.pool }}
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             --config=rocm_ci_hermetic \
@@ -49,4 +49,6 @@ jobs:
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=${{ matrix.pool }} \
             --bes_keywords=firmware_check \
             -- \
+            //xla/backends/gpu/tests:sorting_test_amdgpu_any \
             //xla/backends/gpu/codegen/triton/tests:fusion_emitter_int4_device_test_amdgpu_any
+
