@@ -77,4 +77,8 @@ message BlockLevelFusionConfig {
   // AMD MFMA MN instruction size, 0 = auto or 16. Ignored on WMMA and on
   // non-ROCm targets.
   int32 mfma_size = 12;
+
+  // AMD MFMA operand K packing factor, 1 or 2. 0 (absent) means 1. Clamped to
+  // 1 on gfx950 and ignored on WMMA and on non-ROCm targets.
+  int32 kpack = 13;
 }
