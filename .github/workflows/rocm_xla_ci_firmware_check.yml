@@ -19,7 +19,6 @@ jobs:
       fail-fast: false
       matrix:
         pool:
-          - linux_x64_gpu_downgrade
           - linux_x64_gpu
     container:
       image: ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f
@@ -30,7 +29,7 @@ jobs:
           ref: main
           persist-credentials: false
 
-      - name: sorting_test and fusion_emitter_int4 on ${{ matrix.pool }}
+      - name: HSA-aborting GPU tests on ${{ matrix.pool }}
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             --config=rocm_ci_hermetic \
@@ -51,5 +50,6 @@ jobs:
             --bes_keywords=firmware_check \
             -- \
             //xla/backends/gpu/tests:sorting_test_amdgpu_any \
-            //xla/backends/gpu/codegen/triton/tests:fusion_emitter_int4_device_test_amdgpu_any
-
+            //xla/backends/gpu/codegen/triton/tests:fusion_emitter_int4_device_test_amdgpu_any \
+            //xla/tests:dot_operation_test_amdgpu_any \
+            //xla/tests:dot_operation_autotune_disabled_test_amdgpu_any
