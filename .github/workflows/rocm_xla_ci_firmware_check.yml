@@ -29,15 +29,15 @@ jobs:
           ref: main
           persist-credentials: false
 
-      - name: HSA-aborting GPU tests on ${{ matrix.pool }}
+      - name: Test XLA [single_gpu] on ${{ matrix.pool }}
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             --config=rocm_ci_hermetic \
             --config=rocm_rbe_dynamic \
             --config=ci_single_gpu \
             --test_env=HSA_CO_DMACOPY_SIZE=-1 \
+            --jobs=50 \
             --strategy=TestRunner=remote \
-            --runs_per_test=10 \
             --cache_test_results=no \
             --keep_going \
             --local_test_jobs=1 \
@@ -49,7 +49,4 @@ jobs:
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=${{ matrix.pool }} \
             --bes_keywords=firmware_check \
             -- \
-            //xla/backends/gpu/tests:sorting_test_amdgpu_any \
-            //xla/backends/gpu/codegen/triton/tests:fusion_emitter_int4_device_test_amdgpu_any \
-            //xla/tests:dot_operation_test_amdgpu_any \
-            //xla/tests:dot_operation_autotune_disabled_test_amdgpu_any
+            //xla/...
