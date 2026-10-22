@@ -42,7 +42,7 @@ jobs:
       - id: out
         shell: bash
         run: |
-          echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
+          echo "docker-image=rocm/tensorflow-build@sha256:5261e6df4fe13264a0e4443d36a620e3b1304b89bd45853ad342fb391c3c935f" >> "$GITHUB_OUTPUT"
 
   execute-xla-ut:
     needs: rocm-config
@@ -51,13 +51,12 @@ jobs:
       fail-fast: false
       matrix:
         mode:
-          - {name: "default", configs: ["--config=rocm_ci_hermetic", "--config=rocm_rbe_dynamic"]}
+          - {name: "default", configs: ["--config=rocm_ci", "--config=rocm_rbe", "--repo_env=ROCM_PATH=/opt/rocm"]}
     container: &rocm_container
       image: ${{ needs.rocm-config.outputs.docker-image }}
     env:
       DOCKER_IMAGE: ${{ needs.rocm-config.outputs.docker-image }}
-      ROCM_DISTRO_URL: https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.0.0.tar.gz
-      ROCM_DISTRO_HASH: 1c5e807875d26a2470ecc7323daa5b5b9009208a55c3290ac255a909cde15fc6
+
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -73,11 +72,10 @@ jobs:
             ${{ join(matrix.mode.configs, ' ') }} \
             --jobs=50 \
             --config=ci_single_gpu \
+            --strategy=TestRunner=local \
             --local_test_jobs=4 \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
-            --repo_env=ROCM_DISTRO_URL="${ROCM_DISTRO_URL} \
-            --repo_env=ROCM_DISTRO_HASH="${ROCM_DISTRO_HASH} \
             --bes_keywords=xla \
             --bes_keywords=release \
             --bes_keywords=single_gpu \
@@ -92,8 +90,6 @@ jobs:
             --local_test_jobs=1 \
             --strategy=TestRunner=local \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
-            --repo_env=ROCM_DISTRO_URL="${ROCM_DISTRO_URL} \
-            --repo_env=ROCM_DISTRO_HASH="${ROCM_DISTRO_HASH} \
             --bes_keywords=xla \
             --bes_keywords=release \
             --bes_keywords=multi_gpu \
@@ -102,11 +98,10 @@ jobs:
         if: always() && !cancelled()
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
+            ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_rocm_cpu \
             --jobs=50 \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
-            --repo_env=ROCM_DISTRO_URL="${ROCM_DISTRO_URL} \
-            --repo_env=ROCM_DISTRO_HASH="${ROCM_DISTRO_HASH} \
             --bes_keywords=xla \
             --bes_keywords=release \
             --bes_keywords=cpu \
