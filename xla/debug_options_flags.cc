@@ -367,6 +367,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_enable_nccl_user_buffers_in_default_space(false);
   opts.set_xla_gpu_enable_allocator_spatial_partitioning(true);
   opts.set_xla_gpu_experimental_enable_nccl_symmetric_buffers(false);
+  opts.set_xla_gpu_experimental_collective_allocation_per_buffer(false);
   opts.set_xla_gpu_experimental_vmm_disabled(false);
   opts.set_xla_gpu_experimental_emit_collective_reduce(false);
   opts.set_xla_gpu_enable_nccl_comm_splitting(true);
@@ -2442,6 +2443,14 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
               set_xla_gpu_experimental_enable_nccl_symmetric_buffers),
       debug_options->xla_gpu_experimental_enable_nccl_symmetric_buffers(),
       "Enables NCCL symmetric buffer registration."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_collective_allocation_per_buffer",
+      bool_setter_for(
+          &DebugOptions::
+              set_xla_gpu_experimental_collective_allocation_per_buffer),
+      debug_options->xla_gpu_experimental_collective_allocation_per_buffer(),
+      "Gives every buffer in the collective memory space its own allocation, "
+      "so that each symmetric memory window starts at its buffer."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_experimental_emit_collective_reduce",
       bool_setter_for(

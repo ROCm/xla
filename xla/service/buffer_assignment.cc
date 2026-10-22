@@ -1311,7 +1311,7 @@ absl::Status BufferAssignment::CombineTempAllocations(
       continue;
     }
     if (combined_it->second->size() + temp_allocation.size() >=
-        multiheap_size_constraint_per_heap_) {
+        heap_size_limit(color)) {
       // We cannot put more into the current combined_it. So, appoint a new
       // combined_it.
       VLOG(1) << "Due to size constraint, reset temp allocation for color "
@@ -3195,6 +3195,7 @@ absl::Status BufferAssigner::AssignBuffersWithSequentialOrdering(
   // algorithms.
   auto get_heap_algorithm = [&](int64_t alignment, LogicalBuffer::Color color)
       -> std::unique_ptr<HeapAlgorithm<HloValue>> {
+    const uint64_t heap_size_limit = assignment->heap_size_limit(color);
     uint64_t page_size = assignment->module().config().page_size_kib() * 1024;
     if (page_size > 0 && (color == LogicalBuffer::Color(0) ||
                           color == LogicalBuffer::Color(1))) {
@@ -3221,32 +3222,32 @@ absl::Status BufferAssigner::AssignBuffersWithSequentialOrdering(
 
     if (heap_buffer_interval_compare) {
       return std::make_unique<ConstrainedGlobalDecreasingSizeBestFitHeap>(
-          assignment->multiheap_size_constraint_per_heap(), alignment,
+          heap_size_limit, alignment,
           GlobalDecreasingSizeBestFitHeap<HloValue>::kCustom,
           heap_buffer_interval_compare);
     }
     using HeapType = GlobalDecreasingSizeBestFitHeap<HloValue>;
 
     auto build_algorithm =
-        [alignment, assignment](
+        [alignment, heap_size_limit](
             buffer_assignment::BufferAssignmentAlgorithmProto::Value algo)
         -> std::unique_ptr<HeapAlgorithm<HloValue>> {
       switch (algo) {
         case buffer_assignment::BufferAssignmentAlgorithmProto::SPATIAL:
           return std::make_unique<ConstrainedGlobalDecreasingSizeBestFitHeap>(
-              assignment->multiheap_size_constraint_per_heap(), alignment,
+              heap_size_limit, alignment,
               HeapType::kSpatial);
         case buffer_assignment::BufferAssignmentAlgorithmProto::TEMPORAL:
           return std::make_unique<ConstrainedGlobalDecreasingSizeBestFitHeap>(
-              assignment->multiheap_size_constraint_per_heap(), alignment,
+              heap_size_limit, alignment,
               HeapType::kTemporal);
         case buffer_assignment::BufferAssignmentAlgorithmProto::FAST_MERGE:
           return std::make_unique<ConstrainedGlobalDecreasingSizeBestFitHeap>(
-              assignment->multiheap_size_constraint_per_heap(), alignment,
+              heap_size_limit, alignment,
               HeapType::kFastMerge);
         case buffer_assignment::BufferAssignmentAlgorithmProto::FAST_SPLIT:
           return std::make_unique<ConstrainedGlobalDecreasingSizeBestFitHeap>(
-              assignment->multiheap_size_constraint_per_heap(), alignment,
+              heap_size_limit, alignment,
               HeapType::kFastSplit);
         case buffer_assignment::BufferAssignmentAlgorithmProto::
             BEST_OF_SPATIAL_TEMPORAL:
@@ -3256,11 +3257,11 @@ absl::Status BufferAssigner::AssignBuffersWithSequentialOrdering(
               std::vector<std::unique_ptr<HeapAlgorithm<HloValue>>>>();
           algorithms->push_back(
               std::make_unique<ConstrainedGlobalDecreasingSizeBestFitHeap>(
-                  assignment->multiheap_size_constraint_per_heap(), alignment,
+                  heap_size_limit, alignment,
                   HeapType::kSpatial));
           algorithms->push_back(
               std::make_unique<ConstrainedGlobalDecreasingSizeBestFitHeap>(
-                  assignment->multiheap_size_constraint_per_heap(), alignment,
+                  heap_size_limit, alignment,
                   HeapType::kTemporal));
           return std::make_unique<ChooseBestHeapAlgorithm<HloValue>>(
               std::move(algorithms));
@@ -3640,6 +3641,7 @@ BufferAssigner::CreateAssignment(
       module, std::move(hlo_ordering), std::move(buffer_size),
       std::move(color_alignment), std::move(alias_analysis),
       std::move(hlo_live_range)));
+  assignment->heap_size_limit_per_color_ = opts_.heap_size_limit_per_color;
 
   ABSL_RETURN_IF_ERROR(
       opts_.colorer(&assignment->alias_analysis(), assignment->hlo_ordering()));

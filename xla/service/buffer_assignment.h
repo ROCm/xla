@@ -563,6 +563,16 @@ class BufferAssignment {
     return multiheap_size_constraint_per_heap_;
   }
 
+  // The per-heap size limit for buffers of `color`: its override in
+  // BufferAssigner::Options::heap_size_limit_per_color, else
+  // xla_multiheap_size_constraint_per_heap.
+  uint64_t heap_size_limit(LogicalBuffer::Color color) const {
+    auto it = heap_size_limit_per_color_.find(color);
+    return it == heap_size_limit_per_color_.end()
+               ? multiheap_size_constraint_per_heap_
+               : it->second;
+  }
+
   // Returns whether the given buffer has been assigned an allocation.
   bool HasAllocation(const HloValue& value) const;
 
@@ -955,6 +965,8 @@ class BufferAssignment {
   int64_t temp_allocation_total_size_ = 0;
 
   uint64_t multiheap_size_constraint_per_heap_;
+  absl::flat_hash_map<LogicalBuffer::Color, uint64_t>
+      heap_size_limit_per_color_;
 
   // Maps HloValue::Id to the index of the BufferAllocation which holds the
   // buffer (-1 if unassigned).
@@ -1162,6 +1174,11 @@ class BufferAssigner {
     // If set and returns > 0, the returned limit is used instead of the
     // default module config's device memory size.
     std::function<int64_t(LogicalBuffer::Color)> color_memory_limit;
+
+    // Per-color overrides of xla_multiheap_size_constraint_per_heap. A limit of
+    // 1 gives every buffer of that color an allocation of its own.
+    absl::flat_hash_map<LogicalBuffer::Color, uint64_t>
+        heap_size_limit_per_color;
 
     // Whether a buffer color supports fast buffer assignment (FAST_MERGE /
     // FAST_SPLIT); unsupported colors use the DEFAULT algorithm.

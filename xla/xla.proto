@@ -1087,6 +1087,11 @@ message DebugOptions {
   // Enable NCCL symmetric buffers.
   optional bool xla_gpu_experimental_enable_nccl_symmetric_buffers = 406;
 
+  // Gives every buffer in the collective memory space an allocation of its own
+  // (other memory spaces keep packed, reused allocations), so that each
+  // symmetric memory window, registered per allocation, starts at its buffer.
+  optional bool xla_gpu_experimental_collective_allocation_per_buffer = 558;
+
   // If true, XLA:GPU emits a CollectiveReduceThunk for kCollectiveReduce HLO
   // instructions. This is guarded behind a flag to preserve the 2-week
   // forward compatibility window between the compiler and the runtime.
@@ -1952,7 +1957,7 @@ message DebugOptions {
   // Requires sm_90+ and CUDA 13.3+ (tileiras) at runtime. Off by default.
   optional bool xla_gpu_experimental_enable_tensor_ir = 557;
 
-  // Next id: 558
+  // Next id: 559
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

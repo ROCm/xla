@@ -182,6 +182,12 @@ absl::StatusOr<std::unique_ptr<BufferAssignment>> RunBufferAssignment(
   opts.can_use_allocation = BufferAssigner::AllowCrossColorReuse(
       static_cast<int>(MemorySpaceColor::kDefault),
       static_cast<int>(MemorySpaceColor::kCollective));
+  // Symmetric memory windows are registered per allocation; a heap limit of one
+  // byte gives every collective buffer an allocation (and a window) of its own.
+  if (options.xla_gpu_experimental_collective_allocation_per_buffer()) {
+    opts.heap_size_limit_per_color[static_cast<int>(
+        MemorySpaceColor::kCollective)] = 1;
+  }
 
   std::unique_ptr<HloOrdering> hlo_ordering;
   switch (options.xla_gpu_command_buffer_scheduling_mode()) {
