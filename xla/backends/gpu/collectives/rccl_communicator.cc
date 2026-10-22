@@ -469,15 +469,16 @@ absl::Status RcclCommunicator::LaunchAllToAll(
 
   // Contiguous send and receive buffers go to RCCL's all-to-all directly (as the
   // CUDA path does), which reaches its all-to-all algorithms and, on registered
-  // windows, its copy-engine path; otherwise one send/recv per peer.
+  // windows, its copy-engine path; otherwise one send/recv per peer. Both are
+  // launched in an RCCL group, so that with several collectives in flight
+  // every rank enqueues them in the same order.
   if (IsContiguous(send_buffers) && IsContiguous(recv_buffers)) {
-    XLA_RCCL_RETURN_IF_ERROR(ncclAllToAll(
-        send_buffers[0].opaque(), recv_buffers[0].opaque(),
-        ToNcclCount(dtype, count), nccl_dtype, comm_, AsHipStream(stream)));
-    if (!IsInsideRcclGroupLaunch()) {
-      ABSL_RETURN_IF_ERROR(PollUntilDone());
-    }
-    return absl::OkStatus();
+    return GroupLaunch([&] {
+      XLA_RCCL_RETURN_IF_ERROR(ncclAlltoAll(
+          send_buffers[0].opaque(), recv_buffers[0].opaque(),
+          ToNcclCount(dtype, count), nccl_dtype, comm_, AsHipStream(stream)));
+      return absl::OkStatus();
+    });
   }
 
   auto group = [&] {
