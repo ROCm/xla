@@ -189,7 +189,19 @@ struct TargetIntrinsics GetIntrinsic(TargetIntrinsicID intrin) {
                 module, llvm::Intrinsic::nvvm_barrier_cta_sync_aligned_all, {});
             return b_->CreateCall(intrinsic, {b_->getInt32(0)});
           },
-          llvm::Intrinsic::amdgcn_s_barrier,
+          [](llvm::IRBuilderBase* b_) -> llvm::CallInst* {
+            // s_barrier only synchronizes execution. The fences make shared
+            // memory writes before the barrier visible after it.
+            llvm::SyncScope::ID workgroup =
+                b_->getContext().getOrInsertSyncScopeID("workgroup");
+            b_->CreateFence(llvm::AtomicOrdering::Release, workgroup);
+            llvm::Module* module = b_->GetInsertBlock()->getModule();
+            llvm::CallInst* barrier = b_->CreateCall(
+                llvm::Intrinsic::getOrInsertDeclaration(
+                    module, llvm::Intrinsic::amdgcn_s_barrier, {}));
+            b_->CreateFence(llvm::AtomicOrdering::Acquire, workgroup);
+            return barrier;
+          },
           [](llvm::IRBuilderBase* b_) -> llvm::CallInst* {
             // OpenCL barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE);
             // matches the MLIR emitter pipeline.
