@@ -410,6 +410,21 @@ absl::Status RcclCommunicator::LaunchAllGather(
   return absl::OkStatus();
 }
 
+// True if the buffers are laid out back to back in one allocation.
+static bool IsContiguous(absl::Span<const se::DeviceAddressBase> buffers) {
+  if (buffers.empty()) {
+    return false;
+  }
+  for (size_t i = 1; i < buffers.size(); ++i) {
+    se::DeviceAddress<uint8_t> a(buffers[i - 1]);
+    se::DeviceAddress<uint8_t> b(buffers[i]);
+    if (a.base() + a.size() != b.base()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 absl::Status RcclCommunicator::LaunchAllToAll(
     absl::InlinedVector<se::DeviceAddressBase, 4> send_buffers,
     absl::InlinedVector<se::DeviceAddressBase, 4> recv_buffers,
@@ -451,6 +466,19 @@ absl::Status RcclCommunicator::LaunchAllToAll(
       ToNcclDataType(
           dtype, /*is_reduction_op=*/false,
           stream->parent()->GetDeviceDescription().rocm_compute_capability()));
+
+  // Contiguous send and receive buffers go to RCCL's all-to-all directly (as the
+  // CUDA path does), which reaches its all-to-all algorithms and, on registered
+  // windows, its copy-engine path; otherwise one send/recv per peer.
+  if (IsContiguous(send_buffers) && IsContiguous(recv_buffers)) {
+    XLA_RCCL_RETURN_IF_ERROR(ncclAllToAll(
+        send_buffers[0].opaque(), recv_buffers[0].opaque(),
+        ToNcclCount(dtype, count), nccl_dtype, comm_, AsHipStream(stream)));
+    if (!IsInsideRcclGroupLaunch()) {
+      ABSL_RETURN_IF_ERROR(PollUntilDone());
+    }
+    return absl::OkStatus();
+  }
 
   auto group = [&] {
     for (size_t i = 0; i < send_buffers.size(); ++i) {

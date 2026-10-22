@@ -39,14 +39,33 @@ RcclSymmetricMemory::Create(ncclComm_t comm,
       "Create RCCL symmetric memory on comm=%p from: ptr=%p; size=%ld", comm,
       addr.opaque(), addr.size());
 
+  // A collective call: every rank of `comm` registers its buffer. RCCL >= 2.30
+  // implements it (with copy-engine collectives on registered windows); older
+  // RCCL fails or returns a null window, as do single-rank communicators. Either
+  // way the buffer still works for collectives, unregistered.
   ncclWindow_t win = nullptr;
-  // NOTE: ncclCommWindowRegister is not supported in RCCL yet: it fails loudly
-  // or just returns NULL window.
+  ncclResult_t status = ncclCommWindowRegister(
+      comm, addr.opaque(), addr.size(), &win, NCCL_WIN_COLL_SYMMETRIC);
+  if (status != ncclSuccess) {
+    LOG(WARNING) << "ncclCommWindowRegister failed ("
+                 << ncclGetErrorString(status)
+                 << "); using the buffer unregistered: ptr=" << addr.opaque()
+                 << " size=" << addr.size();
+    win = nullptr;
+  }
   return absl::WrapUnique(new RcclSymmetricMemory(comm, win, addr));
 }
 
 RcclSymmetricMemory::~RcclSymmetricMemory() {
   VLOG(3) << absl::StrFormat("Destroy %v", *this);
+  if (win_ == nullptr) {
+    return;
+  }
+  ncclResult_t status = ncclCommWindowDeregister(comm_, win_);
+  if (status != ncclSuccess) {
+    LOG(ERROR) << "Failed to deregister RCCL symmetric memory: "
+               << ncclGetErrorString(status);
+  }
 }
 
 stream_executor::DeviceAddressBase RcclSymmetricMemory::addr() const {
