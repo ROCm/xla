@@ -1677,6 +1677,25 @@ GetStreamExecutorGpuDeviceAllocator(
            /*memory_space=*/(int)xla::gpu::MemorySpaceColor::kTempBuffer});
     }
   }
+#elif TENSORFLOW_USE_ROCM
+  if (debug_options.xla_gpu_temp_buffer_use_separate_color()) {
+    // Only temp buffers may use this pool; that keeps their address the same
+    // across executions.
+    for (const auto& ordinal_and_device : addressable_devices) {
+      ABSL_ASSIGN_OR_RETURN(
+          auto temp_bfc_allocator,
+          CreateBFCAllocator(ordinal_and_device.second->executor(),
+                             memory_fraction, /*preallocate=*/false,
+                             allocator_config.gpu_system_memory_size,
+                             /*sub_allocator_alloc_visitors=*/{},
+                             /*sub_allocator_free_visitors=*/{}));
+      allocators.push_back(
+          {std::move(temp_bfc_allocator),
+           ordinal_and_device.second->compute_stream(),
+           /*memory_space=*/
+           static_cast<int>(xla::gpu::MemorySpaceColor::kTempBuffer)});
+    }
+  }
 #endif
   return std::make_unique<se::MultiDeviceAdapter>(platform,
                                                   std::move(allocators));
