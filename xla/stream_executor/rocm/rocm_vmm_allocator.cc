@@ -32,6 +32,7 @@ limitations under the License.
 #include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
+#include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/util.h"
 
@@ -49,27 +50,19 @@ static hipMemAccessDesc GetVmmAccessDescriptor(int device) {
 // the padded size, and the allocation handle.
 static absl::StatusOr<
     std::tuple<void*, uint64_t, hipMemGenericAllocationHandle_t>>
-VmmAllocate(StreamExecutor* executor, uint64_t size) {
+VmmAllocate(StreamExecutor* executor, uint64_t size,
+            const RocmVmmOptions& options) {
   std::unique_ptr<ActivateContext> activation = executor->Activate();
 
-  hipDevice_t device;
-  ABSL_RETURN_IF_ERROR(
-      ToStatus(hipDeviceGet(&device, executor->device_ordinal())));
-
-  hipMemAllocationProp properties = {};
-  properties.type = hipMemAllocationTypePinned;
-  properties.location.type = hipMemLocationTypeDevice;
-  properties.location.id = device;
-  properties.requestedHandleTypes = hipMemHandleTypeNone;
-  size_t granularity = 0;
-  ABSL_RETURN_IF_ERROR(ToStatus(hipMemGetAllocationGranularity(
-      &granularity, &properties, hipMemAllocationGranularityRecommended)));
+  ABSL_ASSIGN_OR_RETURN(RocmVmmAllocationParams params,
+                        GetRocmVmmAllocationParams(executor, options));
+  size_t granularity = params.granularity;
 
   uint64_t padded_size = xla::RoundUpTo<uint64_t>(size, granularity);
   hipMemGenericAllocationHandle_t handle;
 
   ABSL_RETURN_IF_ERROR(
-      ToStatus(hipMemCreate(&handle, padded_size, &properties, 0ULL)));
+      ToStatus(hipMemCreate(&handle, padded_size, &params.prop, 0ULL)));
 
   hipDeviceptr_t ptr = nullptr;
   absl::Status status = ToStatus(
@@ -180,8 +173,9 @@ class RocmVmmMemoryAllocation final : public MemoryAllocation {
 
 }  // namespace
 
-RocmVmmAllocator::RocmVmmAllocator(StreamExecutor* executor)
-    : executor_(executor) {}
+RocmVmmAllocator::RocmVmmAllocator(StreamExecutor* executor,
+                                   const RocmVmmOptions& options)
+    : executor_(executor), options_(options) {}
 
 absl::StatusOr<std::unique_ptr<MemoryAllocation>> RocmVmmAllocator::Allocate(
     uint64_t size) {
@@ -190,7 +184,7 @@ absl::StatusOr<std::unique_ptr<MemoryAllocation>> RocmVmmAllocator::Allocate(
                                                      nullptr);
   }
 
-  ABSL_ASSIGN_OR_RETURN(auto result, VmmAllocate(executor_, size));
+  ABSL_ASSIGN_OR_RETURN(auto result, VmmAllocate(executor_, size, options_));
   auto [ptr, padded_size, handle] = result;
 
   return std::make_unique<RocmVmmMemoryAllocation>(executor_, ptr, size,

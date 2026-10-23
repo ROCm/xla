@@ -26,6 +26,7 @@ limitations under the License.
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/memory_reservation.h"
+#include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
 #include "xla/stream_executor/stream_executor.h"
 
 namespace stream_executor::gpu {
@@ -37,8 +38,12 @@ class RocmMemoryReservation : public MemoryReservation {
  public:
   // Reserves a virtual address range of at least `size` bytes using
   // hipMemAddressReserve. StreamExecutor is used only for context activation.
+  //
+  // `options` decides the handle type the mapping granularity is queried for,
+  // so it must match the options of the allocations mapped into this range.
   static absl::StatusOr<std::unique_ptr<RocmMemoryReservation>> Create(
-      StreamExecutor* executor, uint64_t size);
+      StreamExecutor* executor, uint64_t size,
+      const RocmVmmOptions& options = {});
 
   // Returns the base address and padded size of the reserved virtual range.
   DeviceAddressBase address() const override;
