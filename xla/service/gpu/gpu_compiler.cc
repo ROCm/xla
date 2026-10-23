@@ -3255,7 +3255,10 @@ absl::Status GpuCompiler::RunPostSchedulingPipelines(
   // TODO(anurmukh) Enable on gfx12 once Triton block level fusions are
   // validated there.
   if ((cuda_cc != nullptr && cuda_cc->IsAtLeastAmpere()) ||
-      (rocm_cc != nullptr && rocm_cc->gfx9_mi300_series())) {
+      (rocm_cc != nullptr && rocm_cc->gfx9_mi300_series() &&
+       module->config()
+           .debug_options()
+           .xla_gpu_experimental_enable_rocm_fusion_dispatch_pipeline())) {
     // This needs to run after every pass affecting fusions. The last passes
     // that create new fusions are FusionWrapper and StreamAttributeAnnotator.
     main_pipeline.AddPass<HloPassPipeline>(

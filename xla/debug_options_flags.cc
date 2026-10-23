@@ -455,6 +455,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_operand_bytes_threshold_for_windowed_einsum(-1);
 
   opts.set_xla_gpu_experimental_enable_fusion_block_level_rewriter(false);
+  opts.set_xla_gpu_experimental_enable_rocm_fusion_dispatch_pipeline(true);
 
   opts.set_xla_gpu_default_to_alg_dot_bf16_bf16_f32(false);
   opts.set_xla_gpu_enable_libnvptxcompiler(
@@ -3002,6 +3003,16 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_experimental_enable_fusion_block_level_rewriter(),
       "Enabling this flag will attempt to redirect every fusion possible to "
       "the Triton emitter"));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_enable_rocm_fusion_dispatch_pipeline",
+      bool_setter_for(
+          &DebugOptions::
+              set_xla_gpu_experimental_enable_rocm_fusion_dispatch_pipeline),
+      debug_options
+          ->xla_gpu_experimental_enable_rocm_fusion_dispatch_pipeline(),
+      "Run the fusion dispatch pipeline (FusionBlockLevelRewriter) on MI300 "
+      "series ROCm GPUs. Set to false to restore the previous behavior for "
+      "A/B measurements."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_enable_libnvptxcompiler",
       [debug_options](bool enabled) {

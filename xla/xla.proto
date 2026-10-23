@@ -1087,6 +1087,12 @@ message DebugOptions {
   // Pre-existing block-level fusions are left unmodified.
   optional bool xla_gpu_experimental_enable_fusion_block_level_rewriter = 334;
 
+  // If false, do not run the fusion dispatch pipeline
+  // (FusionBlockLevelRewriter) on ROCm GPUs. Local experiment switch for A/B
+  // measurements, not for upstream.
+  optional bool xla_gpu_experimental_enable_rocm_fusion_dispatch_pipeline =
+      562;
+
   // If true, enable heuristic based collective combining.
   optional bool xla_gpu_experimental_enable_heuristic_collective_combining =
       366;
@@ -1978,7 +1984,7 @@ message DebugOptions {
   // when the cuDNN version changes).
   optional bool xla_autotune_cache_require_strict_codegen_match = 559;
 
-  // Next id: 562
+  // Next id: 563
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
