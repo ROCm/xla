@@ -38,8 +38,6 @@ limitations under the License.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-
-#include "absl/log/check.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/types/span.h"
@@ -63,21 +61,18 @@ namespace {
 
 namespace op = xla::testing::opcode_matchers;
 
-// Shared scalar reducer.
-constexpr char kAddF32[] = R"(
+// Today's form. The live count n only decides what the last N - n rows
+// contribute; every instruction, and therefore the launch grid of the fusion
+// XLA builds from this, is shaped by the capacity [8,2].
+constexpr char kMaskedModule[] = R"(
+HloModule moe_extent_masked
+
 add_f32 {
   lhs = f32[] parameter(0)
   rhs = f32[] parameter(1)
   ROOT add = f32[] add(lhs, rhs)
 }
-)";
 
-// Today's form. The live count n only decides what the last N - n rows
-// contribute; every instruction, and therefore the launch grid of the fusion
-// XLA builds from this, is shaped by the capacity [8,2].
-const std::string kMaskedModule = std::string(R"(
-HloModule moe_extent_masked
-)") + kAddF32 + R"(
 ENTRY entry {
   recv = f32[8,2] parameter(0)
   n = s32[] parameter(1)
@@ -98,26 +93,37 @@ ENTRY entry {
 
 // Bounded form. n is attached to dimension 0 of the buffer by
 // set-dimension-size, and the epilogue and the reduce are typed on the
-// bounded shape. No iota, compare or select is written by hand.
-const std::string kBoundedModule = std::string(R"(
+// bounded shape. No iota, compare or select is written by hand. Every
+// elementwise operand carries the same extent: DynamicPadder rejects a
+// bounded operand that has no size source (such as a broadcast declared
+// f32[<=8,2] directly) with "Dynamic input unexpectedly found".
+constexpr char kBoundedModule[] = R"(
 HloModule moe_extent_bounded
-)") + kAddF32 + R"(
+
+add_f32 {
+  lhs = f32[] parameter(0)
+  rhs = f32[] parameter(1)
+  ROOT add = f32[] add(lhs, rhs)
+}
+
 ENTRY entry {
   recv = f32[8,2] parameter(0)
   n = s32[] parameter(1)
   live = f32[<=8,2] set-dimension-size(recv, n), dimensions={0}
   lo = f32[] constant(0)
   hi = f32[] constant(50)
-  lo_b = f32[<=8,2] broadcast(lo), dimensions={}
-  hi_b = f32[<=8,2] broadcast(hi), dimensions={}
-  clamped = f32[<=8,2] clamp(lo_b, live, hi_b)
+  lo_b = f32[8,2] broadcast(lo), dimensions={}
+  hi_b = f32[8,2] broadcast(hi), dimensions={}
+  lo_live = f32[<=8,2] set-dimension-size(lo_b, n), dimensions={0}
+  hi_live = f32[<=8,2] set-dimension-size(hi_b, n), dimensions={0}
+  clamped = f32[<=8,2] clamp(lo_live, live, hi_live)
   act = f32[<=8,2] multiply(clamped, live)
   ROOT combined = f32[2] reduce(act, lo), dimensions={0}, to_apply=add_f32
 }
 )";
 
 // Bounded form without the reduce: the bounded value is the entry result.
-const std::string kBoundedElementwiseModule = R"(
+constexpr char kBoundedElementwiseModule[] = R"(
 HloModule moe_extent_bounded_elementwise
 
 ENTRY entry {
@@ -126,9 +132,11 @@ ENTRY entry {
   live = f32[<=8,2] set-dimension-size(recv, n), dimensions={0}
   lo = f32[] constant(0)
   hi = f32[] constant(50)
-  lo_b = f32[<=8,2] broadcast(lo), dimensions={}
-  hi_b = f32[<=8,2] broadcast(hi), dimensions={}
-  clamped = f32[<=8,2] clamp(lo_b, live, hi_b)
+  lo_b = f32[8,2] broadcast(lo), dimensions={}
+  hi_b = f32[8,2] broadcast(hi), dimensions={}
+  lo_live = f32[<=8,2] set-dimension-size(lo_b, n), dimensions={0}
+  hi_live = f32[<=8,2] set-dimension-size(hi_b, n), dimensions={0}
+  clamped = f32[<=8,2] clamp(lo_live, live, hi_live)
   ROOT act = f32[<=8,2] multiply(clamped, live)
 }
 )";
@@ -197,9 +205,9 @@ class MoeExtentPadderTest : public HloTestBase {
     DynamicPadderOptions options;
     options.slice_dynamic_output = slice_dynamic_output;
     DynamicPadder padder(options);
-    CHECK_OK(padder.Run(module.get()).status());
+    ABSL_RETURN_IF_ERROR(padder.Run(module.get()).status());
     HloDCE dce;
-    CHECK_OK(dce.Run(module.get()).status());
+    ABSL_RETURN_IF_ERROR(dce.Run(module.get()).status());
     return Execute(std::move(module), {arguments});
   }
 };
@@ -210,8 +218,7 @@ TEST_F(MoeExtentPadderTest, MaskedFormComputesLivePrefix) {
   auto module = GetHloModule(kMaskedModule);
   Literal recv = ReceiveBuffer();
   Literal n = LiveCount();
-  ASSERT_OK_AND_ASSIGN(Literal result,
-                          Execute(std::move(module), {&recv, &n}));
+  ASSERT_OK_AND_ASSIGN(Literal result, Execute(std::move(module), {&recv, &n}));
   EXPECT_EQ(result, ExpectedCombined());
 }
 
@@ -220,7 +227,7 @@ TEST_F(MoeExtentPadderTest, BoundedFormComputesLivePrefix) {
   Literal recv = ReceiveBuffer();
   Literal n = LiveCount();
   ASSERT_OK_AND_ASSIGN(Literal result,
-                          PadAndExecute(std::move(module), {&recv, &n}));
+                       PadAndExecute(std::move(module), {&recv, &n}));
   EXPECT_EQ(result, ExpectedCombined());
 }
 
@@ -253,8 +260,8 @@ TEST_F(MoeExtentPadderTest, PadderRewritesBoundedFormToMaskedForm) {
 // [8,2]: a fusion built from it still launches over all 8 rows.
 TEST_F(MoeExtentPadderTest, ExtentSurvivesOnlyAtEntryBoundary) {
   auto module = GetHloModule(kBoundedElementwiseModule);
-  ASSERT_OK_AND_ASSIGN(
-      bool changed, RunPadder(module.get(), /*slice_dynamic_output=*/true));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       RunPadder(module.get(), /*slice_dynamic_output=*/true));
   EXPECT_TRUE(changed);
 
   const HloInstruction* root = module->entry_computation()->root_instruction();
