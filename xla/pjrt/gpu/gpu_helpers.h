@@ -79,12 +79,15 @@ absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> GetGpuHostAllocator(
 // reserves the cap in VA and extends the mapped prefix without moving it. The
 // initial allocation must fit under the cap, otherwise InvalidArgument is
 // returned. Non-spatial and unified-memory pools use only the start fraction.
+//
+// The allocator is named `<name_prefix>_<device ordinal>_bfc`.
 absl::StatusOr<std::shared_ptr<tsl::BFCAllocator>> CreateBFCAllocator(
     se::StreamExecutor* executor, const MemFraction& memory_fraction,
     bool preallocate, std::optional<int64_t> gpu_system_memory_size,
     const std::vector<tsl::SubAllocator::Visitor>& sub_allocator_alloc_visitors,
     const std::vector<tsl::SubAllocator::Visitor>& sub_allocator_free_visitors,
-    bool enable_spatial_partitioning = false);
+    bool enable_spatial_partitioning = false,
+    absl::string_view name_prefix = "GPU");
 
 // Builds a BFCAllocator for all local GPUs that uses collective memory.
 absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateCollectiveBFCAllocator(

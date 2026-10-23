@@ -1688,7 +1688,9 @@ GetStreamExecutorGpuDeviceAllocator(
                              memory_fraction, /*preallocate=*/false,
                              allocator_config.gpu_system_memory_size,
                              /*sub_allocator_alloc_visitors=*/{},
-                             /*sub_allocator_free_visitors=*/{}));
+                             /*sub_allocator_free_visitors=*/{},
+                             /*enable_spatial_partitioning=*/false,
+                             /*name_prefix=*/"GPU_tempbuffer"));
       allocators.push_back(
           {std::move(temp_bfc_allocator),
            ordinal_and_device.second->compute_stream(),

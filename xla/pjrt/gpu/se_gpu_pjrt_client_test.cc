@@ -4051,6 +4051,12 @@ TEST(StreamExecutorGpuClientTest, TempBufferColorUsesSeparatePool) {
                        allocator->Allocate(/*device_ordinal=*/0, kBytes,
                                            /*retry_on_failure=*/false, kTemp));
   EXPECT_EQ(temp_again->opaque(), temp_address);
+#if TENSORFLOW_USE_ROCM
+  EXPECT_THAT(allocator->Allocate(/*device_ordinal=*/0, uint64_t{1} << 50,
+                                  /*retry_on_failure=*/false, kTemp),
+              StatusIs(absl::StatusCode::kResourceExhausted,
+                       HasSubstr("GPU_tempbuffer_0_bfc")));
+#endif
 }
 
 // Records the address of its first (operand-aliased) result. The second result
