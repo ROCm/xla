@@ -584,6 +584,7 @@ cc_library(
     srcs = ["command_buffer_thunk.cc"],
     hdrs = ["command_buffer_thunk.h"],
     deps = [
+        ":collective_params",
         ":command",
         ":command_executor",
         ":command_state",
@@ -591,8 +592,12 @@ cc_library(
         ":sequential_thunk",  # build_cleaner: keep
         ":thunk",
         ":thunk_proto_cc",
+        "//xla:debug_options_flags",
+        "//xla:executable_run_options",
         "//xla:util",
         "//xla/service:buffer_assignment",  # build_cleaner: keep
+        "//xla/service:device_assignment",
+        "//xla/service:rendezvous",
         "//xla/service/gpu:buffer_allocations",  # build_cleaner: keep
         "//xla/stream_executor:command_buffer",
         "//xla/stream_executor:device_address",
@@ -606,7 +611,9 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@tsl//tsl/profiler/lib:profiler_lock",
         "@tsl//tsl/profiler/lib:traceme",

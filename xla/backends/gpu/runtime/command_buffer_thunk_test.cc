@@ -190,6 +190,15 @@ class CountingDeviceToDeviceCopyThunk : public DeviceToDeviceCopyThunk {
   int* record_count_;
 };
 
+// A copy that requires an update on initialization, like a collective.
+class CountingUpdateOnInitializeCopyThunk
+    : public CountingDeviceToDeviceCopyThunk {
+ public:
+  using CountingDeviceToDeviceCopyThunk::CountingDeviceToDeviceCopyThunk;
+
+  bool requires_update_on_initialize() const override { return true; }
+};
+
 // Creates execute params with a valid persistent allocation indices span
 // (empty by default). Command buffer lowering is enabled only when the span
 // is valid; production code always passes a valid - possibly empty - span.
@@ -201,6 +210,73 @@ Thunk::ExecuteParams CreateExecuteParams(
       run_options, allocations, stream, stream, nullptr, nullptr, nullptr,
       /*additional_compute_streams=*/{}, /*execution_scoped_state=*/nullptr,
       persistent_alloc_indices);
+}
+
+// Initializes and executes a command buffer whose command requires an update on
+// initialization three times, moving the command's source buffer before the
+// third execution. Returns the command's record count after each execution.
+absl::StatusOr<std::vector<int>> RecordCountsWithMovingSource(
+    bool skip_unchanged_collectives) {
+  se::StreamExecutor* stream_executor = GpuExecutor();
+  ABSL_ASSIGN_OR_RETURN(auto stream, stream_executor->CreateStream());
+
+  constexpr int64_t kLength = 4;
+  constexpr int64_t kByteLength = sizeof(int32_t) * kLength;
+  Shape shape = ShapeUtil::MakeShape(S32, {kLength});
+  std::vector<se::DeviceAddress<int32_t>> sources = {
+      stream_executor->AllocateArray<int32_t>(kLength, 0),
+      stream_executor->AllocateArray<int32_t>(kLength, 0)};
+  se::DeviceAddress<int32_t> destination_buffer =
+      stream_executor->AllocateArray<int32_t>(kLength, 0);
+  ABSL_RETURN_IF_ERROR(stream->Memset32(&sources[0], 42, kByteLength));
+  ABSL_RETURN_IF_ERROR(stream->Memset32(&sources[1], 7, kByteLength));
+
+  BufferAllocation source(/*index=*/0, kByteLength, /*color=*/0);
+  BufferAllocation destination(/*index=*/1, kByteLength, /*color=*/0);
+  int record_count = 0;
+  CommandSequence commands;
+  commands.Emplace<CountingUpdateOnInitializeCopyThunk>(
+      Thunk::ThunkInfo(),
+      ShapedSlice{BufferAllocation::Slice(&source, 0, kByteLength), shape},
+      ShapedSlice{BufferAllocation::Slice(&destination, 0, kByteLength), shape},
+      kByteLength, &record_count);
+  ABSL_ASSIGN_OR_RETURN(
+      CommandExecutor executor,
+      CommandExecutor::Create(std::move(commands), serialize));
+  CommandBufferThunk thunk(std::move(executor), Thunk::ThunkInfo(),
+                           /*devices_in_process=*/1, /*thunks=*/nullptr,
+                           /*enable_command_buffers_during_profiling=*/false,
+                           skip_unchanged_collectives);
+
+  stream_executor::StreamExecutorAddressAllocator allocator(stream_executor);
+  ServiceExecutableRunOptions run_options;
+  // No persistent allocations, as with the default BFC allocator.
+  std::vector<BufferAllocation::Index> persistent_alloc_indices;
+  std::vector<int> record_counts;
+  for (int s : {0, 0, 1}) {
+    BufferAllocations allocations({sources[s], destination_buffer},
+                                  /*device_ordinal=*/0, &allocator);
+    Thunk::InitializeParams initialize_params;
+    initialize_params.executor = stream_executor;
+    initialize_params.buffer_allocations = &allocations;
+    initialize_params.stream = stream.get();
+    initialize_params.persistent_alloc_indices =
+        absl::MakeConstSpan(persistent_alloc_indices);
+    ABSL_RETURN_IF_ERROR(thunk.Initialize(initialize_params));
+    ABSL_RETURN_IF_ERROR(stream->MemZero(&destination_buffer, kByteLength));
+    ABSL_RETURN_IF_ERROR(thunk.ExecuteOnStream(CreateExecuteParams(
+        run_options, allocations, stream.get(), persistent_alloc_indices)));
+
+    std::vector<int32_t> result(kLength, 0);
+    ABSL_RETURN_IF_ERROR(
+        stream->Memcpy(result.data(), destination_buffer, kByteLength));
+    ABSL_RETURN_IF_ERROR(stream->BlockHostUntilDone());
+    if (result != std::vector<int32_t>(kLength, s == 0 ? 42 : 7)) {
+      return absl::InternalError("Command buffer copied wrong values");
+    }
+    record_counts.push_back(record_count);
+  }
+  return record_counts;
 }
 
 }  // namespace
@@ -531,6 +607,21 @@ TEST(CommandBufferThunkTest,
   ASSERT_OK(thunk.ExecuteOnStream(params));
   ASSERT_OK(stream->BlockHostUntilDone());
   EXPECT_EQ(record_count, 2);
+}
+
+TEST(CommandBufferThunkTest,
+     RecordsUpdateOnInitializeCommandsOnEveryExecution) {
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<int> record_counts,
+      RecordCountsWithMovingSource(/*skip_unchanged_collectives=*/false));
+  EXPECT_THAT(record_counts, ::testing::ElementsAre(1, 2, 3));
+}
+
+TEST(CommandBufferThunkTest, SkipUnchangedCollectivesRecordsOnlyMovedCommands) {
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<int> record_counts,
+      RecordCountsWithMovingSource(/*skip_unchanged_collectives=*/true));
+  EXPECT_THAT(record_counts, ::testing::ElementsAre(1, 1, 2));
 }
 
 TEST(CommandBufferThunkTest, MemzeroThunk) {

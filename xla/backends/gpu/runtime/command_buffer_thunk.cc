@@ -21,6 +21,7 @@ limitations under the License.
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -28,31 +29,84 @@ limitations under the License.
 #include "absl/base/thread_annotations.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
 #include "absl/types/span.h"
-#include "tsl/profiler/lib/profiler_lock.h"
-#include "tsl/profiler/lib/traceme.h"
-#include "tsl/profiler/lib/traceme_encode.h"
+#include "xla/backends/gpu/runtime/collective_params.h"
 #include "xla/backends/gpu/runtime/command.h"
 #include "xla/backends/gpu/runtime/command_executor.h"
 #include "xla/backends/gpu/runtime/per_device_state.h"
 #include "xla/backends/gpu/runtime/sequential_thunk.h"
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/backends/gpu/runtime/thunk.pb.h"
+#include "xla/debug_options_flags.h"
+#include "xla/executable_run_options.h"
 #include "xla/service/buffer_assignment.h"
+#include "xla/service/device_assignment.h"
 #include "xla/service/gpu/buffer_allocations.h"
+#include "xla/service/rendezvous.h"
 #include "xla/stream_executor/command_buffer.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/logging.h"
 #include "xla/util.h"
+#include "tsl/profiler/lib/profiler_lock.h"
+#include "tsl/profiler/lib/traceme.h"
+#include "tsl/profiler/lib/traceme_encode.h"
 
 namespace xla::gpu {
 
 using tsl::profiler::TraceMe;
 using tsl::profiler::TraceMeEncode;
+
+namespace {
+
+// Returns the number of participants in the execution if all of them run in
+// this process, and std::nullopt otherwise. Without a global device id map all
+// participants are local, as in the rendezvous after thunk initialization.
+std::optional<int64_t> NumParticipantsIfAllLocal(
+    const CollectiveParams* collective_params) {
+  if (collective_params == nullptr ||
+      collective_params->device_assn == nullptr) {
+    return 1;
+  }
+  const DeviceAssignment& device_assn = *collective_params->device_assn;
+  int64_t num_participants =
+      device_assn.replica_count() * device_assn.computation_count();
+  if (collective_params->global_device_id_map == nullptr) {
+    return num_participants;
+  }
+
+  auto logical_ids = device_assn.GetDeviceToLogicalIdMap();
+  int64_t num_local_participants = 0;
+  for (const auto& [local_id, global_id] :
+       *collective_params->global_device_id_map) {
+    num_local_participants += logical_ids.contains(global_id);
+  }
+  if (num_local_participants != num_participants) {
+    return std::nullopt;
+  }
+  return num_participants;
+}
+
+absl::Duration InitializationWarnStuckTimeout() {
+  static const int64_t timeout_seconds =
+      GetDebugOptionsFromFlags()
+          .xla_gpu_executable_warn_stuck_timeout_seconds();
+  return absl::Seconds(timeout_seconds);
+}
+
+absl::Duration InitializationTerminateTimeout() {
+  static const int64_t timeout_seconds =
+      GetDebugOptionsFromFlags().xla_gpu_executable_terminate_timeout_seconds();
+  return absl::Seconds(timeout_seconds);
+}
+
+}  // namespace
 
 //===----------------------------------------------------------------------===//
 // CommandBufferThunk
@@ -69,15 +123,34 @@ bool CommandBufferThunk::ExecutorCommandBuffer::HasDynamicAllocations(
   return !absl::c_includes(persistent_alloc_indices, commands.allocs_indices());
 }
 
+bool CommandBufferThunk::ExecutorCommandBuffer::AllocationsChanged(
+    absl::Span<const BufferAllocation::Index> alloc_indices,
+    const BufferAllocations& allocs,
+    absl::Span<const BufferAllocation::Index> persistent_alloc_indices) {
+  DCHECK(absl::c_is_sorted(persistent_alloc_indices));
+  for (BufferAllocation::Index index : alloc_indices) {
+    if (absl::c_binary_search(persistent_alloc_indices, index)) {
+      continue;
+    }
+    if (recorded_allocs.size() <= index ||
+        !recorded_allocs[index].IsSameAs(allocs.GetDeviceAddress(index))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 CommandBufferThunk::CommandBufferThunk(
     CommandExecutor commands, ThunkInfo thunk_info, int devices_in_process,
     std::unique_ptr<SequentialThunk> thunks,
-    bool enable_command_buffers_during_profiling)
+    bool enable_command_buffers_during_profiling,
+    bool skip_unchanged_collectives)
     : Thunk(Thunk::kCommandBuffer, std::move(thunk_info)),
       commands_(std::move(commands)),
       thunks_(std::move(thunks)),
       enable_command_buffers_during_profiling_(
           enable_command_buffers_during_profiling),
+      skip_unchanged_collectives_(skip_unchanged_collectives),
       state_(std::make_shared<State>(devices_in_process)) {
   if (VLOG_IS_ON(5)) {
     absl::StatusOr<std::string> graph = commands_.RenderExecutionGraph();
@@ -170,8 +243,17 @@ absl::Status CommandBufferThunk::Initialize(const InitializeParams& params) {
 
   // TODO(b/290773547): Disabled CUDA graphs when profiling is active because of
   // memory corruption.
-  if (tsl::profiler::ProfilerLock::HasActiveSession() && thunks_ &&
-      !enable_command_buffers_during_profiling_) {
+  bool disabled_for_profiling =
+      tsl::profiler::ProfilerLock::HasActiveSession() && thunks_ &&
+      !enable_command_buffers_during_profiling_;
+
+  // Agree before any of the early returns below, because their conditions can
+  // differ between participants.
+  ABSL_ASSIGN_OR_RETURN(
+      bool update_on_initialize,
+      AgreeOnInitializationUpdate(params, disabled_for_profiling));
+
+  if (disabled_for_profiling) {
     VLOG(1) << "Initialize command buffer thunk as a regular thunk sequence "
                "because we detected active profiling session";
     TraceMe trace("WARNING: CommandBuffer disabled when profiling");
@@ -232,7 +314,8 @@ absl::Status CommandBufferThunk::Initialize(const InitializeParams& params) {
   bool is_first_record =
       cmd_buffer->command_buffer->state() == se::CommandBuffer::State::kCreate;
   if (is_first_record ||
-      (has_dynamic_allocations && commands_.requires_update_on_initialize())) {
+      (has_dynamic_allocations && commands_.requires_update_on_initialize() &&
+       update_on_initialize)) {
     VLOG(3) << "Initialize command buffer on device #"
             << params.executor->device_ordinal()
             << " by recoding command buffer cmd sequence"
@@ -393,6 +476,65 @@ CommandBufferThunk::GetOrCreateCommandBuffer(se::StreamExecutor* executor) {
         std::make_shared<ExecutorCommandBuffer>(std::move(command_buffer));
   }
   return device_state->command_buffer;
+}
+
+absl::StatusOr<bool> CommandBufferThunk::AgreeOnInitializationUpdate(
+    const InitializeParams& params, bool disabled_for_profiling) {
+  if (!skip_unchanged_collectives_ ||
+      !commands_.requires_update_on_initialize()) {
+    return true;
+  }
+
+  // A recorded collective can embed peer buffer addresses, so if one
+  // participant records it again, all of them must. Rendezvous works only
+  // within a process, so without all participants here, keep recording.
+  std::optional<int64_t> num_participants =
+      NumParticipantsIfAllLocal(params.collective_params);
+  if (!num_participants.has_value()) {
+    return true;
+  }
+
+  // Whatever keeps this device from replaying its recorded command buffer
+  // counts as an update, so that every participant then records as usual.
+  bool needs_update = true;
+  if (!disabled_for_profiling && params.persistent_alloc_indices.has_value()) {
+    ABSL_ASSIGN_OR_RETURN(std::shared_ptr<ExecutorCommandBuffer> cmd_buffer,
+                          GetOrCreateCommandBuffer(params.executor));
+    absl::MutexLock lock(cmd_buffer->mutex);
+    bool warmed_up =
+        cmd_buffer->warmup_done || !thunks_ || !commands_.requires_warmup();
+    bool is_first_record = cmd_buffer->command_buffer->state() ==
+                           se::CommandBuffer::State::kCreate;
+    needs_update =
+        !warmed_up || is_first_record ||
+        cmd_buffer->AllocationsChanged(
+            commands_.update_on_initialize_allocs_indices(),
+            *params.buffer_allocations, *params.persistent_alloc_indices);
+  }
+
+  if (*num_participants == 1) {
+    return needs_update;
+  }
+
+  int device_ordinal = params.executor->device_ordinal();
+  RunId run_id = params.collective_params->run_id;
+  ABSL_ASSIGN_OR_RETURN(
+      std::shared_ptr<bool> any_needs_update,
+      Rendezvous<bool>(
+          absl::StrFormat("[%d] command buffer initialization update; "
+                          "run_id=%d",
+                          device_ordinal, run_id.ToInt()),
+          std::make_tuple(run_id, this), needs_update, *num_participants,
+          [](absl::Span<bool*> values) {
+            return absl::c_any_of(values, [](bool* value) { return *value; });
+          },
+          InitializationWarnStuckTimeout(), InitializationTerminateTimeout()));
+
+  XLA_VLOG_DEVICE(3, device_ordinal) << absl::StreamFormat(
+      "Command buffer initialization update agreement: needs_update=%v; "
+      "any_needs_update=%v; num_participants=%d",
+      needs_update, *any_needs_update, *num_participants);
+  return *any_needs_update;
 }
 
 //===----------------------------------------------------------------------===//
