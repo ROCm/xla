@@ -39,6 +39,7 @@ limitations under the License.
 #include "xla/stream_executor/rocm/rocm_memory_reservation.h"
 #include "xla/stream_executor/rocm/rocm_raw_memory_allocation.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
+#include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 
@@ -111,11 +112,7 @@ absl::Status RocmDeviceAddressVmmAllocator::InitializeDeviceState(
     hipDevice_t hip_device;
     ABSL_RETURN_IF_ERROR(
         ToStatus(hipDeviceGet(&hip_device, ordinal), "hipDeviceGet"));
-    hipMemAllocationProp alloc_props = {};
-    alloc_props.type = hipMemAllocationTypePinned;
-    alloc_props.location.type = hipMemLocationTypeDevice;
-    alloc_props.location.id = hip_device;
-    alloc_props.requestedHandleTypes = hipMemHandleTypeNone;
+    hipMemAllocationProp alloc_props = MakeRocmVmmAllocationProps(hip_device);
     ABSL_RETURN_IF_ERROR(ToStatus(hipMemGetAllocationGranularity(
         &granularity, &alloc_props, hipMemAllocationGranularityRecommended)));
   }

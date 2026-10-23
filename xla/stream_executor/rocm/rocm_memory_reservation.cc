@@ -30,6 +30,7 @@ limitations under the License.
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/rocm/rocm_raw_memory_allocation.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
+#include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/util.h"
 
@@ -43,11 +44,7 @@ RocmMemoryReservation::Create(StreamExecutor* executor, uint64_t size) {
   ABSL_RETURN_IF_ERROR(
       ToStatus(hipDeviceGet(&device, executor->device_ordinal())));
 
-  hipMemAllocationProp props = {};
-  props.type = hipMemAllocationTypePinned;
-  props.location.type = hipMemLocationTypeDevice;
-  props.location.id = device;
-  props.requestedHandleTypes = hipMemHandleTypeNone;
+  hipMemAllocationProp props = MakeRocmVmmAllocationProps(device);
 
   size_t granularity = 0;
   ABSL_RETURN_IF_ERROR(ToStatus(hipMemGetAllocationGranularity(

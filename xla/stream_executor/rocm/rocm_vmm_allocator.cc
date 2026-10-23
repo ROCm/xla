@@ -32,6 +32,7 @@ limitations under the License.
 #include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
+#include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/util.h"
 
@@ -56,11 +57,7 @@ VmmAllocate(StreamExecutor* executor, uint64_t size) {
   ABSL_RETURN_IF_ERROR(
       ToStatus(hipDeviceGet(&device, executor->device_ordinal())));
 
-  hipMemAllocationProp properties = {};
-  properties.type = hipMemAllocationTypePinned;
-  properties.location.type = hipMemLocationTypeDevice;
-  properties.location.id = device;
-  properties.requestedHandleTypes = hipMemHandleTypeNone;
+  hipMemAllocationProp properties = MakeRocmVmmAllocationProps(device);
   size_t granularity = 0;
   ABSL_RETURN_IF_ERROR(ToStatus(hipMemGetAllocationGranularity(
       &granularity, &properties, hipMemAllocationGranularityRecommended)));
