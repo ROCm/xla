@@ -1092,6 +1092,12 @@ message DebugOptions {
   // symmetric memory window, registered per allocation, starts at its buffer.
   optional bool xla_gpu_experimental_collective_allocation_per_buffer = 558;
 
+  // Collective-memory-space buffers are never packed into one allocation:
+  // each starts an allocation of its own, which buffers with non-overlapping
+  // live ranges reuse (all at offset 0). Like the per-buffer flag, every
+  // symmetric memory window starts at its buffer, but memory is still reused.
+  optional bool xla_gpu_experimental_collective_allocation_no_packing = 559;
+
   // If true, XLA:GPU emits a CollectiveReduceThunk for kCollectiveReduce HLO
   // instructions. This is guarded behind a flag to preserve the 2-week
   // forward compatibility window between the compiler and the runtime.
@@ -1957,7 +1963,7 @@ message DebugOptions {
   // Requires sm_90+ and CUDA 13.3+ (tileiras) at runtime. Off by default.
   optional bool xla_gpu_experimental_enable_tensor_ir = 557;
 
-  // Next id: 559
+  // Next id: 560
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

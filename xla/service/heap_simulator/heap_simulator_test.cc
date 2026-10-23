@@ -1856,6 +1856,37 @@ TEST_F(ConstrainedGlobalDecreasingSizeBestFitHeapTest, DecreasingSize) {
   EXPECT_EQ(0, result.heap_results[0].chunk_map.at(buffer_d_).offset);
 }
 
+TEST_F(ConstrainedGlobalDecreasingSizeBestFitHeapTest, OffsetZeroOnly) {
+  // Live ranges: a [0,1], b [2,4], c [3,6], d [5,7]. b and d do not overlap,
+  // and neither overlaps a: they share one heap, each at offset 0. c overlaps
+  // b and d and gets a heap of its own.
+  ConstrainedGlobalDecreasingSizeBestFitHeap heap(
+      /*size_limit_per_heap=*/1, /*alignment=*/1,
+      GlobalDecreasingSizeBestFitHeap<HloValue>::kSpatial,
+      /*buffer_interval_compare=*/nullptr, /*offset_zero_only=*/true);
+  heap.Alloc(buffer_a_, 10);
+  heap.Free(buffer_a_, 10);
+  heap.Alloc(buffer_b_, 30);
+  heap.Alloc(buffer_c_, 20);
+  heap.Free(buffer_b_, 30);
+  heap.Alloc(buffer_d_, 40);
+  heap.Free(buffer_c_, 20);
+  heap.Free(buffer_d_, 40);
+
+  ASSERT_OK_AND_ASSIGN(const HeapSimulator::Result<HloValue> result,
+                       heap.Finish());
+  ASSERT_EQ(2, result.heap_results.size());
+  EXPECT_EQ(60, result.heap_size);
+  const auto& shared = result.heap_results[0].chunk_map;
+  EXPECT_EQ(40, result.heap_results[0].heap_size);
+  for (const HloValue* buffer : {buffer_a_, buffer_b_, buffer_d_}) {
+    ASSERT_TRUE(shared.contains(buffer));
+    EXPECT_EQ(0, shared.at(buffer).offset);
+  }
+  ASSERT_TRUE(result.heap_results[1].chunk_map.contains(buffer_c_));
+  EXPECT_EQ(0, result.heap_results[1].chunk_map.at(buffer_c_).offset);
+}
+
 TEST_F(ConstrainedGlobalDecreasingSizeBestFitHeapTest,
        DecreasingSizeWithAlignment) {
   // space

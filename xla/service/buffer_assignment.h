@@ -566,6 +566,12 @@ class BufferAssignment {
   // The per-heap size limit for buffers of `color`: its override in
   // BufferAssigner::Options::heap_size_limit_per_color, else
   // xla_multiheap_size_constraint_per_heap.
+  // True if buffers of `color` are never packed: see
+  // BufferAssigner::Options::no_packing_colors.
+  bool no_packing(LogicalBuffer::Color color) const {
+    return no_packing_colors_.contains(color);
+  }
+
   uint64_t heap_size_limit(LogicalBuffer::Color color) const {
     auto it = heap_size_limit_per_color_.find(color);
     return it == heap_size_limit_per_color_.end()
@@ -967,6 +973,7 @@ class BufferAssignment {
   uint64_t multiheap_size_constraint_per_heap_;
   absl::flat_hash_map<LogicalBuffer::Color, uint64_t>
       heap_size_limit_per_color_;
+  absl::flat_hash_set<LogicalBuffer::Color> no_packing_colors_;
 
   // Maps HloValue::Id to the index of the BufferAllocation which holds the
   // buffer (-1 if unassigned).
@@ -1179,6 +1186,11 @@ class BufferAssigner {
     // 1 gives every buffer of that color an allocation of its own.
     absl::flat_hash_map<LogicalBuffer::Color, uint64_t>
         heap_size_limit_per_color;
+
+    // Colors whose temp buffers each start an allocation of their own: buffers
+    // with non-overlapping live ranges share an allocation (at offset 0), live
+    // buffers never share one. Takes precedence over heap_size_limit_per_color.
+    absl::flat_hash_set<LogicalBuffer::Color> no_packing_colors;
 
     // Whether a buffer color supports fast buffer assignment (FAST_MERGE /
     // FAST_SPLIT); unsupported colors use the DEFAULT algorithm.

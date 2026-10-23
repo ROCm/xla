@@ -188,6 +188,12 @@ absl::StatusOr<std::unique_ptr<BufferAssignment>> RunBufferAssignment(
     opts.heap_size_limit_per_color[static_cast<int>(
         MemorySpaceColor::kCollective)] = 1;
   }
+  // The same guarantee with reuse over time: buffers with non-overlapping live
+  // ranges share an allocation, always at offset 0.
+  if (options.xla_gpu_experimental_collective_allocation_no_packing()) {
+    opts.no_packing_colors.insert(
+        static_cast<int>(MemorySpaceColor::kCollective));
+  }
 
   std::unique_ptr<HloOrdering> hlo_ordering;
   switch (options.xla_gpu_command_buffer_scheduling_mode()) {
