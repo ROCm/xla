@@ -59,6 +59,10 @@ struct CommandBufferThunkOptions {
   // command buffer `SupportsNodeAnnotations()` (CUDA 13.2+); otherwise the
   // request is ignored with a one-time warning.
   bool enable_command_buffer_telemetry = false;
+
+  // When true, commands that require an update on initialization are recorded
+  // again only if one of their buffers moved on some participant.
+  bool skip_unchanged_collectives = false;
 };
 
 class CommandBufferThunk : public Thunk {
@@ -135,6 +139,15 @@ class CommandBufferThunk : public Thunk {
     // persistent under the current allocation address policy.
     bool HasDynamicAllocations(
         const CommandExecutor& commands,
+        absl::Span<const BufferAllocation::Index> persistent_alloc_indices)
+        ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex);
+
+    // Returns true if any allocation in `alloc_indices` that is not in
+    // `persistent_alloc_indices` has a different address in `allocs` than at
+    // the last recording. Both spans must be sorted.
+    bool AllocationsChanged(
+        absl::Span<const BufferAllocation::Index> alloc_indices,
+        const BufferAllocations& allocs,
         absl::Span<const BufferAllocation::Index> persistent_alloc_indices)
         ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex);
 
@@ -224,6 +237,13 @@ class CommandBufferThunk : public Thunk {
                                      const ExecutorCommandBuffer* cmd_buffer,
                                      const CollectiveMemory* collective_memory);
 
+  // Returns whether commands that require an update on initialization must be
+  // recorded again in this execution. With `skip_unchanged_collectives_` and
+  // all participants in this process, this is a collective operation: all
+  // participants must call it for the same execution.
+  absl::StatusOr<bool> AgreeOnInitializationUpdate(
+      const InitializeParams& params, bool disabled_for_profiling);
+
   // Each individual command buffer allocates state on device (CUDA graph) and
   // it adds up pretty quickly. To prevent OOM errors we proactively evict
   // command buffers from device by clearing command buffer thunk state. We use
@@ -261,6 +281,9 @@ class CommandBufferThunk : public Thunk {
 
   // See `CommandBufferThunkOptions::enable_command_buffer_telemetry`.
   bool enable_command_buffer_telemetry_;
+
+  // See `CommandBufferThunkOptions::skip_unchanged_collectives`.
+  bool skip_unchanged_collectives_;
 
   // Command buffer thunk state allocated in heap to allow global (per-process)
   // management of instantiated command buffers.
