@@ -423,6 +423,8 @@ rocm_lib_import(
     data = glob([
         "%{rocm_root}/lib/libhipblaslt.so*",
         "%{rocm_root}/lib/librocroller.so*",
+        "%{rocm_root}/lib/liborigami.so*",
+        "%{rocm_root}/lib/libtensilelite-host.so*",
     ]) + glob([
         "%{rocm_root}/lib/hipblaslt/library/*" + arch + "*"
         for arch in rocm_gpu_architectures()
