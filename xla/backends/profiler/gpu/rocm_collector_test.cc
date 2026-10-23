@@ -98,7 +98,7 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
   activity_event.correlation_id = kCorrelationId;
   activity_event.start_time_ns = kStartTimeNs;
   activity_event.end_time_ns = kEndTimeNs;
-  activity_event.device_id = 100;
+  activity_event.device_id = 0;
   activity_event.stream_id = 123;
 
   collector.AddEvent(std::move(activity_event), /*is_auxiliary=*/false);
@@ -145,7 +145,7 @@ TEST(RocmCollectorTest, MultipleActivitiesPerCorrelationIdAllExported) {
   // that replays a captured graph: one API call, many kernel-dispatch
   // records emitted by rocprofiler-sdk under the same correlation_id.
   constexpr uint32_t kCorrelationId = 7;
-  constexpr uint32_t kDeviceId = 100;
+  constexpr uint32_t kDeviceId = 0;
   constexpr uint64_t kStreamId = 123;
 
   RocmTracerEvent api_event;
@@ -404,6 +404,112 @@ TEST(RocmCollectorTest, MarkerAndApiEventsOnSameThreadGetSeparateLines) {
       << "the API event must stay on the plain host-thread line";
 }
 
+// ---------------------------------------------------------------------------
+// Device numbering. RocmTracer numbers rows by HIP device, so each row goes to
+// the plane of its own device_id.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+RocmTraceCollectorOptions Options(uint32_t num_gpus) {
+  RocmTraceCollectorOptions options;
+  options.max_callback_api_events = 100;
+  options.max_activity_api_events = 100;
+  options.max_annotation_strings = 100;
+  options.num_gpus = num_gpus;
+  return options;
+}
+
+// Adds a kernel's API row and activity row, as RocmTracer does.
+void AddKernel(RocmTraceCollectorImpl& collector, uint32_t correlation_id,
+               uint32_t device_id) {
+  RocmTracerEvent api_event;
+  api_event.type = RocmTracerEventType::Kernel;
+  api_event.source = RocmTracerEventSource::ApiCallback;
+  api_event.domain = RocmTracerEventDomain::HIP_API;
+  api_event.name = "kernel";
+  api_event.correlation_id = correlation_id;
+  api_event.thread_id = 1;
+  api_event.kernel_info = KernelDetails{};
+  collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
+
+  RocmTracerEvent activity_event;
+  activity_event.type = RocmTracerEventType::Kernel;
+  activity_event.source = RocmTracerEventSource::Activity;
+  activity_event.domain = RocmTracerEventDomain::HIP_OPS;
+  activity_event.name = "kernel";
+  activity_event.correlation_id = correlation_id;
+  activity_event.start_time_ns = 3000;
+  activity_event.end_time_ns = 4000;
+  activity_event.device_id = device_id;
+  activity_event.stream_id = 1;
+  collector.AddEvent(std::move(activity_event), /*is_auxiliary=*/false);
+}
+
+// -1 if there is no such plane.
+int NumEvents(const XSpace& space, absl::string_view plane_name) {
+  const auto* plane = tsl::profiler::FindPlaneWithName(space, plane_name);
+  if (plane == nullptr) return -1;
+  int num_events = 0;
+  for (const auto& line : plane->lines()) num_events += line.events_size();
+  return num_events;
+}
+
+TEST(RocmCollectorTest, RowsOnlyOnDeviceOneExportOnGpuOne) {
+  RocmTraceCollectorImpl collector(Options(/*num_gpus=*/2),
+                                   /*start_walltime_ns=*/1000,
+                                   /*start_gputime_ns=*/2000);
+  AddKernel(collector, /*correlation_id=*/1, /*device_id=*/1);
+
+  collector.Flush();
+  XSpace space;
+  collector.Export(&space);
+
+  EXPECT_EQ(NumEvents(space, "/device:GPU:1"), 1);
+  EXPECT_EQ(NumEvents(space, "/device:GPU:0"), 0);
+}
+
+TEST(RocmCollectorTest, DropsInvalidDeviceRowAndKeepsTheOthers) {
+  RocmTraceCollectorImpl collector(Options(/*num_gpus=*/1),
+                                   /*start_walltime_ns=*/1000,
+                                   /*start_gputime_ns=*/2000);
+  AddKernel(collector, /*correlation_id=*/1, /*device_id=*/0);
+  AddKernel(collector, /*correlation_id=*/2, RocmTracerEvent::kInvalidDeviceId);
+
+  collector.Flush();
+  XSpace space;
+  collector.Export(&space);
+
+  EXPECT_EQ(NumEvents(space, "/device:GPU:0"), 1);
+}
+
+// RocmTracer gives a HIP device that matched no agent a placeholder agent.
+TEST(RocmCollectorTest, PlaceholderAgentGetsNoDeviceCapabilities) {
+  RocmTraceCollectorImpl collector(Options(/*num_gpus=*/2),
+                                   /*start_walltime_ns=*/1000,
+                                   /*start_gputime_ns=*/2000);
+  rocprofiler_agent_v0_t gpu{};
+  gpu.type = ROCPROFILER_AGENT_TYPE_GPU;
+  gpu.cu_count = 256;
+  rocprofiler_agent_v0_t placeholder{};
+  placeholder.type = ROCPROFILER_AGENT_TYPE_NONE;
+  collector.SetGpuAgents({gpu, placeholder});
+
+  collector.Flush();
+  XSpace space;
+  collector.Export(&space);
+
+  const auto* gpu_plane =
+      tsl::profiler::FindPlaneWithName(space, "/device:GPU:0");
+  const auto* placeholder_plane =
+      tsl::profiler::FindPlaneWithName(space, "/device:GPU:1");
+  ASSERT_NE(gpu_plane, nullptr);
+  ASSERT_NE(placeholder_plane, nullptr);
+  EXPECT_GT(gpu_plane->stats_size(), 0);
+  EXPECT_EQ(placeholder_plane->stats_size(), 0);
+}
+
+}  // namespace
 }  // namespace test
 }  // namespace profiler
 }  // namespace xla

@@ -23,10 +23,12 @@ limitations under the License.
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/base/call_once.h"
 #include "absl/base/optimization.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/log/log.h"
@@ -37,6 +39,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
+#include "rocm/include/hip/hip_runtime_api.h"
 #include "rocm/include/rocprofiler-sdk/agent.h"
 #include "rocm/include/rocprofiler-sdk/buffer.h"
 #include "rocm/include/rocprofiler-sdk/buffer_tracing.h"
@@ -49,11 +52,12 @@ limitations under the License.
 #include "rocm/include/rocprofiler-sdk/marker.h"
 #include "rocm/include/rocprofiler-sdk/registration.h"
 #include "rocm/include/rocprofiler-sdk/rocprofiler.h"
-#include "tsl/platform/abi.h"
 #include "xla/backends/profiler/gpu/rocm_collector.h"
+#include "xla/backends/profiler/gpu/rocm_device_map.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
+#include "tsl/platform/abi.h"
 
 namespace xla {
 namespace profiler {
@@ -82,6 +86,32 @@ thread_local absl::InlinedVector<uint64_t, 4> tls_stream_stack = {0};
 // so no per-thread bookkeeping outlives it.
 thread_local std::vector<RoctxFrame> tls_roctx_stack;
 
+// The PCI address of each device HIP numbers, i.e. each GPU that
+// HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES leave visible; nullopt where
+// HIP reports none.
+std::vector<std::optional<PciAddress>> GetHipPciAddresses() {
+  int count = 0;
+  if (hipError_t status = hipGetDeviceCount(&count); status != hipSuccess) {
+    // HIP errors are sticky per thread (see
+    // https://github.com/openxla/xla/pull/40199), so clear ours. A failed
+    // call can still write a count; ignore it.
+    (void)hipGetLastError();
+    LOG(WARNING) << "hipGetDeviceCount failed: " << hipGetErrorString(status)
+                 << ". The profiler will trace no GPU.";
+    return {};
+  }
+  std::vector<std::optional<PciAddress>> addresses(count);
+  for (int k = 0; k < count; ++k) {
+    char bus_id[64] = {};
+    if (hipDeviceGetPCIBusId(bus_id, sizeof(bus_id), k) == hipSuccess) {
+      addresses[k] = ParsePciBusId(bus_id);
+    } else {
+      (void)hipGetLastError();
+    }
+  }
+  return addresses;
+}
+
 }  // namespace
 
 using tsl::profiler::AnnotationStack;
@@ -93,7 +123,7 @@ inline auto GetCallbackTracingNames() {
   return rocprofiler::sdk::get_callback_tracing_names();
 }
 
-std::vector<rocprofiler_agent_v0_t> GetGpuDeviceAgents();
+static std::vector<rocprofiler_agent_v0_t> GetAllAgents();
 
 //-----------------------------------------------------------------------------
 // copy api calls
@@ -155,6 +185,34 @@ bool RocmTracer::IsAvailable() const {
     return 0;
   }
   return ts;
+}
+
+const HipDeviceMap& RocmTracer::EnsureHipDeviceMap() {
+  absl::call_once(hip_device_map_once_, [this] {
+    // Ask HIP first: initialising HIP can be what runs toolInit, which fills
+    // agents_.
+    std::vector<std::optional<PciAddress>> hip = GetHipPciAddresses();
+    std::vector<rocprofiler_agent_v0_t> agents;
+    agents.reserve(agents_.size());
+    for (const auto& [handle, agent] : agents_) agents.push_back(agent);
+    hip_device_map_.store(new HipDeviceMap(BuildHipDeviceMap(agents, hip)),
+                          std::memory_order_release);
+  });
+  return *hip_device_map_.load(std::memory_order_acquire);
+}
+
+uint32_t RocmTracer::HipDeviceOf(uint64_t agent_handle) const {
+  const HipDeviceMap* map = hip_device_map_.load(std::memory_order_acquire);
+  if (map == nullptr) return RocmTracerEvent::kInvalidDeviceId;
+  auto it = map->hip_device_of_agent.find(agent_handle);
+  return it == map->hip_device_of_agent.end()
+             ? RocmTracerEvent::kInvalidDeviceId
+             : it->second;
+}
+
+rocprofiler_agent_type_t RocmTracer::AgentType(uint64_t agent_handle) const {
+  auto it = agents_.find(agent_handle);
+  return it == agents_.end() ? ROCPROFILER_AGENT_TYPE_NONE : it->second.type;
 }
 
 absl::Status RocmTracer::Enable(RocmTraceCollector* collector) {
@@ -274,31 +332,27 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
       trace_event->type = RocmTracerEventType::MemcpyOther;
   }
 #undef OO
-  const auto &src_gpu = agents_[static_cast<uint32_t>(rec.src_agent_id.handle)],
-             &dst_gpu = agents_[static_cast<uint32_t>(rec.dst_agent_id.handle)];
-
-  // Assign device_id based on copy direction
-  if (trace_event->type == RocmTracerEventType::MemcpyH2D &&
-      dst_gpu.type == ROCPROFILER_AGENT_TYPE_GPU) {
-    trace_event->device_id = dst_gpu.id.handle;  // Destination is GPU
-  } else if (trace_event->type == RocmTracerEventType::MemcpyD2H &&
-             src_gpu.type == ROCPROFILER_AGENT_TYPE_GPU) {
-    trace_event->device_id = src_gpu.id.handle;  // Source is GPU
-  } else if (trace_event->type == RocmTracerEventType::MemcpyD2D) {
-    // Prefer destination GPU for D2D
-    trace_event->device_id = dst_gpu.id.handle;
+  const uint64_t src = rec.src_agent_id.handle;
+  const uint64_t dst = rec.dst_agent_id.handle;
+  const bool src_is_gpu = AgentType(src) == ROCPROFILER_AGENT_TYPE_GPU;
+  const bool dst_is_gpu = AgentType(dst) == ROCPROFILER_AGENT_TYPE_GPU;
+  uint32_t destination;
+  if (src_is_gpu && dst_is_gpu && src != dst) {
+    // Peer copy, placed by the SDK label as before.
+    // TODO(rocm-profiler): put it on the source GPU, as CUDA does.
+    trace_event->device_id = HipDeviceOf(
+        trace_event->type == RocmTracerEventType::MemcpyD2H ? src : dst);
+    destination = HipDeviceOf(dst);
+  } else if (src_is_gpu || dst_is_gpu) {
+    // The copy touches one GPU. As on CUDA, the row and dest both name it.
+    trace_event->device_id = HipDeviceOf(dst_is_gpu ? dst : src);
+    destination = trace_event->device_id;
   } else {
-    // Fallback for MemcpyOther or HOST_TO_HOST
-    if (dst_gpu.type == ROCPROFILER_AGENT_TYPE_GPU) {
-      trace_event->device_id = dst_gpu.id.handle;
-    } else if (src_gpu.type == ROCPROFILER_AGENT_TYPE_GPU) {
-      trace_event->device_id = src_gpu.id.handle;
-    } else {
-      LOG(WARNING) << "No GPU ID available for memory copy operation: "
-                   << trace_event->name << ", src_agent_type=" << src_gpu.type
-                   << ", dst_agent_type=" << dst_gpu.type;
-      trace_event->device_id = 0;  // Invalid ID or default
-    }
+    LOG(WARNING) << "No GPU ID available for memory copy operation: "
+                 << trace_event->name << ", src_agent_type=" << AgentType(src)
+                 << ", dst_agent_type=" << AgentType(dst);
+    trace_event->device_id = RocmTracerEvent::kInvalidDeviceId;
+    destination = RocmTracerEvent::kInvalidDeviceId;
   }
 
   trace_event->source = RocmTracerEventSource::Activity;
@@ -317,7 +371,7 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
   trace_event->stream_id = rec.correlation_id.external.value;
   trace_event->memcpy_info = MemcpyDetails{
       .num_bytes = rec.bytes,
-      .destination = static_cast<uint32_t>(dst_gpu.id.handle),
+      .destination = destination,
       .async = false,
   };
 
@@ -340,7 +394,7 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
   trace_event->name = "??";
   trace_event->start_time_ns = rec.start_timestamp;
   trace_event->end_time_ns = rec.end_timestamp;
-  trace_event->device_id = agents_[kinfo.agent_id.handle].id.handle;
+  trace_event->device_id = HipDeviceOf(kinfo.agent_id.handle);
   trace_event->correlation_id = rec.correlation_id.internal;
   trace_event->annotation =
       annotation_map()->LookUp(trace_event->correlation_id);
@@ -618,18 +672,15 @@ static int stream_external_correlation_callback(
 absl::Status RocmTracer::InitProfiling(void* tool_data) {
   name_info_ = GetCallbackTracingNames();
 
-  // Build an ordered list of GPU agents for use by the profiler collector
-  // (e.g. GetDeviceCapabilities).
-  num_gpus_ = 0;
-  gpu_agents_.clear();
-  for (const auto& agent : GetGpuDeviceAgents()) {
-    VLOG(1) << "agent id = " << agent.id.handle << ", dev = " << agent.device_id
+  // Every agent, by handle. EnsureHipDeviceMap() numbers the GPUs among them.
+  for (const auto& agent : GetAllAgents()) {
+    const PciAddress pci = PciAddressOf(agent);
+    VLOG(1) << "agent handle = " << agent.id.handle
+            << ", node = " << agent.node_id
+            << absl::StrFormat(", pci = %04x:%02x:%02x.%x", pci.domain, pci.bus,
+                               pci.device, pci.function)
             << ", name = " << (agent.name ? agent.name : "null");
     agents_[agent.id.handle] = agent;
-    if (agent.type == ROCPROFILER_AGENT_TYPE_GPU) {
-      gpu_agents_.push_back(agent);
-      num_gpus_++;
-    }
   }
 
   ABSL_RETURN_IF_ERROR(RocprofilerStatusToAbslStatus(
@@ -833,7 +884,7 @@ void RocmTracer::Disable() {
 // ----------------------------------------------------------------------------
 // Helper that returns all device agents (GPU + CPU for now).
 // ----------------------------------------------------------------------------
-std::vector<rocprofiler_agent_v0_t> GetGpuDeviceAgents() {
+static std::vector<rocprofiler_agent_v0_t> GetAllAgents() {
   std::vector<rocprofiler_agent_v0_t> agents;
 
   rocprofiler_query_available_agents_cb_t iterate_cb =
