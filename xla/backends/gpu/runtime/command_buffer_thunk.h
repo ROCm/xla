@@ -34,6 +34,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/backends/gpu/runtime/thunk.pb.h"
 #include "xla/service/buffer_assignment.h"
+#include "xla/service/decision.h"
 #include "xla/service/gpu/buffer_allocations.h"
 #include "xla/stream_executor/command_buffer.h"
 #include "xla/stream_executor/device_address.h"
@@ -46,7 +47,8 @@ class CommandBufferThunk : public Thunk {
   CommandBufferThunk(CommandExecutor commands, ThunkInfo thunk_info,
                      int devices_in_process,
                      std::unique_ptr<SequentialThunk> thunks = nullptr,
-                     bool enable_command_buffers_during_profiling = false);
+                     bool enable_command_buffers_during_profiling = false,
+                     bool skip_unchanged_collectives = false);
 
   const std::unique_ptr<SequentialThunk>& thunks() const { return thunks_; }
 
@@ -109,6 +111,15 @@ class CommandBufferThunk : public Thunk {
         absl::Span<const BufferAllocation::Index> persistent_alloc_indices)
         ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex);
 
+    // Returns true if any allocation in `alloc_indices` that is not in
+    // `persistent_alloc_indices` has a different address in `allocs` than at
+    // the last recording. Both spans must be sorted.
+    bool AllocationsChanged(
+        absl::Span<const BufferAllocation::Index> alloc_indices,
+        const BufferAllocations& allocs,
+        absl::Span<const BufferAllocation::Index> persistent_alloc_indices)
+        ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex);
+
     // se::CommandBuffer is not thread safe, and we guard it with a mutex to
     // guarantee that we do not mutate it concurrently.
     absl::Mutex mutex;
@@ -162,6 +173,14 @@ class CommandBufferThunk : public Thunk {
   absl::StatusOr<std::shared_ptr<ExecutorCommandBuffer>>
   GetOrCreateCommandBuffer(se::StreamExecutor* executor);
 
+  // Decides whether commands that require an update on initialization can skip
+  // recording again in this execution, and if not, why. With
+  // `skip_unchanged_collectives_` and all participants in this process, this
+  // is a collective operation: all participants must call it for the same
+  // execution.
+  absl::StatusOr<Decision> CanSkipInitializationUpdate(
+      const InitializeParams& params, bool disabled_for_profiling);
+
   // Each individual command buffer allocates state on device (CUDA graph) and
   // it adds up pretty quickly. To prevent OOM errors we proactively evict
   // command buffers from device by clearing command buffer thunk state. We use
@@ -192,6 +211,10 @@ class CommandBufferThunk : public Thunk {
   // When true, allows command buffers to be used while profiling active.
   // TODO(b/355487968): Remove this option when validation complete.
   bool enable_command_buffers_during_profiling_;
+
+  // When true, commands that require an update on initialization are recorded
+  // again only if one of their buffers moved on some participant.
+  bool skip_unchanged_collectives_;
 
   // Command buffer thunk state allocated in heap to allow global (per-process)
   // management of instantiated command buffers.

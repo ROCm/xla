@@ -678,7 +678,8 @@ ConvertThunksToCommandBuffer(
       std::move(cmd_executor), std::move(thunk_info), devices_in_process,
       std::make_unique<SequentialThunk>(Thunk::ThunkInfo(),
                                         std::move(thunks_to_convert)),
-      debug_options.xla_enable_command_buffers_during_profiling());
+      debug_options.xla_enable_command_buffers_during_profiling(),
+      debug_options.xla_gpu_command_buffer_skip_unchanged_collectives());
 }
 
 int64_t CountCommandBufferSize(ThunkSequence& thunks) {
