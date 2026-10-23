@@ -20,6 +20,9 @@ limitations under the License.
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
@@ -64,6 +67,31 @@ TEST_F(TargetUtilTest, AMDGCNGroupBarrier) {
                             &builder_);
   builder_.CreateRetVoid();
   EXPECT_FALSE(llvm::verifyModule(module_, &llvm::errs()));
+}
+
+TEST_F(TargetUtilTest, AMDGCNBarrierFencesWorkgroupMemory) {
+  module_.setTargetTriple(llvm::Triple("amdgcn"));
+  EmitCallToTargetIntrinsic(TargetIntrinsicID::kBarrierId, {}, {}, &builder_);
+  builder_.CreateRetVoid();
+  EXPECT_FALSE(llvm::verifyModule(module_, &llvm::errs()));
+
+  // s_barrier alone does not order memory; the release fence before it makes
+  // the backend wait for this wave's LDS stores, as in HIP's __syncthreads().
+  llvm::BasicBlock& block = module_.getFunction("fn")->getEntryBlock();
+  ASSERT_EQ(block.size(), 4u);
+  auto it = block.begin();
+  auto* release = llvm::dyn_cast<llvm::FenceInst>(&*it++);
+  auto* barrier = llvm::dyn_cast<llvm::IntrinsicInst>(&*it++);
+  auto* acquire = llvm::dyn_cast<llvm::FenceInst>(&*it++);
+  ASSERT_NE(release, nullptr);
+  ASSERT_NE(barrier, nullptr);
+  ASSERT_NE(acquire, nullptr);
+  llvm::SyncScope::ID workgroup = ctx_.getOrInsertSyncScopeID("workgroup");
+  EXPECT_EQ(release->getOrdering(), llvm::AtomicOrdering::Release);
+  EXPECT_EQ(release->getSyncScopeID(), workgroup);
+  EXPECT_EQ(barrier->getIntrinsicID(), llvm::Intrinsic::amdgcn_s_barrier);
+  EXPECT_EQ(acquire->getOrdering(), llvm::AtomicOrdering::Acquire);
+  EXPECT_EQ(acquire->getSyncScopeID(), workgroup);
 }
 
 TEST(TargetUtil, ObtainDeviceFunctionNameExp) {
