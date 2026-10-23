@@ -877,7 +877,9 @@ absl::Status RunOptimizationPasses(
   pipeline.AddPass<SelectAndScatterExpander>();
 
   // Rewrite Cholesky.
-  pipeline.AddPass<CholeskyExpander>();
+  if (gpu_version.IsCuda()) {
+    pipeline.AddPass<CholeskyExpander>();
+  }
 
   if (RequireDeterminism(hlo_module->config()) ||
       debug_options.xla_gpu_enable_scatter_determinism_expander()) {
