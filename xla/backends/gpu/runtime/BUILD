@@ -596,6 +596,7 @@ cc_library(
         "//xla:executable_run_options",
         "//xla:util",
         "//xla/service:buffer_assignment",  # build_cleaner: keep
+        "//xla/service:decision",
         "//xla/service:device_assignment",
         "//xla/service:rendezvous",
         "//xla/service/gpu:buffer_allocations",  # build_cleaner: keep

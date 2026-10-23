@@ -253,7 +253,7 @@ absl::StatusOr<std::vector<int>> RecordCountsWithMovingSource(
   // No persistent allocations, as with the default BFC allocator.
   std::vector<BufferAllocation::Index> persistent_alloc_indices;
   std::vector<int> record_counts;
-  for (int s : {0, 0, 1}) {
+  for (int64_t s : {0, 0, 1}) {
     BufferAllocations allocations({sources[s], destination_buffer},
                                   /*device_ordinal=*/0, &allocator);
     Thunk::InitializeParams initialize_params;

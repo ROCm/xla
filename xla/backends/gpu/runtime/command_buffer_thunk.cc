@@ -75,13 +75,13 @@ std::optional<int64_t> NumParticipantsIfAllLocal(
     return 1;
   }
   const DeviceAssignment& device_assn = *collective_params->device_assn;
-  int64_t num_participants =
+  const int64_t num_participants =
       device_assn.replica_count() * device_assn.computation_count();
   if (collective_params->global_device_id_map == nullptr) {
     return num_participants;
   }
 
-  auto logical_ids = device_assn.GetDeviceToLogicalIdMap();
+  const auto logical_ids = device_assn.GetDeviceToLogicalIdMap();
   int64_t num_local_participants = 0;
   for (const auto& [local_id, global_id] :
        *collective_params->global_device_id_map) {
@@ -243,15 +243,15 @@ absl::Status CommandBufferThunk::Initialize(const InitializeParams& params) {
 
   // TODO(b/290773547): Disabled CUDA graphs when profiling is active because of
   // memory corruption.
-  bool disabled_for_profiling =
+  const bool disabled_for_profiling =
       tsl::profiler::ProfilerLock::HasActiveSession() && thunks_ &&
       !enable_command_buffers_during_profiling_;
 
   // Agree before any of the early returns below, because their conditions can
   // differ between participants.
   ABSL_ASSIGN_OR_RETURN(
-      bool update_on_initialize,
-      AgreeOnInitializationUpdate(params, disabled_for_profiling));
+      const Decision skip_update,
+      CanSkipInitializationUpdate(params, disabled_for_profiling));
 
   if (disabled_for_profiling) {
     VLOG(1) << "Initialize command buffer thunk as a regular thunk sequence "
@@ -315,7 +315,7 @@ absl::Status CommandBufferThunk::Initialize(const InitializeParams& params) {
       cmd_buffer->command_buffer->state() == se::CommandBuffer::State::kCreate;
   if (is_first_record ||
       (has_dynamic_allocations && commands_.requires_update_on_initialize() &&
-       update_on_initialize)) {
+       skip_update.IsForbidden())) {
     VLOG(3) << "Initialize command buffer on device #"
             << params.executor->device_ordinal()
             << " by recoding command buffer cmd sequence"
@@ -478,63 +478,77 @@ CommandBufferThunk::GetOrCreateCommandBuffer(se::StreamExecutor* executor) {
   return device_state->command_buffer;
 }
 
-absl::StatusOr<bool> CommandBufferThunk::AgreeOnInitializationUpdate(
+absl::StatusOr<Decision> CommandBufferThunk::CanSkipInitializationUpdate(
     const InitializeParams& params, bool disabled_for_profiling) {
-  if (!skip_unchanged_collectives_ ||
-      !commands_.requires_update_on_initialize()) {
-    return true;
+  if (!commands_.requires_update_on_initialize()) {
+    return Decision::Allow();
+  }
+  if (!skip_unchanged_collectives_) {
+    return Decision::Forbid("skipping unchanged collectives is disabled");
   }
 
   // A recorded collective can embed peer buffer addresses, so if one
   // participant records it again, all of them must. Rendezvous works only
   // within a process, so without all participants here, keep recording.
-  std::optional<int64_t> num_participants =
+  const std::optional<int64_t> num_participants =
       NumParticipantsIfAllLocal(params.collective_params);
   if (!num_participants.has_value()) {
-    return true;
+    return Decision::Forbid("not all participants are in this process");
   }
 
   // Whatever keeps this device from replaying its recorded command buffer
-  // counts as an update, so that every participant then records as usual.
-  bool needs_update = true;
-  if (!disabled_for_profiling && params.persistent_alloc_indices.has_value()) {
+  // forbids the skip, so that every participant then records as usual.
+  Decision decision = Decision::Allow();
+  if (disabled_for_profiling) {
+    decision = Decision::Forbid("command buffers are disabled for profiling");
+  } else if (!params.persistent_alloc_indices.has_value()) {
+    decision =
+        Decision::Forbid("persistent allocation indices are not available");
+  } else {
     ABSL_ASSIGN_OR_RETURN(std::shared_ptr<ExecutorCommandBuffer> cmd_buffer,
                           GetOrCreateCommandBuffer(params.executor));
     absl::MutexLock lock(cmd_buffer->mutex);
-    bool warmed_up =
+    const bool warmed_up =
         cmd_buffer->warmup_done || !thunks_ || !commands_.requires_warmup();
-    bool is_first_record = cmd_buffer->command_buffer->state() ==
-                           se::CommandBuffer::State::kCreate;
-    needs_update =
-        !warmed_up || is_first_record ||
-        cmd_buffer->AllocationsChanged(
-            commands_.update_on_initialize_allocs_indices(),
-            *params.buffer_allocations, *params.persistent_alloc_indices);
+    const bool is_first_record = cmd_buffer->command_buffer->state() ==
+                                 se::CommandBuffer::State::kCreate;
+    if (!warmed_up) {
+      decision = Decision::Forbid("not warmed up");
+    } else if (is_first_record) {
+      decision = Decision::Forbid("not recorded yet");
+    } else if (cmd_buffer->AllocationsChanged(
+                   commands_.update_on_initialize_allocs_indices(),
+                   *params.buffer_allocations,
+                   *params.persistent_alloc_indices)) {
+      decision = Decision::Forbid("a buffer of these commands moved");
+    }
   }
 
-  if (*num_participants == 1) {
-    return needs_update;
+  const int device_ordinal = params.executor->device_ordinal();
+  if (*num_participants > 1) {
+    const RunId run_id = params.collective_params->run_id;
+    bool can_skip = decision.IsAllowed();
+    ABSL_ASSIGN_OR_RETURN(
+        std::shared_ptr<bool> all_can_skip,
+        Rendezvous<bool>(
+            absl::StrFormat("[%d] command buffer initialization update; "
+                            "run_id=%d",
+                            device_ordinal, run_id.ToInt()),
+            std::make_tuple(run_id, this), can_skip, *num_participants,
+            [](absl::Span<bool*> values) {
+              return absl::c_all_of(values, [](bool* value) { return *value; });
+            },
+            InitializationWarnStuckTimeout(),
+            InitializationTerminateTimeout()));
+    if (decision.IsAllowed() && !*all_can_skip) {
+      decision = Decision::Forbid("another participant records again");
+    }
   }
-
-  int device_ordinal = params.executor->device_ordinal();
-  RunId run_id = params.collective_params->run_id;
-  ABSL_ASSIGN_OR_RETURN(
-      std::shared_ptr<bool> any_needs_update,
-      Rendezvous<bool>(
-          absl::StrFormat("[%d] command buffer initialization update; "
-                          "run_id=%d",
-                          device_ordinal, run_id.ToInt()),
-          std::make_tuple(run_id, this), needs_update, *num_participants,
-          [](absl::Span<bool*> values) {
-            return absl::c_any_of(values, [](bool* value) { return *value; });
-          },
-          InitializationWarnStuckTimeout(), InitializationTerminateTimeout()));
 
   XLA_VLOG_DEVICE(3, device_ordinal) << absl::StreamFormat(
-      "Command buffer initialization update agreement: needs_update=%v; "
-      "any_needs_update=%v; num_participants=%d",
-      needs_update, *any_needs_update, *num_participants);
-  return *any_needs_update;
+      "Skip command buffer initialization update: %s; num_participants=%d",
+      decision.Explain(), *num_participants);
+  return decision;
 }
 
 //===----------------------------------------------------------------------===//

@@ -34,6 +34,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/backends/gpu/runtime/thunk.pb.h"
 #include "xla/service/buffer_assignment.h"
+#include "xla/service/decision.h"
 #include "xla/service/gpu/buffer_allocations.h"
 #include "xla/stream_executor/command_buffer.h"
 #include "xla/stream_executor/device_address.h"
@@ -172,11 +173,12 @@ class CommandBufferThunk : public Thunk {
   absl::StatusOr<std::shared_ptr<ExecutorCommandBuffer>>
   GetOrCreateCommandBuffer(se::StreamExecutor* executor);
 
-  // Returns whether commands that require an update on initialization must be
-  // recorded again in this execution. With `skip_unchanged_collectives_` and
-  // all participants in this process, this is a collective operation: all
-  // participants must call it for the same execution.
-  absl::StatusOr<bool> AgreeOnInitializationUpdate(
+  // Decides whether commands that require an update on initialization can skip
+  // recording again in this execution, and if not, why. With
+  // `skip_unchanged_collectives_` and all participants in this process, this
+  // is a collective operation: all participants must call it for the same
+  // execution.
+  absl::StatusOr<Decision> CanSkipInitializationUpdate(
       const InitializeParams& params, bool disabled_for_profiling);
 
   // Each individual command buffer allocates state on device (CUDA graph) and
