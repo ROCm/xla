@@ -45,23 +45,28 @@ TEST(TritonConfigsTest, PlatformsReturnNonEmptyConfig) {
               SizeIs(2));
   EXPECT_THAT(GetTritonConfigsForPlatform(TritonConfigsPlatform::kHopper),
               SizeIs(25));
-  // 33 tuned configs + 20 mfma_size=16 variants, each with kpack 1 and 2.
+  // 33 tuned configs + 20 mfma_size=16 variants + 5 kpack=2 variants.
   EXPECT_THAT(GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI300),
-              SizeIs(106));
+              SizeIs(58));
   EXPECT_THAT(GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI350),
               SizeIs(58));
   EXPECT_THAT(GetTritonConfigsForPlatform(TritonConfigsPlatform::kRubin),
               SizeIs(40));
 }
 
-TEST(TritonConfigsTest, MI300ListsEveryConfigWithBothKpacks) {
+TEST(TritonConfigsTest, MI300ListsKpack2VariantsNextToKpack1Configs) {
   const std::vector<TritonGemmConfig>& configs =
       GetTritonConfigsForPlatform(TritonConfigsPlatform::kMI300);
 
   EXPECT_THAT(configs, Each(Field(&TritonGemmConfig::kpack, AnyOf(1, 2))));
+  EXPECT_THAT(configs,
+              Contains(Field(&TritonGemmConfig::kpack, 2)).Times(5));
   for (const TritonGemmConfig& config : configs) {
+    if (config.kpack != 2) {
+      continue;
+    }
     TritonGemmConfig twin = config;
-    twin.kpack = config.kpack == 1 ? 2 : 1;
+    twin.kpack = 1;
     EXPECT_THAT(configs, Contains(twin)) << config.ToString();
   }
 }
