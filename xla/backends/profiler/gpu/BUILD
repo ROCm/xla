@@ -83,6 +83,7 @@ cc_library(
     ],
     deps = [
         ":rocm_collector",
+        ":rocm_device_map",
         ":rocm_tracer",
         ":rocm_tracer_utils",
         "//xla:debug_options_flags",
@@ -606,10 +607,12 @@ cc_library(
     ],
     deps = [
         ":rocm_collector",
+        ":rocm_device_map",
         ":rocm_tracer_utils",
         "//xla/stream_executor/rocm:roctracer_wrapper",
         "//xla/tsl/platform:errors",
         "//xla/tsl/profiler/backends/cpu:annotation_stack",
+        "@com_google_absl//absl/base",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:inlined_vector",
@@ -622,6 +625,7 @@ cc_library(
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:optional",
         "@com_google_absl//absl/types:span",
+        "@local_config_rocm//rocm:hip_runtime",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocm_headers",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocprofiler_sdk",  # buildcleaner: keep
         "@tsl//tsl/platform:abi",
@@ -636,6 +640,7 @@ xla_test(
     tags = ["rocm-only"],
     deps = [
         ":rocm_collector",
+        ":rocm_device_map",
         ":rocm_tracer",
         ":rocm_tracer_utils",
         "//xla/tsl/lib/core:status_test_util",
@@ -653,6 +658,22 @@ xla_test(
         "@local_config_rocm//rocm:rocprofiler_sdk",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocprofiler_sdk_roctx",  # buildcleaner: keep
         "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
+    ],
+)
+
+xla_test(
+    name = "rocm_tracer_nodevice_test",
+    size = "small",
+    srcs = ["rocm_tracer_nodevice_test.cc"],
+    backends = ["gpu"],
+    # HIP numbers no device, as when every GPU is masked.
+    env = {"ROCR_VISIBLE_DEVICES": ""},
+    tags = ["rocm-only"],
+    deps = [
+        ":rocm_device_map",
+        ":rocm_tracer",
+        "@com_google_googletest//:gtest_main",
+        "@local_config_rocm//rocm:rocm_headers",
     ],
 )
 

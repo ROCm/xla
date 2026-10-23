@@ -20,11 +20,14 @@ limitations under the License.
 #include <cstdint>
 #include <string>
 
+#include "absl/base/call_once.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/types/optional.h"
+#include "absl/types/span.h"
+#include "xla/backends/profiler/gpu/rocm_device_map.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/stream_executor/rocm/roctracer_wrapper.h"
 
@@ -59,9 +62,19 @@ class RocmTracer {
   void Disable();
 
   static uint64_t GetTimestamp();
-  uint32_t NumGpus() const { return num_gpus_; }
-  const std::vector<rocprofiler_agent_v0_t>& GpuAgents() const {
-    return gpu_agents_;
+
+  // Rows are numbered by HIP device. The first call asks HIP which GPUs it
+  // numbers and matches them to the SDK's agents; every call returns that
+  // map. Until then NumGpus() and GpuAgents() report no GPUs, and rows carry
+  // kInvalidDeviceId. Calls HIP, so never call it from an SDK callback or
+  // while holding collector_mutex_ or kernel_lock_.
+  const HipDeviceMap& EnsureHipDeviceMap();
+  uint32_t NumGpus() const { return static_cast<uint32_t>(GpuAgents().size()); }
+  // Indexed by HIP device number.
+  absl::Span<const rocprofiler_agent_v0_t> GpuAgents() const {
+    const HipDeviceMap* map = hip_device_map_.load(std::memory_order_acquire);
+    if (map == nullptr) return {};
+    return map->gpu_agents;
   }
   RocmTraceCollector* collector() { return collector_; }
 
@@ -112,8 +125,14 @@ class RocmTracer {
 
  private:
   absl::Status InitProfiling(void* tool_data);
+  // The HIP device number of an agent, or kInvalidDeviceId.
+  uint32_t HipDeviceOf(uint64_t agent_handle) const;
+  rocprofiler_agent_type_t AgentType(uint64_t agent_handle) const;
 
-  uint32_t num_gpus_{0};
+  // Set once by EnsureHipDeviceMap() and never freed, because the SDK's buffer
+  // thread reads it, possibly during exit.
+  absl::once_flag hip_device_map_once_;
+  std::atomic<const HipDeviceMap*> hip_device_map_{nullptr};
   std::optional<RocmTracerOptions> options_;
   RocmTraceCollector* collector_{nullptr};
   absl::Mutex collector_mutex_;
@@ -171,7 +190,6 @@ class RocmTracer {
 
   callback_name_info name_info_;
   agent_info_map_t agents_;
-  std::vector<rocprofiler_agent_v0_t> gpu_agents_;
 
  public:
   // Disable copy and move.
