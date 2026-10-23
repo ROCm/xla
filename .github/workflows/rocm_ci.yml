@@ -45,8 +45,8 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'main' }}
 
 env:
-  ROCM_DISTRO_URL: https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.0.0.tar.gz
-  ROCM_DISTRO_HASH: 1c5e807875d26a2470ecc7323daa5b5b9009208a55c3290ac255a909cde15fc6
+  ROCM_DISTRO_URL: https://rc.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.2.0rc0.tar.gz
+  ROCM_DISTRO_HASH: 612f68eabc5bb51905413a9b84d72e0a37a3f0c2a8a880cec018f85219d1890d
   ROCM_AMD_GPU_TARGETS: gfx950
   ROCM_SINGLE_GPU_RBE_POOL: linux_x64_gpu
 
