@@ -1188,12 +1188,16 @@ cc_library(
     ],
     visibility = ["//visibility:private"],
     deps = [
+        ":cancellation_token",
         ":rccl_errors",
+        "//xla:future",
         "//xla:util",
         "//xla/core/collectives:symmetric_memory",
         "//xla/stream_executor:device_address",
+        "//xla/tsl/concurrency:executor",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
         "@local_config_rocm//rocm:rccl",  # buildcleaner: keep
