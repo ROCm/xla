@@ -80,7 +80,7 @@ jobs:
     env:
       COMMON_ARGS: >-
         --config=rocm_ci_hermetic
-        --config=rocm_rbe_dev
+        --config=${{ matrix.mode.rbe_config }}
         --local_test_jobs=1
         --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu
         --repo_env=TF_ROCM_RBE_MULTI_GPU_POOL=default
@@ -102,10 +102,17 @@ jobs:
             distro_url: "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.1.0.tar.gz"
             distro_hash: "a95c72f0052168f2262365dff71c2259331721ad0a65da7957dc7d96ccb77021"
             runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
+            rbe_config: "rocm_rbe"
           - name: "therock_nightly"
             distro_url: "https://rc.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-${{ needs.rocm-config.outputs.therock-version }}.tar.gz"
             distro_hash: "no_hash"
             runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
+            rbe_config: "rocm_rbe"
+          - name: "therock_release_bb"
+            distro_url: "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.1.0.tar.gz"
+            distro_hash: "a95c72f0052168f2262365dff71c2259331721ad0a65da7957dc7d96ccb77021"
+            runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
+            rbe_config: "rocm_rbe_dev"
     container:
       image: ${{ needs.rocm-config.outputs.docker-image }}
 
