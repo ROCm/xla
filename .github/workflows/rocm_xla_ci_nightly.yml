@@ -89,6 +89,7 @@ jobs:
         --bes_keywords=xla
         --bes_keywords=nightly
         --keep_going
+        --nocache_test_results
       ROCM_DISTRO_ARGS: >-
         --repo_env=ROCM_PATH=
         --repo_env=ROCM_DISTRO_URL=${{ matrix.mode.distro_url }}
