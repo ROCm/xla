@@ -20,23 +20,24 @@ limitations under the License.
 #include <vector>
 
 #include "absl/types/span.h"
-#include "nanobind/nanobind.h"  // from @nanobind
-#include "nanobind/stl/detail/nb_list.h"  // from @nanobind
-#include "nanobind/stl/vector.h"  // from @nanobind  // IWYU pragma: keep
+#include "nanobind/nanobind.h"
+#include "nanobind/stl/detail/nb_list.h"
+#include "nanobind/stl/vector.h"  // IWYU pragma: keep
 
 namespace nanobind {
 namespace detail {
 
 template <typename T>
 struct type_caster<absl::Span<T const>> {
-  NB_TYPE_CASTER(absl::Span<T const>,
-                 const_name("Span[") + make_caster<T>::Name + const_name("]"))
+  NB_TYPE_CASTER(absl::Span<T const>, const_name("collections.abc.Sequence[") +
+                                          make_caster<T>::Name +
+                                          const_name("]"))
 
   using Caster = make_caster<T>;
 
   list_caster<std::vector<T>, T> vec_caster;
 
-  bool from_python(handle src, uint8_t flags, cleanup_list *cleanup) noexcept {
+  bool from_python(handle src, uint8_t flags, cleanup_list* cleanup) noexcept {
     if (!vec_caster.from_python(src, flags, cleanup)) {
       return false;
     }
@@ -45,20 +46,19 @@ struct type_caster<absl::Span<T const>> {
   }
 
   static handle from_cpp(absl::Span<T const> src, rv_policy policy,
-                         cleanup_list *cleanup) noexcept {
-    object ret = steal(PyList_New(src.size()));
-    if (ret.is_valid()) {
-      Py_ssize_t i = 0;
-      for (const T &value : src) {
-        handle h = Caster::from_cpp(value, policy, cleanup);
-        if (!h.is_valid()) {
-          ret.reset();
-          break;
-        }
-        PyList_SET_ITEM(ret.ptr(), i++, h.ptr());
-      }
+                         cleanup_list* cleanup) noexcept {
+    seq_builder<false> b(src.size());
+    if (NB_UNLIKELY(!b.valid())) {
+      return {};
     }
-    return ret.release();
+    for (const T& x : src) {
+      handle h = Caster::from_cpp(x, policy, cleanup);
+      if (NB_UNLIKELY(!h.is_valid())) {
+        break;
+      }
+      b.put(h);
+    }
+    return b.commit();
   }
 };
 

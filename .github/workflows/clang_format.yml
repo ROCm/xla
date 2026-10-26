@@ -14,8 +14,13 @@
 # ============================================================================
 
 name: Clang Format
+permissions:
+  contents: read
 on:
   pull_request:
+  push:
+    branches:
+      - main
 
 jobs:
   clang-format:
@@ -23,13 +28,21 @@ jobs:
     defaults:
       run:
         shell: bash
-    timeout-minutes: 1
+    timeout-minutes: 6
     if: |
+      github.event.sender.type == 'User' ||
       contains(github.event.pull_request.body, 'FORCE_TEST_ACTIONS')
     steps:
       - name: "Checking out repository"
-        uses: actions/checkout@e2f20e631ae6d7dd3b768f56a5d2af784dd54791 # v2.5.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: '0'
+          persist-credentials: false
       - name: "Fetch HEAD of main branch"
         run: git fetch origin main --depth=1
-      - name: "Run clang-format" # Use pipx to get version that apt doesn't have by default
-        run: pipx run clang-format==17.0.6 --dry-run --Werror --verbose $(git diff --name-only origin/main HEAD -- '*.cc' '*.h')
+      - name: Install uv dependencies
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - name: "Run clang-format check"
+        env:
+          TARGET_REF: "origin/${{ github.base_ref || 'main' }}"
+        run: ./build_tools/ci/run_clang_format.sh

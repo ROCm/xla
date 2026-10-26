@@ -17,10 +17,13 @@ limitations under the License.
 #define XLA_SERVICE_GPU_LAUNCH_DIMENSIONS_H_
 
 #include <cstdint>
-#include <ostream>
 #include <string>
+#include <tuple>
 
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "xla/runtime/work_dimensions.h"
+#include "xla/service/gpu/launch_dimensions.pb.h"
 #include "xla/shape.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/launch_dim.h"
@@ -34,22 +37,21 @@ class LaunchDimensions {
  public:
   // The default constructor creates a launch dimension that indicate
   // single-threaded execution.
-  LaunchDimensions()
-      : block_counts_(se::BlockDim()),
-        thread_counts_per_block_(se::ThreadDim()) {}
+  constexpr LaunchDimensions() = default;
 
-  LaunchDimensions(uint64_t block_x_count, uint64_t thread_x_count_per_block)
+  constexpr LaunchDimensions(uint64_t block_x_count,
+                             uint64_t thread_x_count_per_block)
       : block_counts_(block_x_count, 1, 1),
         thread_counts_per_block_(thread_x_count_per_block, 1, 1) {}
 
-  LaunchDimensions(const se::BlockDim& block_counts,
-                   const se::ThreadDim& thread_counts_per_block)
+  constexpr LaunchDimensions(const se::BlockDim& block_counts,
+                             const se::ThreadDim& thread_counts_per_block)
       : block_counts_(block_counts),
         thread_counts_per_block_(thread_counts_per_block) {}
 
-  se::BlockDim block_counts() const { return block_counts_; }
+  const se::BlockDim& block_counts() const { return block_counts_; }
 
-  se::ThreadDim thread_counts_per_block() const {
+  const se::ThreadDim& thread_counts_per_block() const {
     return thread_counts_per_block_;
   }
 
@@ -76,13 +78,23 @@ class LaunchDimensions {
                         thread_counts_per_block_.z, "}");
   }
 
-  bool operator==(const LaunchDimensions& other) const {
-    return block_counts_ == other.block_counts_ &&
-           thread_counts_per_block_ == other.thread_counts_per_block_;
+  static absl::StatusOr<LaunchDimensions> FromWorkDimensions(
+      const WorkDimensions& work_dimensions);
+  WorkDimensions AsWorkDimensions() const;
+
+  LaunchDimensionsProto ToProto() const;
+  static absl::StatusOr<LaunchDimensions> FromProto(
+      const LaunchDimensionsProto& proto);
+
+  friend bool operator==(const LaunchDimensions& lhs,
+                         const LaunchDimensions& rhs) {
+    return std::tie(lhs.block_counts_, lhs.thread_counts_per_block_) ==
+           std::tie(rhs.block_counts_, rhs.thread_counts_per_block_);
   }
 
-  bool operator!=(const LaunchDimensions& other) const {
-    return !(*this == other);
+  friend bool operator!=(const LaunchDimensions& lhs,
+                         const LaunchDimensions& rhs) {
+    return !(lhs == rhs);
   }
 
  private:
@@ -90,42 +102,16 @@ class LaunchDimensions {
   se::ThreadDim thread_counts_per_block_;
 };
 
-std::ostream& operator<<(std::ostream& out,
-                         const LaunchDimensions& launch_dims);
-
-struct LaunchDimensionsConfig {
-  // The kernel implementation will be unrolled if `unroll_factor` is
-  // greater than one.
-  int unroll_factor = 1;
-  // A wave is a group of blocks that execute at the same time on the
-  // GPU. If there are more blocks then the number that can run
-  // concurrently, there are multiple waves of blocks running
-  // sequentially.  If `few_waves` is true, each thread will loop over
-  // a block of unroll_factor elements. Otherwise each thread will
-  // handle only unroll_factor.
-  bool few_waves = false;
-  // If `row_vectorized` is true, then the block size will equal to
-  // `hlo.shape().dimensions().back()/unroll_factor`.
-  // Currently few_waves and row_vectorized do not work together.
-  bool row_vectorized = false;
-
-  std::string ToString() {
-    return absl::StrCat("unroll_factor=", unroll_factor,
-                        ", few_waves=", few_waves,
-                        ", row_vectorized=", row_vectorized);
-  }
-};
-
 // Returns -1 if the shape doesn't allow the row vectorization code path.
 // If supported, return the number of threads to use in that case.
 int64_t ThreadsPerBlockRowVectorized(
     const Shape& shape, const se::DeviceDescription& gpu_device_info,
-    LaunchDimensionsConfig dim_config);
+    int unroll_factor);
 
 // Calculates the launch dimensions used to invoke `hlo`.
 LaunchDimensions CalculateLaunchDimensions(
     const Shape& shape, const se::DeviceDescription& gpu_device_info,
-    LaunchDimensionsConfig dim_config = {});
+    int unroll_factor = 1);
 
 }  // namespace gpu
 }  // namespace xla

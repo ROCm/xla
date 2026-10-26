@@ -24,11 +24,12 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "absl/status/statusor.h"
 #include "absl/types/span.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/service/hlo.pb.h"
 #include "xla/shape.h"
-#include "xla/statusor.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -118,7 +119,9 @@ class ShapeInference {
       const Shape& lhs, const Shape& rhs, int64_t feature_group_count,
       int64_t batch_group_count, const Window& window,
       const ConvolutionDimensionNumbers& dimension_numbers,
-      std::optional<PrimitiveType> preferred_element_type);
+      const SparsityConfig& sparsity_config,
+      std::optional<PrimitiveType> preferred_element_type,
+      ConvolutionKind convolution_kind = CONVOLUTION_KIND_UNSET);
 
   // Infers the shape produced by the given FFT type on the given operand.
   static absl::StatusOr<Shape> InferFftShape(
@@ -178,18 +181,28 @@ class ShapeInference {
   static absl::StatusOr<Shape> InferAllToAllTupleShape(
       absl::Span<const Shape* const> operand_shapes);
 
+  // Infers the shape of an HLO ragged-all-to-all instruction.
+  static absl::StatusOr<Shape> InferRaggedAllToAllShape(
+      absl::Span<const Shape* const> operand_shapes);
+
   // Infers the shape of a collective broadcast operation.
   static absl::StatusOr<Shape> InferCollectiveBroadcastShape(
-      absl::Span<const Shape* const> operand_shapes);
+      absl::Span<const Shape* const> operand_shapes,
+      bool has_dynamic_root = false);
+
+  // Infers the shape of a collective reduce operation.
+  static absl::StatusOr<Shape> InferCollectiveReduceShape(
+      absl::Span<const Shape* const> operand_shapes,
+      bool has_dynamic_root = false);
 
   // Infers the shape of a collective permute operation.
   static absl::StatusOr<Shape> InferCollectivePermuteShape(
-      absl::Span<const Shape* const> operand_shapes);
+      absl::Span<const Shape* const> operand_shapes, bool inplace);
 
   // Infers the shape of a collective permute start operation.
   static absl::StatusOr<Shape> InferCollectivePermuteStartShape(
       absl::Span<const Shape* const> operand_shapes,
-      absl::Span<const Shape> context_shapes);
+      absl::Span<const Shape> context_shapes, bool inplace);
 
   // Infers the shape of a collective permute operation.
   static absl::StatusOr<Shape> InferCollectivePermuteDoneShape(
@@ -234,6 +247,12 @@ class ShapeInference {
   // of the elements in the given dimensions.
   static absl::StatusOr<Shape> InferReverseShape(
       const Shape& operand_shape, absl::Span<const int64_t> dimensions);
+
+  // Infers the shape of a shuffle instruction, which rearranges the operand's
+  // elements along the given dimensions according to `mode`.
+  static absl::StatusOr<Shape> InferShuffleShape(
+      const Shape& operand_shape, absl::Span<const int64_t> dimensions,
+      const ShuffleMode& mode);
 
   // Infers the shape produced by a slice operation spanning from the starts to
   // the limits in the original shape's dimensions.
@@ -291,7 +310,7 @@ class ShapeInference {
   // its operand and the new dimension sizes specified.
   static absl::StatusOr<Shape> InferReshapeShape(
       const Shape& operand, absl::Span<const int64_t> dimensions,
-      absl::Span<const int64_t> new_sizes, int64_t inferred_dimension);
+      int64_t inferred_dimension);
 
   // Infers the shape produced by a dynamic reshape operation from the element
   // type of its operand and the new dimension sizes specified. The result shape
@@ -356,12 +375,15 @@ class ShapeInference {
       const Shape& lhs, const Shape& rhs,
       const DotDimensionNumbers& dimension_numbers,
       std::optional<PrimitiveType> preferred_element_type,
-      absl::Span<const SparsityDescriptor> sparsity = {});
+      const SparsityConfig& sparsity_config = {});
 
-  // Helper that infers the shape of the sparse dot metadata.
-  static absl::StatusOr<Shape> InferSparseDotMetadataShape(
-      const Shape& operand_shape, const DotDimensionNumbers& dimension_numbers,
-      const SparsityDescriptor& sparsity, PrimitiveType element_type = U16);
+  // Helper that infers the shape produced by performing a ragged dot operation
+  // with the given LHS and RHS shapes. An optional preferred_element_type can
+  // be specified to upcast the element type.
+  static absl::StatusOr<Shape> InferRaggedDotOpShape(
+      const Shape& lhs, const Shape& rhs, const Shape& group_sizes,
+      const RaggedDotDimensionNumbers& ragged_dot_dim_nums,
+      std::optional<PrimitiveType> preferred_element_type);
 
   // Helper that infers the shape of the tensor produced by a gather operation
   // with the given input shape, gather indices shape and gather dimension

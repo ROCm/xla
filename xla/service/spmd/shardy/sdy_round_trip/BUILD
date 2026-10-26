@@ -1,0 +1,181 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+load("//xla/tsl:tsl.bzl", "internal_visibility")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
+
+package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
+    default_visibility = internal_visibility([":friends"]),
+    licenses = ["notice"],
+)
+
+package_group(
+    name = "friends",
+    includes = [
+        "//xla:friends",
+    ],
+)
+
+cc_library(
+    name = "export_shardy_attrs",
+    srcs = ["export_shardy_attrs.cc"],
+    hdrs = ["export_shardy_attrs.h"],
+    deps = [
+        "//xla/hlo/ir:hlo_sharding",
+        "//xla/hlo/translate/hlo_to_mhlo:hlo_utils",
+        "//xla/service/spmd/shardy:constants",
+        "//xla/service/spmd/shardy:utils",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TransformUtils",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_library(
+    name = "export_ops",
+    srcs = ["export_ops.cc"],
+    hdrs = ["export_ops.h"],
+    deps = [
+        "//xla/service/spmd/shardy:constants",
+        "//xla/service/spmd/shardy:utils",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TransformUtils",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_library(
+    name = "import_shardy_attrs",
+    srcs = ["import_shardy_attrs.cc"],
+    hdrs = ["import_shardy_attrs.h"],
+    visibility = internal_visibility([":friends"]),
+    deps = [
+        "//xla:side_effect_util",
+        "//xla/hlo/ir:hlo_sharding",
+        "//xla/hlo/ir:mesh_and_axis",
+        "//xla/hlo/ir:named_sharding",
+        "//xla/hlo/parser:hlo_parser",
+        "//xla/hlo/translate/hlo_to_mhlo:hlo_utils",
+        "//xla/service/spmd/shardy:constants",
+        "//xla/service/spmd/shardy:utils",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/log:check",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:AsmParser",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Parser",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TransformUtils",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_library(
+    name = "shard_map_export",
+    srcs = ["shard_map_export.cc"],
+    hdrs = ["shard_map_export.h"],
+    deps = [
+        "//xla/service/spmd/shardy:constants",
+        "//xla/service/spmd/shardy:utils",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TransformUtils",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_library(
+    name = "shard_map_import",
+    srcs = ["shard_map_import.cc"],
+    hdrs = ["shard_map_import.h"],
+    deps = [
+        "//xla/service/spmd/shardy:constants",
+        "//xla/service/spmd/shardy:utils",
+        "@com_google_absl//absl/log:check",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:Analysis",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TransformUtils",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_library(
+    name = "dedup_meshes",
+    srcs = ["dedup_meshes.cc"],
+    hdrs = ["dedup_meshes.h"],
+    deps = [
+        "@com_google_absl//absl/log:check",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@shardy//shardy/dialect/sdy/transforms/common:sharding_walker",
+        "@shardy//shardy/dialect/sdy/transforms/export:utils",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_library(
+    name = "pipelines",
+    srcs = ["pipelines.cc"],
+    hdrs = ["pipelines.h"],
+    visibility = internal_visibility([":friends"]),
+    deps = [
+        ":dedup_meshes",
+        ":export_ops",
+        ":export_shardy_attrs",
+        ":import_shardy_attrs",
+        ":shard_map_export",
+        ":shard_map_import",
+        "//xla/mlir_hlo:stablehlo_extension_passes",
+        "//xla/service:hlo_proto_cc",
+        "//xla/service/spmd/shardy:utils",
+        "//xla/service/spmd/shardy/round_trip_common:import_constants",
+        "//xla/service/spmd/shardy/round_trip_common:import_sdy_custom_calls",
+        "//xla/service/spmd/shardy/round_trip_common:open_while_free_vars_sharding",
+        "//xla/service/spmd/shardy/stablehlo_round_trip:export_shardings",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TransformUtils",
+        "@llvm-project//mlir:Transforms",
+        "@shardy//shardy/dialect/sdy/transforms/export:passes",
+        "@shardy//shardy/dialect/sdy/transforms/import:passes",
+    ],
+)

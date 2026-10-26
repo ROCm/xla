@@ -26,10 +26,8 @@ limitations under the License.
 namespace mlir {
 namespace deallocation {
 
-// Pass to reuse buffers (hoisting, double buffering, dealloc/alloc
-// coalescing).
-std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>>
-createBufferReusePass();
+#define GEN_PASS_DECL
+#include "deallocation/transforms/passes.h.inc"
 
 #define GEN_PASS_REGISTRATION
 #include "deallocation/transforms/passes.h.inc"

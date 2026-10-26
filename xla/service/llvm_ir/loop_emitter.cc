@@ -15,36 +15,48 @@ limitations under the License.
 
 #include "xla/service/llvm_ir/loop_emitter.h"
 
+#include <cstdint>
 #include <memory>
 #include <utility>
+#include <vector>
 
+#include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "xla/layout_util.h"
+#include "xla/service/llvm_ir/ir_array.h"
 #include "xla/service/llvm_ir/llvm_loop.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/status_macros.h"
-#include "xla/types.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/protobuf.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/logging.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace llvm_ir {
 
 LoopEmitter::LoopEmitter(const BodyEmitter& body_emitter, const Shape& shape,
-                         llvm::IRBuilder<>* b)
+                         llvm::IRBuilderBase* b)
     : body_emitter_(body_emitter), shape_(shape), b_(b) {}
 
 LoopEmitter::LoopEmitter(const BodyEmitter& body_emitter, const Shape& shape,
                          std::vector<llvm::Value*> dynamic_dims,
-                         llvm::IRBuilder<>* b)
+                         llvm::IRBuilderBase* b)
     : LoopEmitter::LoopEmitter(body_emitter, shape, b) {
-  CHECK_EQ(dynamic_dims.size(), shape_.dimensions_size());
+  CHECK_EQ(dynamic_dims.size(), shape_.dimensions().size());
   dynamic_dims_ = std::move(dynamic_dims);
 }
 
 LoopEmitter::LoopEmitter(const ElementGenerator& target_element_generator,
-                         const IrArray& target_array, llvm::IRBuilder<>* b)
+                         const IrArray& target_array, llvm::IRBuilderBase* b)
     : body_emitter_(MakeBodyEmitter(target_element_generator, {target_array}, b,
                                     /*is_tuple=*/false)),
       shape_(target_array.GetShape()),
@@ -52,7 +64,7 @@ LoopEmitter::LoopEmitter(const ElementGenerator& target_element_generator,
 
 LoopEmitter::LoopEmitter(const ElementGenerator& target_element_generator,
                          absl::Span<const IrArray> target_arrays,
-                         llvm::IRBuilder<>* b)
+                         llvm::IRBuilderBase* b)
     : body_emitter_(MakeBodyEmitter(target_element_generator, target_arrays, b,
                                     /*is_tuple=*/true)),
       shape_(target_arrays[0].GetShape()),
@@ -61,22 +73,22 @@ LoopEmitter::LoopEmitter(const ElementGenerator& target_element_generator,
   // same dimensions.
   for (const IrArray& array : target_arrays) {
     CHECK(ShapeUtil::SameDimensions(shape_, array.GetShape()))
-        << ": '" << shape_.ShortDebugString() << "' does not match '"
-        << array.GetShape().ShortDebugString() << "'";
+        << ": '" << shape_.ToString() << "' does not match '"
+        << array.GetShape().ToString() << "'";
   }
 }
 
 BodyEmitter MakeBodyEmitter(const ElementGenerator& target_element_generator,
                             absl::Span<IrArray const> target_arrays,
-                            llvm::IRBuilder<>* b, bool is_tuple) {
+                            llvm::IRBuilderBase* b, bool is_tuple) {
   std::vector<IrArray> target_arrays_vec(target_arrays.begin(),
                                          target_arrays.end());
   if (!is_tuple) {
     CHECK_EQ(target_arrays.size(), 1);
     return [=](const llvm_ir::IrArray::Index array_index) -> absl::Status {
       // Convert target_element_generator to a BodyEmitter.
-      TF_ASSIGN_OR_RETURN(llvm::Value * target_element,
-                          target_element_generator(array_index));
+      ABSL_ASSIGN_OR_RETURN(llvm::Value * target_element,
+                            target_element_generator(array_index));
       target_arrays_vec[0].EmitWriteArrayElement(array_index, target_element,
                                                  b);
       return absl::OkStatus();
@@ -84,8 +96,8 @@ BodyEmitter MakeBodyEmitter(const ElementGenerator& target_element_generator,
   }
 
   return [=](const llvm_ir::IrArray::Index array_index) {
-    TF_ASSIGN_OR_RETURN(llvm::Value * target_element,
-                        target_element_generator(array_index));
+    ABSL_ASSIGN_OR_RETURN(llvm::Value * target_element,
+                          target_element_generator(array_index));
     CHECK(target_element->getType()->isStructTy())
         << "This BodyEmitter is for multi-output, but target element "
            "generator does not produce values of struct type.";
@@ -114,13 +126,18 @@ IrArray::Index LoopEmitter::EmitStaticIndex(ForLoopNest* loop_nest,
   // Loops are added from outermost to innermost order with the ForLoopNest
   // class so emit loops in order from most-major dimension down to most-minor
   // dimension (of the target shape).
-  std::vector<llvm::Value*> array_multi_index(shape_.dimensions_size());
+  std::vector<llvm::Value*> array_multi_index(shape_.dimensions().size());
   for (int i = 0; i < LayoutUtil::MinorToMajor(shape_).size(); ++i) {
     int64_t dimension = LayoutUtil::Major(shape_.layout(), i);
+    // Only unroll the most minor dimension, this seems to give us good runtime
+    // performance with a large improvement in compile time.
+    auto unroll_mode = (i == shape_.dimensions().size() - 1)
+                           ? llvm_ir::UnrollMode::kDefaultUnroll
+                           : llvm_ir::UnrollMode::kNoUnroll;
     std::unique_ptr<ForLoop> loop = loop_nest->AddLoop(
         /*start_index=*/0,
         /*end_index=*/shape_.dimensions(dimension),
-        /*suffix=*/absl::StrFormat("dim.%d", dimension));
+        /*suffix=*/absl::StrFormat("dim.%d", dimension), unroll_mode);
     array_multi_index[dimension] = loop->GetIndVarValue();
   }
   return IrArray::Index(array_multi_index, shape_, index_type);
@@ -133,13 +150,18 @@ IrArray::Index LoopEmitter::EmitDynamicIndex(ForLoopNest* loop_nest,
   // Loops are added from outermost to innermost order with the ForLoopNest
   // class so emit loops in order from most-major dimension down to most-minor
   // dimension (of the target shape).
-  std::vector<llvm::Value*> array_multi_index(shape_.dimensions_size());
+  std::vector<llvm::Value*> array_multi_index(shape_.dimensions().size());
   for (int i = 0; i < LayoutUtil::MinorToMajor(shape_).size(); ++i) {
     int64_t dimension = LayoutUtil::Major(shape_.layout(), i);
+    // Only unroll the most minor dimension, this seems to give us good runtime
+    // performance with a large improvement in compile time.
+    auto unroll_mode = (i == shape_.dimensions().size() - 1)
+                           ? llvm_ir::UnrollMode::kDefaultUnroll
+                           : llvm_ir::UnrollMode::kNoUnroll;
     std::unique_ptr<ForLoop> loop = loop_nest->AddLoop(
         /*suffix=*/absl::StrFormat("dim.%d", dimension),
         /*start_index=*/llvm::ConstantInt::get(index_type, 0),
-        /*end_index=*/dynamic_dims_[dimension]);
+        /*end_index=*/dynamic_dims_[dimension], unroll_mode);
     array_multi_index[dimension] = loop->GetIndVarValue();
   }
   return IrArray::Index(array_multi_index, shape_, index_type);
@@ -188,13 +210,15 @@ absl::Status LoopEmitter::EmitLoop(absl::string_view loop_name,
   for (const IrArray::Index& array_index :
        EmitIndexAndSetExitBasicBlock(loop_name, index_type,
                                      /*base_index*/ nullptr)) {
-    TF_RETURN_IF_ERROR(body_emitter_(array_index));
+    ABSL_RETURN_IF_ERROR(body_emitter_(array_index));
   }
 
   // Set the insertion point of b_ to the loop exit, so that
   // code emitted for later instructions will be correctly placed.
+  // Insert before any instructions the loop emission split off into the
+  // exit block (e.g. a terminator), not at the block's end.
   if (exit_bb_ != nullptr) {
-    b_->SetInsertPoint(exit_bb_);
+    b_->SetInsertPoint(exit_bb_, exit_bb_->getFirstInsertionPt());
   }
   return absl::OkStatus();
 }

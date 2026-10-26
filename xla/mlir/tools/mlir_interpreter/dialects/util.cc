@@ -21,14 +21,14 @@ limitations under the License.
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "mlir/IR/AffineExpr.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "mlir/IR/Operation.h"  // from @llvm-project
-#include "mlir/IR/ValueRange.h"  // from @llvm-project
-#include "mlir/Interfaces/ViewLikeInterface.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
-#include "mlir/Support/MathExtras.h"  // from @llvm-project
+#include "llvm/Support/MathExtras.h"
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/ValueRange.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
+#include "mlir/Support/LLVM.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/interpreter.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/interpreter_value.h"
 
@@ -121,7 +121,7 @@ InterpreterValue TransposeImpl(const InterpreterValue& in,
 
 int64_t DimImpl(const InterpreterValue& in, int64_t index,
                 InterpreterState& state) {
-  if (index < 0 || index >= in.View().Rank()) {
+  if (index < 0 || index >= in.View().num_dimensions()) {
     state.AddFailure("dimension index out of bounds");
     return 0;
   }
@@ -137,7 +137,7 @@ llvm::SmallVector<InterpreterValue> NoOpTerminator(
 int64_t EvalAffineExpr(AffineExpr expr, ArrayRef<int64_t> dims,
                        ArrayRef<int64_t> symbols) {
   int64_t lhs = 0, rhs = 0;
-  if (auto bin = expr.dyn_cast<AffineBinaryOpExpr>()) {
+  if (auto bin = mlir::dyn_cast<AffineBinaryOpExpr>(expr)) {
     lhs = EvalAffineExpr(bin.getLHS(), dims, symbols);
     rhs = EvalAffineExpr(bin.getRHS(), dims, symbols);
   }
@@ -147,17 +147,17 @@ int64_t EvalAffineExpr(AffineExpr expr, ArrayRef<int64_t> dims,
     case AffineExprKind::Mul:
       return lhs * rhs;
     case AffineExprKind::Mod:
-      return mod(lhs, rhs);
+      return llvm::mod(lhs, rhs);
     case AffineExprKind::FloorDiv:
-      return floorDiv(lhs, rhs);
+      return llvm::divideFloorSigned(lhs, rhs);
     case AffineExprKind::CeilDiv:
-      return ceilDiv(lhs, rhs);
+      return llvm::divideCeilSigned(lhs, rhs);
     case AffineExprKind::Constant:
-      return expr.cast<AffineConstantExpr>().getValue();
+      return mlir::cast<AffineConstantExpr>(expr).getValue();
     case AffineExprKind::DimId:
-      return dims[expr.cast<AffineDimExpr>().getPosition()];
+      return dims[mlir::cast<AffineDimExpr>(expr).getPosition()];
     case AffineExprKind::SymbolId:
-      return symbols[expr.cast<AffineSymbolExpr>().getPosition()];
+      return symbols[mlir::cast<AffineSymbolExpr>(expr).getPosition()];
   }
 }
 

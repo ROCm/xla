@@ -41,8 +41,8 @@ class HloModule;
 // parameter index in the entry computation.
 class HloInputOutputAliasConfig {
  public:
-  // The kind of aliases which can be set. A kMayAlias is one setup at
-  // compilation time by the user, and has to be respected. A kMustAlias one
+  // The kind of aliases which can be set. A kMustAlias is one setup at
+  // compilation time by the user, and has to be respected. A kMayAlias one
   // might be setup by the compiler, if it decides it is convenient to do so.
   enum AliasKind {
     kMayAlias,
@@ -68,6 +68,15 @@ class HloInputOutputAliasConfig {
                              parameter_index.ToString(),
                              kind == kMustAlias ? "must-alias" : "may-alias");
     }
+
+    friend bool operator==(const Alias& lhs, const Alias& rhs) {
+      return std::tie(lhs.parameter_number, lhs.parameter_index, lhs.kind) ==
+             std::tie(rhs.parameter_number, rhs.parameter_index, rhs.kind);
+    }
+
+    friend bool operator!=(const Alias& lhs, const Alias& rhs) {
+      return !(lhs == rhs);
+    }
   };
 
   HloInputOutputAliasConfig() = default;
@@ -90,6 +99,9 @@ class HloInputOutputAliasConfig {
 
   // Checks whether the provided output index has already been aliased.
   bool OutputHasAlias(const ShapeIndex& output_index) const;
+
+  // Checks whether any output index has been aliased.
+  bool OutputHasAnyAlias() const;
 
   // (De)Serializes an HloInputOutputAliasConfig to/from an
   // HloInputOutputAliasProto.

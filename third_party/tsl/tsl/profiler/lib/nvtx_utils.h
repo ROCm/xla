@@ -34,6 +34,19 @@ using ProfilerDomainHandle = ProfilerDomain*;
 // Get the "TSL" domain if NVTX profiling is enabled, otherwise null
 ProfilerDomainHandle DefaultProfilerDomain();
 
+// Assign a human-readable name to the current thread
+void NameCurrentThread(const std::string&);
+
+// Assign a human-readable name to the given local device
+void NameDevice(int device_id, const std::string& device_name);
+
+struct Stream;
+// Opaque handle to an execution stream
+using StreamHandle = Stream*;
+
+// Assign a human-readable name to the given execution stream
+void NameStream(StreamHandle stream, const std::string& stream_name);
+
 // Register a string with the profiler/NVTX implementation for faster use
 StringHandle RegisterString(ProfilerDomainHandle, const std::string&);
 
@@ -65,5 +78,10 @@ void RangePush(ProfilerDomainHandle domain, StringHandle title,
 // Register the schema of a custom payload type, for use with the more powerful
 // version of RangePush
 uint64_t RegisterSchema(ProfilerDomainHandle domain, const void* schemaAttr);
+
+// Mark a memory region as initialized.
+// This mitigates false positives from the compute sanitizer (initcheck).
+void MarkMemoryInitialized(void const* address, size_t size,
+                           StreamHandle stream);
 }  // namespace tsl::profiler
 #endif  // TENSORFLOW_TSL_PROFILER_LIB_NVTX_UTILS_H_

@@ -1,4 +1,3 @@
-
 /* Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,27 +15,30 @@ limitations under the License.
 
 #ifndef XLA_TSL_UTIL_ONEDNN_THREADPOOL_H_
 #define XLA_TSL_UTIL_ONEDNN_THREADPOOL_H_
-#ifdef INTEL_MKL
 
-#include <list>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <utility>
-#include <vector>
+#include <algorithm>
+#include <cstdint>
+#include <functional>
 
 #define EIGEN_USE_THREADS
 
-#include "dnnl.hpp"
-#include "dnnl_threadpool.hpp"
-#include "tsl/platform/blocking_counter.h"
+#include "absl/synchronization/blocking_counter.h"
+#include "oneapi/dnnl/dnnl_threadpool.h"
+#include "oneapi/dnnl/dnnl_threadpool_iface.hpp"
+#include "oneapi/dnnl/dnnl_version.h"
 #include "tsl/platform/cpu_info.h"
-#include "tsl/platform/threadpool.h"
+#include "xla/tsl/platform/threadpool.h"
 
 namespace tsl {
 
 #ifndef ENABLE_ONEDNN_OPENMP
 using dnnl::threadpool_interop::threadpool_iface;
+
+// =============================================================================
+// This threadpool is synchronous and is used only in TensorFlow.
+// XLA has a different asynchronous-eligible threadpool at:
+//   xla/backends/cpu/runtime/onednn/onednn_threadpool.h
+// =============================================================================
 
 // Divide 'n' units of work equally among 'teams' threads. If 'n' is not
 // divisible by 'teams' and has a remainder 'r', the first 'r' teams have one
@@ -88,15 +90,27 @@ class OneDnnThreadPool : public threadpool_iface {
         can_use_caller_thread_(can_use_caller_thread) {
     set_num_and_max_threads(num_threads);
   }
-  virtual int get_num_threads() const override { return num_threads_; }
-  virtual bool get_in_parallel() const override {
+  int get_num_threads() const override { return num_threads_; }
+  bool get_in_parallel() const override {
     return (eigen_interface_->CurrentThreadId() != -1) ? true : false;
   }
-  virtual uint64_t get_flags() const override { return ASYNCHRONOUS; }
-  virtual void parallel_for(int n,
-                            const std::function<void(int, int)>& fn) override {
+#if defined(ENABLE_ONEDNN_ASYNC) || DNNL_VERSION_MAJOR > 3 || \
+    (DNNL_VERSION_MAJOR == 3 && DNNL_VERSION_MINOR >= 11)
+  // Return 0 for synchronous execution; parallel_for handles synchronization.
+  uint64_t get_flags() const override { return 0; }
+  // wait() is a no-op because parallel_for does not return early.
+  void wait() override {}
+#else
+  // Preserve the behavior required by older oneDNN versions, whose threadpool
+  // interface does not declare wait().
+  uint64_t get_flags() const override { return ASYNCHRONOUS; }
+#endif  // defined(ENABLE_ONEDNN_ASYNC) || DNNL_VERSION_MAJOR > 3 ||
+        // (DNNL_VERSION_MAJOR == 3 && DNNL_VERSION_MINOR >= 11)
+  void parallel_for(int n, const std::function<void(int, int)>& fn) override {
     // Should never happen (handled by DNNL)
-    if (n == 0) return;
+    if (n == 0) {
+      return;
+    }
 
     // Should never happen (handled by DNNL)
     if (n == 1) {
@@ -115,6 +129,21 @@ class OneDnnThreadPool : public threadpool_iface {
     const int njobs_to_schedule = use_caller_thread ? njobs - 1 : njobs;
 
     if (use_caller_thread) {
+#if defined(ENABLE_ONEDNN_ASYNC) || DNNL_VERSION_MAJOR > 3 || \
+    (DNNL_VERSION_MAJOR == 3 && DNNL_VERSION_MINOR >= 11)
+      absl::BlockingCounter counter(njobs_to_schedule + 1);
+      for (int i = 0; i < njobs_to_schedule; i++) {
+        eigen_interface_->ScheduleWithHint(
+            [balance, i, n, njobs, fn, &counter]() {
+              run_jobs(balance, i, n, njobs, fn);
+              counter.DecrementCount();
+            },
+            i, i + 1);
+      }
+      run_jobs(balance, njobs_to_schedule, n, njobs, fn);
+      counter.DecrementCount();
+      counter.Wait();
+#else
       for (int i = 0; i < njobs_to_schedule; i++) {
         eigen_interface_->ScheduleWithHint(
             [balance, i, n, njobs, fn]() {
@@ -123,8 +152,10 @@ class OneDnnThreadPool : public threadpool_iface {
             i, i + 1);
       }
       run_jobs(balance, njobs_to_schedule, n, njobs, fn);
+#endif  // defined(ENABLE_ONEDNN_ASYNC) || DNNL_VERSION_MAJOR > 3 ||
+        // (DNNL_VERSION_MAJOR == 3 && DNNL_VERSION_MINOR >= 11)
     } else {
-      tsl::BlockingCounter counter(njobs);
+      absl::BlockingCounter counter(njobs);
       std::function<void(int, int)> handle_range = [=, &handle_range, &counter](
                                                        int first, int last) {
         while (last - first > 1) {
@@ -134,8 +165,8 @@ class OneDnnThreadPool : public threadpool_iface {
                                              mid, mid + 1);
           last = mid;
         }
-        counter.DecrementCount();
         run_jobs(balance, first, n, njobs, fn);
+        counter.DecrementCount();
       };
 
       // Eigen avoids a thread hop by running the root of the tree on the main
@@ -154,9 +185,7 @@ class OneDnnThreadPool : public threadpool_iface {
   static void set_onednn_max_threads(int num_threads) {
 #if DNNL_VERSION_MAJOR >= 3 || \
     (DNNL_VERSION_MAJOR == 2 && DNNL_VERSION_MINOR >= 7)
-#ifndef DNNL_AARCH64_USE_ACL
     dnnl_threadpool_interop_set_max_concurrency(num_threads);
-#endif  // DNNL_AARCH64_USE_ACL
 #endif  // DNNL_VERSION_MAJOR >= 3 ||
         // (DNNL_VERSION_MAJOR == 2 && DNNL_VERSION_MINOR >= 7)
   }
@@ -189,5 +218,4 @@ class OneDnnThreadPool {
 
 }  // namespace tsl
 
-#endif  // INTEL_MKL
 #endif  // XLA_TSL_UTIL_ONEDNN_THREADPOOL_H_

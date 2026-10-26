@@ -26,7 +26,9 @@ class PassManager;
 namespace gpu {
 class GPUModuleOp;
 }  // namespace gpu
-
+namespace amdgpu {
+struct Chipset;
+}
 #define GEN_PASS_DECL
 #include "transforms/gpu_passes.h.inc"
 
@@ -34,14 +36,6 @@ class GPUModuleOp;
 // the corresponding operand is written. This attribute is attached to
 // 'gpu.launc_func' ops during the fusion rewrite pass above.
 ArrayAttr getWrittenOperandsAttribute(Operation* op);
-
-/// Pass that transforms gpu modules in standard dialect to NNVM.
-std::unique_ptr<OperationPass<mlir::gpu::GPUModuleOp>>
-createGpuKernelToNvvmPass(bool useBarePtrCallConv = false);
-
-/// Pass that transforms gpu modules in standard dialect to ROCDL.
-std::unique_ptr<OperationPass<mlir::gpu::GPUModuleOp>>
-createGpuKernelToRocdlPass();
 
 #define GEN_PASS_REGISTRATION
 #include "transforms/gpu_passes.h.inc"

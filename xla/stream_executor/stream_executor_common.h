@@ -18,13 +18,10 @@ limitations under the License.
 
 #include <cstdint>
 #include <memory>
-#include <optional>
-#include <string>
-#include <variant>
-#include <vector>
 
-#include "absl/base/thread_annotations.h"
-#include "absl/synchronization/mutex.h"
+#include "absl/base/call_once.h"
+#include "xla/stream_executor/activate_context.h"
+#include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/stream_executor.h"
 
@@ -46,24 +43,24 @@ class StreamExecutorCommon : public StreamExecutor {
  public:
   explicit StreamExecutorCommon(const Platform* platform);
 
+  std::unique_ptr<ActivateContext> Activate() override {
+    // Non-GPU stream executors don't have a context to activate.
+    return std::make_unique<ActivateContext>();
+  }
+
   const Platform* GetPlatform() const override { return platform_; }
   const DeviceDescription& GetDeviceDescription() const override;
   int64_t GetMemoryLimitBytes() const override { return memory_limit_bytes_; }
 
  private:
-  // Reader/writer lock for mutable data structures on this StreamExecutor.
-  //
-  // Mutable so that caching functions (like DeviceDescription, AsBlas, etc.)
-  // can acquire the lock on their first (mutating) call as well.
-  mutable absl::Mutex mu_;
-
   // Reference to the platform that created this executor.
   const Platform* platform_;
 
+  mutable absl::once_flag device_description_once_;
+
   // Slot to cache the owned DeviceDescription for the underlying device
   // once it has been queried from DeviceDescription().
-  mutable std::unique_ptr<DeviceDescription> device_description_
-      ABSL_GUARDED_BY(mu_);
+  mutable std::unique_ptr<DeviceDescription> device_description_;
 
   // Memory limit in bytes. Value less or equal to 0 indicates there is no
   // limit.

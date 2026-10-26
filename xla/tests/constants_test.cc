@@ -15,48 +15,66 @@ limitations under the License.
 
 // Tests that constants in program memory round trip as expected.
 
-#include "xla/client/lib/constants.h"
+#include "xla/hlo/builder/lib/constants.h"
 
+#include <gtest/gtest.h>
+
+#include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
+#include "tsl/platform/ml_dtypes.h"
 #include "xla/array2d.h"
 #include "xla/array3d.h"
 #include "xla/array4d.h"
-#include "xla/client/local_client.h"
-#include "xla/client/xla_builder.h"
+#include "xla/error_spec.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/literal.h"
 #include "xla/literal_util.h"
-#include "xla/tests/client_library_test_base.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/tests/client_library_test_runner_mixin.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
 #include "xla/tests/literal_test_util.h"
-#include "xla/tests/test_macros.h"
-#include "xla/tests/test_utils.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/ml_dtypes.h"
-#include "tsl/platform/test.h"
+#include "xla/tests/xla_test_backend_predicates.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/types.h"
 
 namespace xla {
 namespace {
 
-class ConstantsTest : public ClientLibraryTestBase {
- protected:
-  const ErrorSpec error_spec_{1e-3, 1e-5};
-};
+constexpr ErrorSpec kErrorSpec{1e-3, 1e-5};
+
+using ConstantsTest =
+    ClientLibraryTestRunnerMixin<HloInterpreterReferenceMixin<HloTestBase>>;
+
+template <typename T>
+class ConstantsFloatTest : public ConstantsTest {};
+
+using FloatTypes = ::testing::Types<
+    float, half, tsl::float8_e3m4, tsl::float8_e4m3, tsl::float8_e4m3fn,
+    tsl::float8_e4m3b11fnuz, tsl::float8_e4m3fnuz, tsl::float8_e5m2,
+    tsl::float8_e5m2fnuz, tsl::float4_e2m1fn, tsl::float8_e8m0fnu>;
+
+TYPED_TEST_SUITE(ConstantsFloatTest, FloatTypes);
 
 TEST_F(ConstantsTest, ZeroCellF32) {
   XlaBuilder builder(TestName());
   ConstantR1<float>(&builder, {});
 
-  ComputeAndCompareR1<float>(&builder, {}, {}, error_spec_);
+  ComputeAndCompareR1<float>(&builder, {}, {}, kErrorSpec);
 }
 
-TEST_F(ConstantsTest, OneCellF32) {
-  std::vector<float> constant = {2.0};
+TYPED_TEST(ConstantsFloatTest, OneCellFloat) {
+  std::vector<TypeParam> constant = {TypeParam{2.0}};
 
-  XlaBuilder builder(TestName());
-  ConstantR1<float>(&builder, constant);
+  XlaBuilder builder(ConstantsTest::TestName());
+  ConstantR1<TypeParam>(&builder, constant);
 
-  ComputeAndCompareR1<float>(&builder, constant, {}, error_spec_);
+  ConstantsTest::ComputeAndCompareR1<TypeParam>(&builder, constant, {},
+                                                kErrorSpec);
 }
 
 TEST_F(ConstantsTest, OneCellS32) {
@@ -77,7 +95,10 @@ TEST_F(ConstantsTest, OneCellU32) {
   ComputeAndCompareR1<uint32_t>(&builder, constant, {});
 }
 
-TEST_F(ConstantsTest, DISABLED_ON_CPU(DISABLED_ON_GPU(OneCellU4))) {
+TEST_F(ConstantsTest, OneCellU4) {
+  if (test::DeviceTypeIsOneOf({test::kCpu, test::kGpu})) {
+    GTEST_SKIP();
+  }
   std::vector<u4> constant = {u4(2)};
 
   XlaBuilder builder(TestName());
@@ -88,7 +109,10 @@ TEST_F(ConstantsTest, DISABLED_ON_CPU(DISABLED_ON_GPU(OneCellU4))) {
   ComputeAndCompareR1<uint8_t>(&builder, {2}, {});
 }
 
-TEST_F(ConstantsTest, DISABLED_ON_CPU(DISABLED_ON_GPU(OneCellS4))) {
+TEST_F(ConstantsTest, OneCellS4) {
+  if (test::DeviceTypeIsOneOf({test::kCpu, test::kGpu})) {
+    GTEST_SKIP();
+  }
   std::vector<s4> constant = {s4(-2)};
 
   XlaBuilder builder(TestName());
@@ -99,67 +123,13 @@ TEST_F(ConstantsTest, DISABLED_ON_CPU(DISABLED_ON_GPU(OneCellS4))) {
   ComputeAndCompareR1<int8_t>(&builder, {-2}, {});
 }
 
-TEST_F(ConstantsTest, OneCellF16) {
-  std::vector<half> constant = {half{2.0}};
-
-  XlaBuilder builder(TestName());
-  auto c = ConstantR1<half>(&builder, constant);
-  // F16 outputs are not yet supported so convert to F32
-  ConvertElementType(c, F32);
-
-  ComputeAndCompareR1<float>(&builder, {2.0f}, {}, error_spec_);
-}
-
-TEST_F(ConstantsTest, OneCellF8e5m2) {
-  std::vector<tsl::float8_e5m2> constant = {tsl::float8_e5m2{2.0}};
-
-  XlaBuilder builder(TestName());
-  auto c = ConstantR1<tsl::float8_e5m2>(&builder, constant);
-  // F8 outputs are not yet supported so convert to F32
-  ConvertElementType(c, F32);
-
-  ComputeAndCompareR1<float>(&builder, {2.0f}, {}, error_spec_);
-}
-
-TEST_F(ConstantsTest, OneCellF8e4m3b11fnuz) {
-  std::vector<tsl::float8_e4m3b11fnuz> constant = {
-      tsl::float8_e4m3b11fnuz{2.0}};
-
-  XlaBuilder builder(TestName());
-  auto c = ConstantR1<tsl::float8_e4m3b11fnuz>(&builder, constant);
-  // F8 outputs are not yet supported so convert to F32
-  ConvertElementType(c, F32);
-
-  ComputeAndCompareR1<float>(&builder, {2.0f}, {}, error_spec_);
-}
-
-TEST_F(ConstantsTest, OneCellF8e5m2fnuz) {
-  std::vector<tsl::float8_e5m2fnuz> constant = {tsl::float8_e5m2fnuz{2.0}};
-
-  XlaBuilder builder(TestName());
-  ConstantR1<tsl::float8_e5m2fnuz>(&builder, constant);
-
-  ComputeAndCompareR1<tsl::float8_e5m2fnuz>(&builder, constant, {},
-                                            error_spec_);
-}
-
-TEST_F(ConstantsTest, OneCellF8e4m3fnuz) {
-  std::vector<tsl::float8_e4m3fnuz> constant = {tsl::float8_e4m3fnuz{2.0}};
-
-  XlaBuilder builder(TestName());
-  ConstantR1<tsl::float8_e4m3fnuz>(&builder, constant);
-
-  ComputeAndCompareR1<tsl::float8_e4m3fnuz>(&builder, constant, {},
-                                            error_spec_);
-}
-
 TEST_F(ConstantsTest, EightCells) {
   std::vector<float> constant = {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0};
 
   XlaBuilder builder(TestName());
   ConstantR1<float>(&builder, constant);
 
-  ComputeAndCompareR1<float>(&builder, constant, {}, error_spec_);
+  ComputeAndCompareR1<float>(&builder, constant, {}, kErrorSpec);
 }
 
 TEST_F(ConstantsTest, SixteenCells) {
@@ -169,14 +139,14 @@ TEST_F(ConstantsTest, SixteenCells) {
   XlaBuilder builder(TestName());
   ConstantR1<float>(&builder, constant);
 
-  ComputeAndCompareR1<float>(&builder, constant, {}, error_spec_);
+  ComputeAndCompareR1<float>(&builder, constant, {}, kErrorSpec);
 }
 
 TEST_F(ConstantsTest, Empty_0x2) {
   XlaBuilder builder(TestName());
   ConstantR2FromArray2D<float>(&builder, Array2D<float>(0, 2));
 
-  ComputeAndCompareR2<float>(&builder, Array2D<float>(0, 2), {}, error_spec_);
+  ComputeAndCompareR2<float>(&builder, Array2D<float>(0, 2), {}, kErrorSpec);
 }
 
 TEST_F(ConstantsTest, Small_2x2) {
@@ -186,7 +156,7 @@ TEST_F(ConstantsTest, Small_2x2) {
   XlaBuilder builder(TestName());
   ConstantR2FromArray2D<float>(&builder, *constant);
 
-  ComputeAndCompareR2<float>(&builder, *constant, {}, error_spec_);
+  ComputeAndCompareR2<float>(&builder, *constant, {}, kErrorSpec);
 }
 
 TEST_F(ConstantsTest, Empty_3x0x2) {
@@ -223,17 +193,25 @@ TEST_F(ConstantsTest, Small_3x2x1x1) {
   input_array.FillWithPZ(pz);
   Literal input_literal = LiteralUtil::CreateR4FromArray4D(input_array);
 
-  {
-    XlaBuilder builder(TestName());
-    ConstantLiteral(&builder, input_literal);
-    ComputeAndCompareR4<float>(&builder, input_array, {}, error_spec_);
-  }
+  XlaBuilder builder(TestName());
+  ConstantLiteral(&builder, input_literal);
+  ComputeAndCompareR4<float>(&builder, input_array, {}, kErrorSpec);
+}
 
-  {
-    XlaBuilder builder(TestName());
-    ConstantR4FromArray4D<float>(&builder, input_array);
-    ComputeAndCompareR4<float>(&builder, input_array, {}, error_spec_);
-  }
+TEST_F(ConstantsTest, Small_3x2x1x1_array4d) {
+  Array4D<float> input_array(3, 2, 1, 1);
+  Array2D<float> pz({
+      // z0 z1
+      {-1.0f, 4.1f},  // p0
+      {2.0f, 4.1f},   // p1
+      {5.0f, 4.4f},   // p2
+  });
+  input_array.FillWithPZ(pz);
+  Literal input_literal = LiteralUtil::CreateR4FromArray4D(input_array);
+
+  XlaBuilder builder(TestName());
+  ConstantR4FromArray4D<float>(&builder, input_array);
+  ComputeAndCompareR4<float>(&builder, input_array, {}, kErrorSpec);
 }
 
 // TODO(b/29263943): Support tuple constants.
@@ -246,9 +224,9 @@ TEST_F(ConstantsTest, DISABLED_TupleConstant) {
   Literal result = ExecuteAndTransfer(&builder, {}).value();
 
   LiteralTestUtil::ExpectR2Near<float>({{1.0}, {2.0}},
-                                       LiteralSlice(result, {0}), error_spec_);
+                                       LiteralSlice(result, {0}), kErrorSpec);
   LiteralTestUtil::ExpectR1Near<float>({2.0, 42.0}, LiteralSlice(result, {1}),
-                                       error_spec_);
+                                       kErrorSpec);
 }
 
 TEST_F(ConstantsTest, Token) {
@@ -256,7 +234,7 @@ TEST_F(ConstantsTest, Token) {
   ConstantLiteral(&builder, LiteralUtil::CreateToken());
   // TODO(b/80000000): tokens cannot be returned from computations.
   Tuple(&builder, {});
-  TF_ASSERT_OK(Execute(&builder, {}).status());
+  TF_ASSERT_OK(ExecuteAndTransfer(&builder, {}).status());
 }
 
 TEST_F(ConstantsTest, FullLike) {
@@ -264,7 +242,7 @@ TEST_F(ConstantsTest, FullLike) {
   auto val1 = Iota(&b, F32, 3);
   auto val2 = FullLike(val1, 10);
   val1 + val2;
-  ComputeAndCompareR1<float>(&b, {10, 11, 12}, {}, error_spec_);
+  ComputeAndCompareR1<float>(&b, {10, 11, 12}, {}, kErrorSpec);
 }
 
 TEST_F(ConstantsTest, IllegalFullLikeOnTuple) {
@@ -279,18 +257,15 @@ TEST_F(ConstantsTest, FullLikeScalar) {
   auto scalar1 = ConstantR0WithType(&b, F32, 1);
   auto scalar2 = FullLike(scalar1, 2);
   scalar1 - scalar2;
-  ComputeAndCompareR0<float>(&b, -1, {}, error_spec_);
+  ComputeAndCompareR0<float>(&b, -1, {}, kErrorSpec);
 }
 
-class ConstantsHloTest : public HloTestBase {};
+using ConstantsHloTest = HloTestBase;
 
 // TODO(b/121147351): Fails on GPU. Not clear if this is expected behavior.
-XLA_TEST_F(ConstantsHloTest,
-           DISABLED_ON_TPU(DISABLED_ON_GPU(BitcastOfConstant))) {
-  if (IsMlirLoweringEnabled()) {
-    // Bitcasts are not generated by frontends directly and are not supported by
-    // the MLIR pipeline.
-    GTEST_SKIP() << "Bitcasts are unsupported by MLIR";
+TEST_F(ConstantsHloTest, BitcastOfConstant) {
+  if (test::DeviceTypeIsOneOf({test::kGpu, test::kTpu})) {
+    GTEST_SKIP();
   }
   const char* testcase = R"(
     HloModule module, is_scheduled=true
@@ -310,7 +285,8 @@ XLA_TEST_F(ConstantsHloTest,
   )";
   auto module = ParseAndReturnVerifiedModule(testcase).value();
   auto param = LiteralUtil::CreateR0<int32_t>(1);
-  auto result = ExecuteNoHloPasses(std::move(module), {&param});
+  TF_ASSERT_OK_AND_ASSIGN(Literal result, Execute(std::move(module), {&param},
+                                                  /*run_hlo_passes=*/false));
   EXPECT_TRUE(LiteralTestUtil::Equal(param, result));
 }
 

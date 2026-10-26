@@ -1,0 +1,409 @@
+/* Copyright 2026 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include "xla/backends/gpu/runtime/collective_memory.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "absl/algorithm/container.h"
+#include "absl/container/btree_map.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/log/log.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
+#include "absl/types/span.h"
+#include "tsl/profiler/lib/traceme.h"
+#include "xla/backends/gpu/collectives/gpu_clique_key.h"
+#include "xla/backends/gpu/collectives/gpu_communicator.h"
+#include "xla/backends/gpu/runtime/collective_cliques.h"
+#include "xla/backends/gpu/runtime/collective_memory_cache.h"
+#include "xla/backends/gpu/runtime/collective_memory_requests.h"
+#include "xla/backends/gpu/runtime/collective_params.h"
+#include "xla/core/collectives/rank_id.h"
+#include "xla/core/collectives/symmetric_memory.h"
+#include "xla/service/buffer_assignment.h"
+#include "xla/service/gpu/buffer_allocations.h"
+#include "xla/service/rendezvous.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/util/safe_reinterpret_cast.h"
+#include "xla/tsl/util/tied_ref.h"
+#include "xla/util.h"
+
+namespace xla::gpu {
+
+CollectiveMemory::CollectiveMemory(
+    const BufferAllocations& buffers,
+    absl::flat_hash_map<Key, std::shared_ptr<SymmetricMemory>> sym_memories,
+    absl::flat_hash_map<Key, PeerMemory> peer_memories)
+    : buffers_(buffers),
+      sym_memories_(std::move(sym_memories)),
+      peer_memories_(std::move(peer_memories)) {}
+
+std::pair<SymmetricMemory*, size_t> CollectiveMemory::FindSymmetricMemory(
+    const GpuCliqueKey& clique, BufferAllocation::Index allocation) const {
+  auto it = sym_memories_.find(std::make_pair(clique, allocation));
+  if (it == sym_memories_.end()) {
+    return std::make_pair(nullptr, 0);
+  }
+  return std::make_pair(it->second.get(), 0);
+}
+
+std::pair<SymmetricMemory*, size_t> CollectiveMemory::FindSymmetricMemory(
+    const GpuCliqueKey& clique, BufferAllocation::Slice slice) const {
+  auto [sym, sym_offset] = FindSymmetricMemory(clique, slice.index());
+  return std::make_pair(sym, sym_offset + slice.offset());
+}
+
+std::pair<SymmetricMemory*, size_t> CollectiveMemory::FindSymmetricMemory(
+    const GpuCliqueKey& clique, se::DeviceAddressBase addr) const {
+  auto allocation = buffers_.FindAllocationIndex(addr);
+  if (!allocation.has_value()) {
+    return std::make_pair(nullptr, 0);
+  }
+
+  // Find offset from the base allocation.
+  se::DeviceAddressBase base = buffers_.GetDeviceAddress(*allocation);
+  size_t offset = tsl::safe_reinterpret_cast<uintptr_t>(addr.opaque()) -
+                  tsl::safe_reinterpret_cast<uintptr_t>(base.opaque());
+
+  auto [sym, sym_offset] = FindSymmetricMemory(clique, *allocation);
+  return std::make_pair(sym, sym_offset + offset);
+}
+
+std::optional<se::DeviceAddressBase> CollectiveMemory::FindPeerAddress(
+    const GpuCliqueKey& clique, RankId rank,
+    BufferAllocation::Index allocation) const {
+  auto it = peer_memories_.find(std::make_pair(clique, allocation));
+  if (it == peer_memories_.end()) {
+    return std::nullopt;
+  }
+
+  auto addr = it->second.addrs.find(rank);
+  if (addr == it->second.addrs.end()) {
+    return std::nullopt;
+  }
+
+  return addr->second;
+}
+
+std::optional<se::DeviceAddressBase> CollectiveMemory::FindPeerAddress(
+    const GpuCliqueKey& clique, RankId rank,
+    BufferAllocation::Slice slice) const {
+  auto peer_alloc = FindPeerAddress(clique, rank, slice.index());
+  if (!peer_alloc.has_value()) {
+    return std::nullopt;
+  }
+  return peer_alloc->GetByteSlice(slice.offset(), slice.size());
+}
+
+std::optional<se::DeviceAddressBase> CollectiveMemory::FindPeerAddress(
+    const GpuCliqueKey& clique, RankId rank, se::DeviceAddressBase addr) const {
+  auto allocation = buffers_.FindAllocationIndex(addr);
+  if (!allocation.has_value()) {
+    return std::nullopt;
+  }
+
+  // Find offset from the base allocation.
+  se::DeviceAddressBase base = buffers_.GetDeviceAddress(*allocation);
+  size_t offset = tsl::safe_reinterpret_cast<uintptr_t>(addr.opaque()) -
+                  tsl::safe_reinterpret_cast<uintptr_t>(base.opaque());
+
+  // Find device address for peer allocation.
+  auto peer_alloc = FindPeerAddress(clique, rank, *allocation);
+  if (!peer_alloc.has_value()) {
+    return std::nullopt;
+  }
+
+  return peer_alloc->GetByteSlice(offset, addr.size());
+}
+
+//===----------------------------------------------------------------------===//
+// Local rendezvous parameters.
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+// Wrap GpuCliqueKey into a unique struct to guarantee we do not accidentally
+// try to run multiple unrelated rendezvous for a same key.
+struct RendezvousKey {
+  GpuCliqueKey clique_key;
+
+  bool operator==(const RendezvousKey& other) const {
+    return clique_key == other.clique_key;
+  }
+
+  template <typename H>
+  friend H AbslHashValue(H h, const RendezvousKey& key) {
+    return H::combine(std::move(h), key.clique_key);
+  }
+};
+
+// Parameters passed to the rendezvous callback from all ranks.
+struct RendezvousParams {
+  RankId rank;
+  se::StreamExecutor* executor;
+  const BufferAllocations& buffers;
+};
+
+struct RankCmp {
+  bool operator()(const RendezvousParams* a, const RendezvousParams* b) const {
+    return a->rank < b->rank;
+  }
+};
+
+struct DeviceOrdinalFormatter {
+  void operator()(std::string* out, const RendezvousParams* param) const {
+    absl::StrAppend(out, param->executor->device_ordinal());
+  }
+};
+
+struct RankFormatter {
+  void operator()(std::string* out, const RendezvousParams* param) const {
+    absl::StrAppend(out, param->rank.value());
+  }
+};
+
+}  // namespace
+
+//===----------------------------------------------------------------------===//
+// Symmetric memory acquisition.
+//===----------------------------------------------------------------------===//
+
+// Acquire symmetric memory for all requested allocation.
+static absl::StatusOr<absl::flat_hash_map<CollectiveMemory::Key,
+                                          std::shared_ptr<SymmetricMemory>>>
+AcquireSymmetricMemory(
+    const CollectiveParams& params, CollectiveCliques& cliques,
+    const BufferAllocations& buffers,
+    absl::Span<const CollectiveMemoryRequests::CollectiveAllocations> allocs,
+    CollectiveMemoryCache& memory_cache) {
+  absl::flat_hash_map<CollectiveMemory::Key, std::shared_ptr<SymmetricMemory>>
+      sym_memories;
+
+  for (const CollectiveMemoryRequests::CollectiveAllocations& r : allocs) {
+    std::optional<RankId> rank = r.clique.rank(params.global_device_id);
+
+    if (!rank.has_value()) {
+      return Internal("Can't find global device id %v in clique key %v",
+                      params.global_device_id, r.clique);
+    }
+
+    // TODO(ezhulenev): All of the buffer allocations that we make symmetric
+    // are created from the same underlying memory allocator. We can
+    // significantly improve performance with a few tricks:
+    //
+    // 1. Coalesce adjacent allocations and create one large symmetric region.
+    // 2. Create one big symmetric region from [start, end] addresses, we might
+    //    have unused gaps in the middle, but it doesn't matter, we will ignore
+    //    them.
+    // 3. Cache symmetric memories in a process-level cache.
+    //
+    // Currently it's very simple proof of concept.
+
+    ABSL_ASSIGN_OR_RETURN(GpuCommunicator * comm,
+                          cliques.GetComm(r.clique, *rank));
+    for (BufferAllocation::Index i : r.allocations) {
+      se::DeviceAddressBase addr = buffers.GetDeviceAddress(i);
+      CollectiveMemory::Key mem_key = std::make_pair(r.clique, i);
+      // Check cache first to avoid redundant collective window registration.
+      if (auto cached = memory_cache.FindSymmetricMemory(
+              params.executor->device_ordinal(), r.clique, addr)) {
+        sym_memories[mem_key] = std::move(cached);
+        continue;
+      }
+      ABSL_ASSIGN_OR_RETURN(
+          std::unique_ptr<SymmetricMemory> symm,
+          comm->CreateSymmetricMemory(addr, params.nccl_window_symmetric));
+      ABSL_ASSIGN_OR_RETURN(tsl::TiedRef<SymmetricMemory> tied_symm,
+                            cliques.Tie(r.clique, std::move(symm)));
+      sym_memories[mem_key] =
+          memory_cache.AddSymmetricMemory(params.executor->device_ordinal(),
+                                          r.clique, addr, std::move(tied_symm));
+    }
+  }
+
+  return sym_memories;
+}
+
+//===----------------------------------------------------------------------===//
+// Peer memory acquisition.
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+using PeerMemoryMap =
+    absl::flat_hash_map<CollectiveMemory::Key, CollectiveMemory::PeerMemory>;
+
+}  // namespace
+
+// Acquire peer memory for all requested allocation.
+absl::StatusOr<PeerMemoryMap> AcquirePeerMemory(
+    const CollectiveParams& params, const CollectiveCliques& cliques,
+    const BufferAllocations& buffers,
+    absl::Span<const CollectiveMemoryRequests::CollectiveAllocations> allocs) {
+  int32_t device_ordinal = params.executor->device_ordinal();
+
+  PeerMemoryMap peer_memories;
+
+  for (const CollectiveMemoryRequests::CollectiveAllocations& r : allocs) {
+    std::optional<RankId> rank = r.clique.rank(params.global_device_id);
+
+    if (!rank.has_value()) {
+      return Internal("[%d] Can't find global device id %v in clique key %v",
+                      device_ordinal, params.global_device_id, r.clique);
+    }
+
+    // We rely on in-process rendezvous to exchange peer memory with all ranks.
+    if (!r.clique.is_local()) {
+      return Unimplemented(
+          "[%d] Peer memory is not supported in multi-process mode in clique "
+          "%v",
+          device_ordinal, r.clique);
+    }
+
+    std::string rendezvous_name = absl::StrFormat(
+        "[%d] [rank=%v] AcquirePeerMemory for clique %v: allocs=[%s]",
+        device_ordinal, *rank, r.clique, absl::StrJoin(r.allocations, ","));
+
+    // A callback for rendezvous to exchange peer allocation addresses with
+    // all participating ranks.
+    auto exchange = [&](absl::Span<RendezvousParams*> params)
+        -> absl::StatusOr<PeerMemoryMap> {
+      // Sort all participants by rank to get deterministic execution.
+      absl::c_sort(params, RankCmp{});
+
+      VLOG(3) << absl::StrFormat(
+          "[%s] [ranks=%s] Exchange collective peer memory for clique: %v",
+          absl::StrJoin(params, ",", DeviceOrdinalFormatter{}),
+          absl::StrJoin(params, ",", RankFormatter{}), r.clique);
+
+      PeerMemoryMap clique_peer_memories;
+      for (BufferAllocation::Index i : r.allocations) {
+        // For all participating devices get allocation device address.
+        absl::btree_map<RankId, se::DeviceAddressBase> addrs;
+        for (const RendezvousParams* param : params) {
+          addrs[param->rank] = param->buffers.GetDeviceAddress(i);
+        }
+        clique_peer_memories[std::make_pair(r.clique, i)] =
+            CollectiveMemory::PeerMemory{std::move(addrs)};
+      }
+      return clique_peer_memories;
+    };
+
+    // We expect that all local participants will collectively exchange peer
+    // memory. We do one rendezvous for each clique.
+    RendezvousKey rendezvous_key = {r.clique};
+    RendezvousParams allocate_params = {*rank, params.executor, buffers};
+
+    int64_t num_participants = r.clique.num_local_participants();
+    ABSL_ASSIGN_OR_RETURN(
+        std::shared_ptr<PeerMemoryMap> clique_peer_memories,
+        Rendezvous<PeerMemoryMap>(rendezvous_name, rendezvous_key,
+                                  allocate_params, num_participants, exchange));
+
+    // Copy clique peer memory to each participating thread.
+    for (auto& [k, v] : *clique_peer_memories) {
+      peer_memories[k] = v;
+    }
+  }
+
+  return peer_memories;
+}
+
+//===----------------------------------------------------------------------===//
+// Collective memory acquisition.
+//===----------------------------------------------------------------------===//
+
+absl::StatusOr<CollectiveMemory> AcquireCollectiveMemory(
+    const CollectiveParams& params, CollectiveCliques& cliques,
+    const CollectiveMemoryRequests& requests,
+    CollectiveMemoryCache& memory_cache) {
+  // We rely on deterministic order of memory requests, to guarantee that all
+  // ranks create collective memory in identical order, otherwise we can get
+  // a deadlock.
+  std::vector<CollectiveMemoryRequests::CollectiveAllocations> sym_allocs =
+      requests.OrderedSymmetricAllocations();
+  std::vector<CollectiveMemoryRequests::CollectiveAllocations> peer_allocs =
+      requests.OrderedPeerAllocations();
+
+  // Short-circuit if we have nothing to allocate.
+  if (sym_allocs.empty() && peer_allocs.empty()) {
+    return CollectiveMemory(requests.buffers(), /*sym_memories=*/{},
+                            /*peer_memories=*/{});
+  }
+
+  XLA_VLOG_DEVICE(2, params.executor->device_ordinal()) << absl::StreamFormat(
+      " Acquire collective memory for global device id %v: run_id=%v "
+      "symmetric=%d peer=%d",
+      params.global_device_id, params.run_id, sym_allocs.size(),
+      peer_allocs.size());
+  absl::Time start = absl::Now();
+
+  for (size_t i = 0; i < sym_allocs.size(); ++i) {
+    const CollectiveMemoryRequests::CollectiveAllocations& r = sym_allocs[i];
+    XLA_VLOG_DEVICE(2, params.executor->device_ordinal()) << absl::StreamFormat(
+        "    symmetric memory #%d (global device %v): id=%d; clique=%v; "
+        "allocations=[%s]",
+        i, params.global_device_id, r.id, r.clique,
+        absl::StrJoin(r.allocations, ", "));
+  }
+
+  for (size_t i = 0; i < peer_allocs.size(); ++i) {
+    const CollectiveMemoryRequests::CollectiveAllocations& r = peer_allocs[i];
+    XLA_VLOG_DEVICE(2, params.executor->device_ordinal()) << absl::StreamFormat(
+        "    peer memory #%d (global device %v): id=%d; clique=%v; "
+        "allocations=[%s]",
+        i, params.global_device_id, r.id, r.clique,
+        absl::StrJoin(r.allocations, ", "));
+  }
+
+  tsl::profiler::TraceMe trace([&] {
+    return tsl::profiler::TraceMeEncode("AcquireCollectiveMemory",
+                                        {{"sym_allocs", sym_allocs.size()},
+                                         {"peer_allocs", peer_allocs.size()}});
+  });
+
+  ABSL_ASSIGN_OR_RETURN(
+      auto sym_memories,
+      AcquireSymmetricMemory(params, cliques, requests.buffers(), sym_allocs,
+                             memory_cache));
+
+  ABSL_ASSIGN_OR_RETURN(
+      auto peer_memories,
+      AcquirePeerMemory(params, cliques, requests.buffers(), peer_allocs));
+
+  XLA_VLOG_DEVICE(2, params.executor->device_ordinal()) << absl::StreamFormat(
+      "Acquired collective memory in %s for global device id %v; "
+      "run_id=%v symmetric=%d peer=%d",
+      absl::FormatDuration(absl::Now() - start), params.global_device_id,
+      params.run_id, sym_allocs.size(), peer_allocs.size());
+
+  return CollectiveMemory(requests.buffers(), std::move(sym_memories),
+                          std::move(peer_memories));
+}
+
+}  // namespace xla::gpu

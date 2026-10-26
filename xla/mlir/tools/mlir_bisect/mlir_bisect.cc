@@ -29,35 +29,37 @@ limitations under the License.
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/Dialect/Affine/Utils.h"  // from @llvm-project
-#include "mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
-#include "mlir/IR/Builders.h"  // from @llvm-project
-#include "mlir/IR/BuiltinAttributeInterfaces.h"  // from @llvm-project
-#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
-#include "mlir/IR/DialectRegistry.h"  // from @llvm-project
-#include "mlir/IR/MLIRContext.h"  // from @llvm-project
-#include "mlir/IR/OwningOpRef.h"  // from @llvm-project
-#include "mlir/IR/SymbolTable.h"  // from @llvm-project
-#include "mlir/IR/Verifier.h"  // from @llvm-project
-#include "mlir/InitAllDialects.h"  // from @llvm-project
-#include "mlir/InitAllPasses.h"  // from @llvm-project
-#include "mlir/Parser/Parser.h"  // from @llvm-project
-#include "mlir/Pass/PassManager.h"  // from @llvm-project
-#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
-#include "mlir/Support/FileUtilities.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
-#include "mlir/Support/LogicalResult.h"  // from @llvm-project
-#include "mlir/Transforms/Passes.h"  // from @llvm-project
+#include "mlir/Dialect/Affine/Utils.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributeInterfaces.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/OwningOpRef.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/Verifier.h"
+#include "mlir/InitAllDialects.h"
+#include "mlir/InitAllPasses.h"
+#include "mlir/Parser/Parser.h"
+#include "mlir/Pass/PassManager.h"
+#include "mlir/Pass/PassRegistry.h"
+#include "mlir/Support/FileUtilities.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Support/LogicalResult.h"
+#include "mlir/Transforms/Passes.h"
+#include "tsl/platform/env.h"
+#include "tsl/platform/init_main.h"
 #include "xla/literal.h"
 #include "xla/mlir/tools/mlir_bisect/bisect_lib.h"
 #include "xla/mlir/tools/mlir_bisect/test_passes.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/interpreter.h"
+#include "xla/mlir/tools/mlir_replay/public/execution_trace.pb.h"
 #include "xla/mlir/tools/mlir_replay/public/execution_trace_utils.h"
 #include "xla/mlir_hlo/mhlo/IR/register.h"
 #include "xla/mlir_hlo/mhlo/transforms/passes.h"
 #include "xla/service/hlo.pb.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/init_main.h"
 
 struct Options {
   llvm::cl::opt<std::string> input_filename{llvm::cl::Positional,
@@ -261,8 +263,8 @@ void ReplaceArgsWithConstants(ModuleOp module,
         bbarg.getType());
     CHECK_EQ(attr.size(), 1) << "unsupported argument";
 
-    auto constant = b.create<arith::ConstantOp>(
-        main.getLoc(), bbarg.getType(), llvm::cast<TypedAttr>(attr.front()));
+    auto constant = arith::ConstantOp::create(
+        b, main.getLoc(), bbarg.getType(), llvm::cast<TypedAttr>(attr.front()));
     bbarg.replaceAllUsesWith(constant);
   }
 
@@ -270,8 +272,8 @@ void ReplaceArgsWithConstants(ModuleOp module,
   for (auto arg :
        main.getBody().getArguments().drop_front(snapshot.arguments().size())) {
     CHECK(llvm::isa<MemRefType>(arg.getType())) << "unsupported argument";
-    arg.replaceAllUsesWith(b.create<memref::AllocOp>(
-        module.getLoc(), llvm::cast<MemRefType>(arg.getType())));
+    arg.replaceAllUsesWith(memref::AllocOp::create(
+        b, module.getLoc(), llvm::cast<MemRefType>(arg.getType())));
   }
   while (main.getBody().getNumArguments() > 0) {
     main.getBody().eraseArgument(0);

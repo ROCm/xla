@@ -15,10 +15,13 @@ limitations under the License.
 
 #include "xla/stream_executor/rocm/hip_blas_utils.h"
 
-#include "absl/strings/str_cat.h"
-#include "xla/stream_executor/blas.h"
+#include <string>
 
-#if TF_HIPBLASLT
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
+#include "rocm/rocm_config.h"
+#include "xla/stream_executor/blas.h"
 
 namespace stream_executor {
 namespace rocm {
@@ -34,19 +37,21 @@ absl::Status ToStatus(hipblasStatus_t status, const char* prefix) {
 
 hipDataType AsHipblasDataType(blas::DataType type) {
   switch (type) {
-    case blas::DataType::kF8E5M2:
-    case blas::DataType::kF8E4M3FN:
-      LOG(FATAL) << "hipblaslt does not support F8E5M2 and F8E4M3FN";
-#if TF_ROCM_VERSION >= 60000
+    case blas::DataType::kF8E4M3:
+    case blas::DataType::kF8E3M4:
+    case blas::DataType::kF8E8M0FNU:
+      LOG(FATAL) << "hipblaslt does not support F8E4M3, F8E3M4, and F8E8M0FNU "
+                    "as matrix data types";
+    case blas::DataType::kF4E2M1FN:
+      return HIP_R_4F_E2M1;
     case blas::DataType::kF8E5M2FNUZ:
       return HIP_R_8F_E5M2_FNUZ;
     case blas::DataType::kF8E4M3FNUZ:
       return HIP_R_8F_E4M3_FNUZ;
-#else
-    case blas::DataType::kF8E5M2FNUZ:
-    case blas::DataType::kF8E4M3FNUZ:
-      LOG(FATAL) << "hipblaslt only supports F8 in ROCm 6.0 and above";
-#endif
+    case blas::DataType::kF8E5M2:
+      return HIP_R_8F_E5M2;
+    case blas::DataType::kF8E4M3FN:
+      return HIP_R_8F_E4M3;
     case blas::DataType::kHalf:
       return HIP_R_16F;
     case blas::DataType::kBF16:
@@ -69,11 +74,19 @@ hipDataType AsHipblasDataType(blas::DataType type) {
 }
 
 hipblasComputeType_t AsHipblasComputeType(blas::ComputationType type) {
-  if (type == blas::ComputationType::kF32 ||
-      type == blas::ComputationType::kTF32AsF32)
-    return HIPBLAS_COMPUTE_32F;
-  else
-    LOG(FATAL) << "unsupported hipblaslt computation type";
+  switch (type) {
+    case blas::ComputationType::kF32:
+      return HIPBLAS_COMPUTE_32F;
+    case blas::ComputationType::kTF32AsF32:
+      return HIPBLAS_COMPUTE_32F_FAST_TF32;
+    case blas::ComputationType::kF64:
+      return HIPBLAS_COMPUTE_64F;
+    case blas::ComputationType::kI32:
+      return HIPBLAS_COMPUTE_32I;
+    default:
+      LOG(FATAL) << "unsupported hipblaslt computation type: "
+                 << static_cast<int>(type);
+  }
 }
 
 hipblasOperation_t AsHipblasOperation(blas::Transpose trans) {
@@ -89,5 +102,3 @@ hipblasOperation_t AsHipblasOperation(blas::Transpose trans) {
 
 }  // namespace rocm
 }  // namespace stream_executor
-
-#endif  // #TF_HIPBLASLT

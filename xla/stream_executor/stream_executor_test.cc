@@ -15,28 +15,76 @@ limitations under the License.
 
 #include "xla/stream_executor/stream_executor.h"
 
-#include <memory>
+#include <gtest/gtest.h>
 
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform_manager.h"
-#include "tsl/platform/statusor.h"
-#include "tsl/platform/test.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/tsl/platform/threadpool.h"
 
 namespace stream_executor {
+namespace {
 
-static absl::StatusOr<std::unique_ptr<StreamExecutor>> NewStreamExecutor() {
-  StreamExecutorConfig config(/*ordinal=*/0);
-  TF_ASSIGN_OR_RETURN(auto platform, PlatformManager::PlatformWithName("Host"));
-  TF_ASSIGN_OR_RETURN(auto stream_exec, platform->GetUncachedExecutor(config));
+struct TestResource : public StreamExecutor::Resource {
+  TestResource() = default;
+  explicit TestResource(int32_t value) : value(value) {}
+  int32_t value = 0;
+};
+
+absl::StatusOr<StreamExecutor*> NewStreamExecutor() {
+  ABSL_ASSIGN_OR_RETURN(auto platform,
+                        PlatformManager::PlatformWithName("Host"));
+  ABSL_ASSIGN_OR_RETURN(auto stream_exec, platform->ExecutorForDevice(0));
   return stream_exec;
 }
 
 TEST(StreamExecutorTest, HostMemoryAllocate) {
-  TF_ASSERT_OK_AND_ASSIGN(auto executor, NewStreamExecutor());
-  TF_ASSERT_OK_AND_ASSIGN(auto allocation, executor->HostMemoryAllocate(1024));
-  EXPECT_NE(allocation->opaque(), nullptr);
-  EXPECT_EQ(allocation->size(), 1024);
+  ASSERT_OK_AND_ASSIGN(auto executor, NewStreamExecutor());
+  ASSERT_OK_AND_ASSIGN(auto allocation, executor->HostMemoryAllocate(1024));
+  EXPECT_NE(allocation->address().opaque(), nullptr);
+  EXPECT_EQ(allocation->address().size(), 1024);
 }
 
+TEST(StreamExecutorTest, GetOrCreateResource) {
+  ASSERT_OK_AND_ASSIGN(auto executor, NewStreamExecutor());
+
+  EXPECT_EQ(executor->GetOrNullResource<TestResource>(), nullptr);
+
+  TestResource* resource = executor->GetOrCreateResource<TestResource>(
+      [] { return std::make_unique<TestResource>(42); });
+  EXPECT_NE(resource, nullptr);
+  EXPECT_EQ(resource->value, 42);
+
+  EXPECT_EQ(executor->GetOrNullResource<TestResource>(), resource);
+}
+
+TEST(StreamExecutorTest, GetDeviceDescriptionConcurrent) {
+  ASSERT_OK_AND_ASSIGN(StreamExecutor * executor, NewStreamExecutor());
+
+  constexpr int kNumThreads = 8;
+  std::vector<const DeviceDescription*> descriptions(kNumThreads, nullptr);
+  {
+    tsl::thread::ThreadPool pool(tsl::Env::Default(), "test_pool", kNumThreads);
+    for (int i = 0; i < kNumThreads; ++i) {
+      pool.Schedule([executor, &descriptions, i]() {
+        descriptions[i] = &executor->GetDeviceDescription();
+      });
+    }
+  }
+
+  ASSERT_NE(descriptions[0], nullptr);
+  for (int i = 1; i < kNumThreads; ++i) {
+    EXPECT_EQ(descriptions[i], descriptions[0]);
+  }
+}
+
+}  // namespace
 }  // namespace stream_executor

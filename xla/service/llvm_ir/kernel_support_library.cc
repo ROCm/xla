@@ -15,9 +15,32 @@ limitations under the License.
 
 #include "xla/service/llvm_ir/kernel_support_library.h"
 
+#include <cstdint>
+#include <functional>
+#include <iterator>
+#include <memory>
+#include <vector>
+
+#include "absl/algorithm/container.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/strings/string_view.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "xla/service/hlo_module_config.h"
+#include "xla/service/llvm_ir/llvm_loop.h"
 #include "xla/service/llvm_ir/llvm_type_conversion_util.h"
 #include "xla/service/llvm_ir/llvm_util.h"
+#include "xla/tsl/platform/errors.h"
 
 namespace xla {
 absl::Status KernelSupportLibrary::ForWithStatus(
@@ -25,7 +48,8 @@ absl::Status KernelSupportLibrary::ForWithStatus(
     llvm::Value* step,
     const std::function<absl::Status(llvm::Value*, bool)>& for_body_generator) {
   return IfWithStatus(b_->CreateICmpSLT(start, end), [&]() -> absl::Status {
-    TF_RETURN_IF_ERROR(for_body_generator(start, /*is_first_iteration=*/true));
+    ABSL_RETURN_IF_ERROR(
+        for_body_generator(start, /*is_first_iteration=*/true));
     return ForWithStatus(
         name, b_->CreateAdd(start, step), end, step,
         [&](llvm::Value* iv) { return for_body_generator(iv, false); });
@@ -41,7 +65,7 @@ absl::Status KernelSupportLibrary::ForWithStatus(
       /*unroll_mode=*/unroll_mode_,
       /*prevent_vectorization=*/prevent_vectorization_);
   b_->SetInsertPoint(&loop->GetBodyBasicBlock()->back());
-  TF_RETURN_IF_ERROR(for_body_generator(loop->GetIndVarValue()));
+  ABSL_RETURN_IF_ERROR(for_body_generator(loop->GetIndVarValue()));
   llvm_ir::SetToLastInsertPoint(loop->GetExitBasicBlock(), b_);
   return absl::OkStatus();
 }
@@ -54,17 +78,17 @@ absl::Status KernelSupportLibrary::IfWithStatus(
       llvm_ir::EmitIfThenElse(condition, name, b_,
                               /*emit_else=*/false_block_generator != nullptr);
   b_->SetInsertPoint(&if_data.true_block->back());
-  TF_RETURN_IF_ERROR(true_block_generator());
+  ABSL_RETURN_IF_ERROR(true_block_generator());
   if (false_block_generator != nullptr) {
     b_->SetInsertPoint(&if_data.false_block->back());
-    TF_RETURN_IF_ERROR(false_block_generator());
+    ABSL_RETURN_IF_ERROR(false_block_generator());
   }
   llvm_ir::SetToLastInsertPoint(if_data.after_block, b_);
   return absl::OkStatus();
 }
 
 void KernelSupportLibrary::EmitAndCallOutlinedKernel(
-    const HloModuleConfig& module_config, llvm::IRBuilder<>* b,
+    const HloModuleConfig& module_config, llvm::IRBuilderBase* b,
     absl::string_view kernel_name,
     KernelSupportLibrary::ArgumentVector arguments,
     const std::function<void(KernelSupportLibrary::ArgumentVector)>&
@@ -88,9 +112,8 @@ void KernelSupportLibrary::EmitAndCallOutlinedKernel(
   if (!function) {
     VLOG(2) << "Generating kernel for " << kernel_name;
     std::vector<llvm::Type*> arg_types;
-    std::transform(sanitized_args.begin(), sanitized_args.end(),
-                   std::back_inserter(arg_types),
-                   [](llvm::Value* arg) { return arg->getType(); });
+    absl::c_transform(sanitized_args, std::back_inserter(arg_types),
+                      [](llvm::Value* arg) { return arg->getType(); });
 
     auto* function_type =
         llvm::FunctionType::get(b->getVoidTy(), arg_types, /*isVarArg=*/false);
@@ -99,7 +122,7 @@ void KernelSupportLibrary::EmitAndCallOutlinedKernel(
                                           llvm::GlobalValue::InternalLinkage,
                                           module_config, kernel_name, module);
 
-    llvm::IRBuilder<>::InsertPointGuard guard(*b);
+    llvm::IRBuilderBase::InsertPointGuard guard(*b);
 
     auto* entry_bb =
         llvm::BasicBlock::Create(b->getContext(), "entry", function);

@@ -1,0 +1,298 @@
+/* Copyright 2025 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include "xla/pjrt/gpu/se_gpu_topology_description.h"
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
+#include "xla/layout.h"
+#include "xla/layout_util.h"
+#include "xla/pjrt/pjrt_common.h"
+#include "xla/pjrt/pjrt_compiler.h"
+#include "xla/pjrt/pjrt_device_description.h"
+#include "xla/pjrt/pjrt_device_dimensions.h"
+#include "xla/pjrt/pjrt_topology_description_registry.h"
+#include "xla/pjrt/proto/topology_description.pb.h"
+#include "xla/pjrt/se/pjrt_stream_executor_device_description.h"
+#include "xla/runtime/process_id.h"
+#include "xla/service/gpu_topology.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/xla_data.pb.h"
+
+namespace xla {
+namespace {
+
+using ::absl_testing::IsOkAndHolds;
+using ::absl_testing::StatusIs;
+using ::testing::ElementsAre;
+using ::testing::Property;
+
+void CheckDeviceDescription(const PjRtDeviceDescription& device_desc,
+                            int global_device_id, int process_index,
+                            const std::vector<int>& coords) {
+  EXPECT_EQ(device_desc.device_kind(), "NVIDIA H100");
+  EXPECT_EQ(device_desc.id(), global_device_id);
+  EXPECT_EQ(device_desc.process_index(), process_index);
+  const auto& gpu_device_desc =
+      dynamic_cast<const PjRtStreamExecutorDeviceDescription&>(device_desc);
+  EXPECT_THAT(gpu_device_desc.coords(),
+              ElementsAre(coords[0], coords[1], coords[2]));
+}
+
+TEST(StreamExecutorGpuTopologyDescriptionTest, SymmetricTopology) {
+  std::shared_ptr<xla::GpuTopology> gpu_topology =
+      std::make_shared<xla::GpuTopology>(
+          /*platform_version=*/"NVIDIA H100", /*num_partitions=*/3,
+          /*num_hosts_per_partition=*/2, /*num_devices_per_host=*/4);
+
+  StreamExecutorGpuTopologyDescription topology_desc(
+      xla::CudaId(), xla::CudaName(), "cuda 12030", gpu_topology);
+
+  EXPECT_EQ(topology_desc.platform_id(), xla::CudaId());
+  EXPECT_EQ(topology_desc.platform_name(), xla::CudaName());
+  EXPECT_EQ(topology_desc.platform_version(), "cuda 12030");
+
+  ASSERT_OK_AND_ASSIGN(
+      auto process_and_index,
+      topology_desc.ProcessIdAndIndexOnProcessForLogicalDeviceOfDefaultType(
+          GlobalDeviceId(5)));
+  EXPECT_EQ(process_and_index.first, ProcessId(1));
+  EXPECT_EQ(process_and_index.second, 1);
+
+  EXPECT_FALSE(topology_desc
+                   .ProcessIdAndIndexOnProcessForLogicalDeviceOfDefaultType(
+                       GlobalDeviceId(100))
+                   .ok());
+
+  ASSERT_OK_AND_ASSIGN(
+      auto assignment,
+      topology_desc.GetDefaultDeviceAssignment(
+          /*process_index=*/0,
+          /*num_replicas=*/2, /*num_replicas_per_slice=*/std::nullopt,
+          /*num_partitions=*/2, /*multi_slice_config=*/nullptr));
+  EXPECT_EQ(assignment(0, 0), 0);
+  EXPECT_EQ(assignment(0, 1), 2);
+  EXPECT_EQ(assignment(1, 0), 1);
+  EXPECT_EQ(assignment(1, 1), 3);
+
+  const auto device_descs = topology_desc.DeviceDescriptions();
+  EXPECT_EQ(device_descs.size(), 24);
+  CheckDeviceDescription(*device_descs[0], 0, 0, {0, 0, 0});
+  CheckDeviceDescription(*device_descs[1], 1, 0, {0, 0, 1});
+  CheckDeviceDescription(*device_descs[2], 2, 0, {0, 0, 2});
+  CheckDeviceDescription(*device_descs[3], 3, 0, {0, 0, 3});
+  CheckDeviceDescription(*device_descs[4], 4, 1, {0, 1, 0});
+  CheckDeviceDescription(*device_descs[5], 5, 1, {0, 1, 1});
+  CheckDeviceDescription(*device_descs[6], 6, 1, {0, 1, 2});
+  CheckDeviceDescription(*device_descs[7], 7, 1, {0, 1, 3});
+  CheckDeviceDescription(*device_descs[8], 8, 2, {1, 0, 0});
+  CheckDeviceDescription(*device_descs[9], 9, 2, {1, 0, 1});
+  CheckDeviceDescription(*device_descs[10], 10, 2, {1, 0, 2});
+  CheckDeviceDescription(*device_descs[11], 11, 2, {1, 0, 3});
+  CheckDeviceDescription(*device_descs[12], 12, 3, {1, 1, 0});
+  CheckDeviceDescription(*device_descs[13], 13, 3, {1, 1, 1});
+  CheckDeviceDescription(*device_descs[14], 14, 3, {1, 1, 2});
+  CheckDeviceDescription(*device_descs[15], 15, 3, {1, 1, 3});
+  CheckDeviceDescription(*device_descs[16], 16, 4, {2, 0, 0});
+  CheckDeviceDescription(*device_descs[17], 17, 4, {2, 0, 1});
+  CheckDeviceDescription(*device_descs[18], 18, 4, {2, 0, 2});
+  CheckDeviceDescription(*device_descs[19], 19, 4, {2, 0, 3});
+  CheckDeviceDescription(*device_descs[20], 20, 5, {2, 1, 0});
+  CheckDeviceDescription(*device_descs[21], 21, 5, {2, 1, 1});
+  CheckDeviceDescription(*device_descs[22], 22, 5, {2, 1, 2});
+  CheckDeviceDescription(*device_descs[23], 23, 5, {2, 1, 3});
+}
+
+TEST(StreamExecutorGpuTopologyDescriptionTest, AsymmetricTopology) {
+  std::shared_ptr<xla::GpuTopology> gpu_topology =
+      std::make_shared<xla::GpuTopology>(
+          /*platform_version=*/"12.3", /*num_partitions=*/-1,
+          /*num_hosts_per_partition=*/-1, /*num_devices_per_host=*/-1);
+
+  StreamExecutorGpuTopologyDescription topology_desc(
+      xla::CudaId(), xla::CudaName(), "cuda 12030", gpu_topology);
+
+  EXPECT_EQ(topology_desc.platform_id(), xla::CudaId());
+  EXPECT_EQ(topology_desc.platform_name(), xla::CudaName());
+  EXPECT_EQ(topology_desc.platform_version(), "cuda 12030");
+
+  const auto device_descs = topology_desc.DeviceDescriptions();
+  EXPECT_EQ(device_descs.size(), 0);
+}
+
+TEST(StreamExecutorGpuTopologyDescriptionTest,
+     SerializationPreservesPlatformVersionAndDeviceKind) {
+  // Legacy snapshots stored the model in the outer version field too.
+  const char* const versions[] = {"cuda 12030", "NVIDIA H100"};
+  for (const char* version : versions) {
+    StreamExecutorGpuTopologyDescription topology(
+        CudaId(), CudaName(), version,
+        std::make_shared<GpuTopology>(
+            /*platform_version=*/"NVIDIA H100", /*num_partitions=*/1,
+            /*num_hosts_per_partition=*/1, /*num_devices_per_host=*/1));
+    ASSERT_OK_AND_ASSIGN(auto proto, topology.ToProto());
+    EXPECT_EQ(proto.platform_version(), version);
+    ASSERT_OK_AND_ASSIGN(
+        auto restored, StreamExecutorGpuTopologyDescription::FromProto(proto));
+    EXPECT_EQ(restored->platform_version(), version);
+    const auto devices = restored->DeviceDescriptions();
+    ASSERT_EQ(devices.size(), 1);
+    EXPECT_EQ(devices[0]->device_kind(), "NVIDIA H100");
+  }
+}
+
+TEST(PjRtTopologyUtilsGPUTest, GetDeviceCoords) {
+  std::shared_ptr<xla::GpuTopology> gpu_topology =
+      std::make_shared<xla::GpuTopology>(
+          /*platform_version=*/"12.3", /*num_partitions=*/1,
+          /*num_hosts_per_partition=*/1, /*num_devices_per_host=*/4);
+  StreamExecutorGpuTopologyDescription topology_desc(
+      xla::CudaId(), xla::CudaName(), "cuda 12030", gpu_topology);
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto device_core,
+      topology_desc.ChipCoordAndCoreIndexForLogicalDeviceOfDefaultType(
+          GlobalDeviceId(1)));
+  auto [device_coords, core_id] = std::move(device_core);
+  ASSERT_EQ(device_coords, (PjRtDeviceDimensions{0, 0, 1}));
+  ASSERT_EQ(core_id, 0);
+}
+
+TEST(PjRtTopologyUtilsGPUTest, GetDeviceCoordsSingleHostScopedPartition) {
+  std::shared_ptr<xla::GpuTopology> gpu_topology =
+      std::make_shared<xla::GpuTopology>(
+          /*platform_version=*/"12.3", /*num_partitions=*/4,
+          /*num_hosts_per_partition=*/1, /*num_devices_per_host=*/4);
+  StreamExecutorGpuTopologyDescription topology_desc(
+      xla::CudaId(), xla::CudaName(), "cuda 12030", gpu_topology);
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto device_core1,
+      topology_desc.ChipCoordAndCoreIndexForLogicalDeviceOfDefaultType(
+          GlobalDeviceId(1)));
+  auto [device_coords1, core_id1] = std::move(device_core1);
+  ASSERT_EQ(device_coords1, (PjRtDeviceDimensions{0, 0, 1}));
+  ASSERT_EQ(core_id1, 0);
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto device_core2,
+      topology_desc.ChipCoordAndCoreIndexForLogicalDeviceOfDefaultType(
+          GlobalDeviceId(6)));
+  auto [device_coords2, core_id2] = std::move(device_core2);
+  ASSERT_EQ(device_coords2, (PjRtDeviceDimensions{1, 0, 2}));
+  ASSERT_EQ(core_id2, 0);
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto device_core3,
+      topology_desc.ChipCoordAndCoreIndexForLogicalDeviceOfDefaultType(
+          GlobalDeviceId(10)));
+  auto [device_coords3, core_id3] = std::move(device_core3);
+  ASSERT_EQ(device_coords3, (PjRtDeviceDimensions{2, 0, 2}));
+  ASSERT_EQ(core_id3, 0);
+}
+
+TEST(PjRtTopologyUtilsGPUTest, GetDeviceCoordsMultipleHostScopedPartition) {
+  std::shared_ptr<xla::GpuTopology> gpu_topology =
+      std::make_shared<xla::GpuTopology>(
+          /*platform_version=*/"12.3", /*num_partitions=*/1,
+          /*num_hosts_per_partition=*/4, /*num_devices_per_host=*/4);
+  StreamExecutorGpuTopologyDescription topology_desc(
+      xla::CudaId(), xla::CudaName(), "cuda 12030", gpu_topology);
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto device_core1,
+      topology_desc.ChipCoordAndCoreIndexForLogicalDeviceOfDefaultType(
+          GlobalDeviceId(1)));
+  auto [device_coords1, core_id1] = std::move(device_core1);
+  ASSERT_EQ(device_coords1, (PjRtDeviceDimensions{0, 0, 1}));
+  ASSERT_EQ(core_id1, 0);
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto device_core2,
+      topology_desc.ChipCoordAndCoreIndexForLogicalDeviceOfDefaultType(
+          GlobalDeviceId(6)));
+  auto [device_coords2, core_id2] = std::move(device_core2);
+  ASSERT_EQ(device_coords2, (PjRtDeviceDimensions{0, 1, 2}));
+  ASSERT_EQ(core_id2, 0);
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto device_core3,
+      topology_desc.ChipCoordAndCoreIndexForLogicalDeviceOfDefaultType(
+          GlobalDeviceId(10)));
+  auto [device_coords3, core_id3] = std::move(device_core3);
+  ASSERT_EQ(device_coords3, (PjRtDeviceDimensions{0, 2, 2}));
+  ASSERT_EQ(core_id3, 0);
+}
+
+TEST(StreamExecutorGpuTopologyDescriptionTest, OneApiRegistryDeserialization) {
+  // This tests oneAPI platform deserialization. It verifies that the oneAPI
+  // deserializer is registered and can be invoked.
+  std::shared_ptr<xla::GpuTopology> gpu_topology =
+      std::make_shared<xla::GpuTopology>(
+          /*platform_version=*/"Xe2", /*num_partitions=*/1,
+          /*num_hosts_per_partition=*/1, /*num_devices_per_host=*/2);
+
+  StreamExecutorGpuTopologyDescription topology_desc(
+      xla::OneapiId(), xla::OneapiName(), gpu_topology);
+
+  ASSERT_OK_AND_ASSIGN(auto proto, topology_desc.ToProto());
+  ASSERT_OK_AND_ASSIGN(
+      auto deserialized_topology,
+      PjRtTopologyDescriptionRegistry::Global().Deserialize(proto));
+
+  // Verify deserialized topology matches original.
+  EXPECT_EQ(deserialized_topology->platform_id(), xla::OneapiId());
+  EXPECT_EQ(deserialized_topology->platform_name(), xla::OneapiName());
+  EXPECT_EQ(deserialized_topology->platform_version(), "Xe2");
+}
+
+TEST(StreamExecutorGpuTopologyDescriptionTest,
+     MakeCanonicalShapeForMemorySpaceSubByte) {
+  std::shared_ptr<xla::GpuTopology> gpu_topology =
+      std::make_shared<xla::GpuTopology>(
+          /*platform_version=*/"12.3", /*num_partitions=*/1,
+          /*num_hosts_per_partition=*/1, /*num_devices_per_host=*/4);
+
+  StreamExecutorGpuTopologyDescription topology_desc(
+      xla::CudaId(), xla::CudaName(), gpu_topology);
+
+  const Shape shape = ShapeUtil::MakeShape(S4, {2, 4});
+  Layout unset_bits_layout = LayoutUtil::MakeDescendingLayout(2);
+  EXPECT_THAT(topology_desc.MakeCanonicalShapeForMemorySpace(
+                  topology_desc.GetDefaultMemorySpaceKindId(), shape,
+                  &unset_bits_layout),
+              IsOkAndHolds(Property(
+                  &Shape::layout, Property(&Layout::element_size_in_bits, 4))));
+
+  Layout invalid_bits_layout = LayoutUtil::MakeDescendingLayout(2);
+  invalid_bits_layout.set_element_size_in_bits(8);
+  EXPECT_THAT(topology_desc.MakeCanonicalShapeForMemorySpace(
+                  topology_desc.GetDefaultMemorySpaceKindId(), shape,
+                  &invalid_bits_layout),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+}  // namespace
+}  // namespace xla

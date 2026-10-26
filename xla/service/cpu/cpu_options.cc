@@ -15,30 +15,41 @@ limitations under the License.
 
 #include "xla/service/cpu/cpu_options.h"
 
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <vector>
+
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/numbers.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
+#include "absl/strings/string_view.h"
+#include "xla/service/hlo_module_config.h"
 
-namespace {
-
-const char* const kXlaOptimizeForSizeCpuOption = "xla_cpu_optimize_for_size";
-const char* const kLlvmIrDotTilingFactor = "xla_llvm_dot_tiling_factor";
-const char* const kXlaForceEnableExperimentalLlvmIrGemm =
-    "xla_force_enable_experimental_llvm_ir_gemm";
-const char* const kLlvmIrGemmTileSize = "xla_llvm_ir_gemm_tile_size";
-const char* const kDisableSlpVectorizer = "xla_cpu_disable_slp_vectorizer";
-const char* const kXlaCpuExperimentalOverridePipeline =
-    "xla_cpu_experimental_override_pipeline";
-
-}  // namespace
-
-namespace xla {
-namespace cpu {
-namespace options {
+namespace xla::cpu::options {
 
 bool OptimizeForSizeRequested(const HloModuleConfig& config) {
   const auto& extra_options_map =
       config.debug_options().xla_backend_extra_options();
   return extra_options_map.count(kXlaOptimizeForSizeCpuOption) > 0;
+}
+
+bool IsMsanEnabled(const HloModuleConfig& config) {
+  const auto& extra_options_map =
+      config.debug_options().xla_backend_extra_options();
+  auto it = extra_options_map.find(kXlaCpuEnableMsan);
+  if (it != extra_options_map.end()) {
+    return it->second == "true";
+  }
+#ifdef MEMORY_SANITIZER
+  return true;
+#else
+  return false;
+#endif
 }
 
 bool VectorizedReduceDisabled(const HloModuleConfig& config) {
@@ -53,6 +64,25 @@ bool SlpVectorizerDisabled(const HloModuleConfig& config) {
   return extra_options_map.count(kDisableSlpVectorizer) > 0;
 }
 
+bool DisableLoopUnrolling(const HloModuleConfig& config) {
+  const auto& extra_options_map =
+      config.debug_options().xla_backend_extra_options();
+  return extra_options_map.count(kDisableLoopUnrolling) > 0;
+}
+
+bool FoldAllConstants(const HloModuleConfig& config) {
+  const auto& extra_options_map =
+      config.debug_options().xla_backend_extra_options();
+  return extra_options_map.count(kFoldAllConstants) > 0;
+}
+
+bool DisablePlatformDependentMath(const HloModuleConfig& config) {
+  const auto& extra_options_map =
+      config.debug_options().xla_backend_extra_options();
+  return !config.debug_options().xla_cpu_enable_platform_dependent_math() ||
+         extra_options_map.count(kDisablePlatformDependentMath) > 0;
+}
+
 std::optional<int64_t> LlvmIrGemvTilingFactor(const HloModuleConfig& config) {
   const auto& extra_options_map =
       config.debug_options().xla_backend_extra_options();
@@ -63,6 +93,24 @@ std::optional<int64_t> LlvmIrGemvTilingFactor(const HloModuleConfig& config) {
     return tiling_factor;
   }
   return std::nullopt;
+}
+
+absl::StatusOr<int64_t> SmallWhileLoopByteThreshold(
+    const HloModuleConfig& config) {
+  const auto& extra_options_map =
+      config.debug_options().xla_backend_extra_options();
+
+  auto itr = extra_options_map.find(kSmallWhileLoopByteThreshold);
+  if (itr == extra_options_map.end()) {
+    return 1000000000;  // Default value.
+  }
+
+  int64_t byte_threshold;
+  if (!absl::SimpleAtoi(itr->second, &byte_threshold)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Failed to parse value for: ", kSmallWhileLoopByteThreshold, "."));
+  }
+  return byte_threshold;
 }
 
 bool ForceEnableExperimentalLlvmIrGemm(const HloModuleConfig& config) {
@@ -107,17 +155,27 @@ std::optional<std::tuple<int64_t, int64_t, int64_t>> LlvmIrGemmTileSize(
                                                tile_size_n_in_vector_width);
 }
 
-std::optional<std::string> ExperimentalOverriddenPipeline(
-    const HloModuleConfig& config) {
+bool FlattenAfterFusion(const HloModuleConfig& config) {
   const auto& extra_options_map =
       config.debug_options().xla_backend_extra_options();
-  auto it = extra_options_map.find(kXlaCpuExperimentalOverridePipeline);
-  if (it == extra_options_map.end()) {
-    return std::nullopt;
-  }
-  return it->second;
+  return extra_options_map.count(kFlattenAfterFusion) > 0;
 }
 
-}  // namespace options
-}  // namespace cpu
-}  // namespace xla
+bool UseMultiOutputFusion(const HloModuleConfig& config) {
+  const auto& extra_options_map =
+      config.debug_options().xla_backend_extra_options();
+  return extra_options_map.count(kUseMultiOutputFusion) > 0;
+}
+
+bool EnableTiledEmitter(const HloModuleConfig& config) {
+  const auto& extra_options_map =
+      config.debug_options().xla_backend_extra_options();
+  return extra_options_map.count(kDisableTiledEmitter) == 0;
+}
+
+bool EnableExperimentalTiling(const HloModuleConfig& config) {
+  return config.debug_options()
+      .xla_cpu_experimental_enable_tiling_propagation();
+}
+
+}  // namespace xla::cpu::options

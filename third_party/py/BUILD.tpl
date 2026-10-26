@@ -1,27 +1,34 @@
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 licenses(["restricted"])
 
 package(default_visibility = ["//visibility:public"])
 
 # Point both runtimes to the same python binary to ensure we always
 # use the python binary specified by ./configure.py script.
-load("@bazel_tools//tools/python:toolchain.bzl", "py_runtime_pair")
-load("@python//:defs.bzl", "interpreter")
-
-py_runtime(
-    name = "py2_runtime",
-    interpreter_path = interpreter,
-    python_version = "PY2",
-)
+load("@rules_python//python:py_runtime_pair.bzl", "py_runtime_pair")
 
 py_runtime(
     name = "py3_runtime",
-    interpreter_path = interpreter,
+    interpreter = "%{PYTHON_INTERPRETER}",
     python_version = "PY3",
 )
 
 py_runtime_pair(
     name = "py_runtime_pair",
-    py2_runtime = ":py2_runtime",
     py3_runtime = ":py3_runtime",
 )
 
@@ -34,7 +41,7 @@ toolchain(
 )
 
 alias(name = "python_headers",
-      actual = "@python//:python_headers")
+      actual = "@rules_python//python/cc:current_py_cc_headers")
 
 # This alias is exists for the use of targets in the @llvm-project dependency,
 # which expect a python_headers target called @python_runtime//:headers. We use

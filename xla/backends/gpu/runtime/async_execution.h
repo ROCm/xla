@@ -1,0 +1,139 @@
+/* Copyright 2026 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#ifndef XLA_BACKENDS_GPU_RUNTIME_ASYNC_EXECUTION_H_
+#define XLA_BACKENDS_GPU_RUNTIME_ASYNC_EXECUTION_H_
+
+#include <cstdint>
+#include <memory>
+
+#include "absl/container/flat_hash_map.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "xla/backends/gpu/runtime/per_device_state.h"
+#include "xla/backends/gpu/runtime/thunk.h"
+#include "xla/backends/gpu/runtime/thunk_id.h"
+#include "xla/runtime/object_pool.h"
+#include "xla/stream_executor/event.h"
+#include "xla/stream_executor/stream.h"
+#include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/lib/gtl/int_type.h"
+
+namespace xla::gpu {
+
+// Unique identifier for async execution scopes. The same identifier shared
+// between start and done thunks means that they belong to the same execution
+// scope. This identifier is used during thunk serialization and deserialization
+// to/from proto to connect done thunks to their corresponding start thunks.
+TSL_LIB_GTL_DEFINE_INT_TYPE(AsyncExecutionId, uint64_t);
+
+// AsyncExecution is a helper class to manage async execution of XLA thunks.
+//
+// XLA has several asynchronous operations (mostly communication operations,
+// however it also supports asynchronous computations) that are decomposed into
+// a pair of start and done operations:
+//
+// Example: asynchronous all reduce
+//
+//   %start = all-reduce-start(...), stream_id=comm-stream
+//   ... compute kernels launched on compute stream
+//   %done = all-reduce-done(%start)
+//
+// `%start` operation launches an all-reduce on a dedicated communication
+// stream, and `%done` operation synchronizes it with a compute stream. By
+// decomposing operation into start/done pairs XLA makes them "asynchronous" in
+// a sense that they can run concurrently with the "main" compute stream.
+//
+// Simply synchronizing compute stream with a communication stream is not going
+// to work, because it can create false dependencies between multiple async
+// operations:
+//
+//   %start0 = all-reduce-start(...), stream_id=comm-stream
+//   %start1 = all-reduce-start(...), stream_id=comm-stream
+//   ... compute kernels launched on compute stream
+//   %done0 = all-reduce-done(%start0)
+//   %done1 = all-reduce-done(%start1)
+//
+// If `all-reduce-done` would simply synchronize compute stream with
+// `comm-stream` it would create a false dependency between two unrelated all
+// reduce operations.
+//
+// Async execution scope is always started by a `start` Thunk, and start thunk
+// id is used throughout the runtime as async execution id.
+class AsyncExecution {
+ public:
+  using EventPool = ObjectPool<std::unique_ptr<se::Event>, se::StreamExecutor*>;
+
+  // We need to know the thunk that starts an async execution, as we use its id
+  // as a key in the execution scoped state and its profile annotation for
+  // logging.
+  AsyncExecution(Thunk::ThunkInfo start_thunk_info, int devices_per_host);
+
+  ThunkId start_thunk_id() const { return start_thunk_info_.thunk_id; }
+
+  // An RAII guard that automatically records an event on a given async stream
+  // when it goes out of scope.
+  class ExecutionGuard {
+   public:
+    ExecutionGuard(const ExecutionGuard&) = delete;
+    ExecutionGuard& operator=(const ExecutionGuard&) = delete;
+    ExecutionGuard(ExecutionGuard&& other) noexcept;
+    ExecutionGuard& operator=(ExecutionGuard&&) = delete;
+    ~ExecutionGuard();
+
+   private:
+    friend class AsyncExecution;
+    ExecutionGuard(se::Event* event, se::Stream* async_stream);
+    se::Event* event_;          // owned by ExecutionScopedState
+    se::Stream* async_stream_;  // owned by GpuExecutable
+  };
+
+  // Initializes async execution state on the given executor. Borrows an event
+  // from the pool (creating one if needed) and stores it in the execution
+  // scoped state. When the state is destroyed, the event is returned to the
+  // pool.
+  absl::Status Initialize(Thunk::ExecutionScopedState* state,
+                          se::StreamExecutor* executor);
+
+  // Starts an async execution on `async_stream`: creates a dependency from
+  // `stream` to `async_stream` which guarantees that async operations launched
+  // on `async_stream` will observe all prior operations launched on `stream`.
+  // Start can be called at most once. Before the next Start can be called,
+  // the async execution has to be completed with Done.
+  absl::StatusOr<ExecutionGuard> Start(Thunk::ExecutionScopedState* state,
+                                       se::Stream* stream,
+                                       se::Stream* async_stream);
+
+  // Completes an async execution on `stream` by synchronizing with the event
+  // recorded by the corresponding Start call.
+  absl::Status Done(Thunk::ExecutionScopedState* state, se::Stream* stream);
+
+ private:
+  struct PoolState {
+    EventPool pool{[](se::StreamExecutor* e) { return e->CreateEvent(); }};
+  };
+
+  const Thunk::ThunkInfo start_thunk_info_;
+  PerDeviceState<PoolState> event_pools_;
+};
+
+// Map from AsyncExecutionId to shared AsyncExecution, used during
+// deserialization to connect AsyncStartThunk and AsyncDoneThunk pairs.
+using AsyncExecutionMap =  // NOLINT
+    absl::flat_hash_map<AsyncExecutionId, std::shared_ptr<AsyncExecution>>;
+
+}  // namespace xla::gpu
+
+#endif  // XLA_BACKENDS_GPU_RUNTIME_ASYNC_EXECUTION_H_

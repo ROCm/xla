@@ -14,13 +14,13 @@ limitations under the License.
 ==============================================================================*/
 
 #include "absl/synchronization/mutex.h"
-#include "xla/client/client_library.h"
-#include "xla/client/xla_builder.h"
-#include "xla/shape_util.h"
-#include "xla/stream_executor/platform_manager.h"
-#include "tsl/lib/core/status_test_util.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/test.h"
+#include "xla/client/client_library.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/shape_util.h"
+#include "xla/stream_executor/platform_manager.h"
+#include "xla/tsl/lib/core/status_test_util.h"
 
 namespace xla {
 namespace {
@@ -49,7 +49,7 @@ void CompileAndExecute(
   absl::StatusOr<ScopedShapedBuffer> result =
       executable->Run(absl::Span<const ShapedBuffer* const>(), execute_options);
   {
-    absl::MutexLock lock(results_mutex);
+    absl::MutexLock lock(*results_mutex);
     results->emplace_back(device_ordinal, std::move(result));
   }
 }

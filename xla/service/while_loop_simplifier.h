@@ -21,7 +21,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
-#include "xla/service/hlo_pass_interface.h"
+#include "xla/hlo/pass/hlo_pass_interface.h"
 
 namespace xla {
 
@@ -50,10 +50,13 @@ absl::StatusOr<bool> TryRemoveDeadWhileParams(HloInstruction* while_op);
 //    (e.g. removing unused loop parameters).
 //
 //  - Removing trivial compare instructions inside while bodies. Assuming a
-//    while loop with known trip count, k, loop induction variable i, and the
-//    initial loop induction value c, a compare(i,x) instruction is trivial if:
-//      1) x is a constant and x >= k + c.
-//      2) x is a constant x <= c.
+//    while loop with known trip count k, loop induction variable i with
+//    initial value c and constant step s (so i takes the values c, c + s, ...,
+//    c + (k - 1) * s), a compare(i,x) instruction with constant x is trivial
+//    if:
+//      1) x <= c: (i < x) is false; and if x < c, (i > x) is true.
+//      2) x >= c + (k - 1) * s: (i > x) is false; and if x > c + (k - 1) * s,
+//         (i < x) is true.
 //
 // Flattening nested while loop tuples adds a whole mess of likely unnecessary
 // kGetTupleElement and kTuple operations to the graph.  We expect that tuple
@@ -65,9 +68,11 @@ class WhileLoopSimplifier : public HloModulePass {
       : simplify_compare_instrs_(simplify_compare_instrs) {}
 
   ~WhileLoopSimplifier() override = default;
-  absl::string_view name() const override { return "simplify-while-loops"; }
-  using HloPassInterface::Run;
-  absl::StatusOr<bool> Run(
+  static constexpr absl::string_view kName = "simplify-while-loops";
+  absl::string_view name() const override { return kName; }
+
+ protected:
+  absl::StatusOr<bool> RunImpl(
       HloModule* module,
       const absl::flat_hash_set<absl::string_view>& execution_threads) override;
 

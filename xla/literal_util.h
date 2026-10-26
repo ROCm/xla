@@ -19,7 +19,9 @@ limitations under the License.
 #define XLA_LITERAL_UTIL_H_
 
 #include <array>
+#include <cmath>
 #include <cstdint>
+#include <functional>
 #include <initializer_list>
 #include <iterator>
 #include <optional>
@@ -30,6 +32,8 @@ limitations under the License.
 #include <vector>
 
 #include "absl/functional/function_ref.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/array.h"
@@ -43,11 +47,11 @@ limitations under the License.
 #include "xla/shape.h"
 #include "xla/shape_util.h"
 #include "xla/status_macros.h"
-#include "xla/statusor.h"
+#include "xla/tests/constraint_state.h"
+#include "xla/tsl/lib/core/bitmap.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/logging.h"  // IWYU pragma: keep
 #include "xla/xla_data.pb.h"
-#include "tsl/lib/core/bitmap.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"  // IWYU pragma: keep
 
 namespace xla {
 
@@ -120,6 +124,10 @@ class LiteralUtil {
   // Creates a scalar literal value containing the maximum value of the given
   // primitive type. For floating-point types supporting inf, returns inf.
   static Literal MaxValue(PrimitiveType primitive_type);
+  // Creates a scalar literal value containing the maximum finite value of the
+  // given primitive type. For floating-point types that do not support inf,
+  // this is the same as MaxValue.
+  static Literal MaxFiniteValue(PrimitiveType primitive_type);
   // Creates a scalar literal value containing the NaN value of the given
   // primitive type. Fail for non-inexact types. For complex types, returns a
   // nan + nan * j value.
@@ -128,6 +136,9 @@ class LiteralUtil {
   template <typename NativeT>
   static Literal CreateFullWithDescendingLayout(
       absl::Span<const int64_t> dimensions, NativeT value);
+  template <typename NativeT>
+  static Literal CreateFull(absl::Span<const int64_t> dimensions,
+                            NativeT value);
 
   // Creates a new literal from an Array type. The variants not ending with
   // WithLayout use the default XLA layout for the literal's linear
@@ -175,9 +186,19 @@ class LiteralUtil {
       std::initializer_list<std::initializer_list<NativeT>> values,
       int64_t projection_p, int64_t projection_z);
 
-  // Returns an identity matrix (rank 2) with the given row and column count.
+  // Returns a scalar matrix (rank 2) of the given size and scalar value.
+  template <typename NativeT>
+  static Literal MakeScalarMatrixR2(int64_t size, NativeT scalar);
+
+  // Returns an identity matrix (rank 2) of the given size.
   template <typename NativeT>
   static Literal MakeIdentityR2(int64_t size);
+
+  // Creates fingerprint input where each entry encodes its row and column
+  // scaled by the given scale.
+  template <typename NativeT>
+  static Literal CreateFingerprintMatixR2(int64_t m, int64_t n,
+                                          NativeT scale = 1);
 
   // Returns a tuple literal composed of given literals. Data is copied from the
   // given elements into the returned literal.
@@ -226,16 +247,22 @@ class LiteralUtil {
   // If the given literal's data type is <SrcType>, converts it to a <DstType>
   // literal; otherwise, returns a copy of it. If the literal is a tuple,
   // recursively converts its elements.
+  static Literal ConvertF8E4M3FNToF32(const LiteralSlice& f8e4m3fn_literal);
+  static Literal ConvertF8E5M2ToF32(const LiteralSlice& f8e5m2_literal);
+  static Literal ConvertS8ToF32(const LiteralSlice& s8_literal);
   static Literal ConvertBF16ToF32(const LiteralSlice& bf16_literal);
   static Literal ConvertBF16ToF64(const LiteralSlice& bf16_literal);
   static Literal ConvertF32ToF8E4M3FNUZ(const LiteralSlice& f32_literal);
   static Literal ConvertF32ToF8E5M2FNUZ(const LiteralSlice& f32_literal);
+  static Literal ConvertF32ToF8E5M2(const LiteralSlice& f32_literal);
+  static Literal ConvertF32ToF8E4M3FN(const LiteralSlice& f32_literal);
   static Literal ConvertF32ToBF16(const LiteralSlice& f32_literal);
   static Literal ConvertF32ToS8(const LiteralSlice& f32_literal);
   static Literal ConvertF32ToF64(const LiteralSlice& f32_literal);
   static Literal ConvertF64ToBF16(const LiteralSlice& f64_literal);
   static Literal ConvertF64ToF32(const LiteralSlice& f64_literal);
   static Literal ConvertS32ToF32(const LiteralSlice& s32_literal);
+  static Literal ConvertS32ToS1(const LiteralSlice& s32_literal);
 
   // Creates a scalar literal whose value is the maximum value of a given
   // literal slice.
@@ -266,6 +293,12 @@ class LiteralUtil {
   static absl::StatusOr<Literal> CreateRandomLiteral(const Shape& shape,
                                                      E* engine, T mean,
                                                      T stddev);
+  // Same as the above, but takes mean and stddev as doubles.
+  template <PrimitiveType type, typename E,
+            typename T = primitive_util::NativeTypeOf<type>>
+  static absl::StatusOr<Literal> CreateRandomLiteral(const Shape& shape,
+                                                     E* engine, double mean,
+                                                     double stddev);
 
   // Creates a literal with the supplied shape, and initializes the literal
   // values using a normal distribution with given mean and stddev standard
@@ -288,6 +321,10 @@ class LiteralUtil {
   // Fails if the literal is not an integral type or if the value it contains
   // cannot be represented as an int64_t.
   static std::optional<int64_t> LiteralAsScalarInt64(const Literal& l);
+
+  // Creates a vector of pointers to the given literals.
+  static std::vector<const Literal*> MakePointers(
+      absl::Span<const Literal> literals);
 };
 
 std::ostream& operator<<(std::ostream& out, const Literal& literal);
@@ -303,7 +340,7 @@ template <typename NativeT>
 template <typename T>
 /* static */ Literal LiteralUtil::CreateR0(PrimitiveType primitive_type,
                                            T value) {
-  return primitive_util::ArrayTypeSwitch<Literal>(
+  return primitive_util::ArrayTypeSwitch(
       [&value](auto type) {
         using NativeT = primitive_util::NativeTypeOf<type>;
         return CreateR0(static_cast<NativeT>(value));
@@ -516,12 +553,32 @@ template <typename NativeT>
   return CreateFromArrayWithLayout(values, layout);
 }
 
-// Returns an identity matrix (rank 2) with the given row and column count.
+// Creates a squared scalar matrix of given size.
+template <typename NativeT>
+/* static */ Literal LiteralUtil::MakeScalarMatrixR2(int64_t size,
+                                                     NativeT scalar) {
+  Array2D<NativeT> array(size, size, NativeT(0));
+  for (int64_t i = 0; i < size; ++i) {
+    array(i, i) = scalar;
+  }
+  return CreateR2FromArray2D(array);
+}
+
 template <typename NativeT>
 /* static */ Literal LiteralUtil::MakeIdentityR2(int64_t size) {
-  Array2D<NativeT> array(size, size, 0);
-  for (int64_t i = 0; i < size; ++i) {
-    array(i, i) = 1;
+  return MakeScalarMatrixR2<NativeT>(size, NativeT(1));
+}
+
+template <typename NativeT>
+/* static */ Literal LiteralUtil::CreateFingerprintMatixR2(int64_t m, int64_t n,
+                                                           NativeT scale) {
+  NativeT row_factor = log10(m) + 1;
+  NativeT col_factor = log10(n) + 1;
+  Array2D<NativeT> array(m, n, NativeT(0));
+  for (int64_t i = 0; i < m; ++i) {
+    for (int64_t j = 0; j < n; ++j) {
+      array(i, i) = scale * (row_factor * i + col_factor * j);
+    }
   }
   return CreateR2FromArray2D(array);
 }
@@ -535,6 +592,15 @@ template <typename NativeT>
   return literal;
 }
 
+template <typename NativeT>
+/* static */ Literal LiteralUtil::CreateFull(
+    absl::Span<const int64_t> dimensions, NativeT value) {
+  Literal literal(ShapeUtil::MakeShape(
+      primitive_util::NativeToPrimitiveType<NativeT>(), dimensions));
+  literal.PopulateWithValue(value);
+  return literal;
+}
+
 template <PrimitiveType type, typename T>
 /* static */ absl::StatusOr<Literal> LiteralUtil::CreateLiteralWithGenerator(
     const Shape& shape,
@@ -542,7 +608,7 @@ template <PrimitiveType type, typename T>
   using NativeT = primitive_util::NativeTypeOf<type>;
   TF_RET_CHECK(shape.element_type() == type);
   Literal literal(shape);
-  TF_RETURN_IF_ERROR(literal.Populate<NativeT>(
+  ABSL_RETURN_IF_ERROR(literal.Populate<NativeT>(
       [=](absl::Span<const int64_t> indexes) { return generator(indexes); }));
   return std::move(literal);
 }
@@ -550,6 +616,13 @@ template <PrimitiveType type, typename T>
 template <PrimitiveType type, typename E, typename T>
 /* static */ absl::StatusOr<Literal> LiteralUtil::CreateRandomLiteral(
     const Shape& shape, E* engine, T mean, T stddev) {
+  return CreateRandomLiteral<type>(shape, engine, static_cast<double>(mean),
+                                   static_cast<double>(stddev));
+}
+
+template <PrimitiveType type, typename E, typename T>
+/* static */ absl::StatusOr<Literal> LiteralUtil::CreateRandomLiteral(
+    const Shape& shape, E* engine, double mean, double stddev) {
   using NativeT = primitive_util::NativeTypeOf<type>;
   std::normal_distribution<double> generator(mean, stddev);
   return CreateLiteralWithGenerator<type, NativeT>(
@@ -564,6 +637,49 @@ template <PrimitiveType type, typename T>
   std::minstd_rand0 engine;
   return CreateRandomLiteral<type>(shape, &engine, mean, stddev);
 }
+
+// Generates fake data in a literal of the given shape, or returns an error
+// status if the element type is currently unhandled for fake data
+// generation. See below for documentation of pseudo_random and use_large_range.
+absl::StatusOr<Literal> MakeFakeLiteral(const Shape& shape,
+                                        bool pseudo_random = true,
+                                        bool use_large_range = false);
+
+// Similar to MakeFakeLiteral above but takes a random number generator engine
+// to enable reusing the engine across randomly generated literals. 'limit' is a
+// optional pair that contains the min and the max values to be sample for
+// integers (integer format only). 'is_sorted' sorts the sample data for
+// integers (integer format only). 'no_duplicates' indicates that there should
+// be no duplicate values in each generated array. This is uniqueness is
+// best-effort only. Some types (half and bfloat16) are not supported and
+// uniqueness cannot be guaranteed if the number of elements exceeds the number
+// of different values supported by the type. (floating point format only)
+// 'use_large_range' indicates the sampled data is from the full range of the
+// floating point format. (floating point format only)
+// 'max_bits_of_precision' sets the data to have the given number of bits or
+// less and are not NaNs (integer or floating point formats only).
+// 'float_generator' is a function that generates a floating point value. If
+// null, the values are generated using the engine and the distribution suitable
+// for the type.
+// 'index_alignment' indicates that generated data is aligned to the given
+// number (integer formats only).
+// 'index_known_zeroes' indicates the number of zeroes in the generated data
+// (integer formats only).
+absl::StatusOr<Literal> MakeFakeLiteral(
+    const Shape& shape, std::minstd_rand0* engine,
+    std::optional<std::pair<int64_t, int64_t>> limit, bool is_sorted,
+    bool no_duplicates, bool use_large_range,
+    std::optional<int64_t> max_bits_of_precision,
+    std::optional<int64_t> index_alignment = std::nullopt,
+    std::optional<uint64_t> index_known_zeroes = std::nullopt,
+    std::function<double(std::minstd_rand0*)> float_generator = nullptr,
+    std::optional<ConstraintInterval> interval = std::nullopt);
+
+// Materializes a dense literal from compressed sparse values and indices
+// using the provided sparsity configuration.
+absl::StatusOr<Literal> MaterializeSparseOperand(
+    const LiteralSlice& values, const LiteralSlice& indices,
+    const SparsityConfig::TensorSparsityConfig& config);
 
 }  // namespace xla
 

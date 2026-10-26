@@ -27,12 +27,12 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/statusor.h"
 
 namespace xla {
 
@@ -71,7 +71,7 @@ class DynamicDimensionInference {
     kIgnore,
   };
   using CustomCallInferenceHandler =
-      std::function<absl::Status(HloInstruction*, DynamicDimensionInference*)>;
+      std::function<bool(HloInstruction*, DynamicDimensionInference*)>;
 
   // Generate an assertion which fails the execution if the instruction value is
   // false.
@@ -169,7 +169,7 @@ class DynamicDimensionInference {
              lhs.dim == rhs.dim;
     }
 
-    std::tuple<int, int, std::string, int64_t> ToTuple() const {
+    std::tuple<int, int64_t, std::string, int64_t> ToTuple() const {
       return std::make_tuple(
           inst && inst->GetModule() ? inst->GetModule()->unique_id() : -1,
           inst ? inst->unique_id() : -1, index.ToString(), dim);

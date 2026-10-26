@@ -17,17 +17,22 @@ limitations under the License.
 
 #include <memory>
 #include <string>
-#include <string_view>
 #include <utility>
-#include <variant>
+#include <vector>
 
+#include "absl/log/check.h"
 #include "absl/memory/memory.h"
 #include "absl/strings/str_cat.h"
-#include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/service/gpu/model/hlo_op_profiles_data.h"
-#include "xla/stream_executor/device_description.h"
-#include "tsl/platform/logging.h"
+#include "absl/strings/str_split.h"
+#include "absl/strings/string_view.h"
+#include "google/protobuf/text_format.h"
 #include "tsl/platform/protobuf.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/service/gpu/model/hlo_op_profile.pb.h"
+#include "xla/service/gpu/model/hlo_op_profiles_data.h"
+#include "xla/stream_executor/cuda/cuda_compute_capability.h"
+#include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 
 namespace xla {
 namespace gpu {
@@ -41,22 +46,38 @@ namespace gpu {
 }
 
 /*static*/ std::string HloOpProfiles::GetProfileName(
-    const se::DeviceDescription* device_info) {
-  if (device_info != nullptr) {
-    if (auto* ptr = std::get_if<stream_executor::CudaComputeCapability>(
-            &device_info->gpu_compute_capability()))
-      return absl::StrCat("sm_", ptr->major, ptr->minor);
+    const se::DeviceDescription& device_info) {
+  if (auto* ptr =
+          device_info.gpu_compute_capability().cuda_compute_capability()) {
+    return absl::StrCat("sm_", ptr->major, ptr->minor);
+  }
+  if (auto* ptr =
+          device_info.gpu_compute_capability().rocm_compute_capability()) {
+    return ptr->gfx_version();
   }
   return "<unknown>";
 }
 
+/*static*/ std::string HloOpProfiles::GetDeviceSpecificProfileName(
+    const se::DeviceDescription& device_info) {
+  std::string profile_name = GetProfileName(device_info);
+  if (profile_name == "sm_100") {
+    CHECK(device_info.name() != se::DeviceDescription::kUndefinedString)
+        << "Device name must be set for sm_100 device-specific profiles.";
+    std::vector<std::string> full_name =
+        absl::StrSplit(device_info.name(), ' ');
+    return absl::StrCat(profile_name, "_", full_name.back());
+  }
+  return profile_name;
+}
+
 /*static*/ std::unique_ptr<HloOpProfiles> HloOpProfiles::Load(
-    std::string_view profiles_text_proto,
-    std::string_view default_profile_name) {
+    absl::string_view profiles_text_proto,
+    absl::string_view default_profile_name) {
   ProfilesNestedMap profiles_map;
   DeviceHloInstructionProfiles all_device_profiles;
-  CHECK(tsl::protobuf::TextFormat::ParseFromString(
-      std::string(profiles_text_proto), &all_device_profiles));
+  CHECK(tsl::protobuf::TextFormat::ParseFromString(profiles_text_proto,
+                                                   &all_device_profiles));
   for (const auto& device_profile : all_device_profiles.entries()) {
     for (const auto& entry : device_profile.second.entries()) {
       auto op_code = StringToHloOpcode(entry.instruction().opcode()).value();
@@ -71,9 +92,11 @@ namespace gpu {
 }
 
 const HloOpProfiles::HloOpProfile& HloOpProfiles::GetProfile(
-    const se::DeviceDescription* device_info) const {
+    const se::DeviceDescription& device_info) const {
   auto it = profiles_.find(GetProfileName(device_info));
-  if (it != profiles_.end()) return it->second;
+  if (it != profiles_.end()) {
+    return it->second;
+  }
   return default_profile_;
 }
 

@@ -1,0 +1,185 @@
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+load("@bazel_skylib//rules:expand_template.bzl", "expand_template")
+
+exports_files(["LICENSE"])
+
+_DNNL_COPTS_THREADPOOL = [
+    "-fopenmp-simd",
+    "-fexceptions",
+    "-UUSE_MKL",
+    "-UUSE_CBLAS",
+]
+
+_DNNL_RUNTIME_THREADPOOL = {
+    "#cmakedefine DNNL_CPU_THREADING_RUNTIME DNNL_RUNTIME_${DNNL_CPU_THREADING_RUNTIME}": "#define DNNL_CPU_THREADING_RUNTIME DNNL_RUNTIME_THREADPOOL",
+    "#cmakedefine DNNL_CPU_RUNTIME DNNL_RUNTIME_${DNNL_CPU_RUNTIME}": "#define DNNL_CPU_RUNTIME DNNL_RUNTIME_THREADPOOL",
+    "#cmakedefine DNNL_GPU_RUNTIME DNNL_RUNTIME_${DNNL_GPU_RUNTIME}": "#define DNNL_GPU_RUNTIME DNNL_RUNTIME_NONE",
+    "#cmakedefine DNNL_GPU_VENDOR DNNL_VENDOR_${DNNL_GPU_VENDOR}": "#define DNNL_GPU_VENDOR DNNL_VENDOR_NONE",
+    "#cmakedefine DNNL_USE_RT_OBJECTS_IN_PRIMITIVE_CACHE": "#undef DNNL_USE_RT_OBJECTS_IN_PRIMITIVE_CACHE",
+    "#cmakedefine DNNL_WITH_SYCL": "#undef DNNL_WITH_SYCL",
+    "#cmakedefine DNNL_WITH_LEVEL_ZERO": "#undef DNNL_WITH_LEVEL_ZERO",
+    "#cmakedefine DNNL_SYCL_CUDA": "#undef DNNL_SYCL_CUDA",
+    "#cmakedefine DNNL_SYCL_HIP": "#undef DNNL_SYCL_HIP",
+    "#cmakedefine DNNL_ENABLE_STACK_CHECKER": "#undef DNNL_ENABLE_STACK_CHECKER",
+    "#cmakedefine DNNL_EXPERIMENTAL": "#undef DNNL_EXPERIMENTAL",
+    "#cmakedefine DNNL_EXPERIMENTAL_UKERNEL": "#undef DNNL_EXPERIMENTAL_UKERNEL",
+    "#cmakedefine ONEDNN_BUILD_GRAPH": "#define ONEDNN_BUILD_GRAPH",
+    "#cmakedefine DNNL_EXPERIMENTAL_PROFILING": "#undef DNNL_EXPERIMENTAL_PROFILING",
+    "#cmakedefine DNNL_EXPERIMENTAL_LOGGING": "#undef DNNL_EXPERIMENTAL_LOGGING",
+    "#cmakedefine DNNL_SAFE_RBP": "#undef DNNL_SAFE_RBP",
+    "#cmakedefine DNNL_EXPERIMENTAL_SYCL_KERNEL_COMPILER": "#undef DNNL_EXPERIMENTAL_SYCL_KERNEL_COMPILER",
+    "#cmakedefine01 BUILD_TRAINING": "#define BUILD_TRAINING 1",
+    "#cmakedefine01 BUILD_INFERENCE": "#define BUILD_INFERENCE 0",
+    "#cmakedefine01 BUILD_PRIMITIVE_ALL": "#define BUILD_PRIMITIVE_ALL 1",
+    "#cmakedefine01 BUILD_BATCH_NORMALIZATION": "#define BUILD_BATCH_NORMALIZATION 0",
+    "#cmakedefine01 BUILD_BINARY": "#define BUILD_BINARY 0",
+    "#cmakedefine01 BUILD_CONCAT": "#define BUILD_CONCAT 0",
+    "#cmakedefine01 BUILD_CONVOLUTION": "#define BUILD_CONVOLUTION 0",
+    "#cmakedefine01 BUILD_DECONVOLUTION": "#define BUILD_DECONVOLUTION 0",
+    "#cmakedefine01 BUILD_ELTWISE": "#define BUILD_ELTWISE 0",
+    "#cmakedefine01 BUILD_INNER_PRODUCT": "#define BUILD_INNER_PRODUCT 0",
+    "#cmakedefine01 BUILD_LAYER_NORMALIZATION": "#define BUILD_LAYER_NORMALIZATION 0",
+    "#cmakedefine01 BUILD_LRN": "#define BUILD_LRN 0",
+    "#cmakedefine01 BUILD_MATMUL": "#define BUILD_MATMUL 0",
+    "#cmakedefine01 BUILD_POOLING": "#define BUILD_POOLING 0",
+    "#cmakedefine01 BUILD_PRELU": "#define BUILD_PRELU 0",
+    "#cmakedefine01 BUILD_REDUCTION": "#define BUILD_REDUCTION 0",
+    "#cmakedefine01 BUILD_REORDER": "#define BUILD_REORDER 0",
+    "#cmakedefine01 BUILD_RESAMPLING": "#define BUILD_RESAMPLING 0",
+    "#cmakedefine01 BUILD_RNN": "#define BUILD_RNN 0",
+    "#cmakedefine01 BUILD_SHUFFLE": "#define BUILD_SHUFFLE 0",
+    "#cmakedefine01 BUILD_SOFTMAX": "#define BUILD_SOFTMAX 0",
+    "#cmakedefine01 BUILD_SUM": "#define BUILD_SUM 0",
+    "#cmakedefine01 BUILD_PRIMITIVE_CPU_ISA_ALL": "#define BUILD_PRIMITIVE_CPU_ISA_ALL 0",
+    "#cmakedefine01 BUILD_SSE41": "#define BUILD_SSE41 0",
+    "#cmakedefine01 BUILD_AVX2": "#define BUILD_AVX2 0",
+    "#cmakedefine01 BUILD_AVX512": "#define BUILD_AVX512 0",
+    "#cmakedefine01 BUILD_AMX": "#define BUILD_AMX 0",
+    "#cmakedefine01 BUILD_PRIMITIVE_GPU_ISA_ALL": "#define BUILD_PRIMITIVE_GPU_ISA_ALL 0",
+    "#cmakedefine01 BUILD_XELP": "#define BUILD_XELP 0",
+    "#cmakedefine01 BUILD_XEHPG": "#define BUILD_XEHPG 0",
+    "#cmakedefine01 BUILD_XEHPC": "#define BUILD_XEHPC 0",
+    "#cmakedefine01 BUILD_XEHP": "#define BUILD_XEHP 0",
+    "#cmakedefine01 BUILD_GROUP_NORMALIZATION": "#define BUILD_GROUP_NORMALIZATION 0",
+    "#cmakedefine01 BUILD_GEMM_KERNELS_ALL": "#define BUILD_GEMM_KERNELS_ALL 1",
+    "#cmakedefine01 BUILD_GEMM_KERNELS_NONE": "#define BUILD_GEMM_KERNELS_NONE 0",
+    "#cmakedefine01 BUILD_GEMM_SSE41": "#define BUILD_GEMM_SSE41 0",
+    "#cmakedefine01 BUILD_GEMM_AVX2": "#define BUILD_GEMM_AVX2 0",
+    "#cmakedefine01 BUILD_GEMM_AVX512": "#define BUILD_GEMM_AVX512 0",
+    "#cmakedefine DNNL_SYCL_GENERIC": "#undef DNNL_SYCL_GENERIC",
+    "#cmakedefine DNNL_DISABLE_GPU_REF_KERNELS": "#undef DNNL_DISABLE_GPU_REF_KERNELS",
+    "#cmakedefine01 BUILD_SDPA": "#define BUILD_SDPA 0",
+    "#cmakedefine01 BUILD_XE2": "#define BUILD_XE2 0",
+    "#cmakedefine01 BUILD_XE3": "#define BUILD_XE3 0",
+}
+
+expand_template(
+    name = "dnnl_config_h",
+    out = "include/oneapi/dnnl/dnnl_config.h",
+    substitutions = select({
+        "//conditions:default": _DNNL_RUNTIME_THREADPOOL,
+    }),
+    template = "include/oneapi/dnnl/dnnl_config.h.in",
+)
+
+expand_template(
+    name = "dnnl_version_h",
+    out = "include/oneapi/dnnl/dnnl_version.h",
+    substitutions = {
+        "@DNNL_VERSION_MAJOR@": "3",
+        "@DNNL_VERSION_MINOR@": "11",
+        "@DNNL_VERSION_PATCH@": "3",
+    },
+    template = "include/oneapi/dnnl/dnnl_version.h.in",
+)
+
+expand_template(
+    name = "dnnl_version_hash_h",
+    out = "include/oneapi/dnnl/dnnl_version_hash.h",
+    substitutions = {
+        "@DNNL_VERSION_HASH@": "74d04752d9eaefff6a9ff62466c4d20b155e5bca",
+    },
+    template = "include/oneapi/dnnl/dnnl_version_hash.h.in",
+)
+
+cc_library(
+    name = "mkl_dnn_acl",
+    srcs = glob(
+        [
+            "src/common/*.cpp",
+            "src/cpu/**/*.cpp",
+            "src/cpu/*.cpp",
+            "src/cpu/jit_utils/**/*.cpp",
+            "src/graph/interface/*.cpp",
+            "src/graph/backend/*.cpp",
+            "src/graph/backend/dnnl/*.cpp",
+            "src/graph/backend/dnnl/executables/*.cpp",
+            "src/graph/backend/fake/*.cpp",
+            "src/graph/backend/dnnl/passes/*.cpp",
+            "src/graph/backend/dnnl/patterns/*.cpp",
+            "src/graph/backend/dnnl/kernels/*.cpp",
+            "src/graph/utils/*.cpp",
+            "src/graph/utils/pm/*.cpp",
+            "third_party/xbyak_aarch64/src/*.cpp",
+        ],
+        exclude = [
+            "src/common/logging.cpp",
+            "src/cpu/x64/**",
+            "src/cpu/ppc64/**",
+            "src/cpu/rv64/**",
+            "src/cpu/s390x/**",
+            "src/cpu/sycl/**",
+            "src/xpu/**",
+        ],
+    ),
+    copts = select({
+        "//conditions:default": _DNNL_COPTS_THREADPOOL,
+    }),
+    defines = ["DNNL_AARCH64_USE_ACL=1"],
+    includes = [
+        "include",
+        "src",
+        "src/common",
+        "src/cpu",
+        "src/cpu/gemm",
+        "third_party",
+        "third_party/xbyak_aarch64/src",
+        "third_party/xbyak_aarch64/xbyak_aarch64",
+    ],
+    textual_hdrs = glob(
+        [
+            "include/**/*",
+            "include/*",
+            "src/common/*.hpp",
+            "src/common/**/*.h",
+            "src/cpu/**/*.hpp",
+            "src/cpu/*.hpp",
+            "src/graph/**/*.hpp",
+            "src/graph/backend/dnnl/executables/*.hpp",
+            "third_party/ittnotify/**/*.h",
+            "third_party/xbyak_aarch64/**/*.h",
+        ],
+    ) + [
+        ":dnnl_config_h",
+        ":dnnl_version_h",
+        ":dnnl_version_hash_h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@compute_library//:arm_compute",
+    ],
+)

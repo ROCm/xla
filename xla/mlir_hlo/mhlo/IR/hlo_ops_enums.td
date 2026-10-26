@@ -27,21 +27,21 @@ include "mlir/IR/PatternBase.td"
 def MHLO_PRECISION_DEFAULT : I32EnumAttrCase<"DEFAULT", 0>;
 def MHLO_PRECISION_HIGH    : I32EnumAttrCase<"HIGH", 1>;
 def MHLO_PRECISION_HIGHEST : I32EnumAttrCase<"HIGHEST", 2>;
-def MHLO_PRECISION_PACKED_NIBBLE : I32EnumAttrCase<"PACKED_NIBBLE", 3>;
 
 def MHLO_Precision : I32EnumAttr<"Precision",
     "XLA precision for an operand. Has backend specific meaning.",
-    [MHLO_PRECISION_DEFAULT, MHLO_PRECISION_HIGH, MHLO_PRECISION_HIGHEST, MHLO_PRECISION_PACKED_NIBBLE]> {
+    [MHLO_PRECISION_DEFAULT, MHLO_PRECISION_HIGH, MHLO_PRECISION_HIGHEST]> {
   let genSpecializedAttr = 0;
   let cppNamespace = "::mlir::mhlo";
 }
 
-def MHLO_PrecisionAttr : EnumAttr<MHLO_Dialect, MHLO_Precision, "precision">;
+def MHLO_PrecisionAttr : EnumAttr<MHLO_Dialect, MHLO_Precision, "precision"> {
+  let assemblyFormat = "$value";
+}
 
 // TODO(b/129153247) See if it's possible to also validate the size.
 def MHLO_PrecisionConfigAttr:
-    OptionalAttr<
-          TypedArrayAttrBase<MHLO_PrecisionAttr, "Precision Config attribute">>;
+    TypedArrayAttrBase<MHLO_PrecisionAttr, "Precision Config attribute">;
 
 //===----------------------------------------------------------------------===//
 // Custom call schedule hints
@@ -65,7 +65,9 @@ def MHLO_CustomCallSchedule : I32EnumAttr<"CustomCallSchedule",
   let cppNamespace = "::mlir::mhlo";
 }
 
-def MHLO_CustomCallScheduleAttr : EnumAttr<MHLO_Dialect, MHLO_CustomCallSchedule, "custom_call_schedule">;
+def MHLO_CustomCallScheduleAttr : EnumAttr<MHLO_Dialect, MHLO_CustomCallSchedule, "custom_call_schedule"> {
+  let assemblyFormat = "$value";
+}
 
 //===----------------------------------------------------------------------===//
 // Domain Metadata Kind  enum definitions.
@@ -81,7 +83,9 @@ def MHLO_DomainKind : I32EnumAttr<"DomainKind",
   let cppNamespace = "::mlir::mhlo";
 }
 
-def MHLO_DomainKindAttr : EnumAttr<MHLO_Dialect, MHLO_DomainKind, "kind">;
+def MHLO_DomainKindAttr : EnumAttr<MHLO_Dialect, MHLO_DomainKind, "kind"> {
+  let assemblyFormat = "$value";
+}
 
 //===----------------------------------------------------------------------===//
 // Fast Fourier Transform Type enum definitions.
@@ -101,7 +105,9 @@ def MHLO_FftType : I32EnumAttr<"FftType",
   let cppNamespace = "::mlir::mhlo";
 }
 
-def MHLO_FftTypeAttr : EnumAttr<MHLO_Dialect, MHLO_FftType, "fft_type">;
+def MHLO_FftTypeAttr : EnumAttr<MHLO_Dialect, MHLO_FftType, "fft_type"> {
+  let assemblyFormat = "$value";
+}
 
 //===----------------------------------------------------------------------===//
 // Custom call enum definitions.
@@ -156,7 +162,9 @@ def MHLO_ComparisonDirection : I32EnumAttr<"ComparisonDirection",
   let cppNamespace = "::mlir::mhlo";
 }
 
-def MHLO_ComparisonDirectionAttr : EnumAttr<MHLO_Dialect, MHLO_ComparisonDirection, "comparison_direction">;
+def MHLO_ComparisonDirectionAttr : EnumAttr<MHLO_Dialect, MHLO_ComparisonDirection, "comparison_direction"> {
+  let assemblyFormat = "$value";
+}
 
 def MHLO_DEFAULT_COMPARISON_TYPE : NativeCodeCall<"::mlir::mhlo::ComparisonTypeAttr()">;
 def MHLO_COMPARISON_TYPE_NOTYPE : I32EnumAttrCase<"NOTYPE", 0>;
@@ -164,6 +172,7 @@ def MHLO_COMPARISON_TYPE_FLOAT : I32EnumAttrCase<"FLOAT", 1>;
 def MHLO_COMPARISON_TYPE_FLOAT_TOTAL_ORDER : I32EnumAttrCase<"TOTALORDER", 2>;
 def MHLO_COMPARISON_TYPE_SIGNED : I32EnumAttrCase<"SIGNED", 3>;
 def MHLO_COMPARISON_TYPE_UNSIGNED : I32EnumAttrCase<"UNSIGNED", 4>;
+def MHLO_COMPARISON_TYPE_WEAK_ORDER : I32EnumAttrCase<"WEAKORDER", 5>;
 
 def MHLO_ComparisonType : I32EnumAttr<"ComparisonType",
     "Which comparison type to use.",
@@ -172,13 +181,16 @@ def MHLO_ComparisonType : I32EnumAttr<"ComparisonType",
       MHLO_COMPARISON_TYPE_FLOAT,
       MHLO_COMPARISON_TYPE_FLOAT_TOTAL_ORDER,
       MHLO_COMPARISON_TYPE_SIGNED,
-      MHLO_COMPARISON_TYPE_UNSIGNED
+      MHLO_COMPARISON_TYPE_UNSIGNED,
+      MHLO_COMPARISON_TYPE_WEAK_ORDER
     ]> {
   let genSpecializedAttr = 0;
   let cppNamespace = "::mlir::mhlo";
 }
 
-def MHLO_ComparisonTypeAttr : EnumAttr<MHLO_Dialect, MHLO_ComparisonType, "comparison_type">;
+def MHLO_ComparisonTypeAttr : EnumAttr<MHLO_Dialect, MHLO_ComparisonType, "comparison_type"> {
+  let assemblyFormat = "$value";
+}
 
 // These mirror the XLA Dequantize mode string enum.
 def MHLO_MIN_COMBINED : I32EnumAttrCase<"MIN_COMBINED", 0>;
@@ -190,7 +202,9 @@ def MHLO_DequantizeMode : I32EnumAttr<"DequantizeMode",
   let cppNamespace = "::mlir::mhlo";
 }
 
-def MHLO_DequantizeModeAttr : EnumAttr<MHLO_Dialect, MHLO_DequantizeMode, "dequantize_mode">;
+def MHLO_DequantizeModeAttr : EnumAttr<MHLO_Dialect, MHLO_DequantizeMode, "dequantize_mode"> {
+  let assemblyFormat = "$value";
+}
 
 // These mirror the XLA Transpose enum in Triangular Solve options.
 def MHLO_TRANSPOSE_INVALID : I32EnumAttrCase<"TRANSPOSE_INVALID", 0>;
@@ -210,7 +224,9 @@ def MHLO_Transpose : I32EnumAttr<"Transpose",
   let cppNamespace = "::mlir::mhlo";
 }
 
-def MHLO_TransposeAttr : EnumAttr<MHLO_Dialect, MHLO_Transpose, "transpose">;
+def MHLO_TransposeAttr : EnumAttr<MHLO_Dialect, MHLO_Transpose, "transpose"> {
+  let assemblyFormat = "$value";
+}
 
 def MHLO_LOOP_FUSION : I32EnumAttrCase<"kLoop", 0>;
 def MHLO_INPUT_FUSION : I32EnumAttrCase<"kInput", 1>;
@@ -240,7 +256,10 @@ def MHLO_RngDistributionAttr : EnumAttr<MHLO_Dialect, MHLO_RngDistribution, "rng
   let assemblyFormat = "`<` $value `>`";
 }
 
-def MHLO_FusionKindAttr : EnumAttr<MHLO_Dialect, MHLO_FusionKind, "fusion_kind">;
+def MHLO_FusionKindAttr : EnumAttr<MHLO_Dialect, MHLO_FusionKind, "fusion_kind"> {
+  let assemblyFormat = "$value";
+}
+
 
 def MHLO_RNG_ALGORITHM_DEFAULT : I32EnumAttrCase<"DEFAULT", 0>;
 def MHLO_RNG_ALGORITHM_THREE_FRY : I32EnumAttrCase<"THREE_FRY", 1>;
@@ -258,6 +277,29 @@ def MHLO_RngAlgorithm : I32EnumAttr<"RngAlgorithm",
 }
 
 def MHLO_RngAlgorithmAttr : EnumAttr<MHLO_Dialect, MHLO_RngAlgorithm, "rng_algorithm"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
+//===----------------------------------------------------------------------===//
+// Result Accuracy enum definitions.
+//===----------------------------------------------------------------------===//
+
+def MHLO_RESULT_ACCURACY_DEFAULT : I32EnumAttrCase<"DEFAULT", 0>;
+def MHLO_RESULT_ACCURACY_HIGHEST : I32EnumAttrCase<"HIGHEST", 1>;
+def MHLO_RESULT_ACCURACY_TOLERANCE: I32EnumAttrCase<"TOLERANCE", 2>;
+
+def MHLO_ResultAccuracyMode : I32EnumAttr<"ResultAccuracyMode",
+    "XLA result accuracy mode.",
+    [
+      MHLO_RESULT_ACCURACY_DEFAULT,
+      MHLO_RESULT_ACCURACY_HIGHEST,
+      MHLO_RESULT_ACCURACY_TOLERANCE
+    ]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::mhlo";
+}
+
+def MHLO_ResultAccuracyModeAttr : EnumAttr<MHLO_Dialect, MHLO_ResultAccuracyMode, "result_accuracy_mode"> {
   let assemblyFormat = "`<` $value `>`";
 }
 

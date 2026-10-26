@@ -16,13 +16,17 @@ limitations under the License.
 #include "xla/executable_run_options.h"
 
 #include <atomic>
+#include <cstdint>
+#include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace xla {
 
-RunId::RunId() {
+/*static*/ RunId RunId::CreateUniqueId() {
   static std::atomic<int64_t> counter{0};
-  data_ = counter.fetch_add(1);
+  return RunId(counter.fetch_add(1));
 }
 
 bool operator==(const RunId& a, const RunId& b) { return a.data_ == b.data_; }
@@ -41,13 +45,23 @@ ExecutableRunOptions& ExecutableRunOptions::set_device_ordinal(
 
 int ExecutableRunOptions::device_ordinal() const { return device_ordinal_; }
 
+ExecutableRunOptions& ExecutableRunOptions::set_physical_device_ordinal(
+    int physical_device_ordinal) {
+  physical_device_ordinal_ = physical_device_ordinal;
+  return *this;
+}
+
+int ExecutableRunOptions::physical_device_ordinal() const {
+  return physical_device_ordinal_;
+}
+
 ExecutableRunOptions& ExecutableRunOptions::set_allocator(
-    stream_executor::DeviceMemoryAllocator* allocator) {
+    stream_executor::DeviceAddressAllocator* allocator) {
   allocator_ = allocator;
   return *this;
 }
 
-stream_executor::DeviceMemoryAllocator* ExecutableRunOptions::allocator()
+stream_executor::DeviceAddressAllocator* ExecutableRunOptions::allocator()
     const {
   return allocator_;
 }
@@ -135,6 +149,16 @@ ExecutableRunOptions::cpu_executable_run_options() const {
   return cpu_executable_run_options_;
 }
 
+ExecutableRunOptions& ExecutableRunOptions::set_custom_options(
+    std::shared_ptr<const CustomOptions> custom_options) {
+  custom_options_ = std::move(custom_options);
+  return *this;
+}
+
+const CustomOptions* ExecutableRunOptions::custom_options() const {
+  return custom_options_.get();
+}
+
 ExecutableRunOptions& ExecutableRunOptions::set_ffi_execution_context(
     const ffi::ExecutionContext* ffi_execution_context) {
   ffi_execution_context_ = ffi_execution_context;
@@ -159,5 +183,25 @@ ExecutableRunOptions& ExecutableRunOptions::set_run_id(RunId id) {
 }
 
 RunId ExecutableRunOptions::run_id() const { return run_id_; }
+
+ExecutableRunOptions& ExecutableRunOptions::set_local_device_count(
+    int local_device_count) {
+  local_device_count_ = local_device_count;
+  return *this;
+}
+int ExecutableRunOptions::local_device_count() const {
+  return local_device_count_;
+}
+
+ExecutableRunOptions& ExecutableRunOptions::set_clique_keys(
+    std::vector<std::unique_ptr<CliqueKey>>* clique_keys) {
+  clique_keys_ = clique_keys;
+  return *this;
+}
+
+std::vector<std::unique_ptr<CliqueKey>>* ExecutableRunOptions::clique_keys()
+    const {
+  return clique_keys_;
+}
 
 }  // namespace xla

@@ -18,23 +18,30 @@
 #define XLA_PYTHON_IFRT_PROXY_SERVER_VERSION_H_
 
 #include "absl/status/statusor.h"
+#include "xla/python/ifrt/serdes_any_version_accessor.h"
+#include "xla/python/ifrt/serdes_version.h"
+#include "xla/python/ifrt_proxy/common/versions.h"
 
 namespace xla {
 namespace ifrt {
 namespace proxy {
 
-// LINT.IfChange
-// TODO(b/296144873): Document the version upgrade policy.
-inline constexpr int kServerMinVersion = 1;
-inline constexpr int kServerMaxVersion = 2;
-// LINT.ThenChange(//tensorflow/compiler/xla/python/ifrt_proxy/common/VERSION.md)
+// Returns a protocol version that both the client and the server support, or an
+// error if there is no such a version.
+absl::StatusOr<int> ChooseProtocolVersion(
+    int client_min_version, int client_max_version,
+    int server_min_version = protocol_version::kServerMin,
+    int server_max_version = protocol_version::kServerMax);
 
-// Returns a version that both the client and the server support, or an error if
-// there is no such a version.
-absl::StatusOr<int> ChooseVersion(int client_min_version,
-                                  int client_max_version,
-                                  int server_min_version = kServerMinVersion,
-                                  int server_max_version = kServerMaxVersion);
+// Returns an IFRT SerDes version that both the client and the server support,
+// or an error if there is no such a version.
+absl::StatusOr<SerDesVersionNumber> ChooseIfrtSerdesVersionNumber(
+    SerDesVersionNumber client_min_version_number,
+    SerDesVersionNumber client_max_version_number,
+    SerDesVersionNumber server_min_version_number =
+        SerDesAnyVersionAccessor::GetMinimum().version_number(),
+    SerDesVersionNumber server_max_version_number =
+        SerDesVersion::current().version_number());
 
 }  // namespace proxy
 }  // namespace ifrt

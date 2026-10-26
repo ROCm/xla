@@ -15,17 +15,18 @@ limitations under the License.
 
 #include "xla/mlir/tools/mlir_interpreter/framework/tensor_or_memref.h"
 
-#include <algorithm>
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <cstdint>
 #include <optional>
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
+#include "absl/algorithm/container.h"
 #include "absl/strings/str_join.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"
 
 namespace mlir {
 namespace interpreter {
@@ -56,15 +57,19 @@ std::optional<int64_t> GetCollapsedStrideNaive(llvm::ArrayRef<int64_t> dims,
   // Find all physical indices for the dimensions.
   llvm::SmallBitVector v(view.GetNumElements());
   for (const auto& indices : f.Indices()) {
-    SmallVector<int64_t> view_indices(view.Rank());
+    SmallVector<int64_t> view_indices(view.num_dimensions());
     for (auto [dim, index] : llvm::zip(dims, indices)) {
       view_indices[dim] = index;
     }
     v[*view.GetPhysicalIndex(view_indices)] = true;
   }
 
-  if (v.count() != f.GetNumElements()) return std::nullopt;
-  if (f.GetNumElements() <= 1) return 0;
+  if (v.count() != f.GetNumElements()) {
+    return std::nullopt;
+  }
+  if (f.GetNumElements() <= 1) {
+    return 0;
+  }
 
   // Check that they have a common stride.
   int64_t min = v.find_first();
@@ -79,21 +84,23 @@ std::optional<int64_t> GetCollapsedStrideNaive(llvm::ArrayRef<int64_t> dims,
 }
 
 TEST(TensorOrMemrefTest, CollapsedStride) {
-  BufferView view{.sizes = {1, 2, 3, 1, 5},
-                  .strides = BufferView::GetDefaultStrides({1, 2, 3, 1, 5})};
+  BufferView view{/*offset=*/0, /*sizes=*/{1, 2, 3, 1, 5},
+                  /*strides=*/BufferView::GetDefaultStrides({1, 2, 3, 1, 5})};
 
   auto check_all = [&]() {
-    for (int64_t i = 0; i < (1 << view.Rank()); ++i) {
+    for (int64_t i = 0; i < (1 << view.num_dimensions()); ++i) {
       SmallVector<int64_t> dims;
-      for (int64_t dim = 0; dim < view.Rank(); ++dim) {
-        if (i & (1 << dim)) dims.push_back(dim);
+      for (int64_t dim = 0; dim < view.num_dimensions(); ++dim) {
+        if (i & (1 << dim)) {
+          dims.push_back(dim);
+        }
       }
 
       do {
         auto v = view.GetCollapsedStride(dims);
         auto n = GetCollapsedStrideNaive(dims, view);
         EXPECT_EQ(n, v) << "checking " << absl::StrJoin(dims, ", ");
-      } while (std::next_permutation(dims.begin(), dims.end()));
+      } while (absl::c_next_permutation(dims));
     }
   };
 

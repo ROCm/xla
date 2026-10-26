@@ -15,30 +15,84 @@ limitations under the License.
 
 #include "xla/pjrt/gpu/gpu_helpers.h"
 
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/numbers.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_split.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "tsl/platform/numbers.h"
 #include "xla/client/client_library.h"
+#include "xla/client/local_client.h"
+#include "xla/pjrt/gpu/allocator_config.h"
 #include "xla/service/platform_util.h"
-#include "xla/statusor.h"
-#include "xla/stream_executor/integrations/device_host_allocator.h"
+#include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/integrations/device_mem_allocator.h"
+#include "xla/stream_executor/integrations/stream_executor_allocator.h"
+#include "xla/stream_executor/memory_space.h"
+#include "xla/stream_executor/platform.h"
+#include "xla/stream_executor/semantic_version.h"
+#include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/framework/allocator.h"
+#include "xla/tsl/framework/bfc_allocator.h"
+#include "xla/tsl/framework/device_id.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/tsl/util/env_var.h"
 #include "xla/util.h"
-#include "tsl/framework/device_id.h"
 
 namespace xla {
+
+std::string GetGpuPlatformVersion(
+    const stream_executor::DeviceDescription& device_description) {
+  const stream_executor::SemanticVersion v =
+      device_description.runtime_version();
+  const stream_executor::GpuComputeCapability& cc =
+      device_description.gpu_compute_capability();
+  if (cc.rocm_compute_capability() != nullptr) {
+    const int encoded_version = v.major_version() * 10000000 +
+                                v.minor_version() * 100000 + v.patch_version();
+    return absl::StrCat("rocm ", encoded_version);
+  }
+  if (cc.cuda_compute_capability() != nullptr) {
+    const int encoded_version =
+        v.major_version() * 1000 + v.minor_version() * 10 + v.patch_version();
+    return absl::StrCat("cuda ", encoded_version);
+  }
+  if (cc.oneapi_compute_capability() != nullptr) {
+    return absl::StrCat("oneapi ", v.IsValid() ? v.ToString() : "2026.0");
+  }
+  return "<unknown>";
+}
+
+static size_t RoundUpGpuMemoryLimit(size_t allocator_memory) {
+  // GPU device allocations can be rounded up by backend allocation granularity.
+  // BFC accounts the allocator-reported size as usable pool memory, so round
+  // the limit too to keep memory stats consistent and avoid pool_bytes
+  // exceeding bytes_limit.
+  constexpr size_t kGpuMemoryLimitGranularity = 2 * 1024 * 1024;
+  return RoundUpTo<size_t>(allocator_memory, kGpuMemoryLimitGranularity);
+}
 
 // Builds an xla::LocalClient for the GPU platform.
 absl::StatusOr<LocalClient*> GetGpuXlaClient(
     const std::optional<std::string>& platform_name,
     const std::optional<std::set<int>>& allowed_devices) {
-  TF_ASSIGN_OR_RETURN(
+  ABSL_ASSIGN_OR_RETURN(
       se::Platform * platform,
       PlatformUtil::GetPlatform(platform_name ? *platform_name : "gpu"));
   if (platform->VisibleDeviceCount() <= 0) {
@@ -71,10 +125,29 @@ void EnablePeerAccess(absl::Span<se::StreamExecutor* const> executors) {
   }
 }
 
+static absl::Status ValidateBfcGrowthMemoryLimit(size_t initial_bytes,
+                                                 size_t cap_bytes) {
+  if (initial_bytes == 0 || initial_bytes > cap_bytes) {
+    return InvalidArgument(
+        "Initial BFC allocation (%d bytes, rounded up) does not fit under the "
+        "growth cap (%d bytes, rounded down). Lower the start fraction or "
+        "gpu_system_memory_size, or raise the cap.",
+        initial_bytes, cap_bytes);
+  }
+  return absl::OkStatus();
+}
+
 // Builds a BFCAllocator for all local GPUs.
-absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateBFCAllocator(
-    se::StreamExecutor* executor, double memory_fraction, bool preallocate,
-    std::optional<int64_t> gpu_system_memory_size) {
+absl::StatusOr<std::shared_ptr<tsl::BFCAllocator>> CreateBFCAllocator(
+    se::StreamExecutor* executor, const MemFraction& memory_fraction,
+    bool preallocate, std::optional<int64_t> gpu_system_memory_size,
+    const std::vector<tsl::SubAllocator::Visitor>& sub_allocator_alloc_visitors,
+    const std::vector<tsl::SubAllocator::Visitor>& sub_allocator_free_visitors,
+    bool enable_spatial_partitioning) {
+  if (enable_spatial_partitioning && !preallocate) {
+    return InvalidArgument(
+        "Spatial partitioning of the BFC allocator requires preallocate=true.");
+  }
   bool enable_unified_memory;
   absl::Status status = tsl::ReadBoolFromEnvVar("TF_FORCE_UNIFIED_MEMORY",
                                                 false, &enable_unified_memory);
@@ -83,14 +156,38 @@ absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateBFCAllocator(
                << status.message();
   }
 
+  // Only preallocated spatial device-memory pools grow. Other modes retain
+  // their existing relationship between preallocation and growth and use just
+  // the start fraction.
+  const double start_fraction = MemFractionStart(memory_fraction);
+  const auto* flex = std::get_if<FlexMemFraction>(&memory_fraction);
+  // Match ParseMemFraction even for policies constructed directly in C++.
+  if (flex != nullptr && flex->start == flex->cap &&
+      std::isfinite(start_fraction) && start_fraction > 0) {
+    flex = nullptr;
+  }
+  const bool allow_growth =
+      flex != nullptr && enable_spatial_partitioning && !enable_unified_memory;
+  const double growth_fraction = flex != nullptr ? flex->cap : start_fraction;
+  if (allow_growth &&
+      ((!gpu_system_memory_size &&
+        (!std::isfinite(start_fraction) || start_fraction <= 0 ||
+         start_fraction > 1)) ||
+       (gpu_system_memory_size && *gpu_system_memory_size <= 0))) {
+    return InvalidArgument("Invalid initial BFC allocation size or fraction.");
+  }
+  if (allow_growth &&
+      (!std::isfinite(growth_fraction) || growth_fraction <= 0 ||
+       growth_fraction > 1 ||
+       (!gpu_system_memory_size && growth_fraction < start_fraction))) {
+    return InvalidArgument(
+        "Invalid BFC memory fraction %s: the growth cap must be in (0, 1] and "
+        "at least the start fraction.",
+        MemFractionToString(memory_fraction));
+  }
+
   int device_ordinal = executor->device_ordinal();
-  auto sub_allocator = std::make_unique<se::DeviceMemAllocator>(
-      executor, tsl::PlatformDeviceId(device_ordinal),
-      /*memory_type=*/
-      enable_unified_memory ? stream_executor::MemoryType::kUnified
-                            : stream_executor::MemoryType::kDevice,
-      /*alloc_visitors=*/std::vector<tsl::SubAllocator::Visitor>(),
-      /*free_visitors=*/std::vector<tsl::SubAllocator::Visitor>());
+  std::unique_ptr<tsl::SubAllocator> sub_allocator;
 
   int64_t free_memory;
   int64_t total_memory;
@@ -103,24 +200,118 @@ absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateBFCAllocator(
   // When unified memory is enabled, allow GPU memory oversubscription by
   // setting memory_fraction > 1.
   size_t allocator_memory = enable_unified_memory
-                                ? total_memory * fmax(1.0, memory_fraction)
-                                : total_memory * memory_fraction;
+                                ? total_memory * fmax(1.0, start_fraction)
+                                : total_memory * start_fraction;
   // If gpu_system_memory_size is set, use it instead of default value.
   if (gpu_system_memory_size.has_value()) {
     allocator_memory = gpu_system_memory_size.value();
   }
 
-  if (preallocate) {
-    LOG(INFO) << "XLA backend allocating " << allocator_memory
-              << " bytes on device " << device_ordinal << " for BFCAllocator.";
+  allocator_memory = RoundUpGpuMemoryLimit(allocator_memory);
+
+  // Cap on the mapped prefix: a fraction of total (not free) device memory,
+  // rounded down to the mapping granularity once the reservation reports it.
+  size_t growth_capacity =
+      allow_growth ? static_cast<size_t>(total_memory * growth_fraction)
+                   : static_cast<size_t>(total_memory);
+  if (allow_growth) {
+    ABSL_RETURN_IF_ERROR(
+        ValidateBfcGrowthMemoryLimit(allocator_memory, growth_capacity));
+  }
+  if (enable_unified_memory) {
+    ABSL_ASSIGN_OR_RETURN(
+        auto unified_memory_allocator,
+        executor->CreateMemoryAllocator(se::MemorySpace::kUnified));
+    sub_allocator = std::make_unique<se::StreamExecutorAllocator>(
+        std::move(unified_memory_allocator), se::MemorySpace::kUnified,
+        device_ordinal, sub_allocator_alloc_visitors,
+        sub_allocator_free_visitors);
   } else {
-    LOG(INFO) << "XLA backend will use up to " << allocator_memory
-              << " bytes on device " << device_ordinal << " for BFCAllocator.";
+    auto device_allocator = std::make_unique<se::DeviceMemAllocator>(
+        executor, tsl::PlatformDeviceId(device_ordinal),
+        sub_allocator_alloc_visitors, sub_allocator_free_visitors);
+    if (allow_growth) {
+      // Reserve the capacity cap without consuming physical GPU memory. Alloc
+      // maps only the initial prefix, then appends backing on BFC Extend calls.
+      // The reservation can include VA alignment padding; the physical-memory
+      // cap below still rounds down and never includes that padding.
+      absl::Status reserve_status =
+          device_allocator->ReserveMemory(growth_capacity);
+      if (reserve_status.ok()) {
+        const size_t granularity = device_allocator->GetAllocationGranularity();
+        allocator_memory = RoundUpTo<size_t>(allocator_memory, granularity);
+        growth_capacity -= growth_capacity % granularity;
+      } else if (!absl::IsUnimplemented(reserve_status)) {
+        return reserve_status;
+      }
+      // Backends without VA reservation keep their existing separate-region
+      // growth path. Actual reservation failures must not silently fall back.
+    }
+    sub_allocator = std::move(device_allocator);
+  }
+
+  const std::string allocator_memory_str =
+      absl::StrCat(tsl::strings::HumanReadableNumBytes(allocator_memory), " (",
+                   allocator_memory, " bytes)");
+
+  if (preallocate) {
+    LOG(INFO) << "XLA backend allocating " << allocator_memory_str
+              << " on device " << device_ordinal << " for BFCAllocator.";
+  } else {
+    LOG(INFO) << "XLA backend will use up to " << allocator_memory_str
+              << " on device " << device_ordinal << " for BFCAllocator.";
   }
 
   tsl::BFCAllocator::Options opts;
   opts.allow_growth = !preallocate;
-  return std::make_unique<tsl::BFCAllocator>(
+  // Growing pools can retain entirely free regions that are individually too
+  // small for a later request. Let BFC return those regions and retry with a
+  // larger region before reporting OOM. Preallocated pools must stay reserved.
+  if (!preallocate) {
+    ABSL_RETURN_IF_ERROR(tsl::ReadBoolFromEnvVar(
+        "TF_ENABLE_GPU_GARBAGE_COLLECTION", true, &opts.garbage_collection));
+  }
+  opts.enable_spatial_partitioning = enable_spatial_partitioning;
+  if (enable_spatial_partitioning) {
+    // Default memory (S(0), upper end) mixes buffers with different lifetimes.
+    // Keep the BFC padding-retention heuristic for both owned holes and
+    // central-gap carves: retaining a small remainder as padding can prevent a
+    // longer-lived allocation in that remainder from blocking coalescing later.
+    // This trades immediate internal fragmentation for potentially less
+    // external fragmentation; it does not guarantee better memory utilization.
+    //
+    // Collective memory (S(1), lower end) is expected to be primarily transient
+    // temporaries, with less mixing of lifetimes to justify retaining padding.
+    // Keep exact splitting for both owned holes and central-gap carves so
+    // usable remainders remain free. Exact gap splitting also keeps collective
+    // chunk sizes independent of default-memory activity while the gap has
+    // capacity, as required for reproducible NCCL symmetric-window offsets. The
+    // transient lifetime pattern is an expectation, not an allocator invariant;
+    // collective memory can still suffer external fragmentation.
+    //
+    // Break equal-size ties toward each space's outer arena boundary: lower
+    // addresses for collective memory, higher addresses for default memory.
+    // Size remains the primary best-fit key.
+    opts.lower_end_policy = {tsl::BFCAllocator::HoleOrder::kAscendingAddress,
+                             tsl::BFCAllocator::SplitPolicy::kExact,
+                             tsl::BFCAllocator::SplitPolicy::kExact};
+    opts.upper_end_policy = {tsl::BFCAllocator::HoleOrder::kDescendingAddress,
+                             tsl::BFCAllocator::SplitPolicy::kRetainPadding,
+                             tsl::BFCAllocator::SplitPolicy::kRetainPadding};
+  }
+  if (allow_growth) {
+    ABSL_RETURN_IF_ERROR(
+        ValidateBfcGrowthMemoryLimit(allocator_memory, growth_capacity));
+    opts.allow_growth = true;
+    opts.initial_region_bytes = allocator_memory;
+    allocator_memory = growth_capacity;
+    LOG(INFO) << "BFC may extend default memory up to " << allocator_memory
+              << " bytes (" << growth_fraction
+              << " of device memory, memory fraction "
+              << MemFractionToString(memory_fraction) << ") on device "
+              << device_ordinal;
+  }
+  return std::make_shared<tsl::BFCAllocator>(
       std::move(sub_allocator), allocator_memory,
       absl::StrCat("GPU_", device_ordinal, "_bfc"), opts);
 }
@@ -130,11 +321,13 @@ absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateCollectiveBFCAllocator(
     se::StreamExecutor* executor, double memory_fraction,
     size_t collective_memory_size) {
   int device_ordinal = executor->device_ordinal();
-  auto sub_allocator = std::make_unique<se::DeviceMemAllocator>(
-      executor, tsl::PlatformDeviceId(device_ordinal),
-      /*memory_type=*/stream_executor::MemoryType::kCollective,
-      /*alloc_visitors=*/std::vector<tsl::SubAllocator::Visitor>(),
-      /*free_visitors=*/std::vector<tsl::SubAllocator::Visitor>());
+  ABSL_ASSIGN_OR_RETURN(auto collective_memory_allocator,
+                        executor->CreateMemoryAllocator(
+                            stream_executor::MemorySpace::kCollective));
+  auto sub_allocator = std::make_unique<se::StreamExecutorAllocator>(
+      std::move(collective_memory_allocator),
+      /*memory_type=*/stream_executor::MemorySpace::kCollective,
+      device_ordinal);
 
   int64_t free_memory;
   int64_t total_memory;
@@ -145,6 +338,7 @@ absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateCollectiveBFCAllocator(
   bool preallocate = collective_memory_size != 0;
   size_t allocator_memory =
       preallocate ? collective_memory_size : total_memory * memory_fraction;
+  allocator_memory = RoundUpGpuMemoryLimit(allocator_memory);
 
   if (preallocate) {
     LOG(INFO) << "XLA backend allocating " << allocator_memory
@@ -163,32 +357,58 @@ absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateCollectiveBFCAllocator(
       absl::StrCat("GPU_collectivememory_", device_ordinal, "_bfc"), opts);
 }
 
-// Returns a GPU pinned host memory allocator to use when staging host->GPU
-// transfers. We use a fixed 64GB pool of pinned memory.
-std::unique_ptr<tsl::BFCAllocator> GetGpuHostAllocator(
-    se::StreamExecutor* executor) {
+absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> GetGpuHostAllocator(
+    se::StreamExecutor* executor, bool preallocate) {
+  ABSL_ASSIGN_OR_RETURN(
+      auto host_memory_allocator,
+      executor->CreateMemoryAllocator(stream_executor::MemorySpace::kHost));
   std::unique_ptr<tsl::SubAllocator> sub_allocator(
-      new se::DeviceHostAllocator(executor, /*numa_node=*/0,
-                                  /*alloc_visitors=*/{},
-                                  /*free_visitors=*/{}));
+      new se::StreamExecutorAllocator(std::move(host_memory_allocator),
+                                      stream_executor::MemorySpace::kHost,
+                                      /*index=*/0,
+                                      /*alloc_visitors=*/{},
+                                      /*free_visitors=*/{}));
+
+  const int64_t default_xla_pjrt_gpu_host_memory_limit_gb =
+      preallocate ? 16 : 64;
 
   int64_t xla_pjrt_gpu_host_memory_limit_gb;
-  absl::Status status =
-      tsl::ReadInt64FromEnvVar("XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB", 64,
-                               &xla_pjrt_gpu_host_memory_limit_gb);
-  if (!status.ok()) {
-    LOG(ERROR) << "Unable to read XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB: "
-               << status.message();
-  }
+  ABSL_RETURN_IF_ERROR(
+      tsl::ReadInt64FromEnvVar("XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB",
+                               default_xla_pjrt_gpu_host_memory_limit_gb,
+                               &xla_pjrt_gpu_host_memory_limit_gb));
 
   const int64_t kGpuHostMemoryLimitBytes =
       xla_pjrt_gpu_host_memory_limit_gb * (1LL << 30);
 
   tsl::BFCAllocator::Options opts;
-  opts.allow_growth = true;
+  opts.allow_growth = !preallocate;
   return std::make_unique<tsl::BFCAllocator>(std::move(sub_allocator),
                                              kGpuHostMemoryLimitBytes,
                                              /*name=*/"xla_gpu_host_bfc", opts);
+}
+
+int TopologySizes::GetDeviceCount() {
+  return num_partitions * num_hosts_per_partition * num_devices_per_host;
+}
+
+// static
+absl::StatusOr<TopologySizes> TopologySizes::FromString(
+    absl::string_view topology_string) {
+  TopologySizes sizes;
+  std::vector<std::string> topology_components =
+      absl::StrSplit(topology_string, 'x');
+  if (topology_components.size() != 3 ||
+      !absl::SimpleAtoi(topology_components[0], &sizes.num_partitions) ||
+      !absl::SimpleAtoi(topology_components[1],
+                        &sizes.num_hosts_per_partition) ||
+      !absl::SimpleAtoi(topology_components[2], &sizes.num_devices_per_host)) {
+    return absl::InternalError(
+        "topology must be of shape "
+        "\"<num-partitions>x<num-hosts-per-partition>x<num-devices-per-host>"
+        "\"");
+  }
+  return sizes;
 }
 
 }  // namespace xla

@@ -15,26 +15,35 @@ limitations under the License.
 
 #include "xla/service/gpu/model/coalescing_analysis.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include <gtest/gtest.h>
+#include "absl/log/check.h"
 #include "absl/strings/string_view.h"
-#include "mlir/IR/MLIRContext.h"  // from @llvm-project
+#include "absl/types/span.h"
+#include "mlir/IR/MLIRContext.h"
+#include "xla/backends/gpu/codegen/fusion_emitter.h"
+#include "xla/backends/gpu/codegen/fusions.h"
+#include "xla/codegen/tiling/experimental/tiled_hlo.h"
+#include "xla/codegen/tiling/experimental/tiling_space.h"
+#include "xla/hlo/analysis/symbolic_expr.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/service/gpu/fusions/fusion_emitter.h"
-#include "xla/service/gpu/fusions/fusions.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/utils/hlo_traversal.h"
 #include "xla/service/gpu/gpu_device_info_for_tests.h"
 #include "xla/service/gpu/hlo_fusion_analysis.h"
-#include "xla/service/gpu/hlo_traversal.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
 #include "xla/stream_executor/device_description.h"
-#include "xla/tests/hlo_test_base.h"
-#include "tsl/platform/test.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace gpu {
@@ -42,7 +51,7 @@ namespace {
 
 using ::testing::ElementsAre;
 
-class CoalescingTest : public HloTestBase {
+class CoalescingTest : public HloHardwareIndependentTestBase {
  public:
   std::vector<bool> IsReadCoalescedPerOperand(absl::string_view hlo_string) {
     auto module = ParseAndReturnVerifiedModule(hlo_string).value();
@@ -52,14 +61,14 @@ class CoalescingTest : public HloTestBase {
 
   std::vector<bool> IsReadCoalescedPerOperand(const HloInstruction* root) {
     auto fusion_adaptor = HloFusionAdaptor::ForInstruction(root);
-    auto analysis = AnalyzeFusion(*root, device_info_);
+    auto analysis = HloFusionAnalysis::Create(*root, device_info_);
     auto emitter = GetFusionEmitter(PreBufferAssignmentFusionInfo{analysis});
     auto fusion = dynamic_cast<KernelFusionInterface*>(emitter.get());
     EXPECT_NE(fusion, nullptr);
 
-    CoalescingAnalysis coalescing_analysis(root, root->operands(), analysis,
-                                           fusion, &mlir_context_,
-                                           /*use_heuristic=*/false);
+    CoalescingAnalysis coalescing_analysis = CoalescingAnalysis::Create(
+        root, root->operands(), analysis, &mlir_context_,
+        /*use_heuristic=*/false);
 
     std::vector<bool> results;
     for (const HloInstruction* operand : root->operands()) {
@@ -71,12 +80,13 @@ class CoalescingTest : public HloTestBase {
   bool IsReadCoalescedHeuristic(absl::string_view hlo_string) {
     auto module = ParseAndReturnVerifiedModule(hlo_string).value();
     HloInstruction* root = module->entry_computation()->root_instruction();
-    auto analysis = AnalyzeFusion(*root, device_info_);
-    return xla::gpu::IsReadCoalescedHeuristic(analysis.GetEmitterFusionKind(),
-                                              root->operand(0), root);
+    auto analysis = HloFusionAnalysis::Create(*root, device_info_);
+    return xla::gpu::IsReadCoalescedHeuristic(
+        analysis.emitter_fusion_kind(), device_info_, root->operand(0), root);
   }
 
  protected:
+  CoalescingTest() { RegisterSymbolicExprStorage(&mlir_context_); }
   stream_executor::DeviceDescription device_info_ =
       TestGpuDeviceInfo::RTXA6000DeviceInfo();
   mlir::MLIRContext mlir_context_;
@@ -148,7 +158,7 @@ TEST_F(CoalescingTest, OutputAndLhsTransposedLayout) {
     fusion {
       p0 = f32[100, 200]{1, 0} parameter(0)
       p1 = f32[100, 200]{0, 1} parameter(1)
-      ROOT exp = f32[100, 200]{1, 0} add(p0, p1)
+      ROOT add = f32[100, 200]{1, 0} add(p0, p1)
     }
     ENTRY e {
       p0 = f32[100, 200]{1, 0} parameter(0)
@@ -178,6 +188,69 @@ TEST_F(CoalescingTest, Transpose) {
   // thread_x to linearized input mapping for thread_x in [0, 31]:
   // Operand 1:  (thread_x)[s0] -> (thread_x + s0 * 128) for s0 in [0, 7]
   EXPECT_THAT(IsReadCoalescedPerOperand(ir), ElementsAre(true));
+}
+
+TEST_F(CoalescingTest, ConcatenateInLoopEmitter) {
+  absl::string_view ir = R"(
+    HloModule module
+
+    fusion {
+      p0 = bf16[42] parameter(0)
+      p1 = bf16[42] parameter(1)
+      p2 = bf16[42] parameter(2)
+      p3 = bf16[42] parameter(3)
+      p4 = bf16[44] parameter(4)
+      p5 = bf16[44] parameter(5)
+      concatenate = bf16[256] concatenate(p0, p1, p2, p3, p4, p5), dimensions={0}
+      broadcast = bf16[256] parameter(6)
+      ROOT multiply = bf16[256] multiply(concatenate, broadcast)
+    }
+
+    ENTRY entry_computation {
+      p0 = bf16[42] parameter(0)
+      p1 = bf16[42] parameter(1)
+      p2 = bf16[42] parameter(2)
+      p3 = bf16[42] parameter(3)
+      p4 = bf16[44] parameter(4)
+      p5 = bf16[44] parameter(5)
+      p6 = bf16[256] parameter(6)
+      ROOT fusion = bf16[256] fusion(p0, p1, p2, p3, p4, p5, p6), kind=kLoop, calls=fusion
+  })";
+
+  EXPECT_THAT(IsReadCoalescedPerOperand(ir),
+              ElementsAre(true, true, true, true, true, true, true));
+}
+
+TEST_F(CoalescingTest, ConcatenateWitBitcastInLoopEmitter) {
+  absl::string_view ir = R"(
+    HloModule module
+
+    fusion {
+      p0 = bf16[42] parameter(0)
+      p1 = bf16[42] parameter(1)
+      p2 = bf16[42] parameter(2)
+      p3 = bf16[42] parameter(3)
+      p4 = bf16[44] parameter(4)
+      p5 = bf16[44] parameter(5)
+      concatenate = bf16[256] concatenate(p0, p1, p2, p3, p4, p5), dimensions={0}
+      broadcast = bf16[256] parameter(6)
+      multiply = bf16[256] multiply(concatenate, broadcast)
+      ROOT bitcast = bf16[16,16] bitcast(multiply)
+    }
+
+    ENTRY entry_computation {
+      p0 = bf16[42] parameter(0)
+      p1 = bf16[42] parameter(1)
+      p2 = bf16[42] parameter(2)
+      p3 = bf16[42] parameter(3)
+      p4 = bf16[44] parameter(4)
+      p5 = bf16[44] parameter(5)
+      p6 = bf16[256] parameter(6)
+      ROOT fusion = bf16[16, 16] fusion(p0, p1, p2, p3, p4, p5, p6), kind=kLoop, calls=fusion
+  })";
+
+  EXPECT_THAT(IsReadCoalescedPerOperand(ir),
+              ElementsAre(true, true, true, true, true, true, true));
 }
 
 TEST_F(CoalescingTest, TransposeOfBroadcastHeuristic) {
@@ -508,6 +581,78 @@ TEST_F(CoalescingTest, Param) {
   })";
   // thread_x to linearized input mapping for thread_x in [0, 31]:
   EXPECT_THAT(IsReadCoalescedPerOperand(ir), ElementsAre(true, true, true));
+}
+
+class CoalescingForTiledHloTest : public CoalescingTest {
+ public:
+  std::vector<double> EffectiveBandwidthUtilizationRatePerOperand(
+      const HloInstruction* root, absl::Span<int64_t const> tile_sizes) {
+    auto fusion_adaptor = HloFusionAdaptor::ForInstruction(root);
+
+    auto tiling_space_or =
+        experimental::TilingSpace::Create(*fusion_adaptor, &mlir_context_);
+    CHECK_OK(tiling_space_or);
+    auto tiling_space = std::move(tiling_space_or.value());
+    CHECK_OK(tiling_space->AssignTileSizes(tile_sizes));
+
+    absl::StatusOr<experimental::TiledHloComputation> tiled_hlo_computation =
+        experimental::TiledHloComputation::Tile(*fusion_adaptor,
+                                                std::move(tiling_space));
+    CHECK_OK(tiled_hlo_computation);
+
+    std::vector<double> result;
+    for (const experimental::TiledHloInstruction* operand :
+         tiled_hlo_computation->roots()[0]->operands()) {
+      result.push_back(BandwidthUtilizationRateHeuristicForTiledMemoryAccess(
+          *operand, device_info_));
+    }
+    return result;
+  }
+};
+
+TEST_F(
+    CoalescingForTiledHloTest,
+    EffectiveBandwidthUtilizationRateIsComputedCorrectlyForTiledMemoryAccess) {  // NOLINT(whitespace/line_length)
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule m
+
+ENTRY main {
+  p0 = s8[256, 16] parameter(0)
+  ROOT convert = s8[256, 16] convert(p0)
+})"));
+
+  const HloInstruction* root = module->entry_computation()->root_instruction();
+
+  // Note: the tests below rely strongly on this value for the transaction size.
+  // If the transaction size is changed, the tests will need to be updated.
+  constexpr int kExpectedDramToL2TransactionSize = 64;
+  ASSERT_EQ(device_info_.dram_to_l2_transaction_size_bytes(),
+            kExpectedDramToL2TransactionSize);
+
+  // By reading only one byte at a time, we expect to exploit exactly
+  // 1 / kExpectedDramToL2TransactionSize of the bandwidth.
+  EXPECT_THAT(EffectiveBandwidthUtilizationRatePerOperand(root, {1, 1}),
+              ElementsAre(1.0 / kExpectedDramToL2TransactionSize));
+
+  // Reading one full row won't cut it; by reading 16 bytes at a time, we expect
+  // to exploit exactly 16 / kExpectedDramToL2TransactionSize of the bandwidth.
+  EXPECT_THAT(EffectiveBandwidthUtilizationRatePerOperand(root, {1, 16}),
+              ElementsAre(16.0 / kExpectedDramToL2TransactionSize));
+
+  // Reading 4 rows at a time will allow us to exploit 100% of the bandwidth.
+  EXPECT_THAT(EffectiveBandwidthUtilizationRatePerOperand(root, {4, 16}),
+              ElementsAre(1.0));
+
+  // Reading 8 rows at a time will allow us to exploit 100% of the bandwidth.
+  EXPECT_THAT(EffectiveBandwidthUtilizationRatePerOperand(root, {8, 16}),
+              ElementsAre(1.0));
+
+  // Reading 6 rows at a time will however only allow us to exploit 75% of the
+  // bandwidth; the first four rows are read fully coalesced, but the last two
+  // rows use only half of the transaction size---i.e. 3/4 of the transactions
+  // are coalesced.
+  EXPECT_THAT(EffectiveBandwidthUtilizationRatePerOperand(root, {6, 16}),
+              ElementsAre(0.75));
 }
 
 }  // namespace

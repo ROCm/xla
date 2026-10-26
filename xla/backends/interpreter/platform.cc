@@ -16,19 +16,24 @@ limitations under the License.
 #include "xla/backends/interpreter/platform.h"
 
 #include <memory>
+#include <string>
 #include <utility>
 
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
 #include "xla/backends/interpreter/executor.h"
+#include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform/initialize.h"
 #include "xla/stream_executor/platform_manager.h"
-#include "tsl/platform/status.h"
 
 namespace stream_executor {
 namespace interpreter {
 
-XlaInterpreterPlatform::XlaInterpreterPlatform(const std::string& name,
+XlaInterpreterPlatform::XlaInterpreterPlatform(absl::string_view name,
                                                const Platform::Id& id)
     : name_(name), id_(id) {}
 
@@ -45,31 +50,27 @@ XlaInterpreterPlatform::DescriptionForDevice(int ordinal) const {
   return XlaInterpreterExecutor::CreateDeviceDescription(ordinal);
 }
 
-absl::StatusOr<StreamExecutor*> XlaInterpreterPlatform::ExecutorForDevice(
+absl::StatusOr<StreamExecutor*> XlaInterpreterPlatform::FindExisting(
     int ordinal) {
-  StreamExecutorConfig config;
-  config.ordinal = ordinal;
-  return GetExecutor(config);
+  return executor_cache_.Get(ordinal);
 }
 
-absl::StatusOr<StreamExecutor*> XlaInterpreterPlatform::GetExecutor(
-    const StreamExecutorConfig& config) {
+absl::StatusOr<StreamExecutor*> XlaInterpreterPlatform::ExecutorForDevice(
+    int ordinal) {
   return executor_cache_.GetOrCreate(
-      config, [&]() { return GetUncachedExecutor(config); });
+      ordinal, [this, ordinal]() { return GetUncachedExecutor(ordinal); });
 }
 
 absl::StatusOr<std::unique_ptr<StreamExecutor>>
-XlaInterpreterPlatform::GetUncachedExecutor(
-    const StreamExecutorConfig& config) {
-  auto executor =
-      std::make_unique<XlaInterpreterExecutor>(config.ordinal, this);
+XlaInterpreterPlatform::GetUncachedExecutor(int ordinal) {
+  auto executor = std::make_unique<XlaInterpreterExecutor>(ordinal, this);
   auto init_status = executor->Init();
   if (!init_status.ok()) {
     return absl::Status{
         absl::StatusCode::kInternal,
         absl::StrFormat(
             "failed initializing StreamExecutor for device ordinal %d: %s",
-            config.ordinal, init_status.ToString())};
+            ordinal, init_status.ToString())};
   }
 
   return std::move(executor);
@@ -77,7 +78,7 @@ XlaInterpreterPlatform::GetUncachedExecutor(
 
 static void InitializeXlaInterpreterPlatform() {
   std::unique_ptr<Platform> platform(new XlaInterpreterPlatform);
-  TF_CHECK_OK(PlatformManager::RegisterPlatform(std::move(platform)));
+  CHECK_OK(PlatformManager::RegisterPlatform(std::move(platform)));
 }
 
 }  // namespace interpreter

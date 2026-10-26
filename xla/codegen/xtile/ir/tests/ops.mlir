@@ -1,0 +1,388 @@
+// Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// ==============================================================================
+// RUN: emitters_opt %s --split-input-file --verify-roundtrip -verify-diagnostics
+
+xtile.entry_func @happy_path(%input: memref<1024x4xf32>, %output: memref<128x1024xf32>, %tile_id: index) {
+  %tile = xtile.extract %input[%tile_id, %tile_id][10, 1][1, 1] : memref<1024x4xf32> -> tensor<10xf32>
+  xtile.insert %tile into %output[%tile_id, %tile_id][10, 1][1, 1] : tensor<10xf32> -> memref<128x1024xf32>
+  xtile.return
+}
+
+// -----
+
+xtile.entry_func @with_attributes(
+  %input: memref<1024xf32> {xla.some_attr = 1}, %tile_id: index) {
+  xtile.return
+}
+
+// -----
+
+// expected-error@+1 {{entry function arguments should be of the form (arg: memref..., tile_id: index)}}
+xtile.entry_func @tile_id_at_start(%tile_id: index, %input: memref<1024xf32>, %output: memref<1024xf32>) {
+  xtile.return
+}
+
+// -----
+
+// expected-error@+1 {{entry function arguments should be of the form (arg: memref..., tile_id: index)}}
+xtile.entry_func @too_many_tile_ids(%input: memref<1024xf32>, %id0: index, %id1: index) {
+  xtile.return
+}
+
+// -----
+
+xtile.entry_func @correct_opaque_args(
+  %input: memref<1024xf32>, %opaque0: index, %opaque1: index, %id1: index)
+  attributes {num_opaque_args = 2 : i32}  {
+  xtile.return
+}
+
+// -----
+
+// expected-error@+1 {{entry function arguments should be of the form (arg: memref..., tile_id: index)}}
+xtile.entry_func @wrong_opaque_args(
+  %input: memref<1024xf32>, %opaque0: index, %opaque1: index, %id1: index)
+  attributes {num_opaque_args = 1 : i32}  {
+  xtile.return
+}
+
+// -----
+
+func.func @incorrect_full_shape_extract(%arg: memref<1024xf32>) -> tensor<10xf32> {
+  %offset = arith.constant 0 : index
+  // expected-error@+1 {{full tile shape size: 2 does not match rank of buffer: 1}}
+  %tile = xtile.extract %arg[%offset][10, 1][1] : memref<1024xf32> -> tensor<10xf32>
+  return %tile : tensor<10xf32>
+}
+
+// -----
+
+func.func @incorrect_offset_count_extract(%arg: memref<1024xf32>) -> tensor<10xf32> {
+  %offset = arith.constant 0 : index
+  // expected-error@+1 {{expected 1 offset operands, got 2}}
+  %tile = xtile.extract %arg[%offset, %offset][10][1] : memref<1024xf32> -> tensor<10xf32>
+  return %tile : tensor<10xf32>
+}
+
+// -----
+
+func.func @incorrect_rank_reduction_extract(%arg: memref<16x1024xf32>) -> tensor<10xf32> {
+  %offset = arith.constant 0 : index
+  // expected-error@+1 {{full tile shape: [16, 10] does not reduce to tile shape: [10]}}
+  %tile = xtile.extract %arg[%offset, %offset][16, 10][1, 1] : memref<16x1024xf32> -> tensor<10xf32>
+  return %tile : tensor<10xf32>
+}
+
+// -----
+
+func.func @type_mismatch_extract(%arg: memref<1024xf32>) -> tensor<10xf64> {
+  %offset = arith.constant 0 : index
+  // expected-error@+1 {{buffer element type: 'f32' does not match element type of tile: 'f64'}}
+  %tile = xtile.extract %arg[%offset][10][1] : memref<1024xf32> -> tensor<10xf64>
+  return %tile : tensor<10xf64>
+}
+
+// -----
+
+func.func @incorrect_full_shape_insert(%src: tensor<24xf32>, %dst: memref<1024xf32>) {
+  %offset = arith.constant 0 : index
+  // expected-error@+1 {{full tile shape size: 2 does not match rank of buffer: 1}}
+  xtile.insert %src into %dst[%offset][24, 1][1] : tensor<24xf32> -> memref<1024xf32>
+  return
+}
+
+// -----
+
+func.func @incorrect_offset_count_insert(%src: tensor<24xf32>, %dst: memref<1024xf32>) {
+  %offset = arith.constant 0 : index
+  // expected-error@+1 {{expected 1 offset operands, got 2}}
+  xtile.insert %src into %dst[%offset, %offset][24][1] : tensor<24xf32> -> memref<1024xf32>
+  return
+}
+
+// -----
+
+func.func @incorrect_rank_reduction_insert(%src: tensor<24xf32>, %dst: memref<16x1024xf32>) {
+  %offset = arith.constant 0 : index
+  // expected-error@+1 {{full tile shape: [16, 24] does not reduce to tile shape: [24]}}
+  xtile.insert %src into %dst[%offset, %offset][16, 24][1, 1] : tensor<24xf32> -> memref<16x1024xf32>
+  return
+}
+
+// -----
+
+func.func @type_mismatch_insert(%src: tensor<24xf64>, %dst: memref<1024xf32>) {
+  %offset = arith.constant 0 : index
+  // expected-error@+1 {{buffer element type: 'f32' does not match element type of tile: 'f64'}}
+  xtile.insert %src into %dst[%offset][24][1] : tensor<24xf64> -> memref<1024xf32>
+  return
+}
+
+// -----
+
+func.func @dot_scaled(%lhs: tensor<128x128xf32>, %lhs_scale: tensor<128x4xi8>, %rhs: tensor<128x256xf32>, %rhs_scale: tensor<256x4xi8>, %acc: tensor<128x256xf32>) -> tensor<128x256xf32> {
+  %0 = xtile.dot_scaled %lhs scale %lhs_scale, %rhs scale %rhs_scale <fastMath = true, lhs_elem_type = f32, rhs_elem_type = f32> : tensor<128x128xf32>, tensor<128x4xi8> * tensor<128x256xf32>, tensor<256x4xi8> -> tensor<128x256xf32>
+  return %0 : tensor<128x256xf32>
+}
+
+// -----
+
+func.func @invalid_dot_scaled_scale_type(%lhs: tensor<128x128xf32>, %lhs_scale: tensor<128x4xbf16>, %rhs: tensor<128x256xf32>, %rhs_scale: tensor<256x4xi8>) -> tensor<128x256xf32> {
+  // expected-error@+1 {{LHS scale element type 'bf16' is not supported}}
+  %0 = xtile.dot_scaled %lhs scale %lhs_scale, %rhs scale %rhs_scale <fastMath = true, lhs_elem_type = f32, rhs_elem_type = f32> : tensor<128x128xf32>, tensor<128x4xbf16> * tensor<128x256xf32>, tensor<256x4xi8> -> tensor<128x256xf32>
+  return %0 : tensor<128x256xf32>
+}
+
+// -----
+
+func.func @invalid_dot_scaled_operand_type(%lhs: tensor<128x128xi32>, %lhs_scale: tensor<128x4xi8>, %rhs: tensor<128x256xf32>, %rhs_scale: tensor<256x4xi8>) -> tensor<128x256xf32> {
+  // expected-error@+1 {{'xtile.dot_scaled' op operand #0 must be ranked tensor of floating-point or 8-bit signless integer values, but got 'tensor<128x128xi32>'}}
+  %0 = xtile.dot_scaled %lhs scale %lhs_scale, %rhs scale %rhs_scale <fastMath = true, lhs_elem_type = f32, rhs_elem_type = f32> : tensor<128x128xi32>, tensor<128x4xi8> * tensor<128x256xf32>, tensor<256x4xi8> -> tensor<128x256xf32>
+  return %0 : tensor<128x256xf32>
+}
+
+// -----
+
+func.func @invalid_dot_scaled_logical_elem_type(%lhs: tensor<128x128xf32>, %lhs_scale: tensor<128x4xi8>, %rhs: tensor<128x256xf32>, %rhs_scale: tensor<256x4xi8>) -> tensor<128x256xf32> {
+  // expected-error@+1 {{LHS logical element type 'i32' is not supported}}
+  %0 = xtile.dot_scaled %lhs scale %lhs_scale, %rhs scale %rhs_scale <fastMath = true, lhs_elem_type = i32, rhs_elem_type = f32> : tensor<128x128xf32>, tensor<128x4xi8> * tensor<128x256xf32>, tensor<256x4xi8> -> tensor<128x256xf32>
+  return %0 : tensor<128x256xf32>
+}
+
+
+// -----
+
+func.func @legal_mask_op(%src: tensor<32xf64>, %mask: f64) -> tensor<32xf64> {
+  %masked = xtile.mask %src bounds [10], %mask : tensor<32xf64>
+  return %masked : tensor<32xf64>
+}
+
+// -----
+
+func.func @illegal_mask_bound_rank_mismatch(
+    %src: tensor<32xf64>, %mask: f64) -> tensor<32xf64> {
+  // expected-error@+1 {{tensor rank: 1 does not match mask bounds rank: 2}}
+  %masked = xtile.mask %src bounds [10, 1], %mask : tensor<32xf64>
+  return %masked : tensor<32xf64>
+}
+
+// -----
+
+func.func @illegal_mask_out_of_bounds(%src: tensor<32xf64>, %mask: f64) -> tensor<32xf64> {
+  // expected-error@+1 {{mask bound not less than or equal to the tensor size}}
+  %masked = xtile.mask %src bounds [33], %mask : tensor<32xf64>
+  return %masked : tensor<32xf64>
+}
+
+// -----
+
+func.func @scan_op(%input: tensor<10x20x30xf32>, %init: tensor<10x20x1xf32>) -> (tensor<10x20x30xf32>, tensor<10x20x1xf32>) {
+  %output, %carry = xtile.scan(%input) inits(%init) dimension = 2 <scan_dim_size = 30> : (tensor<10x20x30xf32>), (tensor<10x20x1xf32>) -> (tensor<10x20x30xf32>), (tensor<10x20x1xf32>) {
+  ^bb0(%arg0: tensor<10x20xf32>, %arg1: tensor<10x20xf32>):
+    %add = stablehlo.add %arg0, %arg1 : tensor<10x20xf32>
+    stablehlo.return %add : tensor<10x20xf32>
+  }
+  return %output, %carry : tensor<10x20x30xf32>, tensor<10x20x1xf32>
+}
+
+// -----
+
+func.func @scan_op_rank_reduced_init(%input: tensor<10x20x30xf32>, %init: tensor<10x20xf32>) -> (tensor<10x20x30xf32>, tensor<10x20xf32>) {
+  // expected-error @+1 {{init #0 type 'tensor<10x20xf32>' does not match expected type 'tensor<10x20x1xf32>'}}
+  %output, %carry = xtile.scan(%input) inits(%init) dimension = 2 <scan_dim_size = 30> : (tensor<10x20x30xf32>), (tensor<10x20xf32>) -> (tensor<10x20x30xf32>), (tensor<10x20xf32>) {
+  ^bb0(%arg0: tensor<10x20xf32>, %arg1: tensor<10x20xf32>):
+    %add = stablehlo.add %arg0, %arg1 : tensor<10x20xf32>
+    stablehlo.return %add : tensor<10x20xf32>
+  }
+  return %output, %carry : tensor<10x20x30xf32>, tensor<10x20xf32>
+}
+
+// -----
+
+func.func @scan_op_dimension_out_of_range(%input: tensor<10x20x30xf32>, %init: tensor<10x20x1xf32>) -> (tensor<10x20x30xf32>, tensor<10x20x1xf32>) {
+  // expected-error @+1 {{scan dimension 3 is out of range for input #0 of rank 3}}
+  %output, %carry = xtile.scan(%input) inits(%init) dimension = 3 <scan_dim_size = 30> : (tensor<10x20x30xf32>), (tensor<10x20x1xf32>) -> (tensor<10x20x30xf32>), (tensor<10x20x1xf32>) {
+  ^bb0(%arg0: tensor<10x20xf32>, %arg1: tensor<10x20xf32>):
+    %add = stablehlo.add %arg0, %arg1 : tensor<10x20xf32>
+    stablehlo.return %add : tensor<10x20xf32>
+  }
+  return %output, %carry : tensor<10x20x30xf32>, tensor<10x20x1xf32>
+}
+
+// -----
+
+func.func @scan_op_init_count_mismatch(%input: tensor<10x20x30xf32>, %init: tensor<10x20x1xf32>) -> (tensor<10x20x30xf32>, tensor<10x20x1xf32>) {
+  // expected-error @+1 {{expects one init, output and carry per input, but got 1 inputs, 2 inits, 1 outputs and 1 carries}}
+  %output, %carry = xtile.scan(%input) inits(%init, %init) dimension = 2 <scan_dim_size = 30> : (tensor<10x20x30xf32>), (tensor<10x20x1xf32>, tensor<10x20x1xf32>) -> (tensor<10x20x30xf32>), (tensor<10x20x1xf32>) {
+  ^bb0(%arg0: tensor<10x20xf32>, %arg1: tensor<10x20xf32>):
+    %add = stablehlo.add %arg0, %arg1 : tensor<10x20xf32>
+    stablehlo.return %add : tensor<10x20xf32>
+  }
+  return %output, %carry : tensor<10x20x30xf32>, tensor<10x20x1xf32>
+}
+
+// -----
+
+func.func @scan_op_negative_dimension(%input: tensor<10x20x30xf32>, %init: tensor<10x20x1xf32>) -> (tensor<10x20x30xf32>, tensor<10x20x1xf32>) {
+  // expected-error @+1 {{scan dimension -1 is out of range for input #0 of rank 3}}
+  %output, %carry = xtile.scan(%input) inits(%init) dimension = -1 <scan_dim_size = 30> : (tensor<10x20x30xf32>), (tensor<10x20x1xf32>) -> (tensor<10x20x30xf32>), (tensor<10x20x1xf32>) {
+  ^bb0(%arg0: tensor<10x20xf32>, %arg1: tensor<10x20xf32>):
+    %add = stablehlo.add %arg0, %arg1 : tensor<10x20xf32>
+    stablehlo.return %add : tensor<10x20xf32>
+  }
+  return %output, %carry : tensor<10x20x30xf32>, tensor<10x20x1xf32>
+}
+
+// -----
+
+func.func @scan_op_output_type_mismatch(%input: tensor<10x20x30xf32>, %init: tensor<10x20x1xf32>) -> (tensor<10x20x30xf64>, tensor<10x20x1xf32>) {
+  // expected-error @+1 {{output #0 type 'tensor<10x20x30xf64>' does not match input type 'tensor<10x20x30xf32>'}}
+  %output, %carry = xtile.scan(%input) inits(%init) dimension = 2 <scan_dim_size = 30> : (tensor<10x20x30xf32>), (tensor<10x20x1xf32>) -> (tensor<10x20x30xf64>), (tensor<10x20x1xf32>) {
+  ^bb0(%arg0: tensor<10x20xf32>, %arg1: tensor<10x20xf32>):
+    %add = stablehlo.add %arg0, %arg1 : tensor<10x20xf32>
+    stablehlo.return %add : tensor<10x20xf32>
+  }
+  return %output, %carry : tensor<10x20x30xf64>, tensor<10x20x1xf32>
+}
+
+// -----
+
+func.func @scan_op_carry_type_mismatch(%input: tensor<10x20x30xf32>, %init: tensor<10x20x1xf32>) -> (tensor<10x20x30xf32>, tensor<10x20x30xf32>) {
+  // expected-error @+1 {{carry #0 type 'tensor<10x20x30xf32>' does not match expected type 'tensor<10x20x1xf32>'}}
+  %output, %carry = xtile.scan(%input) inits(%init) dimension = 2 <scan_dim_size = 30> : (tensor<10x20x30xf32>), (tensor<10x20x1xf32>) -> (tensor<10x20x30xf32>), (tensor<10x20x30xf32>) {
+  ^bb0(%arg0: tensor<10x20xf32>, %arg1: tensor<10x20xf32>):
+    %add = stablehlo.add %arg0, %arg1 : tensor<10x20xf32>
+    stablehlo.return %add : tensor<10x20xf32>
+  }
+  return %output, %carry : tensor<10x20x30xf32>, tensor<10x20x30xf32>
+}
+
+// -----
+
+func.func @reduce_scatter_op(%input0: tensor<2x64xf32>, %input1: tensor<2x8xf32>) -> (tensor<1x64xf32>, tensor<1x8xf32>) {
+  %out0, %out1 = xtile.reduce_scatter(%input0, %input1) scatter_dimension = 0 <replica_groups = dense<[[0, 1]]> : tensor<1x2xi64>> : (tensor<2x64xf32>, tensor<2x8xf32>) -> (tensor<1x64xf32>, tensor<1x8xf32>) {
+  ^bb0(%arg0: tensor<f32>, %arg1: tensor<f32>):
+    %add = stablehlo.add %arg0, %arg1 : tensor<f32>
+    stablehlo.return %add : tensor<f32>
+  }
+  return %out0, %out1 : tensor<1x64xf32>, tensor<1x8xf32>
+}
+
+// -----
+
+func.func @reduce_scatter_op_output_count_mismatch(%input0: tensor<2x64xf32>, %input1: tensor<2x8xf32>) -> tensor<1x64xf32> {
+  // expected-error @+1 {{expects one output per input, but got 2 inputs and 1 outputs}}
+  %out0 = xtile.reduce_scatter(%input0, %input1) scatter_dimension = 0 <replica_groups = dense<[[0, 1]]> : tensor<1x2xi64>> : (tensor<2x64xf32>, tensor<2x8xf32>) -> (tensor<1x64xf32>) {
+  ^bb0(%arg0: tensor<f32>, %arg1: tensor<f32>):
+    %add = stablehlo.add %arg0, %arg1 : tensor<f32>
+    stablehlo.return %add : tensor<f32>
+  }
+  return %out0 : tensor<1x64xf32>
+}
+
+// -----
+
+func.func @reduce_scatter_op_element_type_mismatch(%input0: tensor<2x64xf32>, %input1: tensor<2x8xbf16>) -> (tensor<1x64xf32>, tensor<1x8xbf16>) {
+  // expected-error @+1 {{input #1 element type 'bf16' does not match the element type of input #0 'f32'}}
+  %out0, %out1 = xtile.reduce_scatter(%input0, %input1) scatter_dimension = 0 <replica_groups = dense<[[0, 1]]> : tensor<1x2xi64>> : (tensor<2x64xf32>, tensor<2x8xbf16>) -> (tensor<1x64xf32>, tensor<1x8xbf16>) {
+  ^bb0(%arg0: tensor<f32>, %arg1: tensor<f32>):
+    %add = stablehlo.add %arg0, %arg1 : tensor<f32>
+    stablehlo.return %add : tensor<f32>
+  }
+  return %out0, %out1 : tensor<1x64xf32>, tensor<1x8xbf16>
+}
+
+// -----
+
+func.func @reduce_scatter_op_scatter_dimension_out_of_range(%input: tensor<2x64xf32>) -> tensor<1x64xf32> {
+  // expected-error @+1 {{scatter dimension 2 is out of range for input #0 of rank 2}}
+  %out = xtile.reduce_scatter(%input) scatter_dimension = 2 <replica_groups = dense<[[0, 1]]> : tensor<1x2xi64>> : (tensor<2x64xf32>) -> (tensor<1x64xf32>) {
+  ^bb0(%arg0: tensor<f32>, %arg1: tensor<f32>):
+    %add = stablehlo.add %arg0, %arg1 : tensor<f32>
+    stablehlo.return %add : tensor<f32>
+  }
+  return %out : tensor<1x64xf32>
+}
+
+// -----
+
+func.func @reduce_scatter_op_non_scatter_dimension_mismatch(%input: tensor<2x64xf32>) -> tensor<1x32xf32> {
+  // expected-error @+1 {{output #0 type 'tensor<1x32xf32>' differs from input type 'tensor<2x64xf32>' in non-scatter dimension 1}}
+  %out = xtile.reduce_scatter(%input) scatter_dimension = 0 <replica_groups = dense<[[0, 1]]> : tensor<1x2xi64>> : (tensor<2x64xf32>) -> (tensor<1x32xf32>) {
+  ^bb0(%arg0: tensor<f32>, %arg1: tensor<f32>):
+    %add = stablehlo.add %arg0, %arg1 : tensor<f32>
+    stablehlo.return %add : tensor<f32>
+  }
+  return %out : tensor<1x32xf32>
+}
+
+// -----
+
+func.func @reduce_scatter_op_non_scalar_reducer(%input: tensor<2x64xf32>) -> tensor<1x64xf32> {
+  // expected-error @+1 {{expects reduction computation arguments of type 'tensor<f32>', but got 'tensor<1xf32>'}}
+  %out = xtile.reduce_scatter(%input) scatter_dimension = 0 <replica_groups = dense<[[0, 1]]> : tensor<1x2xi64>> : (tensor<2x64xf32>) -> (tensor<1x64xf32>) {
+  ^bb0(%arg0: tensor<1xf32>, %arg1: tensor<1xf32>):
+    %add = stablehlo.add %arg0, %arg1 : tensor<1xf32>
+    stablehlo.return %add : tensor<1xf32>
+  }
+  return %out : tensor<1x64xf32>
+}
+
+// -----
+
+// expected-error @+1 {{layout has 0 dimensions, but shape has 1}}
+func.func @memref_layout_shape_size_mismatch(%arg0: memref<1024xf32, #xtile.layout<[]>>) {
+  return
+}
+
+// -----
+
+// expected-error @+1 {{layout is not a permutation}}
+func.func @memref_layout_is_not_a_permutation(%arg0: memref<1024xf32, #xtile.layout<[1]>>) {
+  return
+}
+
+// -----
+
+func.func @memref_bitcast(%arg0: memref<4x16xbf16, #xtile.layout<[0, 1]>>)
+    -> memref<4x16xi16, #xtile.layout<[0, 1]>> {
+  %0 = xtile.memref_bitcast %arg0 : memref<4x16xbf16, #xtile.layout<[0, 1]>> -> memref<4x16xi16, #xtile.layout<[0, 1]>>
+  return %0 : memref<4x16xi16, #xtile.layout<[0, 1]>>
+}
+
+// -----
+
+func.func @memref_bitcast_shape_mismatch(%arg0: memref<4x16xbf16>) -> memref<16x4xi16> {
+  // expected-error@+1 {{requires the same shape for all operands and results}}
+  %0 = xtile.memref_bitcast %arg0 : memref<4x16xbf16> -> memref<16x4xi16>
+  return %0 : memref<16x4xi16>
+}
+
+// -----
+
+func.func @memref_bitcast_layout_mismatch(%arg0: memref<4x16xbf16, #xtile.layout<[0, 1]>>)
+    -> memref<4x16xi16, #xtile.layout<[1, 0]>> {
+  // expected-error@+1 {{does not match result layout}}
+  %0 = xtile.memref_bitcast %arg0 : memref<4x16xbf16, #xtile.layout<[0, 1]>> -> memref<4x16xi16, #xtile.layout<[1, 0]>>
+  return %0 : memref<4x16xi16, #xtile.layout<[1, 0]>>
+}
+
+// -----
+
+func.func @memref_bitcast_width_mismatch(%arg0: memref<16xbf16>) -> memref<16xi32> {
+  // expected-error@+1 {{element bit widths differ: 'bf16' vs 'i32'}}
+  %0 = xtile.memref_bitcast %arg0 : memref<16xbf16> -> memref<16xi32>
+  return %0 : memref<16xi32>
+}

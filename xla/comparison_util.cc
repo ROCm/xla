@@ -19,66 +19,18 @@ limitations under the License.
 #include <string>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "xla/primitive_util.h"
-#include "xla/statusor.h"
+#include "xla/tsl/platform/logging.h"  // IWYU pragma: keep
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/logging.h"  // IWYU pragma: keep
 
 namespace xla {
 namespace {
-
-// Verifies that this is a valid Comparison: (1) not a partial ordering on
-// integers, and (2) a valid PrimitiveType.
-bool IsValidComparison(xla::PrimitiveType type, Comparison::Order order) {
-  if (primitive_util::IsFloatingPointType(type) ||
-      primitive_util::IsComplexType(type)) {
-    return true;
-  }
-  if (primitive_util::IsIntegralType(type) || type == PRED) {
-    return order == Comparison::Order::kTotal;
-  }
-  LOG(FATAL) << "Unsupported type: " << PrimitiveType_Name(type);
-}
-
-// Returns the X32 primitive type for each Type.
-PrimitiveType DefaultPrimitiveType(Comparison::Type type) {
-  switch (type) {
-    case Comparison::Type::kFloat:
-    case Comparison::Type::kFloatTotalOrder:
-      return PrimitiveType::F32;
-    case Comparison::Type::kSigned:
-      return PrimitiveType::S32;
-    case Comparison::Type::kUnsigned:
-      return PrimitiveType::U32;
-  }
-}
-
-// Returns the default ordering for each Comparison::Type.
-Comparison::Order DefaultOrdering(Comparison::Type type) {
-  switch (type) {
-    case Comparison::Type::kFloat:
-      return Comparison::Order::kPartial;
-    case Comparison::Type::kFloatTotalOrder:
-    case Comparison::Type::kSigned:
-    case Comparison::Type::kUnsigned:
-      return Comparison::Order::kTotal;
-  }
-}
-
-// Returns the expected ordering for each primitive type.
-Comparison::Order DefaultOrdering(PrimitiveType type) {
-  if (primitive_util::IsFloatingPointType(type) ||
-      primitive_util::IsComplexType(type)) {
-    return Comparison::Order::kPartial;
-  }
-  if (primitive_util::IsIntegralType(type) || type == PRED) {
-    return Comparison::Order::kTotal;
-  }
-  LOG(FATAL) << "Unsupported type: " << PrimitiveType_Name(type);
-}
 
 // Returns the converse of `direction`.
 Comparison::Direction Converse(Comparison::Direction direction) {
@@ -137,19 +89,6 @@ std::string ComparisonDirectionToString(Comparison::Direction direction) {
   }
 }
 
-std::string ComparisonTypeToString(Comparison::Type type) {
-  switch (type) {
-    case Comparison::Type::kFloat:
-      return "FLOAT";
-    case Comparison::Type::kFloatTotalOrder:
-      return "TOTALORDER";
-    case Comparison::Type::kSigned:
-      return "SIGNED";
-    case Comparison::Type::kUnsigned:
-      return "UNSIGNED";
-  }
-}
-
 absl::string_view ComparisonPrimitiveTypeToString(PrimitiveType type) {
   return PrimitiveType_Name(type);
 }
@@ -158,15 +97,28 @@ absl::string_view ComparisonOrderToString(Comparison::Order order) {
   switch (order) {
     case Comparison::Order::kPartial:
       return "PARTIALORDER";
+    case Comparison::Order::kWeak:
+      return "WEAKORDER";
     case Comparison::Order::kTotal:
       return "TOTALORDER";
   }
 }
 
+absl::string_view ComparisonOrderToShortString(Comparison::Order order) {
+  switch (order) {
+    case Comparison::Order::kPartial:
+      return "PARTIAL";
+    case Comparison::Order::kWeak:
+      return "WEAK";
+    case Comparison::Order::kTotal:
+      return "TOTAL";
+  }
+}
+
 absl::StatusOr<Comparison::Direction> StringToComparisonDirection(
     absl::string_view direction) {
-  static auto* map =
-      new absl::flat_hash_map<std::string, Comparison::Direction>({
+  static auto* const map =
+      new absl::flat_hash_map<absl::string_view, Comparison::Direction>({
           {"EQ", Comparison::Direction::kEq},
           {"NE", Comparison::Direction::kNe},
           {"GE", Comparison::Direction::kGe},
@@ -181,71 +133,57 @@ absl::StatusOr<Comparison::Direction> StringToComparisonDirection(
   return it->second;
 }
 
-absl::StatusOr<Comparison::Order> StringToComparisonOrder(
+absl::StatusOr<Comparison::Order> ShortStringToComparisonOrder(
     absl::string_view order) {
-  static auto* map = new absl::flat_hash_map<std::string, Comparison::Order>({
-      {"TOTALORDER", Comparison::Order::kTotal},
-      {"PARTIALORDER", Comparison::Order::kPartial},
-  });
+  static auto* const map =
+      new absl::flat_hash_map<absl::string_view, Comparison::Order>({
+          {"TOTAL", Comparison::Order::kTotal},
+          {"WEAK", Comparison::Order::kWeak},
+          {"PARTIAL", Comparison::Order::kPartial},
+      });
   auto it = map->find(order);
   if (it == map->end()) {
-    return InvalidArgument("Unknown comparison type: %s", order);
+    return InvalidArgument("Unknown comparison order: %s", order);
   }
   return it->second;
 }
 
-absl::StatusOr<Comparison::Type> StringToComparisonType(
-    absl::string_view comparison) {
-  static auto* map = new absl::flat_hash_map<std::string, Comparison::Type>({
-      {"FLOAT", Comparison::Type::kFloat},
-      {"TOTALORDER", Comparison::Type::kFloatTotalOrder},
-      {"SIGNED", Comparison::Type::kSigned},
-      {"UNSIGNED", Comparison::Type::kUnsigned},
-  });
-  auto it = map->find(comparison);
+absl::StatusOr<Comparison::Order> ComparisonTypeToOrder(
+    absl::string_view comparison_type) {
+  static auto* const map =
+      new absl::flat_hash_map<absl::string_view, Comparison::Order>({
+          {"FLOAT", Comparison::Order::kPartial},
+          {"TOTALORDER", Comparison::Order::kTotal},
+          {"SIGNED", Comparison::Order::kTotal},
+          {"UNSIGNED", Comparison::Order::kTotal},
+      });
+  auto it = map->find(comparison_type);
   if (it == map->end()) {
-    return InvalidArgument("Unknown comparison type: %s", comparison);
+    return InvalidArgument("Unknown comparison type: %s", comparison_type);
   }
   return it->second;
 }
 
-Comparison::Type Comparison::DefaultComparisonType(PrimitiveType type) {
+// Returns the expected ordering for each primitive type.
+Comparison::Order Comparison::DefaultOrdering(PrimitiveType type) {
   if (primitive_util::IsFloatingPointType(type) ||
       primitive_util::IsComplexType(type)) {
-    return Type::kFloat;
+    return Comparison::Order::kPartial;
   }
-  if (primitive_util::IsSignedIntegralType(type)) {
-    return Type::kSigned;
+  if (primitive_util::IsIntegralType(type) || type == PRED) {
+    return Comparison::Order::kTotal;
   }
-  if (primitive_util::IsUnsignedIntegralType(type) || type == PRED) {
-    return Type::kUnsigned;
-  }
-  LOG(FATAL) << "Unexpected: " << PrimitiveType_Name(type);
+  LOG(FATAL) << "Unsupported type: " << PrimitiveType_Name(type);
 }
 
 Comparison::Comparison(Direction dir, PrimitiveType type, Order order)
-    : dir_(dir),
-      primitive_type_(type),
-      order_(order),
-      type_(DefaultComparisonType(type)) {
-  CHECK(IsValidComparison(primitive_type_, order_));
+    : dir_(dir), primitive_type_(type), order_(order) {
+  CHECK(primitive_util::IsArrayType(type))
+      << "Unsupported type: " << PrimitiveType_Name(type);
 }
 
 Comparison::Comparison(Direction dir, PrimitiveType type)
-    : dir_(dir),
-      primitive_type_(type),
-      order_(DefaultOrdering(type)),
-      type_(DefaultComparisonType(type)) {
-  CHECK(IsValidComparison(primitive_type_, order_));
-}
-
-Comparison::Comparison(Direction dir, Type type)
-    : dir_(dir),
-      primitive_type_(DefaultPrimitiveType(type)),
-      order_(DefaultOrdering(type)),
-      type_(type) {
-  CHECK(IsValidComparison(primitive_type_, order_));
-}
+    : dir_(dir), primitive_type_(type), order_(DefaultOrdering(type)) {}
 
 Comparison Comparison::Converse() const {
   return Comparison(xla::Converse(dir_), primitive_type_, order_);
@@ -253,9 +191,9 @@ Comparison Comparison::Converse() const {
 
 std::optional<Comparison> Comparison::Inverse() const {
   if (IsPartialOrder()) {
-    // We assume comparisons don't have inverses unless they are total order,
-    // e.g., a partial order floating point comparison can return true if one
-    // operand is NaN.
+    // We assume comparisons don't have inverses unless they are total or weak
+    // order, e.g., a partial order floating point comparison can return false
+    // for both (a < b) and (a >= b) if one operand is NaN.
     return std::nullopt;
   }
   if (primitive_util::IsArrayType(primitive_type_)) {
@@ -269,7 +207,7 @@ bool Comparison::IsReflexive() const {
     case Direction::kEq:
     case Direction::kGe:
     case Direction::kLe:
-      return IsTotalOrder();
+      return IsTotalOrder() || IsWeakOrder();
     case Direction::kNe:
     case Direction::kGt:
     case Direction::kLt:
@@ -280,7 +218,7 @@ bool Comparison::IsReflexive() const {
 bool Comparison::IsAntireflexive() const {
   switch (dir_) {
     case Direction::kNe:
-      return IsTotalOrder();
+      return IsTotalOrder() || IsWeakOrder();
     case Direction::kGt:
     case Direction::kLt:
       return true;

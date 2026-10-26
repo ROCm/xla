@@ -23,10 +23,13 @@ limitations under the License.
 #include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "tsl/platform/statusor.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
@@ -34,8 +37,6 @@ limitations under the License.
 #include "xla/shape.h"
 #include "xla/shape_tree.h"
 #include "xla/shape_util.h"
-#include "xla/statusor.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -72,8 +73,8 @@ namespace xla {
   HloComputation* computation = input_tuple->parent();
   const Shape& input_shape = input_tuple->shape();
   std::vector<HloInstruction*> tuple_elements;
-  tuple_elements.reserve(input_shape.tuple_shapes_size());
-  for (int i = 0; i < input_shape.tuple_shapes_size(); i++) {
+  tuple_elements.reserve(input_shape.tuple_shapes().size());
+  for (int i = 0; i < input_shape.tuple_shapes().size(); i++) {
     tuple_elements.push_back(
         computation->AddInstruction(HloInstruction::CreateGetTupleElement(
             input_shape.tuple_shapes(i), input_tuple, i)));
@@ -114,9 +115,9 @@ namespace xla {
   }
 
   HloComputation* computation = new_instruction->parent();
-  std::vector<HloInstruction*> tuple_args(tuple_shape.tuple_shapes_size());
-  CHECK_GE(tuple_shape.tuple_shapes_size(), shape_index[0]);
-  for (int i = 0; i < tuple_shape.tuple_shapes_size(); ++i) {
+  std::vector<HloInstruction*> tuple_args(tuple_shape.tuple_shapes().size());
+  CHECK_GE(tuple_shape.tuple_shapes().size(), shape_index[0]);
+  for (int i = 0; i < tuple_shape.tuple_shapes().size(); ++i) {
     const Shape& subshape = tuple_shape.tuple_shapes(i);
     // If tuple is a tuple instruction, we can get the tuple instruction's
     // operand to construct the new tuple to improve compilation time
@@ -133,10 +134,10 @@ namespace xla {
       // If the subshape is still a tuple, recurse and pass a new shape index
       // for the one level deeper.
       if (subshape.IsTuple()) {
-        TF_ASSIGN_OR_RETURN(tuple_args[i],
-                            ReplaceTupleWith(new_instruction, get_operand(),
-                                             ShapeIndex(shape_index.begin() + 1,
-                                                        shape_index.end())));
+        ABSL_ASSIGN_OR_RETURN(
+            tuple_args[i], ReplaceTupleWith(new_instruction, get_operand(),
+                                            ShapeIndex(shape_index.begin() + 1,
+                                                       shape_index.end())));
       } else {
         if (subshape != new_instruction->shape() &&
             insert_bitcast_if_different_shape) {
@@ -161,7 +162,7 @@ namespace xla {
       tuple_args[i] = get_operand();
     }
   }
-  if (shape_index[0] == tuple_shape.tuple_shapes_size()) {
+  if (shape_index[0] == tuple_shape.tuple_shapes().size()) {
     // If shape_index[0] is equal to the tuple shape size, add the new
     // instruction as an additional argument.
     tuple_args.push_back(new_instruction);
@@ -225,7 +226,7 @@ HloInstruction* TupleUtil::AssembleTupleInstruction(
         if (subshape.IsTuple()) {
           absl::InlinedVector<HloInstruction*, 2> children;
           ShapeIndex child_index = index;
-          for (int i = 0; i < subshape.tuple_shapes_size(); ++i) {
+          for (int i = 0; i < subshape.tuple_shapes().size(); ++i) {
             child_index.push_back(i);
             children.push_back(elements.element(child_index));
             child_index.pop_back();
@@ -244,6 +245,30 @@ HloInstruction* TupleUtil::AssembleTupleInstruction(
         }
       });
   return elements.element({});
+}
+
+HloInstruction* TupleUtil::GetTupleInstructionAtIndex(
+    HloInstruction& tuple, const ShapeIndex& target_index) {
+  HloInstruction* target_index_instr = &tuple;
+
+  for (int32_t tuple_index : target_index) {
+    bool found = false;
+    for (HloInstruction* user : target_index_instr->users()) {
+      if (user->opcode() == HloOpcode::kGetTupleElement &&
+          user->tuple_index() == tuple_index) {
+        target_index_instr = user;
+        found = true;
+        break;
+      }
+    }
+
+    if (!found) {
+      // No GTE found at the target index.
+      return nullptr;
+    }
+  }
+
+  return target_index_instr;
 }
 
 }  // namespace xla

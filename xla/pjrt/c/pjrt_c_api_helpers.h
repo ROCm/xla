@@ -25,18 +25,21 @@ limitations under the License.
 
 #include "absl/base/attributes.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "xla/future.h"
 #include "xla/layout.h"
 #include "xla/pjrt/c/pjrt_c_api.h"
 #include "xla/pjrt/c/pjrt_c_api_layouts_extension.h"
 #include "xla/pjrt/c/pjrt_c_api_profiler_extension.h"
+#include "xla/pjrt/c/pjrt_c_api_status_utils.h"  // IWYU pragma: keep
 #include "xla/pjrt/distributed/key_value_store_interface.h"
 #include "xla/pjrt/pjrt_client.h"
 #include "xla/pjrt/pjrt_common.h"
 #include "xla/pjrt/pjrt_executable.h"
-#include "xla/pjrt/pjrt_future.h"
 #include "xla/shape.h"
 #include "xla/xla_data.pb.h"
 
@@ -46,30 +49,19 @@ ABSL_CONST_INIT extern const absl::string_view kHloFormat;
 ABSL_CONST_INIT extern const absl::string_view kMlirFormat;
 ABSL_CONST_INIT extern const absl::string_view kHloWithConfigFormat;
 
-// Return error status if not success and frees the PJRT_Error returned by
-// `expr`.
-#define RETURN_STATUS_IF_PJRT_ERROR(expr, c_api)                         \
-  do {                                                                   \
-    PJRT_Error* error = (expr);                                          \
-    std::unique_ptr<PJRT_Error, pjrt::PJRT_ErrorDeleter> _error(         \
-        error, pjrt::MakeErrorDeleter(c_api));                           \
-    absl::Status _status = pjrt::PjrtErrorToStatus(_error.get(), c_api); \
-    if (!_status.ok()) {                                                 \
-      return _status;                                                    \
-    }                                                                    \
-  } while (false)
-
 using PJRT_ClientDeleter = std::function<void(PJRT_Client*)>;
 
 // Pass in an API pointer; receive a custom deleter for smart pointers.
 // The lifetime of the Api pointed to must be longer than the client.
 PJRT_ClientDeleter MakeClientDeleter(const PJRT_Api* api);
 
-using PJRT_ErrorDeleter = std::function<void(PJRT_Error*)>;
+using PJRT_AsyncHostToDeviceTransferManagerDeleter =
+    std::function<void(PJRT_AsyncHostToDeviceTransferManager*)>;
 
 // Pass in an API pointer; receive a custom deleter for smart pointers.
-// The lifetime of the Api pointed to must be longer than the error.
-PJRT_ErrorDeleter MakeErrorDeleter(const PJRT_Api* api);
+// The lifetime of the Api pointed to must be longer than the transfer manager.
+PJRT_AsyncHostToDeviceTransferManagerDeleter
+MakeAsyncHostToDeviceTransferManagerDeleter(const PJRT_Api* api);
 
 using PJRT_BufferDeleter = std::function<void(PJRT_Buffer*)>;
 
@@ -117,23 +109,6 @@ using PJRT_Layouts_MemoryLayoutDeleter =
 // extension.
 PJRT_Layouts_MemoryLayoutDeleter MakeMemoryLayoutDeleter(const PJRT_Api* api);
 
-// Fatal error logging if status is not success. This terminates the process
-// and frees the PJRT_Error passed in.
-void LogFatalIfPjrtError(PJRT_Error* error, const PJRT_Api* api);
-
-absl::string_view GetPjrtErrorMessage(const PJRT_Error* error,
-                                      const PJRT_Api* api);
-
-PJRT_Error_Code GetErrorCode(const PJRT_Error* error, const PJRT_Api* api);
-
-absl::Status PjrtErrorToStatus(const PJRT_Error* error, const PJRT_Api* api);
-
-absl::StatusCode PjrtErrorToStatusCode(const PJRT_Error* error,
-                                       const PJRT_Api* api);
-
-absl::StatusCode PjrtErrorCodeToStatusCode(PJRT_Error_Code code);
-PJRT_Error_Code StatusCodeToPjrtErrorCode(absl::StatusCode code);
-
 // Conversion helper from xla::PrimitiveType to PJRT_Buffer_Type.
 PJRT_Buffer_Type ConvertToPjRtBufferType(xla::PrimitiveType type);
 
@@ -150,10 +125,10 @@ PJRT_HostBufferSemantics ConvertToPjRtHostBufferSemantics(
 xla::PjRtClient::HostBufferSemantics ConvertFromPjRtHostBufferSemantics(
     PJRT_HostBufferSemantics buffer_semantics);
 
-// Create and return a `PjRtFuture`  which will be set when `c_event` is ready.
-// This also deletes `c_event` when the `PjRtFuture` is set.
-xla::PjRtFuture<> ConvertCEventToCppFuture(PJRT_Event* c_event,
-                                           const PJRT_Api* c_api);
+// Create and return a `Future`  which will be set when `c_event` is ready.
+// This also deletes `c_event` when the `Future` is set.
+xla::Future<> ConvertCEventToCppFuture(PJRT_Event* c_event,
+                                       const PJRT_Api* c_api);
 
 // The data of returned variable-length PJRT_NamedValue list is backed by
 // `cpp_value_map`, so `cpp_value_map` must outlive the returned list. It will
@@ -181,11 +156,16 @@ const std::vector<PJRT_NamedValue>& GetXlaPluginCAttributes();
 // than or equal to the expected size. The actual struct size can be larger if
 // it comes from a forwards-compatible caller built at a later version than this
 // check. Returns a non-OK status if the expected is smaller.
+//
+// This function is only valid when called from the *plugin* side, not the
+// *client* side.
 absl::Status ActualStructSizeIsGreaterOrEqual(absl::string_view struct_name,
                                               size_t expected_size,
                                               size_t actual_size);
 
 absl::string_view GetPlatformVersion(PJRT_Client* client, const PJRT_Api* api);
+absl::string_view GetPlatformVersion(PJRT_TopologyDescription* c_topology,
+                                     const PJRT_Api* api);
 absl::string_view GetPlatformName(PJRT_Client* client, const PJRT_Api* api);
 
 absl::StatusOr<PJRT_TopologyDescription*> GetTopologyDescription(
@@ -209,6 +189,9 @@ int GetId(const PJRT_Api* api, PJRT_DeviceDescription* device_desc);
 using PJRT_KeyValueGetCFunc =
     std::function<PJRT_Error*(PJRT_KeyValueGetCallback_Args* args)>;
 
+using PJRT_KeyValueTryGetCFunc =
+    std::function<PJRT_Error*(PJRT_KeyValueTryGetCallback_Args* args)>;
+
 using PJRT_KeyValuePutCFunc =
     std::function<PJRT_Error*(PJRT_KeyValuePutCallback_Args* args)>;
 
@@ -219,17 +202,21 @@ struct PJRT_KeyValueCallbackData {
 
   std::shared_ptr<xla::KeyValueStoreInterface> kv_store;
 
-  // kv_get_c_func and kv_put_c_func are holding pointers to kv_store.
+  // kv_get_c_func, kv_try_get_c_func and kv_put_c_func are holding pointers to
+  // kv_store.
   pjrt::PJRT_KeyValueGetCFunc kv_get_c_func;
   pjrt::PJRT_KeyValuePutCFunc kv_put_c_func;
-  // c_kv_get and c_kv_put are holding pointers to kv_get_c_func and
-  // kv_put_c_func.
+  // c_kv_get, c_kv_try_get and c_kv_put are holding pointers to kv_get_c_func,
+  // kv_try_get_c_func and kv_put_c_func.
   PJRT_KeyValueGetCallback c_kv_get;
   PJRT_KeyValuePutCallback c_kv_put;
+  pjrt::PJRT_KeyValueTryGetCFunc kv_try_get_c_func;
+  PJRT_KeyValueTryGetCallback c_kv_try_get;
 };
 
-// The returned &kv_get_c_func and &kv_put_c_func must be set as
-// PJRT_Client_Create_Args.kv_get_user_arg and
+// The returned &kv_get_c_func, &kv_try_get_c_func and &kv_put_c_func must be
+// set as PJRT_Client_Create_Args.kv_get_user_arg,
+// PJRT_Client_Create_Args.kv_try_get_user_arg and
 // PJRT_Client_Create_Args.kv_put_user_arg, respectively. The entire
 // PJRT_KeyValueCallbackData must be kept alive as long as c_kv_get and c_kv_put
 // may be called.
@@ -267,6 +254,14 @@ struct BufferMemoryLayoutData {
   std::vector<int64_t> minor_to_major;
   std::vector<int64_t> tile_dims;
   std::vector<size_t> tile_dim_sizes;
+  // Don't allow copy and copy construction because c_layout includes naked C
+  // pointers, which could lead the field to point to freed memory if the RHS of
+  // the copy goes out of scope.
+  BufferMemoryLayoutData() = default;
+  BufferMemoryLayoutData(const BufferMemoryLayoutData&) = delete;
+  BufferMemoryLayoutData(BufferMemoryLayoutData&&) = default;
+  BufferMemoryLayoutData& operator=(const BufferMemoryLayoutData&) = delete;
+  BufferMemoryLayoutData& operator=(BufferMemoryLayoutData&&) = default;
 };
 absl::StatusOr<BufferMemoryLayoutData> ConvertToBufferMemoryLayoutData(
     const xla::Layout& cpp_layout);
@@ -294,6 +289,12 @@ absl::Span<PJRT_DeviceDescription* const> DeviceDescriptions(
 
 absl::StatusOr<xla::CompiledMemoryStats> GetCompiledMemoryStats(
     const PJRT_Api* api, PJRT_Executable* executable);
+
+PJRT_ShapeSpec ConvertToPjRtShapeSpec(
+    const xla::PjRtClient::ShapeSpec& shape_spec);
+
+xla::PjRtClient::ShapeSpec ConvertFromPjrtShapeSpec(
+    PJRT_ShapeSpec c_shape_spec);
 
 // Creates a PJRT_Profiler_Extension and adds a producer trace with
 // the given name. The created PJRT_Profiler_Extension will be used in argument
@@ -334,6 +335,14 @@ int64_t GetTracemeContextId(InputType* args) {
   }
   return traceme_context_id;
 }
+
+std::vector<xla::PjRtMemorySpaceDescription> GetMemorySpaceDescriptions(
+    PJRT_DeviceDescription* device_description, const PJRT_Api* c_api,
+    absl::StatusOr<xla::PjRtMemorySpaceDescription*>* default_memory);
+
+PJRT_Error* InvokePjRtEventWhenReady(
+    const PJRT_Api* api, PJRT_Event* event,
+    absl::AnyInvocable<void() &&> on_done_with_event);
 
 }  // namespace pjrt
 

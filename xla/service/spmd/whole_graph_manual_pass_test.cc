@@ -15,13 +15,24 @@ limitations under the License.
 
 #include "xla/service/spmd/whole_graph_manual_pass.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <cstdint>
+#include <memory>
+#include <utility>
+
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/pass/hlo_pass_pipeline.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/hlo/utils/hlo_matchers.h"
-#include "xla/service/hlo_parser.h"
-#include "xla/service/hlo_pass_pipeline.h"
-#include "xla/service/hlo_verifier.h"
-#include "xla/tests/hlo_test_base.h"
-#include "tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace spmd {
@@ -31,25 +42,25 @@ using ::testing::_;
 using ::testing::AllOf;
 namespace op = xla::testing::opcode_matchers;
 
-class WholeGraphManualPassTest : public HloTestBase {
+class WholeGraphManualPassTest : public HloHardwareIndependentTestBase {
  public:
   absl::StatusOr<std::unique_ptr<HloModule>> RunPass(
       absl::string_view hlo_module) {
-    TF_ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         auto module,
         ParseAndReturnVerifiedModule(
             hlo_module,
             GetModuleConfigForTest(/*replica_count=*/1, /*num_partitions=*/4)));
     HloPassPipeline pipeline("whole-graph-manual-pass");
     pipeline.AddPass<WholeGraphManualPass>();
-    TF_RETURN_IF_ERROR(pipeline.Run(module.get()).status());
+    ABSL_RETURN_IF_ERROR(pipeline.Run(module.get()).status());
     return absl::StatusOr<std::unique_ptr<HloModule>>(std::move(module));
   }
   absl::Status RunPassOnModule(HloModule* module,
                                int64_t distance_threshold = 100) {
     HloPassPipeline pipeline("all-gather-cse");
     pipeline.AddPass<WholeGraphManualPass>();
-    TF_RETURN_IF_ERROR(pipeline.Run(module).status());
+    ABSL_RETURN_IF_ERROR(pipeline.Run(module).status());
     return absl::OkStatus();
   }
 };

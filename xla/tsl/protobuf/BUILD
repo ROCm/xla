@@ -1,0 +1,134 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+load(
+    "//xla/tsl:tsl.bzl",
+    "if_google",
+    "internal_visibility",
+)
+load("//xla/tsl/platform:build_config.bzl", "tf_proto_library")
+
+package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
+    default_visibility = internal_visibility([
+        "//tensorflow/core:__subpackages__",
+        "//xla/tsl:internal",
+        "//tensorflow_models:__subpackages__",
+    ]),
+    features = if_google(["-parse_headers"]),
+    licenses = ["notice"],
+)
+
+tf_proto_library(
+    name = "bfc_memory_map_proto",
+    srcs = ["bfc_memory_map.proto"],
+    make_default_target_header_only = True,
+    visibility = ["//visibility:public"],
+)
+
+tf_proto_library(
+    name = "test_log_proto",
+    srcs = ["test_log.proto"],
+    make_default_target_header_only = True,
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_google_protobuf//:any_proto",
+        "@com_google_protobuf//:wrappers_proto",
+    ],
+)
+
+tf_proto_library(
+    name = "dnn_proto",
+    srcs = ["dnn.proto"],
+    make_default_target_header_only = True,
+    visibility = ["//visibility:public"],
+    deps = ["@com_google_protobuf//:wrappers_proto"],
+)
+
+tf_proto_library(
+    name = "status_proto",
+    srcs = ["status.proto"],
+    make_default_target_header_only = True,
+    visibility = ["//visibility:public"],
+    deps = ["//xla/tsl/protobuf:error_codes_proto_impl"],
+)
+
+tf_proto_library(
+    name = "histogram_proto",
+    srcs = ["histogram.proto"],
+    make_default_target_header_only = True,
+    visibility = ["//visibility:public"],
+)
+
+tf_proto_library(
+    name = "coordination_config_proto",
+    srcs = ["coordination_config.proto"],
+    make_default_target_header_only = True,
+    visibility = ["//visibility:public"],
+)
+
+tf_proto_library(
+    name = "coordination_service_proto",
+    srcs = ["coordination_service.proto"],
+    has_services = 1,
+    create_grpc_library = True,
+    create_java_proto = False,
+    create_kotlin_proto = False,
+    create_service = True,
+    visibility = ["//visibility:public"],
+    deps = ["@com_google_protobuf//:any_proto"],
+)
+
+tf_proto_library(
+    name = "distributed_runtime_payloads_proto",
+    srcs = ["distributed_runtime_payloads.proto"],
+    make_default_target_header_only = True,
+    visibility = ["//visibility:public"],
+)
+
+tf_proto_library(
+    name = "rpc_options_proto",
+    srcs = ["rpc_options.proto"],
+    make_default_target_header_only = True,
+    visibility = ["//visibility:public"],
+)
+
+tf_proto_library(
+    name = "error_codes_proto_impl",
+    srcs = ["error_codes.proto"],
+    make_default_target_header_only = True,
+    visibility = ["//visibility:public"],
+)
+
+tf_proto_library(
+    name = "protos_all",
+    create_go_proto = False,
+    create_kotlin_proto = False,
+    make_default_target_header_only = True,
+    visibility = ["//visibility:public"],
+    deps = [
+        # TODO(tlongeri): Conceptually, these fit into protos_all but adding them currently causes
+        # breakages (and they are not actually used).
+        ":bfc_memory_map_proto",
+        ":coordination_config_proto",
+        ":distributed_runtime_payloads_proto",
+        "//xla/tsl/protobuf:error_codes_proto_impl",
+        ":histogram_proto",
+        ":rpc_options_proto",
+        ":status_proto",
+        ":test_log_proto",
+        "@com_google_protobuf//:any_proto",
+    ],
+)

@@ -13,6 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+// LINT: LEGACY_NAMES
+
 // This proto file defines messages which represent the HLO module. This is a
 // full fidelity serialization of the c++ HLO constructs.
 //
@@ -31,6 +33,7 @@ syntax = "proto3";
 package xla;
 
 import "google/protobuf/any.proto";
+import "xla/service/metrics.proto";
 import "xla/xla_data.proto";
 
 option cc_enable_arenas = true;
@@ -39,6 +42,19 @@ enum CustomCallSchedule {
   SCHEDULE_NONE = 0;
   SCHEDULE_LATEST = 1;
   SCHEDULE_EARLIEST = 2;
+}
+
+enum TriState {
+  TRI_STATE_UNSPECIFIED = 0;
+  TRI_STATE_TRUE = 1;
+  TRI_STATE_FALSE = 2;
+}
+
+enum ConvolutionKind {
+  CONVOLUTION_KIND_UNSET = 0;
+  CONVOLUTION_KIND_FPROP = 1;
+  CONVOLUTION_KIND_DGRAD = 2;
+  CONVOLUTION_KIND_WGRAD = 3;
 }
 
 // The version of the API used by the custom call function. The signatures for
@@ -112,7 +128,7 @@ enum CustomCallApiVersion {
 }
 
 // Serialization of HloInstruction.
-// Next ID: 87
+// Next ID: 104
 message HloInstructionProto {
   reserved 10;
   reserved "parameter_name";
@@ -223,6 +239,9 @@ message HloInstructionProto {
   // Describes the dimension numbers used for a dot operation
   xla.DotDimensionNumbers dot_dimension_numbers = 30;
 
+  // Describes the dimension numbers used for a ragged dot operation
+  xla.RaggedDotDimensionNumbers ragged_dot_dimension_numbers = 90;
+
   // FFT type (FFT, IFFT, etc).
   xla.FftType fft_type = 31;
 
@@ -252,8 +271,13 @@ message HloInstructionProto {
   // Backend configuration for the instruction. Has backend-specific meaning.
   bytes backend_config = 43;
 
-  // Cross replica op fields.
-  repeated ReplicaGroup replica_groups = 49;
+  // The backend configuration payload, can be either inline or an ID reference.
+  Payload backend_config_payload = 99;
+
+  // Deprecated, but keeping for backward compatibility.
+  // Use collective_device_list. Cross replica op fields.
+  repeated ReplicaGroup replica_groups = 49 [deprecated = true];
+
   // Deprecated, but keeping it for backward compatibility. Use channel_id.
   // Non-positive all_reduce_id is equivalent to no all_reduce_id.
   int64 all_reduce_id = 45 [deprecated = true];
@@ -330,7 +354,8 @@ message HloInstructionProto {
   xla.RandomAlgorithm rng_algorithm = 70;
 
   // The comparison type used for kCompare.
-  string comparison_type = 72;
+  // Deprecated and replaced by comparison_order.
+  string comparison_type = 72 [deprecated = true];
 
   // Specifies if this is a cross-program-prefetch, used by kCopyStart.
   // Deprecated and replaced by optional_cross_program_prefetch_index.
@@ -375,8 +400,52 @@ message HloInstructionProto {
   // Used to be wait_on_operation_queues.
   reserved 84;
 
-  // Sparsity descriptor for dot operation.
-  repeated xla.SparsityDescriptor dot_sparsity = 86;
+  // Used to be dot_sparsity.
+  reserved 86;
+
+  // Represents the list of devices that participate in a collective operation.
+  oneof replica_group_list {
+    xla.CollectiveDeviceListProto collective_device_list = 87;
+    xla.IotaReplicaGroupListProto iota_collective_device_list = 92;
+    xla.MeshAxesReplicaGroupListProto mesh_axes_replica_group_list = 93;
+  }
+
+  // For HLO value tracking.
+  xla.OriginalValueProto original_value = 88;
+
+  // Specifies if a call instruction is a composite.
+  bool is_composite = 89;
+
+  // Accuracy for unary functions with multiple implementations.
+  xla.ResultAccuracy result_accuracy = 91;
+
+  // Whether the scan instruction is in reverse order.
+  bool is_reverse = 94;
+
+  // The number of carries in the scan instruction.
+  int64 num_carries = 95;
+
+  // Whether the scan instruction is associative.
+  TriState is_associative = 96;
+
+  // Conv type (fprop, dgrad, wgrad)
+  ConvolutionKind conv_kind = 97;
+
+  // Convolution sparsity config.
+  SparsityConfig sparsity_config = 98;
+
+  // For collective-broadcast: indicates the last operand is a scalar
+  // root rank index rather than a data tensor to broadcast.
+  bool has_dynamic_root = 100;
+
+  // Convolution block scaling config.
+  BlockScalingConfig block_scaling_config = 101;
+
+  // Comparison order (TOTAL, PARTIAL).
+  string comparison_order = 102;
+
+  // The mode of a kShuffle and the attributes of that mode.
+  xla.ShuffleMode shuffle_mode = 103;
 }
 
 // Serialization of HloComputation.
@@ -407,6 +476,9 @@ message HloComputationProto {
 
   // The name of execution thread this computation belongs to.
   string execution_thread = 8;
+
+  // Backend configuration for the computation. Has backend-specific meaning.
+  bytes backend_config = 9;
 }
 
 // Serialization of an HLO schedule. An HLO schedule contains a total order of
@@ -505,8 +577,12 @@ message StackFrameIndexProto {
     int32 function_name_id = 2;
     // Line number.
     int32 line = 3;
+    // End line number.
+    int32 end_line = 5;
     // Column number.
     int32 column = 4;
+    // End column number.
+    int32 end_column = 6;
   }
 
   // Serialization of frame.
@@ -528,6 +604,7 @@ message StackFrameIndexProto {
 }
 
 // Serialization of HloModule.
+// Next ID: 26
 message HloModuleProto {
   string name = 1;
   string entry_computation_name = 2;
@@ -541,13 +618,23 @@ message HloModuleProto {
   xla.ProgramShapeProto host_program_shape = 4;
 
   // The id of this module.
+  // During replays, this field is ignored and a new unique ID is assigned to
+  // the `HloModule` object.
   int64 id = 5;
+  // If provided, `pjrt_id` is assigned as the `id` of the `HloModule` object
+  // upon creation from an `HloModuleProto`. Do not populate this field in
+  // `HloModule` text or proto dumps to avoid reusing potentially non-unique IDs
+  // during replays.
+  optional int64 pjrt_id = 23;
 
   // The schedule for this module.
   HloScheduleProto schedule = 7;
 
   // Describes alias information between inputs and outputs.
   HloInputOutputAliasProto input_output_alias = 8;
+
+  // A list from payload_id to the payload bytes.
+  repeated bytes payloads = 22;
 
   // Describes the information of input buffer donors.
   HloBufferDonorProto buffer_donor = 18;
@@ -571,6 +658,9 @@ message HloModuleProto {
     FUSION = 2;
     LAYOUT = 3;
     DOT = 4;
+    FLAGNET = 5;
+    SHARDING = 6;
+    SCHEDULE = 7;
   }
 
   // Information about the optimization profile that this module contains.
@@ -583,8 +673,15 @@ message HloModuleProto {
     xla.ProfileSource profile_source = 3;
     // The compilation event that triggered the use of the profile.
     xla.CompilationEvent compilation_event = 4;
-    // The fingerprint of the unoptimized module this profile was applied to.
+    // The fingerprint of this profile. `fingerprint` should match a key
+    // in the profile table.
     string fingerprint = 5;
+    // The type of profile generation strategy used to generate the profile.
+    xla.ProfileGenerationStrategy profile_generation_strategy = 6;
+    // The original changelist the profile was generated at.
+    int64 original_changelist = 7;
+    // The changelist this profile was last updated at.
+    int64 changelist = 8;
   }
 
   // Profile information for the HLO module.
@@ -598,6 +695,16 @@ message HloModuleProto {
 
   // Frontend attributes to pass to the XLA backend.
   xla.FrontendAttributes frontend_attributes = 19;
+
+  xla.OriginalValueRecoveryTableProto original_value_recovery_table = 20;
+
+  // The type of the device that the module is targeted for.
+  string device_type = 21;
+
+  repeated DebugAttributeTableEntryProto debug_attributes = 24;
+
+  // Backend configuration for the module. Has backend-specific meaning.
+  bytes backend_config = 25;
 
   reserved 9;
   reserved "dynamic_parameter_binding";
@@ -633,6 +740,7 @@ message BufferAllocationProto {
     int64 logical_buffer_id = 1;
     int64 offset = 2;
     int64 size = 3;
+    xla.PrimitiveType element_type = 4;
   }
 
   int64 index = 1;
@@ -643,6 +751,7 @@ message BufferAllocationProto {
   bool is_constant = 12;
   int64 parameter_number = 6;
   repeated int64 parameter_shape_index = 10;
+  bool is_parameter_aliased_with_output = 13;
   bool maybe_live_out = 7;
   int64 color = 8;
   repeated Assigned assigned = 9;
@@ -691,19 +800,63 @@ message HloModuleGroupProto {
   repeated HloModuleProto hlo_modules = 2;
 }
 
+// Serialization of memory usage report.
+message MemoryUsageReportProto {
+  // Individual allocation.
+  message AllocationEntry {
+    // BufferAllocation::Index (allocation ID, not sort position).
+    int64 index = 1;
+    int64 size = 2;
+    // Running sum as entries traverse largest→smallest within the memory space.
+    int64 cumulative_size = 3;
+    double cumulative_percentage = 4;
+    // Defining position(s) of HLO value(s) assigned to this allocation.
+    repeated string defining_positions = 5;
+    string hlo_text = 6;
+  }
+
+  // Allocations grouped by memory space (color).
+  message AllocationEntryInMemorySpace {
+    int64 total_bytes = 1;
+    optional int32 memory_space_color = 2;
+    repeated AllocationEntry allocation_entries = 3;
+  }
+
+  repeated AllocationEntryInMemorySpace memory_space_allocation_entries = 1;
+}
+
 // Serialization of BufferAssignment.
 message BufferAssignmentProto {
   // Alias represents a source LogicalBuffer, and the buffer location that
   // aliases it.
+  //
+  // Aliases are emitted once per HloBuffer (the set of LogicalBuffers that
+  // must share an allocation). Within each HloBuffer, the first allocated
+  // LogicalBuffer acts as the canonical `source_buffer_id`, and one
+  // BufferAlias is emitted for the location of every *other* LogicalBuffer in
+  // that HloBuffer. The aliasing relation is symmetric and transitive, so an
+  // HloBuffer with K LogicalBuffers is encoded with K - 1 entries (rather than
+  // all K * (K - 1) ordered pairs). Consumers that need the full alias set for
+  // a LogicalBuffer should treat `source_buffer_id` and `location` as members
+  // of the same equivalence class rather than assuming every LogicalBuffer
+  // appears as a `source_buffer_id`.
   message BufferAlias {
     int64 source_buffer_id = 1;
     LogicalBufferProto.Location location = 2;
+  }
+
+  // Set of buffers live at the point of peak memory usage for a
+  // given allocation, represented by its index.
+  message PeakBuffers {
+    int64 index = 1;
+    repeated int64 logical_buffer_ids = 2;
   }
 
   repeated LogicalBufferProto logical_buffers = 1;
   repeated BufferAlias buffer_aliases = 2;
   repeated BufferAllocationProto buffer_allocations = 3;
   repeated HeapSimulatorTrace heap_simulator_traces = 4;
+  repeated PeakBuffers peak_buffers = 5;
 }
 
 // Grouping message that contains all of the information above.
@@ -730,6 +883,30 @@ message HloSnapshot {
 
   // The name of the platform used to run the graph.
   string execution_platform = 4;
+}
+
+message HloInputs {
+  // Stores the information required to decode the literal.
+  message LiteralDescriptor {
+    int32 version = 1;
+    uint64 argument_size_bytes = 2;
+  }
+
+  // Only one of the following two fields is expected to be set. `arguments`
+  // stores the literals, when `arguments_descriptors` stores only the
+  // information required to decode the literals. This was introduced to bypass
+  // the 2GiB limitation on proto size.
+  repeated LiteralProto arguments = 1;
+  repeated LiteralDescriptor arguments_descriptors = 2;
+}
+
+message HloUnoptimizedSnapshot {
+  // The unoptimized hlo graph.
+  HloModuleProto hlo_module = 1;
+
+  repeated HloInputs partitions = 2;
+
+  int32 version = 3;
 }
 
 // Metadata for an HLO module. Dumped after HLO passes and before LLO lowering
@@ -797,23 +974,67 @@ message HloPassMetadata {
 
   // Custom metadata for the pass.
   google.protobuf.Any custom_metadata = 10;
+
+  // Used to log any number of key, value pair stats per pass.
+  repeated KeyValueMetric kv_metrics = 11;
 }
 
-// Encodes the underlying Xla runtime executable compiled from the XLA module.
-message XlaRuntimeExecutableProto {
-  HloModuleProto hlo_module_proto = 1;
+message X64ConfigProto {
+  // Only to support logging x64 values. Not needed for original value tracking
+  // route and not mirrored in DebugAttributes in hlo_module.h.
+  string xprecision_64bit_fragment = 1;
+  string original_log_instruction_name = 2;
+  string xprecision_64bit_original_type = 3;
+}
 
-  // TODO(b/232263665)): We need to know the TargetMachine this executable was
-  // compiled for, otherwise we can accidentally use illegal instrauctions (e.g.
-  // use AVX512 when it's not available).
+message DebugAttributesProto {
+  enum DebugLogModeProto {
+    // No logging is performed.
+    NONE = 0;
+    // Non-guaranteed delivery. Tensors might be dropped if Original Value
+    // Tracking fails or if the instruction is fused. However, this mode does
+    // not perturb the computation graph and the data logged is exactly what it
+    // would be without logging.
+    DEFAULT = 1;
+    // Same with DEFAULT, but fused value can be logged at the expense of
+    // significant performance overhead.
+    FUSION_DEBUGGER = 2;
+    // Uses an optimization barrier to prevent fusion, preserving ordering but
+    // would perturb the computation graph and cause numerical differences. Log
+    // can still be dropped.
+    NO_FUSION = 3;
+    // Guaranteed delivery at the expense of significant graph perturbation and
+    // numerical differences.
+    GUARANTEED = 4;
+  }
+  DebugLogModeProto log_mode = 1;
+  // The id that uniquely identifies the xla.debug.Log in the HLO module.
+  int64 callback_id = 2;
+  // The index identifying which operand of the xla.debug.Log custom call this
+  // tensor belongs to.
+  int64 op_id = 3;
+  // If true, the device-specific sharded tensor is returned to the callback. If
+  // false, reconstructed tensor is returned to the callback as if XLA's
+  // automatic sharding didn't happen.
+  bool partitioned = 4;
+  // The sharding of the operands of the custom call. This is used by the
+  // runtime to unshard tensors logged in guaranteed mode.
+  string operands_sharding = 5;
+  // The x64 config for the tensor. This is used by the runtime to reconstruct
+  // the 64-bit original value of the tensor in guaranteed mode.
+  X64ConfigProto x64_config = 6;
+}
 
-  // TODO(b/232263665)): Serialized executable has to know what APIs it has to
-  // be linked with, including the version. For example Gpu executable must be
-  // linked with a runtime layer that abstracts over CUDA.
+message DebugAttributeTableEntryProto {
+  OriginalArrayProto original_array = 1;
+  repeated DebugAttributesProto debug_attributes = 2;
+}
 
-  // Serialized object file compiled from the XLA module.
-  bytes obj_file = 3;
-
-  // Serialized MLIR module corresponding to compiled object file.
-  string mlir_module = 4;
+message OriginalValueRecoveryTableProto {
+  message Entry {
+    OriginalArrayProto old_original_array = 1;
+    OriginalArrayProto new_original_array = 2;
+    HloModuleProto recovery_module = 3;
+  }
+  repeated Entry entries = 1;
 }

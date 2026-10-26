@@ -13,8 +13,8 @@
 # limitations under the License.
 # ============================================================================
 
-load("//xla:pytype.default.bzl", "pytype_strict_library")
-# Placeholder: load py_test
+load("@xla//third_party/rules_python/python:py_test.bzl", "py_test")
+load("//xla:pytype.bzl", "pytype_strict_binary", "pytype_strict_library")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -25,6 +25,11 @@ pytype_strict_library(
     name = "check_contents",
     srcs = ["check_contents.py"],
     deps = [":diff_parser"],
+)
+
+pytype_strict_library(
+    name = "check_header_guards",
+    srcs = ["check_header_guards.py"],
 )
 
 pytype_strict_library(
@@ -47,6 +52,7 @@ py_test(
     ],
     deps = [
         ":check_contents",
+        ":diff_parser",
         "//build_tools:test_utils",
         "@absl_py//absl/testing:absltest",
     ],
@@ -73,5 +79,47 @@ py_test(
     deps = [
         ":generate_compile_commands",
         "@absl_py//absl/testing:absltest",
+    ],
+)
+
+py_test(
+    name = "check_header_guards_test",
+    srcs = ["check_header_guards_test.py"],
+    deps = [
+        ":check_header_guards",
+        "@absl_py//absl/testing:absltest",
+    ],
+)
+
+pytype_strict_binary(
+    name = "tags",
+    srcs = ["tags.py"],
+)
+
+pytype_strict_library(
+    name = "check_dwyu",
+    srcs = ["check_dwyu.py"],
+)
+
+py_test(
+    name = "check_dwyu_test",
+    srcs = ["check_dwyu_test.py"],
+    deps = [
+        ":check_dwyu",
+    ],
+)
+
+pytype_strict_library(
+    name = "run_dwyu",
+    srcs = ["run_dwyu.py"],
+)
+
+py_test(
+    name = "run_dwyu_test",
+    srcs = ["run_dwyu_test.py"],
+    data = ["//:.bant-macros"],  # copybara:comment_replace data = ["//third_party/xla:.bant-macros"],
+    deps = [
+        ":check_dwyu",
+        ":run_dwyu",
     ],
 )

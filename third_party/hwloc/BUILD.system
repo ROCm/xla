@@ -1,0 +1,14 @@
+# hwloc: Portable Hardware Locality Library
+
+licenses(["notice"])
+
+filegroup(
+    name = "COPYING",
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "hwloc",
+    linkopts = ["-lhwloc"],
+    visibility = ["//visibility:public"],
+)

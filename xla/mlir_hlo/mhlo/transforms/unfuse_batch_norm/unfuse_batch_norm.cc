@@ -13,6 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cassert>
+#include <cstdint>
+
 #include "llvm/ADT/SmallVector.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -47,24 +50,24 @@ Value broadcastToFeatureDim(Location loc, RankedTensorType resultType,
         loc, resultType, value1d, shapeValue, dims);
   }
   assert(resultType.hasStaticShape());
-  return rewriter.create<mhlo::BroadcastInDimOp>(loc, resultType, value1d,
-                                                 dims);
+  return mhlo::BroadcastInDimOp::create(rewriter, loc, resultType, value1d,
+                                        dims);
 }
 
 // Get the shape of operand, assuming it is a dynamic shape with static rank.
 Value getShapeValue(Location loc, Value operand,
-                    PatternRewriter &rewriter) {  // NOLINT
+                    PatternRewriter& rewriter) {  // NOLINT
   RankedTensorType resultType =
       mlir::dyn_cast<RankedTensorType>(operand.getType());
-  return rewriter.create<mlir::shape::ShapeOfOp>(
-      loc,
+  return mlir::shape::ShapeOfOp::create(
+      rewriter, loc,
       RankedTensorType::get({resultType.getRank()}, rewriter.getIndexType()),
       operand);
 }
 
-Value materializeEpsilon(Operation *op, FloatAttr epsilonAttr, FloatType fpType,
+Value materializeEpsilon(Operation* op, FloatAttr epsilonAttr, FloatType fpType,
                          Value broadcastTo, RankedTensorType broadcastToType,
-                         PatternRewriter &rewriter) {  // NOLINT
+                         PatternRewriter& rewriter) {  // NOLINT
   ImplicitLocOpBuilder b(op->getLoc(), rewriter);
   if (epsilonAttr.getType() != fpType) {
     // Need to convert.
@@ -87,12 +90,12 @@ Value materializeEpsilon(Operation *op, FloatAttr epsilonAttr, FloatType fpType,
   auto scalarType = RankedTensorType::get({}, fpType);
   auto epsilonTensorAttr =
       DenseElementsAttr::get(scalarType, {mlir::cast<Attribute>(epsilonAttr)});
-  Value epsilon = b.create<mhlo::ConstantOp>(epsilonTensorAttr);
+  Value epsilon = mhlo::ConstantOp::create(b, epsilonTensorAttr);
   auto dimsType = RankedTensorType::get({0}, b.getIntegerType(64));
   auto dims = DenseIntElementsAttr::get(dimsType, SmallVector<int64_t, 1>{});
   if (broadcastToType.hasStaticShape()) {
-    return b.create<mhlo::BroadcastInDimOp>(broadcastToType, epsilon,
-                                            /*broadcast_dims=*/dims);
+    return mhlo::BroadcastInDimOp::create(b, broadcastToType, epsilon,
+                                          /*broadcast_dims=*/dims);
   }
   Value shapeValue = getShapeValue(op->getLoc(), broadcastTo, rewriter);
   return b.createOrFold<mhlo::DynamicBroadcastInDimOp>(broadcastToType, epsilon,
@@ -131,9 +134,9 @@ class UnfuseBatchNormInferencePattern
     if (!epsilon) {
       return failure();
     }
-    Value stddev = rewriter.create<mhlo::AddOp>(bnOp.getLoc(),
-                                                bnOp.getVariance(), epsilon);
-    stddev = rewriter.create<mhlo::SqrtOp>(bnOp.getLoc(), stddev);
+    Value stddev = mhlo::AddOp::create(rewriter, bnOp.getLoc(),
+                                       bnOp.getVariance(), epsilon);
+    stddev = mhlo::SqrtOp::create(rewriter, bnOp.getLoc(), stddev);
 
     // Broadcast all terms.
     Value shapeValue;
@@ -154,12 +157,12 @@ class UnfuseBatchNormInferencePattern
 
     // Compute:
     // scale * (input - mean) / stddev + offset
-    Value result = rewriter.create<mhlo::SubtractOp>(
-        bnOp.getLoc(), bnOp.getOperand(), broadcastMean);
+    Value result = mhlo::SubtractOp::create(rewriter, bnOp.getLoc(),
+                                            bnOp.getOperand(), broadcastMean);
     result =
-        rewriter.create<mhlo::MulOp>(bnOp.getLoc(), result, broadcastScale);
+        mhlo::MulOp::create(rewriter, bnOp.getLoc(), result, broadcastScale);
     result =
-        rewriter.create<mhlo::DivOp>(bnOp.getLoc(), result, broadcastStddev);
+        mhlo::DivOp::create(rewriter, bnOp.getLoc(), result, broadcastStddev);
     rewriter.replaceOpWithNewOp<mhlo::AddOp>(bnOp, result, broadcastOffset);
 
     return success();
@@ -175,11 +178,11 @@ Value createReduce(Location loc, Value operand, Value zero,
   Type reduceResultType = RankedTensorType::get(
       {operandType.getDimSize(featureIndex)}, operandType.getElementType());
   mhlo::ReduceOp reduce =
-      rewriter.create<mhlo::ReduceOp>(loc, reduceResultType, operand, zero,
-                                      rewriter.getI64TensorAttr(reduceDims));
+      mhlo::ReduceOp::create(rewriter, loc, reduceResultType, operand, zero,
+                             rewriter.getI64TensorAttr(reduceDims));
 
   // setup "mhlo.reduce"'s body
-  Region &region = reduce.getBody();
+  Region& region = reduce.getBody();
   Block& block = region.emplaceBlock();
   RankedTensorType blockArgumentType =
       RankedTensorType::get({}, operandType.getElementType());
@@ -191,8 +194,8 @@ Value createReduce(Location loc, Value operand, Value zero,
     OpBuilder::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(&block);
     Value addResult =
-        rewriter.create<mhlo::AddOp>(loc, *firstArgument, *secondArgument);
-    rewriter.create<mhlo::ReturnOp>(loc, addResult);
+        mhlo::AddOp::create(rewriter, loc, *firstArgument, *secondArgument);
+    mhlo::ReturnOp::create(rewriter, loc, addResult);
   }
 
   return reduce.getResult(0);
@@ -200,10 +203,10 @@ Value createReduce(Location loc, Value operand, Value zero,
 
 // Calculate total reduce size, assuming it is a dynamic shape with static rank.
 // Reduce from operand to operand[feature_index]/scale
-Value calculateReduceSize(Operation *op, Value operand,
+Value calculateReduceSize(Operation* op, Value operand,
                           RankedTensorType operandType, Value scale,
                           RankedTensorType scaleType, int64_t featureIndex,
-                          PatternRewriter &rewriter) {
+                          PatternRewriter& rewriter) {
   ImplicitLocOpBuilder b(op->getLoc(), rewriter);
   Type indexType = b.getIndexType();
   if (!operandType.hasStaticShape()) {
@@ -211,17 +214,18 @@ Value calculateReduceSize(Operation *op, Value operand,
     Value operandShape = getShapeValue(op->getLoc(), operand, rewriter);
     Value scaleShape = getShapeValue(op->getLoc(), scale, rewriter);
     Value operandTotalSize =
-        b.create<shape::NumElementsOp>(indexType, operandShape);
+        shape::NumElementsOp::create(b, indexType, operandShape);
     Value scaleTotalSize =
-        b.create<shape::NumElementsOp>(indexType, scaleShape);
+        shape::NumElementsOp::create(b, indexType, scaleShape);
     Value reduceSize =
-        b.create<shape::DivOp>(indexType, operandTotalSize, scaleTotalSize);
-    reduceSize = b.create<arith::IndexCastOp>(b.getI64Type(), reduceSize);
-    reduceSize = b.create<tensor::FromElementsOp>(reduceSize);
-    reduceSize = b.create<mhlo::ConvertOp>(
-        RankedTensorType::get({1}, operandType.getElementType()), reduceSize);
-    reduceSize = b.create<mhlo::ReshapeOp>(
-        RankedTensorType::get({}, operandType.getElementType()), reduceSize);
+        shape::DivOp::create(b, indexType, operandTotalSize, scaleTotalSize);
+    reduceSize = arith::IndexCastOp::create(b, b.getI64Type(), reduceSize);
+    reduceSize = tensor::FromElementsOp::create(b, reduceSize);
+    reduceSize = mhlo::ConvertOp::create(
+        b, RankedTensorType::get({1}, operandType.getElementType()),
+        reduceSize);
+    reduceSize = mhlo::ReshapeOp::create(
+        b, RankedTensorType::get({}, operandType.getElementType()), reduceSize);
     return b.createOrFold<mhlo::DynamicBroadcastInDimOp>(
         scaleType, reduceSize, scaleShape, b.getI64TensorAttr({}));
   }
@@ -241,8 +245,8 @@ Value calculateReduceSize(Operation *op, Value operand,
   if (losesInfo) {
     op->emitWarning("Conversion of reduce_dims_size loses precision");
   }
-  Value reduceSize = b.create<mhlo::ConstantOp>(
-      DenseFPElementsAttr::get(scaleType, floatValue));
+  Value reduceSize = mhlo::ConstantOp::create(
+      b, DenseFPElementsAttr::get(scaleType, floatValue));
   return reduceSize;
 }
 
@@ -275,8 +279,8 @@ class UnfuseBatchNormTrainingPattern
     }
 
     // zero constant
-    Value constZero = rewriter.create<mhlo::ConstantOp>(
-        bnOp.getLoc(),
+    Value constZero = mhlo::ConstantOp::create(
+        rewriter, bnOp.getLoc(),
         DenseFPElementsAttr::get(RankedTensorType::get({}, fpType),
                                  APFloat::getZero(fpType.getFloatSemantics())));
     // epsilon
@@ -297,27 +301,28 @@ class UnfuseBatchNormTrainingPattern
     Value sum = createReduce(bnOp.getLoc(), bnOp.getOperand(), constZero,
                              dimensionsWithoutFeature, featureIndex, rewriter);
     // X^2
-    Value operandSquare = rewriter.create<mhlo::MulOp>(
-        bnOp.getLoc(), bnOp.getOperand(), bnOp.getOperand());
+    Value operandSquare = mhlo::MulOp::create(
+        rewriter, bnOp.getLoc(), bnOp.getOperand(), bnOp.getOperand());
     // Sum[X^2]
     Value squareSum =
         createReduce(bnOp.getLoc(), operandSquare, constZero,
                      dimensionsWithoutFeature, featureIndex, rewriter);
     // E[X]
-    Value mean = rewriter.create<mhlo::DivOp>(bnOp.getLoc(), sum, reduceSize);
+    Value mean = mhlo::DivOp::create(rewriter, bnOp.getLoc(), sum, reduceSize);
     // E[X^2]
     Value squareMean =
-        rewriter.create<mhlo::DivOp>(bnOp.getLoc(), squareSum, reduceSize);
+        mhlo::DivOp::create(rewriter, bnOp.getLoc(), squareSum, reduceSize);
     // E^2[X]
-    Value meanSquare = rewriter.create<mhlo::MulOp>(bnOp.getLoc(), mean, mean);
+    Value meanSquare = mhlo::MulOp::create(rewriter, bnOp.getLoc(), mean, mean);
     // Var[X]
-    Value var = rewriter.create<mhlo::SubtractOp>(bnOp.getLoc(), squareMean,
-                                                  meanSquare);
+    Value var = mhlo::SubtractOp::create(rewriter, bnOp.getLoc(), squareMean,
+                                         meanSquare);
     // Var[X] + epsilon
     Value varAddEpsilon =
-        rewriter.create<mhlo::AddOp>(bnOp.getLoc(), var, epsilon);
+        mhlo::AddOp::create(rewriter, bnOp.getLoc(), var, epsilon);
     // Sqrt(Var[X] + epsilon)
-    Value sqrtVar = rewriter.create<mhlo::SqrtOp>(bnOp.getLoc(), varAddEpsilon);
+    Value sqrtVar =
+        mhlo::SqrtOp::create(rewriter, bnOp.getLoc(), varAddEpsilon);
 
     Value shapeValue;
     if (!operandType.hasStaticShape()) {
@@ -326,27 +331,27 @@ class UnfuseBatchNormTrainingPattern
     // X - E[X]
     Value meanBroadcast = broadcastToFeatureDim(
         bnOp.getLoc(), operandType, mean, shapeValue, featureIndex, rewriter);
-    Value operandMinusMean = rewriter.create<mhlo::SubtractOp>(
-        bnOp.getLoc(), bnOp.getOperand(), meanBroadcast);
+    Value operandMinusMean = mhlo::SubtractOp::create(
+        rewriter, bnOp.getLoc(), bnOp.getOperand(), meanBroadcast);
     // (X - E[X]) / Sqrt(Var[X] + epsilon)
     Value sqrtVarBroadcast =
         broadcastToFeatureDim(bnOp.getLoc(), operandType, sqrtVar, shapeValue,
                               featureIndex, rewriter);
-    Value normalized = rewriter.create<mhlo::DivOp>(
-        bnOp.getLoc(), operandMinusMean, sqrtVarBroadcast);
+    Value normalized = mhlo::DivOp::create(rewriter, bnOp.getLoc(),
+                                           operandMinusMean, sqrtVarBroadcast);
 
     // ((X - E[X]) / Sqrt(Var[X] + epsilon)) * scale
     Value scaleBroadcast =
         broadcastToFeatureDim(bnOp.getLoc(), operandType, bnOp.getScale(),
                               shapeValue, featureIndex, rewriter);
-    Value scaledNormalized =
-        rewriter.create<mhlo::MulOp>(bnOp.getLoc(), normalized, scaleBroadcast);
+    Value scaledNormalized = mhlo::MulOp::create(rewriter, bnOp.getLoc(),
+                                                 normalized, scaleBroadcast);
     // ((X - E[X]) / Sqrt(Var[X] + epsilon)) * scale + offset.
     Value offsetBroadcast =
         broadcastToFeatureDim(bnOp.getLoc(), operandType, bnOp.getOffset(),
                               shapeValue, featureIndex, rewriter);
-    Value shiftedNormalized = rewriter.create<mhlo::AddOp>(
-        bnOp.getLoc(), scaledNormalized, offsetBroadcast);
+    Value shiftedNormalized = mhlo::AddOp::create(
+        rewriter, bnOp.getLoc(), scaledNormalized, offsetBroadcast);
 
     // results
     SmallVector<Value> results = {shiftedNormalized, mean, var};
@@ -362,13 +367,13 @@ class UnfuseBatchNormTrainingPattern
 // In combination with marking such ops as illegal, this allows backends that
 // do not have special support for fused batchnorm to use simpler arithmetic
 // primitives.
-void populateUnfuseBatchNormInferencePattern(MLIRContext *context,
-                                             RewritePatternSet *patterns) {
+void populateUnfuseBatchNormInferencePattern(MLIRContext* context,
+                                             RewritePatternSet* patterns) {
   patterns->add<UnfuseBatchNormInferencePattern>(context);
 }
 
-void populateUnfuseBatchNormTrainingPattern(MLIRContext *context,
-                                            RewritePatternSet *patterns) {
+void populateUnfuseBatchNormTrainingPattern(MLIRContext* context,
+                                            RewritePatternSet* patterns) {
   patterns->add<UnfuseBatchNormTrainingPattern>(context);
 }
 

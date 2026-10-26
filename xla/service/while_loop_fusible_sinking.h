@@ -23,14 +23,16 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
-#include "xla/service/hlo_pass_interface.h"
-#include "xla/statusor.h"
+#include "xla/hlo/pass/hlo_pass_interface.h"
 
 namespace xla {
 
-// Sinks while loop invariant values that happen to be fusibles into the while
-// loop body and conditional. This is probably not a win in isolation but may
-// unlock further optimizations like fusible folding.
+// Sinks values into the while loop body and conditional that fusibles. This is
+// probably not a win in isolation but may unlock further optimizations like
+// fusible folding. There are two categories:
+
+// 1. Sinks while loop invariant values into the while
+// loop body and conditional.
 //
 //   state = (..., fusible_graph, ...)
 //   while (pred(state)) {
@@ -52,9 +54,41 @@ namespace xla {
 // tuple trivially loop invariant.  WhileLoopSimplifier will later get rid of
 // `v`.
 //
+// 2. Sinks constant-initialized value, i.e., broadcast(constant) into the while
+// body. The high level idea is that we don't want to leave any element of the
+// buffer after loop execution as undefined. Therefore, all the elements of the
+// buffer must be written to in the body. For element-wise operation 'instr' we
+// have:
+// forall index i in output shape: instr[i] = f(operand1[i], ...),  where
+// f is the elementwise operation.
+// We can see that all the indices of the output shape is written to. These
+// values can sink into the loop and fused later.
+//
+//   state = (..., broadcast(constant), ...)
+//   while (pred(state)) {
+//     (..., v, ...) = state
+//     value = f(v) // f writes to the entire shape of v.
+//     state = (..., value, ...)
+//   }
+//
+// =>
+//
+//   state = (..., allocate-buffer(), ...)
+//   while (pred(state)) {
+//     i = iteration_var
+//     (..., v, ...) = state
+//     new_v = select(i == 0, broadcast(constant), v)
+//     value = f(new_v)
+//     state = (..., value, ...)
+//   }
+//
+//   This transformation replaces the broadcast with a free AllocateBuffer
+//   outside the while loop with the hope that the broadcast inside the loop
+//   will be fused.
 class WhileLoopFusibleSinking : public HloModulePass {
  public:
-  WhileLoopFusibleSinking() = default;
+  explicit WhileLoopFusibleSinking(bool sink_broadcast_of_constant = true)
+      : sink_broadcast_of_constant_(sink_broadcast_of_constant) {}
 
   ~WhileLoopFusibleSinking() override = default;
 
@@ -62,14 +96,29 @@ class WhileLoopFusibleSinking : public HloModulePass {
     return "while-loop-fusible-sinking";
   }
 
-  using HloPassInterface::Run;
-  absl::StatusOr<bool> Run(
+ protected:
+  absl::StatusOr<bool> RunImpl(
       HloModule* module,
       const absl::flat_hash_set<absl::string_view>& execution_threads) override;
 
  private:
   // Sink a fusible subgraph into a while loop.
   absl::StatusOr<bool> TrySinkingFusiblesIntoWhileLoop(
+      HloInstruction* while_instr);
+
+  // The idea is that certain constant-initialized buffers can be left as
+  // uninitialized if all the elements of the buffer are written to in the loop
+  // body. This way, we eliminate the need to initialize the buffer (with
+  // broadcast) in the critical path of the program. To summarize, the
+  // conditions to apply this optimization are:
+  // 1. The buffer is a constant-initialized buffer.
+  // 2. All the elements of the buffer are written to in the loop body.
+  // 3. The iteration variable of the loop is monotonically increasing or
+  // decreasing.
+  // The optimization is applied by creating a select between the initial value
+  // and the value in the body. The select is guarded by a predicate that checks
+  // if the loop iteration variable is equal to the first iteration value.
+  absl::StatusOr<bool> TryRewritingBroadcastAsAllocateBuffer(
       HloInstruction* while_instr);
 
   // Creates a loop fusion instruction containing the computation to move into
@@ -79,6 +128,7 @@ class WhileLoopFusibleSinking : public HloModulePass {
   HloInstruction* CreateSinkableFusion(HloInstruction* while_operand);
 
   absl::flat_hash_map<HloComputation*, int> call_counts_;
+  const bool sink_broadcast_of_constant_;
 };
 }  // namespace xla
 

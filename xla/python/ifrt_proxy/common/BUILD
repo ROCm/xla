@@ -12,11 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@tsl//tsl/platform:build_config.bzl", "tf_proto_library")
-# copybara:uncomment load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
-
-load("//xla/python/ifrt_proxy/common:ifrt_proxy.bzl", "default_ifrt_proxy_visibility", "ifrt_proxy_cc_test")
+load("//xla/python/ifrt_proxy/common:ifrt_proxy.bzl", "cc_library", "default_ifrt_proxy_visibility", "ifrt_proxy_cc_test")
 load("//xla/tsl:tsl.bzl", "if_google")
+load("//xla/tsl/platform:build_config.bzl", "tf_proto_library")
+# copybara:uncomment load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -38,7 +37,7 @@ cc_library(
     deps = if_google(
         ["//xla/python/ifrt_proxy/common/google:grpc_credentials_lib"],
         [":grpc_credentials_oss_lib"],
-    ) + ["@com_github_grpc_grpc//:grpc++"],
+    ) + ["@grpc//:grpc++"],
 )
 
 cc_library(
@@ -49,12 +48,29 @@ cc_library(
     ],
     visibility = ["//visibility:private"],
     deps = [
-        "@com_github_grpc_grpc//:grpc++",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
+        "@grpc//:grpc++",
         "@tsl//tsl/platform",
     ],
     alwayslink = True,
+)
+
+cc_library(
+    name = "grpc_credentials_possibly_insecure_wrapper",
+    srcs = [
+        "grpc_credentials_possibly_insecure_wrapper.cc",
+    ],
+    hdrs = [
+        "grpc_credentials_possibly_insecure_wrapper.h",
+    ],
+    visibility = ["//xla/python/ifrt_proxy:__subpackages__"],
+    deps = [
+        ":grpc_credentials",
+        "@com_google_absl//absl/log",
+        "@grpc//:grpc++",
+        "@tsl//tsl/platform",
+    ],
 )
 
 tf_proto_library(
@@ -65,17 +81,21 @@ tf_proto_library(
 tf_proto_library(
     name = "ifrt_service_proto",
     srcs = ["ifrt_service.proto"],
-    protodeps = [
+    deps = [
         ":types_proto",
-        # copybara:uncomment "//google/protobuf:any",
         "//xla:xla_data_proto",
-        "//xla/pjrt:execute_options_proto",
+        "//xla/pjrt/proto:executable_metadata_proto",
+        "//xla/python/ifrt:array_spec_proto",
+        "//xla/python/ifrt:attribute_map_proto",
         "//xla/python/ifrt:dtype_proto",
+        "//xla/python/ifrt:execute_options_proto",
+        "//xla/python/ifrt:layout_proto",
         "//xla/python/ifrt:remap_plan_proto",
         "//xla/python/ifrt:serdes_proto",
         "//xla/python/ifrt:shape_proto",
         "//xla/python/ifrt:sharding_proto",
-        "@tsl//tsl/protobuf:status_proto",
+        "//xla/tsl/protobuf:status_proto",
+        "@com_google_protobuf//:any_proto",
     ],
 )
 
@@ -87,7 +107,10 @@ tf_proto_library(
     create_grpc_library = True,
     create_java_proto = False,
     create_kotlin_proto = False,
-    protodeps = [":ifrt_service_proto"],
+    deps = [
+        ":ifrt_service_proto",
+        "//xla/python/ifrt:attribute_map_proto",
+    ],
 )
 
 cc_library(
@@ -101,13 +124,16 @@ cc_library(
         "//xla/python/ifrt",
         "//xla/python/ifrt:serdes",
         "//xla/python/ifrt:sharding_serdes",
+        "//xla/tsl/concurrency:ref_count",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/hash",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:cord",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
-        "@llvm-project//llvm:Support",
-        "@tsl//tsl/platform:statusor",
     ] + if_google(["@com_google_absl//absl/types:source_location"]),
 )
 
@@ -118,14 +144,16 @@ ifrt_proxy_cc_test(
         ":types",
         ":types_proto_cc",
         "//xla/pjrt:pjrt_common",
-        "//xla/python/ifrt",
-        "@com_google_absl//absl/strings:string_view",
-        "@com_google_absl//absl/types:span",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/status:status_matchers",
         "@com_google_googletest//:gtest_main",
-        "@tsl//tsl/platform:status_matchers",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/platform:test",
     ],
+)
+
+tf_proto_library(
+    name = "array_util_proto",
+    srcs = ["array_util.proto"],
 )
 
 cc_library(
@@ -133,12 +161,16 @@ cc_library(
     srcs = ["array_util.cc"],
     hdrs = ["array_util.h"],
     deps = [
+        ":array_util_proto_cc",
         "//xla/python/ifrt",
+        "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@tsl//tsl/platform:statusor",
+        "@com_google_absl//absl/strings:cord",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -148,10 +180,11 @@ ifrt_proxy_cc_test(
     deps = [
         ":array_util",
         "//xla/python/ifrt",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings:cord",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest_main",
-        "@tsl//tsl/platform:status_matchers",
-        "@tsl//tsl/platform:statusor",
     ],
 )
 
@@ -159,8 +192,13 @@ ifrt_proxy_cc_test(
 cc_library(
     name = "common_serdes",
     deps = [
+        "//xla/python/ifrt:custom_call_program_serdes",
+        "//xla/python/ifrt:layout_serdes",
         "//xla/python/ifrt:plugin_program_serdes",
         "//xla/python/ifrt/hlo:hlo_program_serdes",
+        "//xla/python/ifrt/ir:ifrt_ir_program_serdes",
+        "//xla/python/pjrt_ifrt:pjrt_layout_serdes",
+        "//xla/python/pjrt_ifrt:xla_sharding_serdes",
     ],
     alwayslink = True,
 )
@@ -171,10 +209,57 @@ cc_library(
     hdrs = ["proto_util.h"],
     deps = [
         ":ifrt_service_proto_cc",
+        "//xla/python/ifrt:user_context_status_util",
+        "//xla/tsl/platform:status_to_from_proto",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings:string_view",
-        "@tsl//tsl/platform:status_to_from_proto",
+    ],
+)
+
+cc_library(
+    name = "test_utils",
+    srcs = ["test_utils.cc"],
+    hdrs = ["test_utils.h"],
+    deps = [
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/debugging:leak_check",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+cc_library(
+    name = "prof_util",
+    hdrs = ["prof_util.h"],
+    deps = [
+        ":ifrt_service_proto_cc",
+        "//xla/tsl/profiler/utils:xplane_schema",
+        "@com_google_absl//absl/strings:string_view",
+        "@tsl//tsl/platform:random",
+        "@tsl//tsl/profiler/lib:traceme",
+        "@tsl//tsl/profiler/lib:traceme_encode",
+    ],
+)
+
+cc_library(
+    name = "versions",
+    hdrs = ["versions.h"],
+)
+
+cc_library(
+    name = "transfer_util",
+    srcs = ["transfer_util.cc"],
+    hdrs = ["transfer_util.h"],
+    deps = [
+        "//xla/tsl/platform:env",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
     ],
 )
 
@@ -184,5 +269,21 @@ cc_library(
 #     srcs = ["ifrt_proxy.bzl"],
 #     parse_tests = False,
 #     visibility = ["//visibility:private"],
+#     deps = [
+#         "@rules_cc//cc:core_rules",
+#         "//xla/tsl:package_groups_bzl",
+#     ],
+# )
+#
+# bzl_library(
+#     name = "ifrt_proxy_google_bzl",
+#     srcs = ["ifrt_proxy.google.bzl"],
+#     parse_tests = False,
+#     visibility = ["//visibility:private"],
+#     deps = [
+#         "//devtools/build_cleaner/skylark:build_defs_lib",
+#         "@rules_cc//cc:core_rules",
+#         "//xla:xla_bzl",
+#     ],
 # )
 # copybara:uncomment_end

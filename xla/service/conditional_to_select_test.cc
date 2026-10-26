@@ -15,23 +15,25 @@ limitations under the License.
 
 #include "xla/service/conditional_to_select.h"
 
+#include <gmock/gmock.h>
+
 #include <memory>
-#include <utility>
+#include <string>
 
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/testlib/test.h"
 #include "xla/hlo/utils/hlo_matchers.h"
 #include "xla/literal.h"
-#include "xla/test.h"
-#include "xla/tests/hlo_test_base.h"
 
 namespace op = xla::testing::opcode_matchers;
 
 namespace xla {
 namespace {
 
-using ConditionalToSelectTest = HloTestBase;
+using ConditionalToSelectTest = HloHardwareIndependentTestBase;
 using ::testing::_;
 
 // Test that a conditional of simple constants is transformed to a select
@@ -130,6 +132,50 @@ ENTRY comp {
           op::Select(op::Broadcast(op::Lt(op::Parameter(0), op::Parameter(1))),
                      _, _),
           _));
+}
+
+// Test Conditional with branch_index
+TEST_F(ConditionalToSelectTest,
+       MapConditionalConstants_ConditionalWithBranchIndex) {
+  const char* kModuleStr = R"(
+  HloModule m
+
+  c0 {
+    %pif = () parameter(0)
+    ROOT %cif = f32[] constant(0)
+  }
+
+  c1 {
+    %pelse = () parameter(0)
+    ROOT %celse = f32[] constant(1)
+  }
+
+  mapped {
+    %a = f32[] parameter(0)
+    %b = f32[] parameter(1)
+    %lt = pred[] compare(%a, %b), direction=LT
+    %s = s32[] convert(%lt)
+    %t = () tuple()
+    ROOT %conditional = f32[] conditional(%s, %t, %t), branch_computations={c0, c1}
+  }
+
+  ENTRY comp {
+    %p1 = f32[1000]{0} parameter(0)
+    %p2 = f32[1000]{0} parameter(1)
+    ROOT %mapped = f32[1000]{0} map(%p1, %p2), dimensions={0}, to_apply=mapped
+  }
+  )";
+
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(kModuleStr));
+  ASSERT_TRUE(ConditionalToSelect().Run(module.get()).value());
+  HloInstruction* root = module->entry_computation()->root_instruction();
+  ASSERT_EQ(root->opcode(), HloOpcode::kMap);
+  HloComputation* mapped = root->called_computations()[0];
+  EXPECT_THAT(
+      mapped->root_instruction(),
+      op::Select(
+          op::Convert(op::Convert(op::Lt(op::Parameter(0), op::Parameter(1)))),
+          op::Constant(), op::Constant()));
 }
 
 }  // namespace

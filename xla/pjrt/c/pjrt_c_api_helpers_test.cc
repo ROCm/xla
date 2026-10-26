@@ -14,34 +14,37 @@ limitations under the License.
 ==============================================================================*/
 #include "xla/pjrt/c/pjrt_c_api_helpers.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/str_cat.h"
 #include "absl/time/time.h"
+#include "stablehlo/dialect/Version.h"
+#include "xla/future.h"
 #include "xla/layout.h"
 #include "xla/pjrt/c/pjrt_c_api.h"
 #include "xla/pjrt/c/pjrt_c_api_wrapper_impl.h"
 #include "xla/pjrt/distributed/in_memory_key_value_store.h"
-#include "xla/pjrt/pjrt_client.h"
 #include "xla/pjrt/pjrt_common.h"
-#include "xla/statusor.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/status.h"
-#include "tsl/platform/status_matchers.h"
-#include "tsl/platform/statusor.h"
+#include "xla/tsl/distributed_runtime/call_options.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace pjrt {
 namespace {
 
+using ::absl_testing::IsOkAndHolds;
 using ::testing::HasSubstr;
 
 TEST(PjRtCApiHelperTest, ConvertValidPjRtValueType) {
@@ -111,14 +114,26 @@ TEST(PjRtCApiHelperTest, Callback) {
   auto kv_callback_data = ConvertToCKeyValueCallbacks(kv_store);
   auto converted_kv_store = ToCppKeyValueStore(
       kv_callback_data->c_kv_get, &kv_callback_data->kv_get_c_func,
+      kv_callback_data->c_kv_try_get, &kv_callback_data->kv_try_get_c_func,
       kv_callback_data->c_kv_put, &kv_callback_data->kv_put_c_func);
 
-  auto s = converted_kv_store->Set("key", "value");
-  TF_EXPECT_OK(s);
+  absl::StatusOr<std::string> v_not_found =
+      converted_kv_store->Get("key", absl::Seconds(1));
+  EXPECT_TRUE(absl::IsNotFound(v_not_found.status())) << v_not_found.status();
 
-  auto v = converted_kv_store->Get("key", absl::Seconds(1));
-  TF_EXPECT_OK(v.status());
-  EXPECT_EQ(*v, "value");
+  EXPECT_OK(converted_kv_store->Set("key", "value"));
+
+  EXPECT_THAT(converted_kv_store->Get("key", absl::Seconds(1)),
+              IsOkAndHolds("value"));
+  EXPECT_THAT(converted_kv_store->TryGet("key"), IsOkAndHolds("value"));
+
+  auto [promise, future] = xla::MakePromise<std::string>();
+  std::shared_ptr<tsl::CallOptions> call_options = converted_kv_store->AsyncGet(
+      "key",
+      [promise = std::move(promise).ToShared()](
+          const absl::StatusOr<std::string>& result) { promise->Set(result); });
+  EXPECT_EQ(call_options, nullptr);
+  EXPECT_TRUE(absl::IsUnimplemented(future.Await().status()));
 }
 
 TEST(PjRtCApiHelperTest, ConvertToCLayoutFromStrides) {
@@ -206,6 +221,37 @@ TEST(PjRtCApiHelperTest, ConvertFromCLayoutToLayoutNoTile) {
   TF_ASSERT_OK_AND_ASSIGN(xla::Layout layout, ConvertToLayout(c_layout.tiled));
 
   EXPECT_EQ(layout.ToString(), "{1,0}");
+}
+
+TEST(PjRtCApiHelperTest, GetXlaPluginCAttributes) {
+  auto result = GetXlaPluginCAttributes();
+  std::unordered_map<std::string, PJRT_NamedValue*> map;
+  for (PJRT_NamedValue& nv : result) {
+    auto [_, did_not_exist_yet] = map.insert({nv.name, &nv});
+    EXPECT_TRUE(did_not_exist_yet);
+  }
+  EXPECT_TRUE(map.find("xla_version") != map.end());
+  PJRT_NamedValue* current = map["stablehlo_current_version"];
+  mlir::vhlo::Version current_version =
+      mlir::vhlo::Version::getCurrentVersion();
+  EXPECT_TRUE(current->int64_array_value[0] == current_version.getMajor());
+  EXPECT_TRUE(current->int64_array_value[1] == current_version.getMinor());
+  EXPECT_TRUE(current->int64_array_value[2] == current_version.getPatch());
+  PJRT_NamedValue* minimum = map["stablehlo_minimum_version"];
+  mlir::vhlo::Version minimum_version =
+      mlir::vhlo::Version::getMinimumVersion();
+  EXPECT_TRUE(minimum->int64_array_value[0] == minimum_version.getMajor());
+  EXPECT_TRUE(minimum->int64_array_value[1] == minimum_version.getMinor());
+  EXPECT_TRUE(minimum->int64_array_value[2] == minimum_version.getPatch());
+}
+
+TEST(PjRtCApiHelperTest, BuildXlaShapeFromCWithNullptrLayout) {
+  int64_t dims[] = {2, 3};
+  TF_ASSERT_OK_AND_ASSIGN(
+      xla::Shape shape,
+      BuildXlaShapeFromC(PJRT_Buffer_Type::PJRT_Buffer_Type_F32, dims, 2,
+                         nullptr));
+  EXPECT_FALSE(shape.has_layout());
 }
 
 }  // namespace

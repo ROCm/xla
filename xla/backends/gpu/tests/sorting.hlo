@@ -1,0 +1,146 @@
+// RUN: hlo-opt %s --platform=gpu --stage=llvm-before-optimizations --xla_gpu_target_config_filename=%S/../target_config/specs/%{GPU}.txtpb --split-input-file | FileCheck --check-prefixes=CHECK,CHECK-%{PTX} %s
+
+HloModule TestModule, is_scheduled=true
+
+compare {
+  p.0.lhs = f32[] parameter(0)
+  p.0.rhs = f32[] parameter(1)
+  ROOT lt = pred[] compare(p.0.lhs, p.0.rhs), direction=LT
+}
+
+// CHECK:         @shared_0 = private addrspace(3) global [64 x float] undef{{$}}
+// CHECK-LABEL: @sort(
+// CHECK-NOT:     alloca
+// CHECK-PTX:     %[[TID:.*]] = call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
+// CHECK-GCN:     %[[TID:.*]] = call i32 @llvm.amdgcn.workitem.id.x()
+// CHECK-PTX:     %[[CTAID:.*]] = call i32 @llvm.nvvm.read.ptx.sreg.ctaid.x()
+// CHECK-GCN:     %[[CTAID:.*]] = call i32 @llvm.amdgcn.workgroup.id.x()
+// CHECK:         %[[BASE_CACHE:.*]] = mul i32 %[[TID]], 4
+// CHECK:         %[[BASE_KEYS:.*]] = mul i32 %[[CTAID]], 3
+// CHECK:         getelementptr inbounds [6 x float], ptr %{{.*}}, i32 0, i32 %[[BASE_KEYS]]
+// CHECK:         getelementptr inbounds [64 x float], ptr addrspacecast (ptr addrspace(3) @shared_0 to ptr), i32 0, i32 %[[BASE_CACHE]]
+// CHECK-PTX:     call void @llvm.nvvm.barrier.cta.sync.aligned.all(i32 0)
+// CHECK-GCN:     call void @llvm.amdgcn.s.barrier
+// CHECK:         xor i32 %[[BASE_CACHE]], 1
+// CHECK:         call i8 @compare_lt(float %{{.*}}, float %{{.*}})
+// CHECK:         xor i32 %{{.*}}, 1
+// CHECK:         call i8 @compare_lt(float %{{.*}}, float %{{.*}})
+// CHECK-PTX:     call void @llvm.nvvm.barrier.cta.sync.aligned.all(i32 0)
+// CHECK-GCN:     call void @llvm.amdgcn.s.barrier
+// CHECK:         xor i32 %{{.*}}, 3
+// CHECK:         call i8 @compare_lt(float %{{.*}}, float %{{.*}})
+// CHECK:         xor i32 %{{.*}}, 3
+// CHECK:         call i8 @compare_lt(float %{{.*}}, float %{{.*}})
+// CHECK-PTX:     call void @llvm.nvvm.barrier.cta.sync.aligned.all(i32 0)
+// CHECK-GCN:     call void @llvm.amdgcn.s.barrier
+// CHECK:         call i8 @compare_lt(float %{{.*}}, float %{{.*}})
+// CHECK:         call i8 @compare_lt(float %{{.*}}, float %{{.*}})
+// CHECK-PTX:     call void @llvm.nvvm.barrier.cta.sync.aligned.all(i32 0)
+// CHECK-GCN:     call void @llvm.amdgcn.s.barrier
+// CHECK:         ret void
+
+// CHECK-LABEL: define internal i8 @compare_lt(
+// CHECK-SAME:      float %[[LHS:.*]], float %[[RHS:.*]])
+// CHECK:         %[[CMP:.*]] = fcmp olt float %[[LHS]], %[[RHS]]
+// CHECK:         %[[RES:.*]] = zext i1 %[[CMP]] to i8
+// CHECK:         ret i8 %[[RES]]
+
+ENTRY main {
+  x = f32[2, 3] parameter(0)
+  ROOT sort = f32[2, 3] sort(x), dimensions={1}, to_apply=compare
+}
+
+// -----
+
+HloModule TestModule, is_scheduled=true
+
+compare {
+  p.0.lhs = s32[] parameter(0)
+  p.0.rhs = s32[] parameter(1)
+  p.1.lhs = f32[] parameter(2)
+  p.1.rhs = f32[] parameter(3)
+  ROOT lt = pred[] compare(p.1.lhs, p.1.rhs), direction=LT
+}
+
+// CHECK:         @shared_1 = private addrspace(3) global [64 x i32] undef{{$}}
+// CHECK:         @shared_0 = private addrspace(3) global [64 x float] undef{{$}}
+// CHECK-LABEL: @sort(
+// CHECK-NOT:     alloca
+// CHECK-PTX:     call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
+// CHECK-GCN:     call i32 @llvm.amdgcn.workitem.id.x()
+// CHECK-PTX:     call i32 @llvm.nvvm.read.ptx.sreg.ctaid.x()
+// CHECK-GCN:     call i32 @llvm.amdgcn.workgroup.id.x()
+// CHECK:         getelementptr inbounds [64 x i32], ptr addrspacecast (ptr addrspace(3) @shared_1 to ptr)
+// CHECK:         getelementptr inbounds [64 x float], ptr addrspacecast (ptr addrspace(3) @shared_0 to ptr)
+// CHECK-PTX:     call void @llvm.nvvm.barrier.cta.sync.aligned.all(i32 0)
+// CHECK-GCN:     call void @llvm.amdgcn.s.barrier
+// CHECK:         call i8 @compare_lt(i32 %{{.*}}, i32 %{{.*}}, float %{{.*}}, float %{{.*}})
+// CHECK:         ret void
+
+// CHECK-LABEL: define internal i8 @compare_lt(
+// CHECK-SAME:      i32 %{{.*}}, i32 %{{.*}}, float %[[LHS:.*]], float %[[RHS:.*]])
+// CHECK:         %[[CMP:.*]] = fcmp olt float %[[LHS]], %[[RHS]]
+// CHECK:         %[[RES:.*]] = zext i1 %[[CMP]] to i8
+// CHECK:         ret i8 %[[RES]]
+
+ENTRY main {
+  x = s32[2, 3] parameter(0)
+  y = f32[2, 3] parameter(1)
+  ROOT sort = (s32[2, 3], f32[2, 3]) sort(x, y), dimensions={1}, to_apply=compare
+}
+
+// -----
+
+HloModule TestModule, is_scheduled=true
+
+compare {
+  p.0.lhs = f64[] parameter(0)
+  p.0.rhs = f64[] parameter(1)
+  p.1.lhs = f64[] parameter(2)
+  p.1.rhs = f64[] parameter(3)
+  p.2.lhs = f64[] parameter(4)
+  p.2.rhs = f64[] parameter(5)
+  p.3.lhs = f64[] parameter(6)
+  p.3.rhs = f64[] parameter(7)
+  ROOT lt = pred[] compare(p.1.lhs, p.1.rhs), direction=LT
+}
+
+ENTRY main {
+  param0 = f64[2, 2048] parameter(0)
+  param1 = f64[2, 2048] parameter(1)
+  param2 = f64[2, 2048] parameter(2)
+  param3 = f64[2, 2048] parameter(3)
+  ROOT sort = (f64[2, 2048], f64[2, 2048], f64[2, 2048], f64[2, 2048]) sort(param0, param1, param2, param3), dimensions={1}, to_apply=compare
+}
+// The tile size is bounded by shared memory per block: 49152 bytes on the CUDA
+// specs gives 1024 elements per operand, 65536 bytes or more on ROCm gives 2048.
+// CHECK-PTX-DAG: @shared_0 = private addrspace(3) global [1024 x double] undef{{$}}
+// CHECK-PTX-DAG: @shared_1 = private addrspace(3) global [1024 x double] undef{{$}}
+// CHECK-PTX-DAG: @shared_2 = private addrspace(3) global [1024 x double] undef{{$}}
+// CHECK-PTX-DAG: @shared_3 = private addrspace(3) global [1024 x double] undef{{$}}
+// CHECK-GCN-DAG: @shared_0 = private addrspace(3) global [2048 x double] undef{{$}}
+// CHECK-GCN-DAG: @shared_1 = private addrspace(3) global [2048 x double] undef{{$}}
+// CHECK-GCN-DAG: @shared_2 = private addrspace(3) global [2048 x double] undef{{$}}
+// CHECK-GCN-DAG: @shared_3 = private addrspace(3) global [2048 x double] undef{{$}}
+// CHECK-LABEL: @sort(
+
+// -----
+
+HloModule TestModule, is_scheduled=true
+
+compare {
+  p.0.lhs = f64[] parameter(0)
+  p.0.rhs = f64[] parameter(1)
+  ROOT lt = pred[] compare(p.0.lhs, p.0.rhs), direction=LT
+}
+
+ENTRY main {
+  param0 = f64[3072] parameter(0)
+  ROOT sort = f64[3072] sort(param0), dimensions={0}, to_apply=compare
+}
+
+// The sort dimension fits in a single partial tile, so only the bounds checked
+// compare loop is emitted: 78 xor masks with 2 comparisons each.
+// CHECK-LABEL: @sort(
+// CHECK-COUNT-156: call i8 @compare_lt(
+// CHECK-NOT:       call i8 @compare_lt(

@@ -15,27 +15,35 @@ limitations under the License.
 
 #include "xla/text_literal_reader.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
+#include "xla/hlo/parser/hlo_parser.h"
 #include "xla/literal.h"
-#include "xla/service/hlo_parser.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/status_macros.h"
-#include "xla/types.h"
+#include "xla/tsl/lib/io/buffered_inputstream.h"
+#include "xla/tsl/lib/io/random_inputstream.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/file_system.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/lib/io/buffered_inputstream.h"
-#include "tsl/lib/io/random_inputstream.h"
-#include "tsl/platform/protobuf.h"
 
 namespace xla {
 
@@ -66,14 +74,25 @@ absl::StatusOr<Literal> TextLiteralReader::ReadAllLines() {
   }
 
   absl::StripAsciiWhitespace(&shape_string);
-  TF_ASSIGN_OR_RETURN(Shape shape, ParseShape(shape_string));
+  ABSL_ASSIGN_OR_RETURN(Shape shape, ParseShape(shape_string));
+
+  // Sanity check to reject shapes that are obviously too large. This doesn't
+  // guarantee allocation will succeed, but prevents crashes from absurdly
+  // large sizes (e.g., from fuzz testing).
+  constexpr int64_t kMaxSupportedBytes = std::numeric_limits<int32_t>::max();
+  int64_t byte_size = ShapeUtil::ByteSizeOf(shape);
+  if (byte_size < 0 || byte_size > kMaxSupportedBytes) {
+    return ResourceExhausted("Shape %s requires too much memory (%d bytes)",
+                             ShapeUtil::HumanString(shape), byte_size);
+  }
+
   if (shape.element_type() != F32) {
     return Unimplemented(
         "unsupported element type for text literal reading: %s",
         ShapeUtil::HumanString(shape));
   }
 
-  Literal result(shape);
+  ABSL_ASSIGN_OR_RETURN(Literal result, Literal::Make(shape));
   const float fill = std::numeric_limits<float>::quiet_NaN();
   result.PopulateWithValue<float>(fill);
   std::vector<absl::string_view> pieces;
@@ -81,7 +100,17 @@ absl::StatusOr<Literal> TextLiteralReader::ReadAllLines() {
   std::vector<int64_t> coordinate_values;
   std::string line;
   while (buf.ReadLine(&line).ok()) {
-    pieces = absl::StrSplit(line, ':');
+    // Ignore empty or whitespace-only lines.
+    absl::string_view trimmed_line = absl::StripAsciiWhitespace(line);
+    if (trimmed_line.empty()) {
+      continue;
+    }
+
+    pieces = absl::StrSplit(trimmed_line, ':');
+    if (pieces.size() != 2) {
+      return InvalidArgument(
+          "expected ':' separating coordinates and value: \"%s\"", line);
+    }
     absl::string_view coordinates_string =
         absl::StripAsciiWhitespace(pieces[0]);
     absl::string_view value_string = absl::StripAsciiWhitespace(pieces[1]);
@@ -109,11 +138,20 @@ absl::StatusOr<Literal> TextLiteralReader::ReadAllLines() {
       }
       coordinate_values.push_back(coordinate_value);
     }
-    if (coordinate_values.size() != shape.dimensions_size()) {
+    if (coordinate_values.size() != shape.dimensions().size()) {
       return InvalidArgument(
-          "line did not have expected number of coordinates; want %d got %u: "
-          "\"%s\"",
-          shape.dimensions_size(), coordinate_values.size(), line);
+          "line did not have expected number of coordinates; "
+          "want %d got %u: \"%s\"",
+          shape.dimensions().size(), coordinate_values.size(), line);
+    }
+    for (size_t i = 0; i < coordinate_values.size(); ++i) {
+      if (coordinate_values[i] < 0 ||
+          coordinate_values[i] >= shape.dimensions()[i]) {
+        return InvalidArgument(
+            "coordinate out of bounds for dimension %d: "
+            "want [0, %d) got %d: \"%s\"",
+            i, shape.dimensions()[i], coordinate_values[i], line);
+      }
     }
     result.Set<float>(coordinate_values, value);
   }

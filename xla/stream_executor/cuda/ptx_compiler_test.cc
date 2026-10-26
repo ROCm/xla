@@ -15,22 +15,26 @@ limitations under the License.
 
 #include "xla/stream_executor/cuda/ptx_compiler.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include <sys/types.h>
 
 #include <cstdint>
 #include <string>
-#include <utility>
 #include <vector>
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/status_matchers.h"  // IWYU pragma: keep
 #include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
+#include "xla/stream_executor/cuda/compilation_provider.h"
+#include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/cuda/ptx_compiler_support.h"
-#include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/gpu/gpu_asm_opts.h"
-#include "tsl/platform/status_matchers.h"
-#include "tsl/platform/test.h"
+#include "xla/stream_executor/kernel_stats.h"
+#include "xla/stream_executor/semantic_version.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace {
 
@@ -147,6 +151,31 @@ constexpr const char kSimplePtx[] = R"(
 
 })";
 
+// Returns a minimal PTX kernel using a tcgen05.st instruction, targeting the
+// given compute capability and PTX ISA version.
+std::string MakeTcgen05Ptx(stream_executor::CudaComputeCapability cc,
+                           int ptx_isa_version) {
+  return absl::StrFormat(R"(
+.version %d.%d
+.target %s
+.address_size 64
+
+.visible .entry tcgen05_kernel(
+        .param .u32 tcgen05_kernel_param_0
+)
+{
+        .reg .b32       %%r<2>;
+        .reg .f32       %%f<2>;
+
+        ld.param.b32    %%r1, [tcgen05_kernel_param_0];
+        mov.f32         %%f1, 1.0;
+        tcgen05.st.sync.aligned.32x32b.x1.b32 [%%r1], {%%f1};
+        ret;
+})",
+                         ptx_isa_version / 10, ptx_isa_version % 10,
+                         cc.GetPtxAsTargetName());
+}
+
 constexpr stream_executor::CudaComputeCapability kDefaultComputeCapability{5,
                                                                            2};
 
@@ -157,8 +186,11 @@ absl::StatusOr<std::vector<uint8_t>> CompileHelper(
   stream_executor::GpuAsmOpts options(disable_gpuasm_optimizations,
                                       /*preferred_cuda_dir=*/"", extra_flags);
 
-  return stream_executor::CompileGpuAsmUsingLibNvPtxCompiler(
-      cc.major, cc.minor, ptx_input, options, cancel_if_reg_spill);
+  ABSL_ASSIGN_OR_RETURN(stream_executor::cuda::Assembly assembly,
+                        stream_executor::CompileGpuAsmUsingLibNvPtxCompiler(
+                            cc, ptx_input, options, cancel_if_reg_spill,
+                            /*dump_compilation_log=*/false));
+  return assembly.cubin;
 }
 
 class PtxCompilerTest : public ::testing::Test {
@@ -166,7 +198,7 @@ class PtxCompilerTest : public ::testing::Test {
     // This can't be in the constructor because `GTEST_SKIP` can't be called
     // from constructors.
     if (!stream_executor::IsLibNvPtxCompilerSupported()) {
-      // We skip these tests if this is a build without libnvptxcompiler
+      // We skip these tests if this is a build without libNvptxCompiler
       // support.
       GTEST_SKIP();
     }
@@ -176,12 +208,12 @@ class PtxCompilerTest : public ::testing::Test {
 TEST_F(PtxCompilerTest, IdentifiesUnsupportedArchitecture) {
   EXPECT_THAT(
       CompileHelper(stream_executor::CudaComputeCapability{100, 0}, kSimplePtx),
-      tsl::testing::StatusIs(absl::StatusCode::kUnimplemented));
+      absl_testing::StatusIs(absl::StatusCode::kUnimplemented));
 }
 
 TEST_F(PtxCompilerTest, CanCompileSingleCompilationUnit) {
   EXPECT_THAT(CompileHelper(kDefaultComputeCapability, kSimplePtx),
-              tsl::testing::IsOk());
+              absl_testing::IsOk());
 }
 
 TEST_F(PtxCompilerTest, CancelsOnRegSpill) {
@@ -190,13 +222,26 @@ TEST_F(PtxCompilerTest, CancelsOnRegSpill) {
   EXPECT_THAT(CompileHelper(kDefaultComputeCapability, kSpillingPtx,
                             /*disable_gpuasm_optimizations=*/true,
                             /*cancel_if_reg_spill=*/true),
-              tsl::testing::StatusIs(absl::StatusCode::kCancelled));
+              absl_testing::StatusIs(absl::StatusCode::kCancelled));
 
   // We also test the converse to ensure our test case isn't broken.
   EXPECT_THAT(CompileHelper(kDefaultComputeCapability, kSpillingPtx,
                             /*disable_gpuasm_optimizations=*/true,
                             /*cancel_if_reg_spill=*/false),
-              tsl::testing::IsOk());
+              absl_testing::IsOk());
+}
+
+TEST_F(PtxCompilerTest, RecordsRegisterSpillStats) {
+  ASSERT_OK_AND_ASSIGN(
+      stream_executor::cuda::Assembly assembly,
+      CompileGpuAsmUsingLibNvPtxCompiler(
+          kDefaultComputeCapability, kSpillingPtx,
+          stream_executor::GpuAsmOpts(/*disable_gpuasm_optimizations=*/true),
+          /*cancel_if_reg_spill=*/false, /*dump_compilation_log=*/false));
+  ASSERT_EQ(assembly.module_stats.size(), 1);
+  KernelStats kernel_stats = assembly.module_stats.begin()->second;
+  EXPECT_GT(kernel_stats.store_bytes_spilled, 0);
+  EXPECT_GT(kernel_stats.load_bytes_spilled, 0);
 }
 
 TEST_F(PtxCompilerTest, AcceptsExtraArguments) {
@@ -211,8 +256,8 @@ TEST_F(PtxCompilerTest, AcceptsExtraArguments) {
                     /*disable_gpuasm_optimizations=*/false,
                     /*cancel_if_reg_spill=*/false, {"--generate-line-info"});
 
-  EXPECT_THAT(reference_cubin, tsl::testing::IsOk());
-  EXPECT_THAT(cubin_with_line_info, tsl::testing::IsOk());
+  EXPECT_THAT(reference_cubin, absl_testing::IsOk());
+  EXPECT_THAT(cubin_with_line_info, absl_testing::IsOk());
   EXPECT_GT(cubin_with_line_info->size(), reference_cubin->size());
 
   // We also test whether invalid flags lead to a compilation error.
@@ -220,7 +265,68 @@ TEST_F(PtxCompilerTest, AcceptsExtraArguments) {
       CompileHelper(kDefaultComputeCapability, kSimplePtx,
                     /*disable_gpuasm_optimizations=*/false,
                     /*cancel_if_reg_spill=*/false, {"--flag-does-not-exist"}),
-      tsl::testing::StatusIs(absl::StatusCode::kInternal));
+      absl_testing::StatusIs(absl::StatusCode::kInternal));
 }
+
+TEST_F(PtxCompilerTest, ReturnsReasonableVersion) {
+  constexpr stream_executor::SemanticVersion kMinSupportedVersion = {12, 0, 0};
+
+  EXPECT_THAT(stream_executor::GetLibNvPtxCompilerVersion(),
+              absl_testing::IsOkAndHolds(testing::Ge(kMinSupportedVersion)));
+}
+
+struct Tcgen05TestCase {
+  int major, minor, min_ptx_isa_version;
+  const char* name;
+};
+
+class PtxCompilerTcgen05Test
+    : public PtxCompilerTest,
+      public ::testing::WithParamInterface<Tcgen05TestCase> {};
+
+TEST_P(PtxCompilerTcgen05Test, CompilesTcgen05OnlyForSupportedArchitectures) {
+  ASSERT_OK_AND_ASSIGN(
+      int ptx_isa_version,
+      stream_executor::GetLatestPtxIsaVersionForNvptxCompiler());
+
+  auto [major, minor, min_ptx, name] = GetParam();
+  if (ptx_isa_version < min_ptx) {
+    GTEST_SKIP() << "PTX ISA version " << ptx_isa_version
+                 << " does not support sm_" << major << minor
+                 << " (need >= " << min_ptx << ")";
+  }
+
+  using CC = stream_executor::CudaComputeCapability;
+  CC cc(major, minor, CC::FeatureExtension::kAcceleratedFeatures);
+  auto result = CompileHelper(cc, MakeTcgen05Ptx(cc, ptx_isa_version).c_str());
+  if (cc.HasTcgen05()) {
+    EXPECT_THAT(result, absl_testing::IsOk())
+        << "Expected tcgen05 PTX to compile for " << name << " ("
+        << cc.ToString() << ")";
+  } else {
+    EXPECT_THAT(result, testing::Not(absl_testing::IsOk()))
+        << "Expected tcgen05 PTX to fail for " << name << " (" << cc.ToString()
+        << ")";
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Tcgen05, PtxCompilerTcgen05Test,
+    ::testing::Values(
+        // sm_90a: Hopper, no tcgen05
+        Tcgen05TestCase{9, 0, 78, "Hopper"},
+        // sm_100a requires PTX ISA 8.7
+        Tcgen05TestCase{10, 0, 87, "B200"},
+        // sm_103a requires PTX ISA 8.8
+        Tcgen05TestCase{10, 3, 88, "B300"},
+        // sm_110a requires PTX ISA 9.0
+        Tcgen05TestCase{11, 0, 90, "Thor"},
+        // sm_120a: consumer Blackwell, no tcgen05
+        Tcgen05TestCase{12, 0, 87, "RTX5090"},
+        // sm_121a: DGX Spark, no tcgen05
+        Tcgen05TestCase{12, 1, 88, "DGXSpark"}),
+    [](const ::testing::TestParamInfo<Tcgen05TestCase>& info) {
+      return info.param.name;
+    });
 
 }  // namespace

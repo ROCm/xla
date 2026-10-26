@@ -1,4 +1,4 @@
-/* Copyright 2020 The OpenXLA Authors.
+/* Copyright 2025 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,39 +13,41 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "xla/python/profiler.h"
-
-#include <functional>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "nanobind/nanobind.h"  // from @nanobind
-#include "nanobind/stl/string.h"  // from @nanobind  // IWYU pragma: keep
-#include "nanobind/stl/string_view.h"  // from @nanobind  // IWYU pragma: keep
-#include "nanobind/stl/unique_ptr.h"  // from @nanobind  // IWYU pragma: keep
-#include "nanobind/stl/vector.h"  // from @nanobind  // IWYU pragma: keep
-#include "xla/backends/profiler/plugin/plugin_tracer.h"
-#include "xla/backends/profiler/plugin/profiler_c_api.h"
+#include "nanobind/nanobind.h"
+#include "nanobind/stl/pair.h"         // IWYU pragma: keep
+#include "nanobind/stl/string.h"       // IWYU pragma: keep
+#include "nanobind/stl/string_view.h"  // IWYU pragma: keep
+#include "nanobind/stl/unique_ptr.h"   // IWYU pragma: keep
+#include "nanobind/stl/vector.h"       // IWYU pragma: keep
+#include "tsl/platform/protobuf.h"
+#include "tsl/profiler/lib/profiler_session.h"
+#include "tsl/profiler/lib/traceme.h"
+#include "tsl/profiler/protobuf/profiled_instructions.pb.h"
+#include "tsl/profiler/protobuf/profiler_options.pb.h"
+#include "tsl/profiler/protobuf/xplane.pb.h"
+#include "xla/backends/profiler/subprocess/subprocess_registry.h"
+#include "xla/backends/profiler/util/metadata_registry.h"
 #include "xla/pjrt/c/pjrt_c_api.h"
-#include "xla/pjrt/c/pjrt_c_api_profiler_extension.h"
 #include "xla/pjrt/exceptions.h"
 #include "xla/pjrt/status_casters.h"
 #include "xla/python/aggregate_profile.h"
+#include "xla/python/profiler/profile_data_lib.h"
 #include "xla/python/profiler_utils.h"
 #include "xla/python/xplane_to_profile_instructions.h"
-#include "tsl/platform/macros.h"
-#include "tsl/platform/protobuf.h"  // IWYU pragma: keep
-#include "tsl/profiler/lib/profiler_factory.h"
-#include "tsl/profiler/lib/profiler_interface.h"
-#include "tsl/profiler/lib/profiler_session.h"
-#include "tsl/profiler/lib/traceme.h"
-#include "tsl/profiler/rpc/client/capture_profile.h"
-#include "tsl/profiler/rpc/profiler_server.h"
+#include "xla/tsl/platform/macros.h"
+#include "xla/tsl/profiler/rpc/client/capture_profile.h"
+#include "xla/tsl/profiler/rpc/profiler_server.h"
 
 namespace xla {
 
@@ -91,7 +93,7 @@ class TraceMeWrapper {
   static void AppendMetadata(std::string* name, const nb::kwargs& kwargs) {
     name->push_back('#');
     for (const auto& kv : kwargs) {
-      absl::StrAppend(name, nb::cast<std::string_view>(kv.first), "=",
+      absl::StrAppend(name, nb::cast<absl::string_view>(kv.first), "=",
                       EncodePyObject(kv.second), ",");
     }
     name->back() = '#';
@@ -110,6 +112,7 @@ class TraceMeWrapper {
 tensorflow::ProfileOptions DefaultPythonProfileOptions() {
   tensorflow::ProfileOptions options = tsl::ProfilerSession::DefaultOptions();
   options.set_python_tracer_level(1);
+  options.set_host_tracer_level(2);
   options.set_enable_hlo_proto(true);
   return options;
 }
@@ -123,15 +126,18 @@ struct ProfilerSessionWrapper {
   explicit ProfilerSessionWrapper(std::unique_ptr<tsl::ProfilerSession> session)
       : session(std::move(session)) {}
 
+  ProfilerSessionWrapper(std::unique_ptr<tsl::ProfilerSession> session,
+                         std::string session_id)
+      : session(std::move(session)), session_id(std::move(session_id)) {}
+
   std::unique_ptr<tsl::ProfilerSession> session;
+  std::string session_id;
 };
 
 static std::string GetFdoProfile(const std::string& xspace,
                                  bool as_textproto = false) {
   tensorflow::profiler::XSpace xspace_proto;
-  // TODO(phawkins): change to std::string_view when protobuf is
-  // updated in XLA.
-  xspace_proto.ParseFromString(std::string(xspace.c_str(), xspace.size()));
+  xspace_proto.ParseFromString(xspace);
   tensorflow::profiler::ProfiledInstructionsProto fdo_profile;
   xla::ThrowIfError(xla::ConvertXplaneToProfiledInstructionsProto(
       {xspace_proto}, &fdo_profile));
@@ -145,12 +151,10 @@ static std::string GetFdoProfile(const std::string& xspace,
   return fdo_profile.SerializeAsString();
 }
 
-void BuildProfilerSubmodule(nb::module_& m) {
-  nb::module_ profiler =
-      m.def_submodule("profiler", "TensorFlow profiler integration");
+NB_MODULE(_profiler, m) {
   nb::class_<tsl::profiler::ProfilerServer> profiler_server_class(
-      profiler, "ProfilerServer");
-  profiler.def(
+      m, "ProfilerServer");
+  m.def(
       "start_server",
       [](int port) -> std::unique_ptr<tsl::profiler::ProfilerServer> {
         auto server = std::make_unique<tsl::profiler::ProfilerServer>();
@@ -158,15 +162,40 @@ void BuildProfilerSubmodule(nb::module_& m) {
         return server;
       },
       nb::arg("port"));
-  profiler.def("register_plugin_profiler", [](nb::capsule c_api) -> void {
-    if (std::string_view(c_api.name()) != "pjrt_c_api") {
-      throw xla::XlaRuntimeError(
-          "Argument to register_plugin_profiler was not a pjrt_c_api capsule.");
-    }
-    RegisterProfiler(static_cast<const PJRT_Api*>(c_api.data()));
-  });
+  m.def(
+      "register_plugin_profiler",
+      [](nb::capsule c_api) -> void {
+        if (absl::string_view(c_api.name()) != "pjrt_c_api") {
+          throw xla::XlaRuntimeError(
+              "Argument to register_plugin_profiler was not a pjrt_c_api "
+              "capsule.");
+        }
+        RegisterProfiler(static_cast<const PJRT_Api*>(c_api.data()));
+      },
+      nb::sig(
+          // clang-format off
+        "def register_plugin_profiler("
+        "arg: typing_extensions.CapsuleType, /"
+        ") -> None"
+          // clang-format on
+          ));
+  m.def(
+      "register_subprocess",
+      [](int pid, int port) -> nb::object {
+        absl::StatusOr<profiler::subprocess::SubprocessCleanup> unregister_fn =
+            xla::profiler::subprocess::RegisterSubprocess(pid, port,
+                                                          std::nullopt);
+        xla::ThrowIfError(unregister_fn.status());
+        auto cleanup =
+            std::make_shared<profiler::subprocess::SubprocessCleanup>(
+                std::move(*unregister_fn));
+        return nb::cpp_function([cleanup]() { cleanup->Invoke(); });
+      },
+      nb::arg("pid"), nb::arg("port"),
+      nb::sig("def register_subprocess(pid: int, port: int) -> "
+              "collections.abc.Callable[[], None]"));
 
-  nb::class_<ProfilerSessionWrapper> profiler_session_class(profiler,
+  nb::class_<ProfilerSessionWrapper> profiler_session_class(m,
                                                             "ProfilerSession");
   profiler_session_class
       .def("__init__",
@@ -177,41 +206,87 @@ void BuildProfilerSubmodule(nb::module_& m) {
       .def("__init__",
            [](ProfilerSessionWrapper* wrapper,
               const tensorflow::ProfileOptions& options) {
-             new (wrapper)
-                 ProfilerSessionWrapper(tsl::ProfilerSession::Create(options));
+             new (wrapper) ProfilerSessionWrapper(
+                 tsl::ProfilerSession::Create(options), options.session_id());
            })
-      .def("stop_and_export",
-           [](ProfilerSessionWrapper* sess,
-              const std::string& tensorboard_dir) -> void {
-             tensorflow::profiler::XSpace xspace;
-             // Disables the ProfilerSession
-             xla::ThrowIfError(sess->session->CollectData(&xspace));
-             xla::ThrowIfError(tsl::profiler::ExportToTensorBoard(
-                 xspace, tensorboard_dir, /* also_export_trace_json= */ true));
-           })
+      .def(
+          "stop_and_export",
+          [](ProfilerSessionWrapper* sess, const std::string& tensorboard_dir) {
+            if (sess->session->IsContinuousProfilingEnabled()) {
+              xla::ThrowIfError(sess->session->Stop());
+              std::vector<tensorflow::profiler::XSpace> xspaces =
+                  sess->session->SerializeChunks();
+
+              if (sess->session_id.empty()) {
+                xla::ThrowIfError(tsl::profiler::ExportToTensorBoard(
+                    tensorboard_dir, xspaces));
+              } else {
+                xla::ThrowIfError(tsl::profiler::ExportToTensorBoard(
+                    tensorboard_dir, sess->session_id, xspaces));
+              }
+            } else {
+              tensorflow::profiler::XSpace xspace;
+              // Disables the ProfilerSession
+              xla::ThrowIfError(sess->session->CollectData(&xspace));
+              if (sess->session_id.empty()) {
+                xla::ThrowIfError(tsl::profiler::ExportToTensorBoard(
+                    xspace, tensorboard_dir,
+                    /* also_export_trace_json= */ true));
+              } else {
+                xla::ThrowIfError(tsl::profiler::ExportToTensorBoard(
+                    xspace, tensorboard_dir, sess->session_id,
+                    /* also_export_trace_json= */ true));
+              }
+            }
+          },
+          nb::call_guard<nb::gil_scoped_release>())
       .def("stop",
-           [](ProfilerSessionWrapper* sess) -> nb::bytes {
-             tensorflow::profiler::XSpace xspace;
+           [](ProfilerSessionWrapper* sess) {
+             std::string xspace_str;
              // Disables the ProfilerSession
-             xla::ThrowIfError(sess->session->CollectData(&xspace));
-             std::string xspace_str = xspace.SerializeAsString();
+             {
+               nb::gil_scoped_release release;
+               tensorflow::profiler::XSpace xspace;
+               xla::ThrowIfError(sess->session->CollectData(&xspace));
+               xspace_str = xspace.SerializeAsString();
+             }
              return nb::bytes(xspace_str.data(), xspace_str.size());
            })
-      .def("export",
-           [](ProfilerSessionWrapper* sess, nb::bytes xspace,
-              const std::string& tensorboard_dir) -> void {
-             tensorflow::profiler::XSpace xspace_proto;
-             // TODO(phawkins): change to std::string_view when protobuf is
-             // updated in XLA.
-             xspace_proto.ParseFromString(
-                 std::string(xspace.c_str(), xspace.size()));
-             xla::ThrowIfError(tsl::profiler::ExportToTensorBoard(
-                 xspace_proto, tensorboard_dir,
-                 /* also_export_trace_json= */ true));
-           });
+      .def(
+          "stop_and_get_profile_data",
+          [](ProfilerSessionWrapper* sess)
+              -> tensorflow::profiler::python::ProfileData {
+            // Serialize chunked XSpaces when continuous profiling is enabled to
+            // avoid hitting the 2GB single-protobuf limit, and pass session_id.
+            if (sess->session->IsContinuousProfilingEnabled()) {
+              xla::ThrowIfError(sess->session->Stop());
+              auto xspaces =
+                  std::make_shared<std::vector<tensorflow::profiler::XSpace>>(
+                      sess->session->SerializeChunks());
+              return tensorflow::profiler::python::ProfileData(
+                  std::move(xspaces), sess->session_id);
+            }
+            auto xspace = std::make_shared<tensorflow::profiler::XSpace>();
+            // Disables the ProfilerSession
+            xla::ThrowIfError(sess->session->CollectData(xspace.get()));
+            return tensorflow::profiler::python::ProfileData(std::move(xspace),
+                                                             sess->session_id);
+          },
+          nb::call_guard<nb::gil_scoped_release>(),
+          nb::sig("def stop_and_get_profile_data(self) -> ProfileData"))
+      .def("export", [](ProfilerSessionWrapper* sess, nb::bytes xspace,
+                        const std::string& tensorboard_dir) {
+        tensorflow::profiler::XSpace xspace_proto;
+        absl::string_view bytes(xspace.c_str(), xspace.size());
+        nb::gil_scoped_release release;
+        xspace_proto.ParseFromString(bytes);
+        xla::ThrowIfError(tsl::profiler::ExportToTensorBoard(
+            xspace_proto, tensorboard_dir,
+            /* also_export_trace_json= */ true));
+      });
 
   nb::class_<tensorflow::ProfileOptions> profile_options_class(
-      profiler, "ProfileOptions");
+      m, "ProfileOptions");
   profile_options_class
       .def("__init__",
            [](tensorflow::ProfileOptions* options) {
@@ -236,30 +311,110 @@ void BuildProfilerSubmodule(nb::module_& m) {
       .def_prop_rw("duration_ms", &tensorflow::ProfileOptions::duration_ms,
                    &tensorflow::ProfileOptions::set_duration_ms)
       .def_prop_rw(
+          "raise_error_on_start_failure",
+          &tensorflow::ProfileOptions::raise_error_on_start_failure,
+          &tensorflow::ProfileOptions::set_raise_error_on_start_failure)
+      .def_prop_rw(
+          "advanced_configuration",
+          [](const tensorflow::ProfileOptions& options) {
+            nb::dict dict;
+            for (const auto& [key, value] : options.advanced_configuration()) {
+              if (value.has_bool_value()) {
+                dict[key.c_str()] = value.bool_value();
+              } else if (value.has_int64_value()) {
+                dict[key.c_str()] = value.int64_value();
+              } else {
+                dict[key.c_str()] = value.string_value();
+              }
+            }
+            return dict;
+          },
+          [](tensorflow::ProfileOptions* options, const nb::dict& dict) {
+            if (options->mutable_advanced_configuration() == nullptr) {
+              throw xla::XlaRuntimeError("advanced_configuration is null");
+            }
+            options->mutable_advanced_configuration()->clear();
+            for (const auto& item : dict) {
+              std::string key = nb::cast<std::string>(item.first);
+              nb::handle value = item.second;
+              tensorflow::ProfileOptions::AdvancedConfigValue config_value;
+              if (nb::isinstance<nb::bool_>(value)) {
+                config_value.set_bool_value(nb::cast<bool>(value));
+              } else if (nb::isinstance<nb::int_>(value)) {
+                config_value.set_int64_value(nb::cast<int64_t>(value));
+              } else {
+                config_value.set_string_value(
+                    nb::cast<std::string>(nb::str(value)));
+              }
+              options->mutable_advanced_configuration()->insert(
+                  {key, config_value});
+            }
+          })
+      .def_prop_rw(
           "repository_path", &tensorflow::ProfileOptions::repository_path,
           [](tensorflow::ProfileOptions* options, const std::string& path) {
             options->set_repository_path(path);
-          });
+          })
+      .def_prop_rw("session_id", &tensorflow::ProfileOptions::session_id,
+                   [](tensorflow::ProfileOptions* options,
+                      const std::string& id) { options->set_session_id(id); });
 
-  nb::class_<TraceMeWrapper> traceme_class(profiler, "TraceMe");
+  nb::class_<TraceMeWrapper> traceme_class(m, "TraceMe");
   traceme_class.def(nb::init<nb::str, nb::kwargs>())
-      .def("__enter__", [](nb::object self) -> nb::object { return self; })
+      .def(
+          "__enter__", [](nb::object self) -> nb::object { return self; },
+          nb::sig("def __enter__(self) -> typing.Self"))
       .def(
           "__exit__",
           [](nb::object self, const nb::object& ex_type,
-             const nb::object& ex_value,
-             const nb::object& traceback) -> nb::object {
+             const nb::object& ex_value, const nb::object& traceback) {
             nb::cast<TraceMeWrapper*>(self)->Stop();
             return nb::none();
           },
           nb::arg("ex_type").none(), nb::arg("ex_value").none(),
-          nb::arg("traceback").none())
+          nb::arg("traceback").none(),
+          nb::sig("def __exit__(self, *exc_info) -> None"))
       .def("set_metadata", &TraceMeWrapper::SetMetadata)
       .def_static("is_enabled", &TraceMeWrapper::IsEnabled);
 
-  profiler.def(
+  m.def(
+      "export_to_xprof",
+      [](const tensorflow::profiler::python::ProfileData& profile_data,
+         const std::string& xprof_dir, const std::string& session_id = "") {
+        // Fall back to profile_data.session_id() when session_id is empty,
+        // and export chunked XSpaces if continuous profiling was used.
+        const std::string& effective_session_id =
+            session_id.empty() ? profile_data.session_id() : session_id;
+        nb::gil_scoped_release release;
+        if (profile_data.raw_xspaces() != nullptr) {
+          if (effective_session_id.empty()) {
+            xla::ThrowIfError(tsl::profiler::ExportToTensorBoard(
+                xprof_dir, *profile_data.raw_xspaces()));
+          } else {
+            xla::ThrowIfError(tsl::profiler::ExportToTensorBoard(
+                xprof_dir, effective_session_id, *profile_data.raw_xspaces()));
+          }
+          return;
+        }
+        if (profile_data.raw_xspace() == nullptr) {
+          throw xla::XlaRuntimeError("ProfileData does not contain XSpace");
+        }
+        if (effective_session_id.empty()) {
+          xla::ThrowIfError(tsl::profiler::ExportToTensorBoard(
+              *profile_data.raw_xspace(), xprof_dir,
+              /* also_export_trace_json= */ true));
+        } else {
+          xla::ThrowIfError(tsl::profiler::ExportToTensorBoard(
+              *profile_data.raw_xspace(), xprof_dir, effective_session_id,
+              /* also_export_trace_json= */ true));
+        }
+      },
+      nb::arg("profile_data"), nb::arg("xprof_dir"),
+      nb::arg("session_id") = "");
+
+  m.def(
       "get_profiled_instructions_proto",
-      [](std::string tensorboard_dir) -> nb::bytes {
+      [](std::string tensorboard_dir) {
         tensorflow::profiler::ProfiledInstructionsProto profile_proto;
         xla::ThrowIfError(
             xla::ConvertXplaneUnderLogdirToProfiledInstructionsProto(
@@ -269,26 +424,47 @@ void BuildProfilerSubmodule(nb::module_& m) {
       },
       nb::arg("tensorboard_dir"));
 
-  profiler.def("get_fdo_profile",
-               [](nb::bytes xspace, bool as_textproto = false) -> nb::object {
-                 std::string out = GetFdoProfile(
-                     std::string(xspace.c_str(), xspace.size()), as_textproto);
-                 return nb::bytes(out.data(), out.size());
-               });
+  m.def(
+      "get_instructions_profile",
+      [](const std::string& tensorboard_dir)
+          -> std::vector<std::pair<std::string, double>> {
+        tensorflow::profiler::ProfiledInstructionsProto profile_proto;
+        xla::ThrowIfError(
+            xla::ConvertXplaneUnderLogdirToProfiledInstructionsProto(
+                tensorboard_dir, &profile_proto));
+        std::vector<std::pair<std::string, double>> results;
+        results.reserve(profile_proto.costs().size());
+        for (const auto& c : profile_proto.costs()) {
+          results.emplace_back(c.name(), c.cost_us());
+        }
+        return results;
+      },
+      nb::arg("tensorboard_dir"));
 
-  profiler.def("get_fdo_profile", [](nb::bytes xspace) -> nb::object {
+  m.def("get_fdo_profile", [](nb::bytes xspace, bool as_textproto = false) {
+    std::string out =
+        GetFdoProfile(std::string(xspace.c_str(), xspace.size()), as_textproto);
+    return nb::bytes(out.data(), out.size());
+  });
+
+  m.def("get_fdo_profile", [](nb::bytes xspace) {
     std::string out = GetFdoProfile(std::string(xspace.c_str(), xspace.size()));
     return nb::bytes(out.data(), out.size());
   });
 
-  profiler.def(
+  m.def("set_metadata", &xla::profiler::SetProfilerMetadata, nb::arg("key"),
+        nb::arg("value"));
+  m.def("clear_metadata", &xla::profiler::ClearProfilerMetadata);
+
+  m.def(
       "aggregate_profiled_instructions",
-      [](const std::vector<nb::bytes>& profiles, int percentile) -> nb::object {
+      [](const std::vector<nb::bytes>& profiles, int percentile) {
         std::vector<tensorflow::profiler::ProfiledInstructionsProto>
             fdo_profiles;
         for (const nb::bytes& profile : profiles) {
           tensorflow::profiler::ProfiledInstructionsProto profile_proto;
-          profile_proto.ParseFromString(profile.c_str());
+          profile_proto.ParseFromString(
+              std::string(profile.c_str(), profile.size()));
           fdo_profiles.push_back(std::move(profile_proto));
         }
 
@@ -298,7 +474,7 @@ void BuildProfilerSubmodule(nb::module_& m) {
         auto result = result_proto.SerializeAsString();
         return nb::bytes(result.data(), result.size());
       },
-      nb::arg("profiles") = nb::list(), nb::arg("percentile"));
+      nb::arg("profiles"), nb::arg("percentile"));
 }
 
 }  // namespace xla

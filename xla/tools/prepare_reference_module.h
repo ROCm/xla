@@ -19,12 +19,13 @@ limitations under the License.
 #include <functional>
 #include <memory>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "tsl/platform/status.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/service/hlo_runner_interface.h"
-#include "xla/statusor.h"
 #include "xla/stream_executor/platform.h"
-#include "tsl/platform/status.h"
 
 namespace xla {
 
@@ -37,7 +38,8 @@ absl::StatusOr<std::unique_ptr<HloModule>> PrepareReferenceModule(
     const HloModule& test_module, HloRunnerInterface* test_runner,
     const std::function<void(HloModuleConfig*)>& config_modifier_hook = {},
     const std::function<absl::Status(const HloModule&, HloRunnerInterface*,
-                                     HloModule*)>& module_modifier_hook = {});
+                                     HloModule*)>& module_modifier_hook = {},
+    bool skip_despecialization = false);
 
 }  // namespace xla
 

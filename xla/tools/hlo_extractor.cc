@@ -15,10 +15,19 @@ limitations under the License.
 
 #include "xla/tools/hlo_extractor.h"
 
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/ir/hlo_schedule.h"
+#include "xla/hlo/transforms/simplifiers/algebraic_simplifier.h"
+#include "xla/hlo/transforms/simplifiers/hlo_dce.h"
+#include "xla/service/call_inliner.h"
+#include "xla/tsl/platform/errors.h"
+
 #ifndef _WIN32
 #include <unistd.h>
 #endif
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -29,6 +38,8 @@ limitations under the License.
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_clone_context.h"
 #include "xla/hlo/ir/hlo_computation.h"
@@ -41,9 +52,6 @@ limitations under the License.
 #include "xla/service/hlo_verifier.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/statusor.h"
-#include "xla/tests/test_utils.h"
-#include "tsl/platform/status.h"
 
 namespace xla {
 namespace {
@@ -66,32 +74,73 @@ namespace {
 // the newly-built computation (in the extracted HLO module).
 class ExtractionVisitor : public ConstDfsHloVisitorWithDefault {
  public:
-  explicit ExtractionVisitor(
-      const HloInstruction* root_instruction,
-      absl::flat_hash_set<const HloInstruction*>* boundary,
-      ExtractSelector extract_selector,
-      ReplaceTypeSelector replace_type_selector)
+  ExtractionVisitor(const HloInstruction* root_instruction,
+                    absl::flat_hash_set<const HloInstruction*>* boundary,
+                    ExtractSelector extract_selector,
+                    ReplaceTypeSelector replace_type_selector,
+                    bool inherit_hlo_module_config, bool inherit_schedule)
       : root_instruction_(root_instruction),
         old_module_(root_instruction->GetModule()),
-        module_(std::make_unique<HloModule>(
-            "extracted", config_,
-            std::make_unique<CompilationEnvironments>(
-                old_module_->comp_envs()))),
+        module_(inherit_hlo_module_config
+                    ? std::make_unique<HloModule>(
+                          "extracted",
+                          root_instruction->GetModule()->shared_config(),
+                          std::make_unique<CompilationEnvironments>(
+                              old_module_->comp_envs()))
+                    : std::make_unique<HloModule>(
+                          "extracted", HloModuleConfig(),
+                          std::make_unique<CompilationEnvironments>(
+                              old_module_->comp_envs()))),
         clone_context_(module_.get()),
         boundary_(boundary),
         extract_selector_(extract_selector),
-        replace_type_selector_(replace_type_selector) {
-    // Initialize the computation builder for every computations.
-    for (auto computation : old_module_->computations()) {
-      old_computations_to_builders_.insert(
-          {computation,
-           std::make_unique<HloComputation::Builder>(computation->name())});
+        replace_type_selector_(replace_type_selector),
+        inherit_schedule_(inherit_schedule) {}
+
+  absl::Status Run(bool cross_computation) {
+    enum class VisitState { kVisiting, kVisited };
+    absl::flat_hash_map<const HloInstruction*, VisitState> visit_state;
+    std::vector<const HloInstruction*> dfs_stack;
+    dfs_stack.push_back(root_instruction_);
+
+    while (!dfs_stack.empty()) {
+      const HloInstruction* current_node = dfs_stack.back();
+      auto it = visit_state.find(current_node);
+      if (it != visit_state.end()) {
+        dfs_stack.pop_back();
+        if (it->second == VisitState::kVisited) {
+          continue;
+        }
+        CHECK_EQ(it->second, VisitState::kVisiting);
+        it->second = VisitState::kVisited;
+        ABSL_RETURN_IF_ERROR(current_node->Visit(this));
+        continue;
+      }
+
+      visit_state.emplace(current_node, VisitState::kVisiting);
+      if (ShouldReplace(current_node)) {
+        continue;
+      }
+
+      const size_t old_dfs_stack_size = dfs_stack.size();
+      auto push_child = [&](const HloInstruction* child) {
+        if (!visit_state.contains(child)) {
+          dfs_stack.push_back(child);
+        }
+      };
+      for (const HloInstruction* child : current_node->operands()) {
+        push_child(child);
+      }
+      if (cross_computation) {
+        for (const HloComputation* called_computation :
+             current_node->called_computations()) {
+          push_child(called_computation->root_instruction());
+        }
+      }
+      std::reverse(dfs_stack.begin() + old_dfs_stack_size, dfs_stack.end());
     }
 
-    // Initialize the parameter counter for every computations.
-    for (auto computation : old_module_->computations()) {
-      parameter_numbers_[computation] = 0;
-    }
+    return FinishVisit(root_instruction_);
   }
 
   absl::Status HandleParameter(const HloInstruction* parameter) override {
@@ -103,8 +152,7 @@ class ExtractionVisitor : public ConstDfsHloVisitorWithDefault {
     // Replace the following two types of instructions with parameters/constants
     // (1) the instructions at the boundary with (2) the instructions that are
     // not selected by the hlo_selector.
-    if ((boundary_ != nullptr && boundary_->contains(hlo) > 0) ||
-        (extract_selector_ != nullptr && !extract_selector_(hlo))) {
+    if (ShouldReplace(hlo)) {
       if (replace_type_selector_ != nullptr) {
         switch (replace_type_selector_(hlo)) {
           case ReplaceType::kReplaceConst:
@@ -136,9 +184,7 @@ class ExtractionVisitor : public ConstDfsHloVisitorWithDefault {
     auto instruction =
         hlo->CloneWithNewOperands(hlo->shape(), new_operands, &clone_context_);
 
-    auto it = old_computations_to_builders_.find(hlo->parent());
-    CHECK(it != old_computations_to_builders_.end());
-    auto builder = it->second.get();
+    HloComputation::Builder* builder = GetComputationBuilder(hlo->parent());
     builder->AddInstruction(std::move(instruction));
 
     // If the visiting `hlo` is the root instruction of a computation (except
@@ -157,26 +203,63 @@ class ExtractionVisitor : public ConstDfsHloVisitorWithDefault {
   absl::Status FinishVisit(const HloInstruction* /*root*/) override {
     // Create the entry computation for the extracted module.
     auto new_entry_computation = module_->AddEntryComputation(
-        old_computations_to_builders_.at(root_instruction_->parent())->Build());
+        GetComputationBuilder(root_instruction_->parent())->Build());
     clone_context_.MapComputation(root_instruction_->parent(),
                                   new_entry_computation);
 
     // Rename HLOs so that their name matches the original. By default,
     // HLOs get new unique names when adding a new entry computation to
     // a module.
-    for (auto computation : old_module_->MakeComputationPostOrder()) {
-      for (auto old_instruction : computation->MakeInstructionPostOrder()) {
-        if (auto new_instruction =
-                clone_context_.FindInstruction(old_instruction)) {
-          new_instruction->SetAndSanitizeName(old_instruction->name());
-        }
-      }
+    for (const auto& instruction_mapping :
+         clone_context_.cloned_instructions()) {
+      auto old_instruction = instruction_mapping.first;
+      auto new_instruction = instruction_mapping.second;
+      new_instruction->SetAndSanitizeName(old_instruction->name());
     }
     // For the extra created instructions (e.g., the ones created when replacing
     // with broadcasted zeros), we make sure they have unique names without
     // breaking the matches made at above code.
     for (HloInstruction* instruction : extra_created_instructions_) {
       module_->SetAndUniquifyInstrName(instruction, instruction->name());
+    }
+
+    // Preserve any existing schedule.
+    if (inherit_schedule_) {
+      if (!old_module_->has_schedule()) {
+        return absl::InvalidArgumentError(
+            "Cannot inherit schedule from module without a schedule.");
+      }
+      const HloSchedule& old_schedule = old_module_->schedule();
+      HloSchedule new_schedule(module_.get());
+      // If the extracted instruction was scheduled, schedule the entry
+      // computation.
+      if (old_schedule.is_computation_scheduled(root_instruction_->parent())) {
+        new_schedule.set_sequence(
+            module_->entry_computation(),
+            module_->entry_computation()->MakeInstructionPostOrder());
+      }
+      // Schedule any called computations.
+      for (const auto& [old_computation, new_computation] :
+           clone_context_.cloned_computations()) {
+        if (old_computation == root_instruction_->parent()) {
+          continue;
+        }
+        if (old_schedule.is_computation_scheduled(old_computation)) {
+          HloInstructionSequence new_sequence;
+          for (const HloInstruction* old_instruction :
+               old_schedule.sequence(old_computation).instructions()) {
+            HloInstruction* new_instruction =
+                clone_context_.FindInstruction(old_instruction);
+            if (new_instruction != nullptr) {
+              new_sequence.push_back(new_instruction);
+            }
+          }
+          new_schedule.set_sequence(new_computation, new_sequence);
+        }
+      }
+      if (!new_schedule.empty()) {
+        ABSL_RETURN_IF_ERROR(module_->set_schedule(std::move(new_schedule)));
+      }
     }
 
     return absl::OkStatus();
@@ -187,28 +270,33 @@ class ExtractionVisitor : public ConstDfsHloVisitorWithDefault {
   std::unique_ptr<HloModule> ConsumeModule() { return std::move(module_); }
 
  private:
+  bool ShouldReplace(const HloInstruction* hlo) const {
+    const bool in_root_async_chain =
+        hlo->IsAsynchronous() && root_instruction_->IsAsynchronous() &&
+        hlo->async_chain_start() == root_instruction_->async_chain_start();
+    return !in_root_async_chain &&
+           ((boundary_ != nullptr && boundary_->contains(hlo)) ||
+            (extract_selector_ != nullptr && !extract_selector_(hlo)));
+  }
+
   // Replace the `hlo` with Constant of the same shape.
   absl::Status ReplaceWithConstant(const HloInstruction* hlo) {
     absl::StatusOr<Literal> literal_status = MakeFakeLiteral(hlo->shape());
-    TF_CHECK_OK(literal_status.status());
+    CHECK_OK(literal_status.status());
     auto new_const =
         HloInstruction::CreateConstant(std::move(literal_status.value()));
     clone_context_.MapInstruction(hlo, new_const.get());
-    auto it = old_computations_to_builders_.find(hlo->parent());
-    CHECK(it != old_computations_to_builders_.end());
-    auto builder = it->second.get();
+    HloComputation::Builder* builder = GetComputationBuilder(hlo->parent());
     builder->AddInstruction(std::move(new_const));
     return absl::OkStatus();
   }
 
   // Replace the `hlo` with Parameter of the same shape.
   absl::Status ReplaceWithParameter(const HloInstruction* hlo) {
-    CHECK(parameter_numbers_.contains(hlo->parent()));
     auto new_parameter = HloInstruction::CreateParameter(
-        parameter_numbers_.at(hlo->parent())++, hlo->shape(), hlo->name());
+        parameter_numbers_[hlo->parent()]++, hlo->shape(), hlo->name());
     clone_context_.MapInstruction(hlo, new_parameter.get());
-    CHECK(old_computations_to_builders_.contains(hlo->parent()));
-    auto builder = old_computations_to_builders_[hlo->parent()].get();
+    HloComputation::Builder* builder = GetComputationBuilder(hlo->parent());
     builder->AddInstruction(std::move(new_parameter));
     return absl::OkStatus();
   }
@@ -250,7 +338,7 @@ class ExtractionVisitor : public ConstDfsHloVisitorWithDefault {
       } else {
         absl::StatusOr<Literal> literal_status =
             MakeFakeLiteral(constant_shape);
-        TF_CHECK_OK(literal_status.status());
+        CHECK_OK(literal_status.status());
         constant_instruction = builder->AddInstruction(
             HloInstruction::CreateConstant(std::move(literal_status.value())));
       }
@@ -272,17 +360,23 @@ class ExtractionVisitor : public ConstDfsHloVisitorWithDefault {
                                             ReplaceType replace_type) {
     CHECK(replace_type == ReplaceType::kReplaceZeroBroadcast ||
           replace_type == ReplaceType::kReplaceRandomBroadcast);
-    CHECK(old_computations_to_builders_.contains(hlo->parent()));
-    auto builder = old_computations_to_builders_[hlo->parent()].get();
+    HloComputation::Builder* builder = GetComputationBuilder(hlo->parent());
     HloInstruction* zero_broadcast =
         ReplaceWithConstantBroadcastHelper(hlo->shape(), builder, replace_type);
     clone_context_.MapInstruction(hlo, zero_broadcast);
     return absl::OkStatus();
   }
 
+  HloComputation::Builder* GetComputationBuilder(
+      const HloComputation* computation) {
+    return (old_computations_to_builders_.try_emplace(
+                computation,
+                std::make_unique<HloComputation::Builder>(computation->name())))
+        .first->second.get();
+  }
+
   const HloInstruction* root_instruction_;
   HloModule* old_module_;
-  HloModuleConfig config_;
   std::unique_ptr<HloModule> module_;
   HloCloneContext clone_context_;
   // Map from the old (i.e., original) computations to the builders (that build
@@ -297,6 +391,7 @@ class ExtractionVisitor : public ConstDfsHloVisitorWithDefault {
   ExtractSelector extract_selector_;
   ReplaceTypeSelector replace_type_selector_;
   std::vector<HloInstruction*> extra_created_instructions_;
+  bool inherit_schedule_;
 };
 
 void ComputeBoundary(const HloInstruction* root, int64_t limit,
@@ -317,10 +412,41 @@ void ComputeBoundary(const HloInstruction* root, int64_t limit,
       if (visited.count(operand)) {
         continue;
       }
+      const bool in_same_async_chain =
+          hlo->IsAsynchronous() && operand->IsAsynchronous() &&
+          hlo->async_chain_start() == operand->async_chain_start();
       worklist.push_back(operand);
-      visited.emplace(operand, hops + 1);
+      visited.emplace(operand, in_same_async_chain ? hops : hops + 1);
     }
   }
+}
+
+absl::Status Inline(HloModule* module) {
+  for (HloComputation* computation : module->computations()) {
+    for (HloInstruction* instruction : computation->instructions()) {
+      if (instruction->opcode() == HloOpcode::kFusion) {
+        HloInstruction* new_instruction =
+            computation->AddInstruction(HloInstruction::CreateCall(
+                /*shape=*/instruction->shape(),
+                /*operands=*/instruction->operands(),
+                /*computation=*/
+                instruction->fused_instructions_computation()));
+        ABSL_RETURN_IF_ERROR(computation
+                                 ->ReplaceInstruction(
+                                     /*old_instruction=*/instruction,
+                                     /*new_instruction=*/new_instruction,
+                                     /*preserve_sharding=*/false,
+                                     /*relay_control_dependency=*/true,
+                                     /*remove_unused_operands=*/true)
+                                 .status());
+      }
+    }
+  }
+  ABSL_RETURN_IF_ERROR(CallInliner().Run(module).status());
+  ABSL_RETURN_IF_ERROR(
+      AlgebraicSimplifier(AlgebraicSimplifierOptions{}).Run(module).status());
+  ABSL_RETURN_IF_ERROR(HloDCE(true).Run(module).status());
+  return absl::OkStatus();
 }
 
 }  // namespace
@@ -328,40 +454,53 @@ void ComputeBoundary(const HloInstruction* root, int64_t limit,
 std::unique_ptr<HloModule> ExtractModule(
     const HloInstruction* instruction, int64_t height,
     ExtractSelector extract_selector, ReplaceTypeSelector replace_type_selector,
-    bool cross_computation) {
+    bool cross_computation, bool inline_calls_and_fusions, bool run_verifier,
+    bool inherit_module_config, bool inherit_schedule) {
   QCHECK(height == -1 || !cross_computation)
       << "Boundary cannnot be calculated across the computations.";
 
+  const HloInstruction* root = instruction;
+  if (instruction->IsAsynchronous() &&
+      instruction->async_chain_done() != nullptr) {
+    root = instruction->async_chain_done();
+  }
+
   absl::flat_hash_set<const HloInstruction*> boundary;
   if (height != -1) {
-    ComputeBoundary(instruction, height, &boundary);
+    ComputeBoundary(root, height, &boundary);
   }
-  ExtractionVisitor visitor(instruction, &boundary, extract_selector,
-                            replace_type_selector);
+  ExtractionVisitor visitor(root, &boundary, extract_selector,
+                            replace_type_selector, inherit_module_config,
+                            inherit_schedule);
 
-  TF_CHECK_OK(instruction->Accept(&visitor, /*call_finish_visit=*/true,
-                                  /*ignore_control_predecessors=*/false,
-                                  /*cross_computation=*/cross_computation));
+  CHECK_OK(visitor.Run(cross_computation));
+  std::unique_ptr<HloModule> extracted = visitor.ConsumeModule();
 
-  // The first pass may leave unused parameter instructions in the entry
-  // computation. Do another extraction pass to remove unused parameters in the
-  // entry computation. This is done because HloComputation does not allow
-  // removing parameters after the computation has been built.
-  ExtractionVisitor cleanup_visitor(
-      visitor.module()->entry_computation()->root_instruction(),
-      /*boundary=*/nullptr,
-      /*extract_selector=*/nullptr,
-      /*replace_type_selector=*/nullptr);
+  // Inline called computations and fusions if the flag
+  // `inline_calls_and_fusions` is true.
+  if (inline_calls_and_fusions) {
+    CHECK_OK(Inline(extracted.get()));
 
-  TF_CHECK_OK(visitor.module()->entry_computation()->root_instruction()->Accept(
-      &cleanup_visitor, /*call_finish_visit=*/true,
-      /*ignore_control_predecessors=*/false,
-      /*cross_computation=*/false));
+    // Inlining may leave unused parameter instructions in the entry
+    // computation. Do another extraction pass to remove unused parameters in
+    // the entry computation. This is done because HloComputation does not allow
+    // removing parameters after the computation has been built.
+    ExtractionVisitor cleanup_visitor(
+        extracted->entry_computation()->root_instruction(),
+        /*boundary=*/nullptr,
+        /*extract_selector=*/nullptr,
+        /*replace_type_selector=*/nullptr,
+        /*inherit_hlo_module_config=*/inherit_module_config, inherit_schedule);
+    CHECK_OK(cleanup_visitor.Run(/*cross_computation=*/false));
+    extracted = cleanup_visitor.ConsumeModule();
+  }
 
-  HloVerifier verifier(/*layout_sensitive=*/false,
-                       /*allow_mixed_precision=*/true);
-  TF_CHECK_OK(verifier.Run(cleanup_visitor.module()).status());
-  return cleanup_visitor.ConsumeModule();
+  if (run_verifier) {
+    HloVerifier verifier(/*layout_sensitive=*/false,
+                         /*allow_mixed_precision=*/true);
+    CHECK_OK(verifier.Run(extracted.get()).status());
+  }
+  return extracted;
 }
 
 }  // namespace xla

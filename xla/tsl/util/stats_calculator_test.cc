@@ -15,9 +15,15 @@ limitations under the License.
 
 #include "xla/tsl/util/stats_calculator.h"
 
-#include <cfloat>
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
-#include "tsl/platform/test.h"
+#include <cfloat>
+#include <cmath>
+#include <cstdint>
+#include <string>
+
+#include "xla/tsl/platform/test.h"
 
 namespace tsl {
 namespace {
@@ -102,6 +108,63 @@ TEST(StatsCalculatorTest, UpdateStat) {
   EXPECT_NEAR(7502.0 / 4, stat.variance(), FLT_EPSILON);
   // Population standard deviation, from WolframAlpha
   EXPECT_NEAR(43.30704330706496060826769, stat.std_deviation(), FLT_EPSILON);
+}
+
+TEST(StatsCalculatorTest, StatWithPercentiles) {
+  StatWithPercentiles<int64_t> stat;
+  EXPECT_TRUE(stat.empty());
+  EXPECT_TRUE(stat.all_same());
+  stat.UpdateStat(1);
+  EXPECT_TRUE(stat.all_same());
+  stat.UpdateStat(-1.0);
+  EXPECT_FALSE(stat.all_same());
+  stat.UpdateStat(100);
+  stat.UpdateStat(0);
+  EXPECT_EQ(4, stat.count());
+  EXPECT_EQ(-1, stat.min());
+  EXPECT_EQ(100, stat.max());
+  EXPECT_EQ(25, stat.avg());
+  EXPECT_EQ(1, stat.first());
+  EXPECT_EQ(0, stat.newest());
+  EXPECT_EQ(10002, stat.squared_sum());
+  EXPECT_EQ(625, stat.avg() * stat.avg());
+  // Sample variance
+  EXPECT_EQ(7502 / 3, stat.sample_variance());
+  // Sample standard deviation, from WolframAlpha
+  EXPECT_EQ(50, std::sqrt(stat.sample_variance()));
+  // Population variance
+  EXPECT_EQ(7502 / 4, stat.variance());
+  // Population standard deviation, from WolframAlpha
+  EXPECT_EQ(43, stat.std_deviation());
+  EXPECT_EQ(1, stat.percentile(50));
+  EXPECT_EQ(100, stat.percentile(90));
+  stat.UpdateStat(150);
+  EXPECT_EQ(1, stat.percentile(50));
+  EXPECT_EQ(150, stat.percentile(90));
+  EXPECT_EQ(150, stat.percentile(100));
+}
+
+TEST(StatsCalculatorTest,
+     VerifyOrderStatsByRunOrderForMaxRunOrderLargerThanDetailsSize) {
+  auto options = StatSummarizerOptions();
+  StatsCalculator calc(options);
+  EXPECT_TRUE(calc.GetDetails().empty());
+
+  calc.AddNodeStats("node1", "type_1", 1, 10, 20);
+  ASSERT_EQ(calc.GetDetails().size(), 1);
+
+  calc.AddNodeStats("node1", "type_1", 2, 11, 21);
+  ASSERT_EQ(calc.GetDetails().size(), 1);
+  calc.AddNodeStats("node2", "type_2", 3, 10, 100);
+  ASSERT_EQ(calc.GetDetails().size(), 2);
+  calc.UpdateRunTotalUs(100);
+  std::string stats = calc.GetStatsByMetric(
+      "test", StatsCalculator::SortingMetric::BY_RUN_ORDER, 0);
+  ASSERT_GT(stats.size(), 0);
+  ASSERT_THAT(stats, ::testing::HasSubstr("node1"));
+  ASSERT_THAT(stats, ::testing::HasSubstr("node2"));
+  // Ensure that node1 has a lower run order than node2 in the stats.
+  ASSERT_LT(stats.find("node1"), stats.find("node2"));
 }
 
 }  // namespace

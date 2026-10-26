@@ -1,12 +1,28 @@
-load("@tsl//tsl/platform:build_config.bzl", "tsl_cc_test")
-load("@tsl//tsl/platform:rules_cc.bzl", "cc_library")
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 load("//xla/tsl:tsl.bzl", "internal_visibility")
-load("//xla/tsl:tsl.default.bzl", "get_compatible_with_portable", "tsl_grpc_cc_dependencies")
+load("//xla/tsl:tsl.default.bzl", "get_compatible_with_portable")
+load("//xla/tsl/platform:build_config.bzl", "tsl_cc_test")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = internal_visibility([
         "//xla/tsl:internal",
+        "//third_party/py/jax:__subpackages__",
     ]),
     licenses = ["notice"],
 )
@@ -17,13 +33,15 @@ cc_library(
     hdrs = ["preemption_notifier.h"],
     compatible_with = get_compatible_with_portable(),
     deps = [
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:mutex",
-        "@tsl//tsl/platform:statusor",
+        "@tsl//tsl/platform:thread_annotations",
     ],
 )
 
@@ -33,16 +51,15 @@ tsl_cc_test(
     srcs = ["preemption_notifier_test.cc"],
     deps = [
         ":preemption_notifier",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:env_impl",  # build_cleaner: keep
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:env_impl",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:mutex",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/platform:test",
-        "@tsl//tsl/platform:test_main",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -54,15 +71,20 @@ cc_library(
         ":preemption_notifier",
         "//xla/tsl/distributed_runtime:call_options",
         "//xla/tsl/distributed_runtime/coordination:coordination_service_agent",
+        "//xla/tsl/lib/monitoring:gauge",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/protobuf:coordination_service_proto_cc",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
-        "@tsl//tsl/lib/monitoring:gauge",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:mutex",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/protobuf:coordination_service_proto_cc",
     ],
 )
 
@@ -76,21 +98,19 @@ tsl_cc_test(
         "//xla/tsl/distributed_runtime/coordination:coordination_client",
         "//xla/tsl/distributed_runtime/coordination:coordination_service",
         "//xla/tsl/distributed_runtime/coordination:coordination_service_agent",
-        "//xla/tsl/distributed_runtime/coordination:coordination_service_impl",
         "//xla/tsl/distributed_runtime/rpc:async_service_interface",
         "//xla/tsl/distributed_runtime/rpc/coordination:grpc_coordination_client",
         "//xla/tsl/distributed_runtime/rpc/coordination:grpc_coordination_service_impl",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:env_impl",  # build_cleaner: keep
+        "//xla/tsl/platform:test",
+        "//xla/tsl/protobuf:coordination_config_proto_cc_impl",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/time",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:env_impl",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/platform:test",
-        "@tsl//tsl/platform:test_main",
-        "@tsl//tsl/protobuf:coordination_config_proto_cc_impl",
-        "@tsl//tsl/protobuf:coordination_service_proto_cc_impl",
-        "@tsl//tsl/protobuf:distributed_runtime_payloads_proto_cc_impl",
-    ] + tsl_grpc_cc_dependencies(),
+        "@com_google_googletest//:gtest_main",
+        "@grpc//:grpc++",
+    ],
 )

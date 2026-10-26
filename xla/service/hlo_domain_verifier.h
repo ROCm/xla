@@ -19,11 +19,11 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "tsl/platform/status.h"
 #include "xla/hlo/ir/hlo_domain_metadata.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/pass/hlo_pass_interface.h"
 #include "xla/service/hlo_domain_map.h"
-#include "xla/service/hlo_pass_interface.h"
-#include "tsl/platform/status.h"
 
 namespace xla {
 
@@ -35,11 +35,6 @@ class HloDomainVerifier : public HloModulePass {
       : kinds_(std::move(kinds)) {}
 
   absl::string_view name() const override { return "domain_verifier"; }
-
-  using HloPassInterface::Run;
-  absl::StatusOr<bool> Run(
-      HloModule* module,
-      const absl::flat_hash_set<absl::string_view>& execution_threads) override;
 
   // Verify that the whole kDomain frontier bounding the instruction reach set,
   // has matching metadata.
@@ -57,6 +52,11 @@ class HloDomainVerifier : public HloModulePass {
   // boundary.
   static absl::StatusOr<const DomainMetadata*> VerifyDomain(
       const DomainMetadata::Domain& domain);
+
+ protected:
+  absl::StatusOr<bool> RunImpl(
+      HloModule* module,
+      const absl::flat_hash_set<absl::string_view>& execution_threads) override;
 
  private:
   class RunContext;

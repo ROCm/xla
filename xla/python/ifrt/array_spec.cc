@@ -15,43 +15,72 @@ limitations under the License.
 
 #include "xla/python/ifrt/array_spec.h"
 
-#include <string>
+#include <memory>
 #include <utility>
 
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "xla/pjrt/pjrt_layout.h"
+#include "xla/python/ifrt/abstract_array_spec.h"
 #include "xla/python/ifrt/array_spec.pb.h"
-#include "xla/python/ifrt/device.h"
+#include "xla/python/ifrt/client.h"
 #include "xla/python/ifrt/dtype.h"
+#include "xla/python/ifrt/memory.h"
+#include "xla/python/ifrt/serdes_version.h"
 #include "xla/python/ifrt/shape.h"
 #include "xla/python/ifrt/sharding.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 namespace ifrt {
 
-absl::StatusOr<ArraySpec> ArraySpec::FromProto(
-    DeviceList::LookupDeviceFunc lookup_device, const ArraySpecProto& proto) {
-  TF_ASSIGN_OR_RETURN(auto dtype, DType::FromProto(proto.dtype()));
-  TF_ASSIGN_OR_RETURN(auto shape, Shape::FromProto(proto.shape()));
-  TF_ASSIGN_OR_RETURN(auto sharding,
-                      Sharding::FromProto(lookup_device, proto.sharding()));
-  return ArraySpec{/*dtype=*/dtype, /*shape=*/std::move(shape),
-                   /*sharding=*/std::move(sharding)};
+absl::StatusOr<ArraySpec> ArraySpec::FromProto(Client* client,
+                                               const ArraySpecProto& proto) {
+  const SerDesVersionNumber version_number(proto.version_number());
+  if (version_number != SerDesVersionNumber(0)) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Unsupported ", version_number, " for ArraySpec deserialization"));
+  }
+
+  ABSL_ASSIGN_OR_RETURN(auto dtype, DType::FromProto(proto.dtype()));
+  ABSL_ASSIGN_OR_RETURN(auto shape, Shape::FromProto(proto.shape()));
+  ABSL_ASSIGN_OR_RETURN(auto sharding,
+                        Sharding::FromProto(client, proto.sharding()));
+  std::shared_ptr<const xla::PjRtLayout> layout;
+  if (proto.has_layout()) {
+    ABSL_ASSIGN_OR_RETURN(layout, xla::PjRtLayout::Deserialize(proto.layout()));
+  }
+  return ArraySpec{
+      /*dtype=*/dtype,
+      /*shape=*/std::move(shape),
+      /*sharding=*/std::move(sharding),
+      /*layout=*/std::move(layout),
+  };
 }
 
-absl::StatusOr<ArraySpecProto> ArraySpec::ToProto() const {
-  ArraySpecProto proto;
-  *proto.mutable_dtype() = dtype.ToProto();
-  *proto.mutable_shape() = shape.ToProto();
-  TF_ASSIGN_OR_RETURN(*proto.mutable_sharding(), sharding->ToProto());
-  return proto;
+absl::Status ArraySpec::ToProto(ArraySpecProto& proto,
+                                SerDesVersion version) const {
+  if (version.version_number() < SerDesVersionNumber(0)) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("Unsupported ", version.version_number(),
+                     " for ArraySpec serialization"));
+  }
+
+  proto.Clear();
+  proto.set_version_number(SerDesVersionNumber(0).value());
+  dtype.ToProto(*proto.mutable_dtype(), version);
+  shape.ToProto(*proto.mutable_shape(), version);
+  ABSL_ASSIGN_OR_RETURN(*proto.mutable_sharding(), sharding->ToProto(version));
+  if (layout != nullptr) {
+    proto.set_layout(layout->Serialize());
+  }
+  return absl::OkStatus();
 }
 
-std::string ArraySpec::DebugString() const {
-  return absl::StrCat("ArraySpec(dtype=", dtype.DebugString(),
-                      ",shape=", shape.DebugString(),
-                      ",sharding=", sharding->DebugString(), ")");
+absl::StatusOr<AbstractArraySpec> ArraySpec::ToAbstractArraySpec() const {
+  return AbstractArraySpec::Create(dtype, shape, sharding->sharding_spec(),
+                                   sharding->memory_kind(), layout);
 }
 
 }  // namespace ifrt

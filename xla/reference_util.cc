@@ -15,9 +15,10 @@ limitations under the License.
 
 #include "xla/reference_util.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
-#include <functional>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -25,15 +26,24 @@ limitations under the License.
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/function_ref.h"
-#include "xla/client/xla_builder.h"
+#include "absl/log/check.h"
+#include "absl/types/span.h"
+#include "xla/array2d.h"
+#include "xla/array3d.h"
+#include "xla/array4d.h"
+#include "xla/hlo/builder/padding.h"
+#include "xla/hlo/builder/xla_builder.h"
 #include "xla/hlo/evaluator/hlo_evaluator.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/literal.h"
 #include "xla/literal_util.h"
+#include "xla/service/hlo_module_config.h"
 #include "xla/service/shape_inference.h"
+#include "xla/shape.h"
+#include "xla/tsl/lib/math/math_util.h"
+#include "xla/tsl/platform/logging.h"
 #include "xla/window_util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/lib/math/math_util.h"
-#include "tsl/platform/logging.h"
 
 namespace xla {
 
@@ -42,7 +52,7 @@ namespace xla {
   auto result =
       std::make_unique<Array2D<double>>(input.height(), input.width());
   for (int64_t rowno = 0; rowno < input.height(); ++rowno) {
-    for (int64_t colno = 0; colno < input.height(); ++colno) {
+    for (int64_t colno = 0; colno < input.width(); ++colno) {
       (*result)(rowno, colno) = input(rowno, colno);
     }
   }
@@ -178,62 +188,6 @@ ReferenceUtil::ReduceWindow1DGeneric(
   return result;
 }
 
-/* static  */ std::unique_ptr<std::vector<float>>
-ReferenceUtil::ReduceWindow1DAdd(absl::Span<const float> operand, float init,
-                                 absl::Span<const int64_t> window,
-                                 absl::Span<const int64_t> stride,
-                                 Padding padding) {
-  const auto add_reduce = [](float arg1, float arg2) { return arg1 + arg2; };
-  std::vector<int64_t> dim_lengths{static_cast<int64_t>(operand.size())};
-  return ReduceWindow1DGeneric(
-      operand, init, add_reduce, window, stride,
-      xla::MakePadding(dim_lengths, window, stride, padding));
-}
-
-/* static  */ std::unique_ptr<Array3D<float>> ReferenceUtil::ReduceWindow3DAdd(
-    const Array3D<float>& operand, float init, absl::Span<const int64_t> window,
-    absl::Span<const int64_t> stride, Padding padding) {
-  std::vector<int64_t> dim_lengths{operand.n1(), operand.n2(), operand.n3()};
-  auto padding_both = xla::MakePadding(dim_lengths, window, stride, padding);
-
-  std::vector<int64_t> window_counts(window.size(), 0);
-  std::vector<int64_t> pad_low(window.size(), 0);
-  for (int64_t i = 0; i < window.size(); ++i) {
-    window_counts[i] =
-        WindowCount(dim_lengths[i], window[i], stride[i], padding);
-    pad_low[i] = padding_both[i].first;
-  }
-  auto result = std::make_unique<Array3D<float>>(
-      window_counts[0], window_counts[1], window_counts[2]);
-
-  for (int64_t i0 = 0; i0 < window_counts[0]; ++i0) {
-    for (int64_t i1 = 0; i1 < window_counts[1]; ++i1) {
-      for (int64_t i2 = 0; i2 < window_counts[2]; ++i2) {
-        int64_t i0_base = i0 * stride[0] - pad_low[0];
-        int64_t i1_base = i1 * stride[1] - pad_low[1];
-        int64_t i2_base = i2 * stride[2] - pad_low[2];
-
-        float val = init;
-        for (int64_t i0_win = 0; i0_win < window[0]; ++i0_win) {
-          for (int64_t i1_win = 0; i1_win < window[1]; ++i1_win) {
-            for (int64_t i2_win = 0; i2_win < window[2]; ++i2_win) {
-              if (i0_base + i0_win >= 0 && i1_base + i1_win >= 0 &&
-                  i2_base + i2_win >= 0 && i0_base + i0_win < operand.n1() &&
-                  i1_base + i1_win < operand.n2() &&
-                  i2_base + i2_win < operand.n3()) {
-                val += operand(i0_base + i0_win, i1_base + i1_win,
-                               i2_base + i2_win);
-              }
-            }
-          }
-        }
-        (*result)(i0, i1, i2) = val;
-      }
-    }
-  }
-  return result;
-}
-
 /* static */ std::unique_ptr<Array4D<float>>
 ReferenceUtil::ReduceWindow4DGeneric(
     const Array4D<float>& operand, float init,
@@ -267,36 +221,42 @@ ReferenceUtil::ReduceWindow4DGeneric(
   }
   auto result = std::make_unique<Array4D<float>>(
       window_counts[0], window_counts[1], window_counts[2], window_counts[3]);
+  const int64_t n2 = operand.n2();
+  const int64_t n3 = operand.n3();
+  const int64_t n4 = operand.n4();
+  const float* operand_data = operand.data();
+  float* out_ptr = result->data();
   // Do a full 4D reduce window.
   for (int64_t i0 = 0; i0 < window_counts[0]; ++i0) {
+    const int64_t i0_base = i0 * stride[0] - pad_low[0];
+    const int64_t b0_start = std::max<int64_t>(0, i0_base);
+    const int64_t b0_end = std::min<int64_t>(operand.n1(), i0_base + window[0]);
     for (int64_t i1 = 0; i1 < window_counts[1]; ++i1) {
+      const int64_t i1_base = i1 * stride[1] - pad_low[1];
+      const int64_t b1_start = std::max<int64_t>(0, i1_base);
+      const int64_t b1_end = std::min<int64_t>(n2, i1_base + window[1]);
       for (int64_t i2 = 0; i2 < window_counts[2]; ++i2) {
+        const int64_t i2_base = i2 * stride[2] - pad_low[2];
+        const int64_t b2_start = std::max<int64_t>(0, i2_base);
+        const int64_t b2_end = std::min<int64_t>(n3, i2_base + window[2]);
         for (int64_t i3 = 0; i3 < window_counts[3]; ++i3) {
-          int64_t i0_base = i0 * stride[0] - pad_low[0];
-          int64_t i1_base = i1 * stride[1] - pad_low[1];
-          int64_t i2_base = i2 * stride[2] - pad_low[2];
-          int64_t i3_base = i3 * stride[3] - pad_low[3];
+          const int64_t i3_base = i3 * stride[3] - pad_low[3];
+          const int64_t b3_start = std::max<int64_t>(0, i3_base);
+          const int64_t b3_end = std::min<int64_t>(n4, i3_base + window[3]);
 
           float val = init;
-          for (int64_t i0_win = 0; i0_win < window[0]; ++i0_win) {
-            for (int64_t i1_win = 0; i1_win < window[1]; ++i1_win) {
-              for (int64_t i2_win = 0; i2_win < window[2]; ++i2_win) {
-                for (int64_t i3_win = 0; i3_win < window[3]; ++i3_win) {
-                  if (i0_base + i0_win >= 0 && i1_base + i1_win >= 0 &&
-                      i2_base + i2_win >= 0 && i3_base + i3_win >= 0 &&
-                      i0_base + i0_win < operand.n1() &&
-                      i1_base + i1_win < operand.n2() &&
-                      i2_base + i2_win < operand.n3() &&
-                      i3_base + i3_win < operand.n4()) {
-                    val = reduce_func(
-                        val, operand(i0_base + i0_win, i1_base + i1_win,
-                                     i2_base + i2_win, i3_base + i3_win));
-                  }
+          for (int64_t b0 = b0_start; b0 < b0_end; ++b0) {
+            for (int64_t b1 = b1_start; b1 < b1_end; ++b1) {
+              const int64_t b01_offset = (b0 * n2 + b1) * n3;
+              for (int64_t b2 = b2_start; b2 < b2_end; ++b2) {
+                const float* row = operand_data + (b01_offset + b2) * n4;
+                for (int64_t b3 = b3_start; b3 < b3_end; ++b3) {
+                  val = reduce_func(val, row[b3]);
                 }
               }
             }
           }
-          (*result)(i0, i1, i2, i3) = val;
+          *out_ptr++ = val;
         }
       }
     }
@@ -474,7 +434,7 @@ ReferenceUtil::ConvArray4DGeneralDimensionsDilated(
       ShapeInference::InferConvolveShape(
           lhs_literal.shape(), rhs_literal.shape(),
           /*feature_group_count=*/1, /*batch_group_count=*/1, window, dnums,
-          /*preferred_element_type=*/std::nullopt)
+          /*sparsity_config=*/{}, /*preferred_element_type=*/std::nullopt)
           .value();
 
   HloInstruction* lhs_instruction =
@@ -486,7 +446,7 @@ ReferenceUtil::ConvArray4DGeneralDimensionsDilated(
   precision_config.mutable_operand_precision()->Resize(
       /*new_size=*/2, PrecisionConfig::DEFAULT);
   b.AddInstruction(HloInstruction::CreateConvolve(
-      shape, lhs_instruction, rhs_instruction, /*feature_group_count=*/1,
+      shape, {lhs_instruction, rhs_instruction}, /*feature_group_count=*/1,
       /*batch_group_count=*/1, window, dnums, precision_config));
   HloModuleConfig config;
   HloModule module("ReferenceUtil", config);
@@ -495,7 +455,7 @@ ReferenceUtil::ConvArray4DGeneralDimensionsDilated(
   HloEvaluator evaluator;
   Literal result_literal = evaluator.Evaluate(*computation, {}).value();
 
-  CHECK_EQ(result_literal.shape().rank(), 4);
+  CHECK_EQ(result_literal.shape().dimensions().size(), 4);
   auto result =
       std::make_unique<Array4D<float>>(result_literal.shape().dimensions(0),
                                        result_literal.shape().dimensions(1),

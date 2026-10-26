@@ -15,21 +15,29 @@ limitations under the License.
 
 #include "xla/packed_literal_reader.h"
 
+#include <cstdint>
+#include <cstring>
 #include <limits>
-#include <memory>
 #include <string>
 #include <utility>
 
 #include "absl/base/casts.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "xla/layout.h"
 #include "xla/layout_util.h"
 #include "xla/literal.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/status_macros.h"
-#include "xla/types.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/file_system.h"
+#include "xla/tsl/platform/logging.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/protobuf.h"
 
 namespace xla {
 
@@ -44,7 +52,7 @@ absl::StatusOr<Literal> PackedLiteralReader::Read(const Shape& shape,
           << " layout: " << (layout == nullptr ? "<none>" : layout->ToString());
   Shape literal_shape = shape;
   if (layout != nullptr) {
-    TF_RETURN_IF_ERROR(
+    ABSL_RETURN_IF_ERROR(
         LayoutUtil::ValidateLayoutForShape(*layout, literal_shape));
     *literal_shape.mutable_layout() = *layout;
   }
@@ -63,7 +71,7 @@ absl::StatusOr<Literal> PackedLiteralReader::Read(const Shape& shape,
   char* data = absl::bit_cast<char*>(field.data());
   uint64_t bytes = elements * sizeof(float);
   absl::string_view sp;
-  auto s = file_->Read(offset_, bytes, &sp, data);
+  auto s = file_->Read(offset_, sp, absl::MakeSpan(data, bytes));
   offset_ += sp.size();
   if (!s.ok()) {
     return s;
@@ -84,7 +92,8 @@ bool PackedLiteralReader::IsExhausted() const {
   // exhausted the data.
   char single_byte[1];
   absl::string_view sp;
-  auto s = file_->Read(offset_, sizeof(single_byte), &sp, single_byte);
+  auto s = file_->Read(offset_, sp,
+                       absl::MakeSpan(single_byte, sizeof(single_byte)));
   return !s.ok();
 }
 

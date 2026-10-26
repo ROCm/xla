@@ -1,0 +1,156 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+load("@llvm-project//mlir:tblgen.bzl", "gentbl_cc_library")
+load("//xla/tsl:tsl.default.bzl", "get_compatible_with_portable")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
+
+package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
+    default_visibility = [":friends"],
+    licenses = ["notice"],
+)
+
+package_group(
+    name = "friends",
+    includes = [
+        "//xla:friends",
+    ],
+)
+
+gentbl_cc_library(
+    name = "passes_inc_gen",
+    compatible_with = get_compatible_with_portable(),
+    tbl_outs = {"passes.h.inc": [
+        "-gen-pass-decls",
+        "-name=XTileCpuTransforms",
+    ]},
+    tblgen = "@llvm-project//mlir:mlir-tblgen",
+    td_file = "passes.td",
+    visibility = ["//visibility:private"],
+    deps = ["@llvm-project//mlir:PassBaseTdFiles"],
+)
+
+cc_library(
+    name = "lowering_utils",
+    srcs = [
+        "lowering_utils.cc",
+    ],
+    hdrs = ["lowering_utils.h"],
+    visibility = ["//visibility:private"],
+    deps = [
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:ArithDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:MemRefDialect",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TensorDialect",
+        "@llvm-project//mlir:VectorDialect",
+    ],
+)
+
+cc_library(
+    name = "passes",
+    srcs = [
+        "drop_vector_unit_dims_pass.cc",
+        "fuse_elementwise_pass.cc",
+        "hoist_alloca.cc",
+        "initialize_allocs.cc",
+        "legalize_narrow_float_storage.cc",
+        "linalg_elementwise_to_vector_pass.cc",
+        "lower_memref_bitcast.cc",
+        "lower_xtile_entry.cc",
+        "memref_copy_to_loops.cc",
+        "shlo_to_vector.cc",
+        "tensor_ops_to_bufferizable.cc",
+        "unpack_sub_byte_vector_write_pass.cc",
+        "unroll_vectors_pass.cc",
+        "vector_to_scalar_pass.cc",
+        "vectorize_xtile.cc",
+    ],
+    hdrs = ["passes.h"],
+    deps = [
+        ":lowering_utils",
+        ":passes_inc_gen",
+        ":vectorized_reduce_emitter",
+        "//xla:util",
+        "//xla/backends/cpu/codegen/emitters/ir:xla_cpu",
+        "//xla/codegen/emitters/ir:xla",
+        "//xla/codegen/xtile/ir:xtile",
+        "//xla/codegen/xtile/ir/transforms:passes",
+        "//xla/hlo/analysis:indexing_analysis",
+        "//xla/hlo/analysis:interval",
+        "//xla/hlo/analysis:symbolic_map",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/numeric:bits",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:AffineDialect",
+        "@llvm-project//mlir:ArithDialect",
+        "@llvm-project//mlir:BufferizationDialect",
+        "@llvm-project//mlir:ComplexDialect",
+        "@llvm-project//mlir:DataLayoutInterfaces",
+        "@llvm-project//mlir:DialectUtils",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:FuncTransforms",
+        "@llvm-project//mlir:FuncUtils",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LLVMCommonConversion",
+        "@llvm-project//mlir:LLVMDialect",
+        "@llvm-project//mlir:LinalgDialect",
+        "@llvm-project//mlir:LinalgTransforms",
+        "@llvm-project//mlir:LinalgUtils",
+        "@llvm-project//mlir:MathDialect",
+        "@llvm-project//mlir:MemRefDialect",
+        "@llvm-project//mlir:MemRefTransforms",
+        "@llvm-project//mlir:MemRefUtils",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:SCFDialect",
+        "@llvm-project//mlir:SCFTransforms",
+        "@llvm-project//mlir:SCFUtils",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TensorDialect",
+        "@llvm-project//mlir:TransformUtils",
+        "@llvm-project//mlir:VectorDialect",
+        "@llvm-project//mlir:VectorInterfaces",
+        "@llvm-project//mlir:VectorTransforms",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_library(
+    name = "vectorized_reduce_emitter",
+    srcs = ["vectorized_reduce_emitter.cc"],
+    hdrs = ["vectorized_reduce_emitter.h"],
+    deps = [
+        ":lowering_utils",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:ArithDialect",
+        "@llvm-project//mlir:BufferizationDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LinalgTransforms",
+        "@llvm-project//mlir:MemRefDialect",
+        "@llvm-project//mlir:SCFDialect",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:VectorDialect",
+    ],
+)

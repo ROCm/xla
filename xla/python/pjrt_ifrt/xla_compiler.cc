@@ -15,18 +15,28 @@ limitations under the License.
 
 #include "xla/python/pjrt_ifrt/xla_compiler.h"
 
+#include <cstdint>
 #include <memory>
-#include <string>
+#include <vector>
 
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/cord.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/ExtensibleRTTI.h"
 #include "xla/pjrt/pjrt_executable.h"
+#include "xla/python/ifrt/client.h"
+#include "xla/python/ifrt/compiler.h"
+#include "xla/python/ifrt/device.h"
+#include "xla/python/ifrt/device_list.h"
+#include "xla/python/ifrt/executable_serdes.h"
+#include "xla/python/ifrt/rtti.h"
 #include "xla/python/ifrt/serdes.h"
+#include "xla/python/ifrt/serdes_version.h"
 #include "xla/python/pjrt_ifrt/xla_compiler.pb.h"
-#include "tsl/platform/statusor.h"
+#include "xla/service/device_assignment.h"
+#include "xla/util.h"
 
 namespace xla {
 namespace ifrt {
@@ -34,46 +44,83 @@ namespace ifrt {
 namespace {
 
 class XlaCompileOptionsSerDes
-    : public llvm::RTTIExtends<XlaCompileOptionsSerDes, SerDes> {
+    : public RTTIExtends<XlaCompileOptionsSerDes, SerDes> {
  public:
   absl::string_view type_name() const override {
     return "xla::ifrt::XlaCompileOptions";
   }
 
-  absl::StatusOr<std::string> Serialize(Serializable& serializable) override {
-    const auto& options = llvm::cast<XlaCompileOptions>(serializable);
+  absl::StatusOr<absl::Cord> Serialize(
+      const Serializable& serializable,
+      std::unique_ptr<SerializeOptions> options) override {
+    const SerDesVersion version = GetRequestedSerDesVersion(options.get());
+    if (version.version_number() < SerDesVersionNumber(0)) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Unsupported ", version.version_number(),
+                       " for XlaCompileOptions serialization"));
+    }
+    const auto& xla_compile_options = cast<XlaCompileOptions>(serializable);
 
     XlaCompileOptionsProto proto;
-    TF_ASSIGN_OR_RETURN(*proto.mutable_compile_options(),
-                        options.compile_options.ToProto());
-    if (!options.loaded_host_callbacks.empty()) {
+    if (version.version_number() >= SerDesVersionNumber(4)) {
+      proto.set_version_number(SerDesVersionNumber(4).value());
+    } else {
+      proto.set_version_number(SerDesVersionNumber(0).value());
+    }
+    ABSL_ASSIGN_OR_RETURN(*proto.mutable_compile_options(),
+                          xla_compile_options.compile_options.ToProto());
+    if (!xla_compile_options.loaded_host_callbacks.empty()) {
       return absl::UnimplementedError(
           "xla::ifrt::XlaCompileOptions with loaded_host_callbacks is not "
           "serializable");
     }
-    return proto.SerializeAsString();
+    if (xla_compile_options.outputs_bundle_slice_sizes.has_value()) {
+      if (version.version_number() < SerDesVersionNumber(4)) {
+        return absl::FailedPreconditionError(
+            absl::StrCat("Unsupported ", version.version_number(),
+                         " for XlaCompileOptions serialization with "
+                         "outputs_bundle_slice_sizes"));
+      }
+      proto.mutable_outputs_bundle_slice_sizes()->Add(
+          xla_compile_options.outputs_bundle_slice_sizes->begin(),
+          xla_compile_options.outputs_bundle_slice_sizes->end());
+    }
+    return proto.SerializeAsCord();
   }
 
   absl::StatusOr<std::unique_ptr<Serializable>> Deserialize(
-      const std::string& serialized,
+      const absl::Cord& serialized,
       std::unique_ptr<DeserializeOptions>) override {
     XlaCompileOptionsProto proto;
     if (!proto.ParseFromString(serialized)) {
       return absl::DataLossError(
           "Unable to parse serialized XlaCompileOptionsProto");
     }
+    const SerDesVersionNumber version_number(proto.version_number());
+    if (version_number > SerDesVersionNumber(4)) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Unsupported ", version_number,
+                       " for XlaCompileOptions deserialization"));
+    }
 
     auto options = std::make_unique<XlaCompileOptions>();
-    TF_ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         options->compile_options,
         xla::CompileOptions::FromProto(proto.compile_options()));
+    if (version_number >= SerDesVersionNumber(4)) {
+      if (!proto.outputs_bundle_slice_sizes().empty()) {
+        options->outputs_bundle_slice_sizes.emplace(
+            proto.outputs_bundle_slice_sizes().begin(),
+            proto.outputs_bundle_slice_sizes().end());
+      }
+    }
     return options;
   }
 
   static char ID;  // NOLINT
 };
 
-char XlaCompileOptionsSerDes::ID = 0;  // NOLINT
+[[maybe_unused]] char XlaCompileOptionsSerDes::ID = 0;  // NOLINT
 
 bool register_xla_compile_options_serdes = ([]{
   RegisterSerDes<XlaCompileOptions>(
@@ -87,7 +134,7 @@ char XlaDeserializeExecutableOptions::ID = 0;
 
 absl::StatusOr<std::unique_ptr<XlaCompileOptions>> GetXlaCompileOptions(
     std::unique_ptr<CompileOptions> options) {
-  if (!llvm::isa<XlaCompileOptions>(options.get())) {
+  if (!isa<XlaCompileOptions>(options.get())) {
     return xla::InvalidArgument("options must be XlaCompileOptions");
   }
   return std::unique_ptr<XlaCompileOptions>(
@@ -97,12 +144,58 @@ absl::StatusOr<std::unique_ptr<XlaCompileOptions>> GetXlaCompileOptions(
 absl::StatusOr<std::unique_ptr<XlaDeserializeExecutableOptions>>
 GetXlaDeserializeExecutableOptions(
     std::unique_ptr<DeserializeExecutableOptions> options) {
-  if (!llvm::isa<XlaDeserializeExecutableOptions>(options.get())) {
+  if (!isa<XlaDeserializeExecutableOptions>(options.get())) {
     return xla::InvalidArgument(
         "options must be XlaDeserializeExecutableOptions");
   }
   return std::unique_ptr<XlaDeserializeExecutableOptions>(
       static_cast<XlaDeserializeExecutableOptions*>(options.release()));
+}
+
+absl::StatusOr<xla::ifrt::DeviceListRef> GetDeviceListFromDeviceAssignment(
+    xla::ifrt::Client* ifrt_client,
+    const xla::DeviceAssignment& device_assignment) {
+  std::vector<xla::ifrt::Device*> devices;
+  devices.reserve(device_assignment.replica_count() *
+                  device_assignment.computation_count());
+  for (int64_t i = 0; i < device_assignment.replica_count(); ++i) {
+    for (int64_t j = 0; j < device_assignment.computation_count(); ++j) {
+      ABSL_ASSIGN_OR_RETURN(xla::ifrt::Device * device,
+                            ifrt_client->LookupDevice(
+                                xla::ifrt::DeviceId(device_assignment(i, j))));
+      devices.push_back(device);
+    }
+  }
+  return ifrt_client->MakeDeviceList(devices);
+}
+
+absl::StatusOr<xla::ifrt::DeviceListRef> GetDeviceListFromXlaCompileOptions(
+    xla::ifrt::Client* ifrt_client,
+    const xla::CompileOptions& compile_options) {
+  if (compile_options.executable_build_options.has_device_assignment()) {
+    return GetDeviceListFromDeviceAssignment(
+        ifrt_client,
+        compile_options.executable_build_options.device_assignment());
+  }
+  if (compile_options.compile_portable_executable) {
+    return ifrt_client->MakeDeviceList(
+        {ifrt_client->addressable_devices().front()});
+  }
+  auto& build_options = compile_options.executable_build_options;
+  if (build_options.device_ordinal() >= 0) {
+    ABSL_ASSIGN_OR_RETURN(xla::ifrt::Device * device,
+                          ifrt_client->LookupDevice(xla::ifrt::DeviceId(
+                              build_options.device_ordinal())));
+    return ifrt_client->MakeDeviceList({device});
+  }
+  ABSL_ASSIGN_OR_RETURN(
+      xla::DeviceAssignment default_da,
+      ifrt_client->GetDefaultDeviceAssignment(build_options.num_replicas(),
+                                              build_options.num_partitions()));
+  ABSL_ASSIGN_OR_RETURN(
+      xla::ifrt::DeviceListRef devices,
+      GetDeviceListFromDeviceAssignment(ifrt_client, default_da));
+  return devices;
 }
 
 }  // namespace ifrt

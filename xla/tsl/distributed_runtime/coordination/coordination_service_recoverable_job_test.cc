@@ -16,27 +16,27 @@ limitations under the License.
 #include <string>
 #include <utility>
 
-#include "grpcpp/server.h"
-#include "grpcpp/server_builder.h"
-#include "grpcpp/support/channel_arguments.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
+#include "grpcpp/server.h"
+#include "grpcpp/server_builder.h"
+#include "grpcpp/support/channel_arguments.h"
 #include "xla/tsl/distributed_runtime/coordination/coordination_client.h"
 #include "xla/tsl/distributed_runtime/coordination/coordination_service.h"
 #include "xla/tsl/distributed_runtime/coordination/coordination_service_agent.h"
 #include "xla/tsl/distributed_runtime/rpc/async_service_interface.h"
 #include "xla/tsl/distributed_runtime/rpc/coordination/grpc_coordination_client.h"
 #include "xla/tsl/distributed_runtime/rpc/coordination/grpc_coordination_service_impl.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/status.h"
-#include "tsl/platform/test.h"
-#include "tsl/platform/threadpool.h"
-#include "tsl/protobuf/coordination_config.pb.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/tsl/platform/threadpool.h"
+#include "xla/tsl/protobuf/coordination_config.pb.h"
 
 namespace tsl {
 namespace {
@@ -51,12 +51,12 @@ constexpr char kServiceLeader[] = "/job:parameter_server/replica:0/task:0";
 class TestCoordinationClientCache : public CoordinationClientCache {
  public:
   void AddTask(const std::string& target, CoordinationClient* client) {
-    absl::MutexLock l(&clients_mu_);
+    absl::MutexLock l(clients_mu_);
     clients_.emplace(target, client);
   }
 
   CoordinationClient* GetClient(const std::string& target) override {
-    absl::MutexLock l(&clients_mu_);
+    absl::MutexLock l(clients_mu_);
     if (auto it = clients_.find(target); it != clients_.end()) {
       return it->second;
     }
@@ -109,7 +109,7 @@ class TestCoordinationServiceTaskState {
         [service = coord_rpc_service_.get()]() { service->HandleRPCsLoop(); }));
   }
 
-  void SetCoordinationService(CoordinationServiceInterface* service) {
+  void SetCoordinationService(CoordinationService* service) {
     auto* grpc_coord_service =
         static_cast<GrpcCoordinationServiceImpl*>(coord_rpc_service_.get());
     grpc_coord_service->SetCoordinationServiceInstance(service);
@@ -124,11 +124,11 @@ class TestCoordinationServiceTaskState {
                  << " is in error status: " << status;
     };
 
-    TF_CHECK_OK(coord_agent_->Initialize(Env::Default(), job_name, task_id,
-                                         coordination_config,
-                                         std::move(coord_client_), error_fn));
-    TF_CHECK_OK(coord_agent_->Connect());
-    TF_CHECK_OK(status_);
+    CHECK_OK(coord_agent_->Initialize(Env::Default(), job_name, task_id,
+                                      coordination_config,
+                                      std::move(coord_client_), error_fn));
+    CHECK_OK(coord_agent_->Connect());
+    CHECK_OK(status_);
   }
 
   CoordinationClient* GetCoordinationClient() { return coord_client_.get(); }
@@ -181,7 +181,7 @@ class CoordinationServiceRecoverableJobTest : public ::testing::Test {
     client_cache->AddTask(
         /*target=*/"/job:worker/replica:0/task:1",
         state_worker_1_.GetCoordinationClient());
-    coord_service_ = CoordinationServiceInterface::EnableCoordinationService(
+    coord_service_ = CoordinationService::Create(
         Env::Default(), coordination_config_, std::move(client_cache));
     // Set the service pointer for all the tasks since it is needed for handling
     // error propagations. In reality, every task has its own service pointer.
@@ -224,7 +224,7 @@ class CoordinationServiceRecoverableJobTest : public ::testing::Test {
 
  protected:
   CoordinationServiceConfig coordination_config_;
-  std::unique_ptr<CoordinationServiceInterface> coord_service_;
+  std::unique_ptr<CoordinationService> coord_service_;
   TestCoordinationServiceTaskState state_ps_0_;
   TestCoordinationServiceTaskState state_ps_1_;
   TestCoordinationServiceTaskState state_worker_0_;

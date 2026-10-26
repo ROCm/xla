@@ -21,6 +21,7 @@ limitations under the License.
 #include "absl/strings/escaping.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 
@@ -30,9 +31,8 @@ std::string OpMetadataToString(const OpMetadata& metadata, bool only_op_name) {
     if (!metadata.op_name().empty()) {
       return absl::StrCat("op_name=\"", absl::CEscape(metadata.op_name()),
                           "\"");
-    } else {
-      return "";
     }
+    return "";
   }
   if (!metadata.op_type().empty()) {
     result.push_back(
@@ -49,6 +49,17 @@ std::string OpMetadataToString(const OpMetadata& metadata, bool only_op_name) {
   if (metadata.source_line() != 0) {
     result.push_back(absl::StrCat("source_line=", metadata.source_line()));
   }
+  if (metadata.source_end_line() != 0) {
+    result.push_back(
+        absl::StrCat("source_end_line=", metadata.source_end_line()));
+  }
+  if (metadata.source_column() != 0) {
+    result.push_back(absl::StrCat("source_column=", metadata.source_column()));
+  }
+  if (metadata.source_end_column() != 0) {
+    result.push_back(
+        absl::StrCat("source_end_column=", metadata.source_end_column()));
+  }
   if (!metadata.profile_type().empty()) {
     result.push_back(absl::StrCat(
         "profile_type={", absl::StrJoin(metadata.profile_type(), ","), "}"));
@@ -58,8 +69,19 @@ std::string OpMetadataToString(const OpMetadata& metadata, bool only_op_name) {
                                   absl::CEscape(metadata.deduplicated_name()),
                                   "\""));
   }
-  if (metadata.preserve_layout()) {
-    result.push_back(absl::StrCat("preserve_layout=true"));
+  if (!metadata.scheduling_name().empty()) {
+    result.push_back(
+        absl::StrCat("scheduling_name=\"", metadata.scheduling_name(), "\""));
+  }
+  if (metadata.stack_frame_id() != 0) {
+    result.push_back(
+        absl::StrCat("stack_frame_id=", metadata.stack_frame_id()));
+  }
+  if (metadata.has_metadata_payload() &&
+      metadata.metadata_payload().has_value()) {
+    result.push_back(
+        absl::StrCat("metadata_payload=\"",
+                     absl::CEscape(metadata.metadata_payload().value()), "\""));
   }
   return absl::StrJoin(result, " ");
 }

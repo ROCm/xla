@@ -15,12 +15,11 @@ limitations under the License.
 
 #include "xla/hlo/ir/dfs_hlo_visitor.h"
 
-#include <string>
-
+#include "absl/status/status.h"
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/types.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/tsl/platform/logging.h"
 #include "xla/util.h"
-#include "tsl/platform/logging.h"
 
 namespace xla {
 
@@ -50,7 +49,7 @@ void DfsHloVisitorBase<HloInstructionPtr>::SetVisiting(
     const HloInstruction& instruction) {
   VLOG(3) << "marking HLO " << &instruction << " as visiting: ";
   DCHECK(NotVisited(instruction));
-  visit_state_[instruction.unique_id()] = VisitState::kVisiting;
+  SetVisitState(instruction.unique_id(), VisitState::kVisiting);
 }
 
 template <typename HloInstructionPtr>
@@ -58,7 +57,7 @@ void DfsHloVisitorBase<HloInstructionPtr>::SetVisited(
     const HloInstruction& instruction) {
   VLOG(3) << "marking HLO " << &instruction << " as visited: ";
   DCHECK(NotVisited(instruction) || IsVisiting(instruction));
-  visit_state_[instruction.unique_id()] = VisitState::kVisited;
+  SetVisitState(instruction.unique_id(), VisitState::kVisited);
 }
 
 template <typename HloInstructionPtr>

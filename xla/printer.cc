@@ -15,16 +15,31 @@ limitations under the License.
 
 #include "xla/printer.h"
 
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <utility>
 
+#include "absl/log/check.h"
 #include "absl/strings/cord.h"
 #include "absl/strings/cord_buffer.h"
 #include "absl/strings/str_cat.h"
-#include "tsl/platform/logging.h"
+#include "absl/types/span.h"
+#include "highwayhash/hh_types.h"
+#include "tsl/platform/fingerprint.h"
+#include "xla/tsl/platform/logging.h"
 
 namespace xla {
+
+void Printer::AppendInt64List(absl::Span<const int64_t> list,
+                              bool leading_comma) {
+  if (leading_comma) {
+    Append(",");
+  }
+  Append("{");
+  AppendJoin(this, list, ",");
+  Append("}");
+}
 
 void StringPrinter::Append(const absl::AlphaNum& a) {
   absl::StrAppend(&result_, a);
@@ -65,6 +80,45 @@ void CordPrinter::Append(const absl::AlphaNum& a) { AppendImpl(a); }
 absl::Cord CordPrinter::ToCord() && {
   if (buffer_.length() > 0) result_.Append(std::move(buffer_));
   return std::move(result_);
+}
+
+namespace {
+// Generated using openssl rand.
+static constexpr highwayhash::HHKey kDefaultKey = {
+    0x9e0433b546e065d2ull,
+    0x0e7ecad49e703760ull,
+    0x83d29f20dae229b0ull,
+    0x40c1ce3ff9d19a42ull,
+};
+}  // namespace
+
+HighwayHashPrinter::HighwayHashPrinter()
+    : Printer(true), hasher_(kDefaultKey) {}
+
+void HighwayHashPrinter::Append(const absl::AlphaNum& a) {
+  hasher_.Append(a.data(), a.size());
+}
+
+void HighwayHashPrinter::AppendInt64List(absl::Span<const int64_t> list,
+                                         bool _ /*leading_comma*/) {
+  // Instead of separators, prefix with the length. This is fine since
+  // there's no way for the caller to distinguish between the two.
+  const uint64_t num = list.size();
+  hasher_.Append(reinterpret_cast<const char*>(&num), sizeof(num));
+  hasher_.Append(reinterpret_cast<const char*>(list.data()),
+                 list.size() * sizeof(list[0]));
+}
+
+uint64_t HighwayHashPrinter::ToFingerprint() {
+  highwayhash::HHResult64 result;
+  hasher_.Finalize(&result);
+  return result;
+}
+
+::tsl::Fprint128 HighwayHashPrinter::ToFingerprint128() {
+  highwayhash::HHResult128 result;
+  hasher_.Finalize(&result);
+  return ::tsl::Fprint128{result[0], result[1]};
 }
 
 }  // namespace xla

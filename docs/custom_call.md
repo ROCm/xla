@@ -1,4 +1,4 @@
-# XLA custom calls
+# XLA Custom Calls
 
 This document describes how to write and use XLA custom calls using XLA FFI
 library. Custom call is a mechanism to describe an external "operation" in the
@@ -22,6 +22,483 @@ hides all the low level details of underlying C APIs from the end user.
 > to the functions in both the `XLA_REGISTER_CUSTOM_CALL` registration macros
 > and custom call target references or to use C-style namespacing directly in
 > the function name.
+
+## JAX + XLA Custom Calls
+
+See [JAX documentation](https://jax.readthedocs.io/en/latest/ffi.html) for
+end to end examples of integrating custom calls and XLA FFI with JAX.
+
+## XLA FFI Binding
+
+XLA FFI binding is a compile-time specification of the custom call signature:
+custom call arguments, attributes and their types, and additional parameters
+passed via the execution context (i.e., gpu stream for GPU backend). XLA FFI
+binding can be bound to any C++ callable (function pointer, lambda, etc.) with
+compatible `operator()` signature. Constructed handler decodes XLA FFI call
+frame (defined by the stable C API), type check all parameters, and forward
+decoded results to the user-defined callback.
+
+XLA FFI binding heavily relies on template metaprogramming to be able to
+compile constructed handler to the most efficient machine code. Run time
+overheads are in order of a couple of nanoseconds for each custom call
+parameter.
+
+XLA FFI customization points implemented as template specializations, and
+users can define how to decode their custom types, i.e., it is possible
+to define custom decoding for user-defined `enum class` types.
+
+### Returning Errors From Custom Calls
+
+Custom call implementations must return `xla::ffi::Error` value to signal
+success or error to XLA runtime. It is similar to `absl::Status`, and has
+the same set of error codes. We do not use `absl::Status` because it does
+not have a stable ABI and it would be unsafe to pass it between dynamically
+loaded custom call library, and XLA itself.
+
+```c++
+// Handler that always returns an error.
+auto always_error = Ffi::Bind().To(
+    []() { return Error(ErrorCode::kInternal, "Oops!"); });
+
+// Handler that always returns a success.
+auto always_success = Ffi::Bind().To(
+    []() { return Error::Success(); });
+
+```
+
+### Buffer Arguments And Results
+
+XLA uses destination passing style for results: custom calls (or any other XLA
+operations for that matter) do not allocate memory for results, and instead
+write into destinations passed by XLA runtime. XLA uses static buffer
+assignment, and allocates buffers for all values based on their live ranges at
+compile time.
+
+Results passed to FFI handlers wrapped into a `Result<T>` template, that
+has a pointer-like semantics: `operator->` gives access to the underlying
+parameter.
+
+`AnyBuffer` arguments and results gives access to custom call buffer parameters
+of any data type. This is useful when custom call has a generic implementation
+that works for multiple data types, and custom call implementation does run time
+dispatching based on data type. `AnyBuffer` gives access to the buffer data
+type, dimensions, and a pointer to the buffer itself.
+
+```mlir
+%0 = "stablehlo.custom_call"(%arg0) {
+  call_target_name = "foo",
+  api_version = 4 : i32
+} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+```
+
+
+```c++
+// Buffers of any number of dimensions and data type.
+auto handler = Ffi::Bind().Arg<AnyBuffer>().Ret<AnyBuffer>().To(
+    [](AnyBuffer arg, Result<AnyBuffer> res) -> Error {
+      void* arg_data = arg.untyped_data();
+      void* res_data = res->untyped_data();
+      return Error::Success();
+    });
+```
+
+### Constrained Buffer Arguments And Results
+
+`Buffer` allows to add constraints on the buffer data type and number of
+dimensions, and they will be automatically checked by the handler and return
+an error to XLA runtime, if run time arguments do not match the FFI handler
+signature.
+
+```c++
+// Buffers of any number of dimensions and F32 data type.
+auto handler = Ffi::Bind().Arg<Buffer<F32>>().Ret<Buffer<F32>>().To(
+    [](Buffer<F32> arg, Result<Buffer<F32>> res) -> Error {
+      float* arg_data = arg.typed_data();
+      float* res_data = res->typed_data();
+      return Error::Success();
+    });
+```
+
+```c++
+// Buffers of number of dimensions 2 and F32 data type.
+auto handler = Ffi::Bind().Arg<BufferR2<F32>>().Ret<BufferR2<F32>>().To(
+    [](BufferR2<F32> arg, Result<BufferR2<F32>> res) -> Error {
+      float* arg_data = arg.typed_data();
+      float* res_data = res->typed_data();
+      return Error::Success();
+    });
+```
+
+### Matching And Verifying Buffers
+
+Buffer patterns can express constraints that are more specific than the argument
+and result types in an FFI binding. They are useful for refining an `AnyBuffer`
+to a concrete buffer type, checking dimension sizes, and checking relationships
+between multiple buffer shapes.
+
+Patterns are immutable and can specify dtype and rank either directly or with
+the corresponding modifiers:
+
+```c++
+namespace m = ::xla::ffi::match;
+
+m::Buffer<F32, 2>();
+m::Buffer().WithDType<F32>().WithRank<2>();
+```
+
+The `Match` function checks a pattern and returns its maximally constrained
+buffer type. To refine an `AnyBuffer`, the pattern must specify exactly one data
+type and one rank. Matching an already typed buffer verifies any additional
+constraints and preserves its type.
+
+```c++
+namespace m = ::xla::ffi::match;
+
+auto handler = Ffi::Bind().Arg<AnyBuffer>().Ret<AnyBuffer>().To(
+    [](AnyBuffer input, Result<AnyBuffer> output) -> Error {
+      int64_t rows;
+      int64_t cols;
+
+      ErrorOr<BufferR2<F32>> typed_input =
+          Match("input", input,
+                m::Buffer<F32>().WithDims(&rows, &cols));
+      if (typed_input.has_error()) {
+        return std::move(typed_input).error();
+      }
+
+      ErrorOr<Result<BufferR2<F32>>> typed_output =
+          Match("output", output,
+                m::Buffer<F32>().WithDims(rows, cols));
+      if (typed_output.has_error()) {
+        return std::move(typed_output).error();
+      }
+
+      float* input_data = typed_input->typed_data();
+      float* output_data = (*typed_output)->typed_data();
+      return Error::Success();
+    });
+```
+
+In this example matching `input` captures its two dimension sizes, and matching
+`output` verifies that it has the same shape. Captures are committed only when
+the complete pattern matches successfully.
+
+A dimension pattern can be unconstrained, fixed, or captured. Fixed values and
+capture pointers are implicitly converted to dimension patterns:
+
+```c++
+m::Dim()       // Any dimension size.
+m::Dim(16)     // A dimension whose size is 16.
+m::Dim(&rows)  // Any dimension size, captured in `rows` on success.
+
+m::Buffer<F32>().WithDims(&rows, 16);
+```
+
+`WithDims` describes a complete shape and sets its rank from the number of
+arguments. `WithDim<I>` or `WithDim(index, ...)` constrains dimensions
+positionally without fixing the complete rank. A positional constraint requires
+the referenced dimension to exist but leaves every other dimension
+unconstrained:
+
+```c++
+ErrorOr<BufferR4<F32>> MatchActivations(AnyBuffer input) {
+  return Match(
+      "input", input,
+      m::Buffer<F32, 4>().WithDim<0>(1).WithDim<3>(128));
+}
+
+Error VerifyDimension(AnyBuffer input, size_t index, int64_t size) {
+  return Verify("input", input, m::Buffer().WithDim(index, size));
+}
+```
+
+`MatchActivations` requires a rank-4 F32 buffer with dimensions 0 and 3 equal to
+1 and 128, respectively; dimensions 1 and 2 are unrestricted. Without an
+explicit `WithRank`, `WithDim(index, ...)` accepts any rank greater than
+`index`.
+
+Dimension captures can also express relationships between positions:
+
+```c++
+auto matrix = m::Buffer<F32>().WithDims(&rows, 128);
+
+int64_t n;
+ErrorOr<BufferR2<F32>> square =
+    Match("matrix", buffer,
+          m::Buffer<F32>().WithDims(&n, &n));
+```
+
+When the same capture pointer appears multiple times, all corresponding
+dimensions must have the same size. The `Match` call above therefore accepts
+only square matrices. Dimension captures are written only after the complete
+pattern succeeds and are unchanged on failure.
+
+Whole-buffer relationships do not require capturing every dimension.
+`WithShapeOf` matches the complete runtime shape of another buffer while
+allowing a different dtype. `Like` also requires the same dtype:
+
+```c++
+Error VerifySortBuffers(AnyBuffer keys, AnyBuffer values,
+                        Result<AnyBuffer> keys_output) {
+  Error error =
+      Verify("values", values, m::Buffer().WithShapeOf(keys));
+  if (error.failure()) {
+    return error;
+  }
+
+  return Verify("keys output", *keys_output, m::Buffer().Like(keys));
+}
+```
+
+Both modifiers copy the reference buffer's metadata when the pattern is built;
+the pattern does not retain a reference to the buffer. Because these are runtime
+constraints, they do not refine an `AnyBuffer` to a concrete return type. They
+are primarily useful with `Verify`, or with `Match` when the input buffer
+already has a concrete type.
+
+Use `Verify` when the buffer should keep its existing type, or when a pattern
+accepts more than one data type or rank. For example, an index buffer can accept
+either `S32` or `S64` and dispatch on its data type after verification:
+
+```c++
+namespace m = ::xla::ffi::match;
+
+Error VerifyIndices(AnyBuffer indices) {
+  auto pattern = m::Buffer().WithDType<S32, S64>().WithRank<1, 2>();
+
+  Error error = Verify("indices", indices, pattern);
+  if (error.failure()) {
+    return error;
+  }
+
+  // Dispatch an implementation based on `indices.element_type()`.
+  return Error::Success();
+}
+```
+
+Because this pattern permits multiple concrete buffer types, it cannot refine an
+`AnyBuffer` with `Match`: there is no unique return type. It can still be passed
+to `Match` with an already typed buffer, whose return type is already known. An
+already typed buffer can also be verified; this is typically useful for checking
+shape relationships:
+
+```c++
+Error VerifySameShape(BufferR2<F32> lhs, BufferR2<F32> rhs) {
+  int64_t rows;
+  int64_t cols;
+
+  Error error = Verify(
+      "lhs", lhs,
+      m::Buffer().WithDims(&rows, &cols));
+  if (error.failure()) {
+    return error;
+  }
+
+  return Verify("rhs", rhs,
+                m::Buffer().WithDims(rows, cols));
+}
+```
+
+The name passed as the first argument to `Match` and `Verify` is required and is
+included in errors, together with a description of the failed constraint.
+
+The external FFI API in `xla/ffi/api/ffi.h` returns `Error` from `Verify` and
+`ErrorOr<T>` from `Match`, as in the examples above. The internal FFI API in
+`xla/ffi/ffi.h` provides the same matching interface using `absl::Status` and
+`absl::StatusOr<T>`:
+
+```c++
+ABSL_ASSIGN_OR_RETURN(BufferR2<F32> input,
+                      Match("input", buffer, m::Buffer<F32, 2>()));
+ABSL_RETURN_IF_ERROR(Verify(
+    "input", input,
+    m::Buffer().WithDims(expected_rows, m::Dim())));
+```
+
+### Variadic Arguments And Results
+
+If the number of arguments and result can be different in different instances of
+a custom call, they can be decoded at run time using `RemainingArgs` and
+`RemainingRets`.
+
+```
+auto handler = Ffi::Bind().RemainingArgs().RemainingRets().To(
+    [](RemainingArgs args, RemainingRets results) -> Error {
+      ErrorOr<AnyBuffer> arg = args.get<AnyBuffer>(0);
+      ErrorOr<Result<AnyBuffer>> res = results.get<AnyBuffer>(0);
+
+      if (!arg.has_value()) {
+        return Error(ErrorCode::kInternal, arg.error());
+      }
+
+      if (!res.has_value()) {
+        return Error(ErrorCode::kInternal, res.error());
+      }
+
+      return Error::Success();
+    });
+```
+
+Variadic arguments and results can be declared after regular arguments and
+results, however binding regular arguments and results after variadic one is
+illegal.
+
+```c++
+auto handler =
+    Ffi::Bind()
+        .Arg<AnyBuffer>()
+        .RemainingArgs()
+        .Ret<AnyBuffer>()
+        .RemainingRets()
+        .To([](AnyBuffer arg, RemainingArgs args, AnyBuffer ret,
+               RemainingRets results) -> Error { return Error::Success(); });
+```
+
+### Attributes
+
+XLA FFI supports automatic decoding of `mlir::DictionaryAttr` passed as a
+`custom_call` `backend_config` into FFI handler arguments.
+
+Note: See [stablehlo RFC](https://github.com/openxla/stablehlo/blob/main/rfcs/20240312-standardize-customcallop.md)
+for details, and `stablehlo.custom_call` operation specification.
+
+```mlir
+%0 = "stablehlo.custom_call"(%arg0) {
+  call_target_name = "foo",
+  backend_config= {
+    i32 = 42 : i32,
+    str = "string"
+  },
+  api_version = 4 : i32
+} : (tensor<f32>) -> tensor<f32>
+```
+
+In this example custom call has a single buffer argument and two attributes, and
+XLA FFI can automatically decode them and pass to the user-defined callable.
+
+```c++
+auto handler = Ffi::Bind()
+  .Arg<BufferR0<F32>>()
+  .Attr<int32_t>("i32")
+  .Attr<std::string_view>("str")
+  .To([](BufferR0<F32> buffer, int32_t i32, std::string_view str) {
+    return Error::Success();
+  });
+```
+
+### User-Defined Enum Attributes
+
+XLA FFI can automatically decode integral MLIR attributes into user-defined
+enums. Enum class must have the same underlying integral type, and decoding
+has to be explicitly registered with XLA FFI.
+
+
+```mlir
+%0 = "stablehlo.custom_call"(%arg0) {
+  call_target_name = "foo",
+  backend_config= {
+    command = 0 : i32
+  },
+  api_version = 4 : i32
+} : (tensor<f32>) -> tensor<f32>
+```
+
+```c++
+enum class Command : int32_t {
+  kAdd = 0,
+  kMul = 1,
+};
+
+XLA_FFI_REGISTER_ENUM_ATTR_DECODING(Command);
+
+auto handler = Ffi::Bind().Attr<Command>("command").To(
+    [](Command command) -> Error { return Error::Success(); });
+```
+
+### Binding All Custom Call Attributes
+
+It is possible to get access to all custom call attributes as a dictionary
+and lazily decode only the attributes that are needed at run time.
+
+```c++
+auto handler = Ffi::Bind().Attrs().To([](Dictionary attrs) -> Error {
+  ErrorOr<int32_t> i32 = attrs.get<int32_t>("i32");
+  return Error::Success();
+});
+```
+
+### Per-execution Custom Options
+
+FFI handlers can access runtime custom options as a `Dictionary` by binding
+`Ctx<CustomOptions>()`. In JAX, pass options with `jax.execution_options`:
+
+```python
+with jax.execution_options(custom_options={"foo": 42}):
+    result = compiled_fn(x)
+```
+
+Python integer options decode as `int64_t`:
+
+```c++
+auto handler =
+    Ffi::Bind().Ctx<CustomOptions>().To([](Dictionary options) -> Error {
+      ErrorOr<int64_t> foo = options.get<int64_t>("foo");
+      return Error::Success();
+    });
+```
+
+**WARNING:** GPU command buffers can replay recorded or captured work without
+invoking the FFI handler again. Changing custom options does not trigger a
+command buffer update or invalidate the stream-capture cache, so replay may use
+work recorded with earlier option values. Custom calls whose recorded work
+depends on options that change between executions must stay out of GPU command
+buffers until this is supported.
+
+### User-defined Struct Attributes
+
+XLA FFI can decode dictionary attributes into user-defined structs.
+
+```mlir
+%0 = "stablehlo.custom_call"(%arg0) {
+  call_target_name = "foo",
+  backend_config= {
+    range = { lo = 0 : i64, hi = 42 : i64 }
+  },
+  api_version = 4 : i32
+} : (tensor<f32>) -> tensor<f32>
+```
+
+In example above `range` is an `mlir::DictionaryAttr` attribute, and instead
+of accessing dictionary fields by name, it can be automatically decoded as
+a C++ struct. Decoding has to be explicitly registered with a
+`XLA_FFI_REGISTER_STRUCT_ATTR_DECODING` macro (behind the scene it defines
+a template specialization in `::xla::ffi` namespace, thus macro must be added to
+the global namespace).
+
+```c++
+struct Range {
+  int64_t lo;
+  int64_t hi;
+};
+
+XLA_FFI_REGISTER_STRUCT_ATTR_DECODING(Range, StructMember<int64_t>("lo"),
+                                             StructMember<int64_t>("hi"));
+
+auto handler = Ffi::Bind().Attr<Range>("range").To([](Range range) -> Error{
+  return Error::Success();
+});
+```
+
+Custom attributes can be loaded from a dictionary, just like any other
+attribute. In example below, all custom call attributes decoded as a
+`Dictionary`, and a `range` can be accessed by name.
+
+```c++
+auto handler = Ffi::Bind().Attrs().To([](Dictionary attrs) -> Error {
+  ErrorOr<Range> range = attrs.get<Range>("range");
+  return Error::Success();
+});
+```
 
 ## Create a custom call on CPU
 
@@ -49,10 +526,10 @@ void do_it() {
         /*api_version=*/CustomCallApiVersion::API_VERSION_TYPED_FFI);
 }
 
-// Constrain custom call arguments to rank-1 buffers of F32 data type.
+// Constrain custom call arguments to 1-dimensional buffers of F32 data type.
 using BufferF32 = xla::ffi::BufferR1<xla::ffi::DataType::F32>;
 
-// Implement a custom call as a C+ function. Note that we can use `Buffer` type
+// Implement a custom call as a C++ function. Note that we can use `Buffer` type
 // defined by XLA FFI that gives us access to buffer data type and shape.
 xla::ffi::Error do_custom_call(BufferF32 in0, BufferF32 in1,
                                xla::ffi::Result<BufferF32> out) {

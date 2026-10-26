@@ -24,6 +24,7 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
@@ -37,11 +38,21 @@ namespace xla {
 
 class ElementalIrEmitter : public IrBuilderMixin<ElementalIrEmitter> {
  public:
+  struct Options {
+    // Instead of relying on builtin `fpext` and `fpcast` emit a bitcast and
+    // truncate to convert f32 to bf16 (and emit extend to convert bf16 to f32).
+    bool xla_cpu_use_truncate_f32_to_bf16_conversion = false;
+  };
+
   using HloToElementGeneratorMap =
       absl::flat_hash_map<const HloInstruction*, llvm_ir::ElementGenerator>;
 
-  ElementalIrEmitter(llvm::Module* module, llvm::IRBuilder<>* b)
-      : b_(b), module_(module) {}
+  ElementalIrEmitter(llvm::Module* module, llvm::IRBuilderBase* b,
+                     const Options& options)
+      : b_(b), module_(module), options_(options) {}
+
+  ElementalIrEmitter(llvm::Module* module, llvm::IRBuilderBase* b)
+      : ElementalIrEmitter(module, b, Options()) {}
 
   virtual ~ElementalIrEmitter() = default;
 
@@ -51,10 +62,10 @@ class ElementalIrEmitter : public IrBuilderMixin<ElementalIrEmitter> {
       const HloInstruction* hlo,
       const HloToElementGeneratorMap& operand_to_generator);
 
-  llvm::IRBuilder<>* b() { return b_; }
+  llvm::IRBuilderBase* b() { return b_; }
 
   // builder() is for IrBuilderMixin.
-  llvm::IRBuilder<>* builder() { return b_; }
+  llvm::IRBuilderBase* builder() { return b_; }
 
   llvm::Module* module() { return module_; }
 
@@ -107,6 +118,8 @@ class ElementalIrEmitter : public IrBuilderMixin<ElementalIrEmitter> {
                                     bool is_signed);
   llvm::Value* EmitIntegerPow(llvm::Value* lhs, llvm::Value* rhs,
                               bool is_signed);
+  llvm::Value* EmitIntegerMulhi(llvm::Value* lhs, llvm::Value* rhs,
+                                bool is_signed);
 
   virtual absl::StatusOr<llvm::Value*> EmitPredBinaryOp(
       const HloInstruction* op, llvm::Value* lhs_value, llvm::Value* rhs_value);
@@ -132,13 +145,31 @@ class ElementalIrEmitter : public IrBuilderMixin<ElementalIrEmitter> {
   llvm::Value* EmitIntegralMin(llvm::Value* lhs_value, llvm::Value* rhs_value,
                                bool is_signed);
 
+  virtual absl::StatusOr<llvm::Value*> EmitAcos(PrimitiveType prim_type,
+                                                llvm::Value* value);
+
+  virtual absl::StatusOr<llvm::Value*> EmitAcosh(PrimitiveType prim_type,
+                                                 llvm::Value* value);
+
+  virtual absl::StatusOr<llvm::Value*> EmitAsin(PrimitiveType prim_type,
+                                                llvm::Value* value);
+
   virtual absl::StatusOr<llvm::Value*> EmitAtan2(PrimitiveType prim_type,
                                                  llvm::Value* lhs,
                                                  llvm::Value* rhs,
                                                  absl::string_view name);
 
+  virtual absl::StatusOr<llvm::Value*> EmitAtanh(PrimitiveType prim_type,
+                                                 llvm::Value* value);
+
+  virtual absl::StatusOr<llvm::Value*> EmitAsinh(PrimitiveType prim_type,
+                                                 llvm::Value* value);
+
   virtual absl::StatusOr<llvm::Value*> EmitLog(PrimitiveType prim_type,
                                                llvm::Value* value);
+
+  virtual absl::StatusOr<llvm::Value*> EmitLog2(PrimitiveType prim_type,
+                                                llvm::Value* value);
 
   virtual absl::StatusOr<llvm::Value*> EmitSqrt(PrimitiveType prim_type,
                                                 llvm::Value* value);
@@ -155,8 +186,14 @@ class ElementalIrEmitter : public IrBuilderMixin<ElementalIrEmitter> {
   virtual absl::StatusOr<llvm::Value*> EmitSin(PrimitiveType prim_type,
                                                llvm::Value* value);
 
+  virtual absl::StatusOr<llvm::Value*> EmitSinh(PrimitiveType prim_type,
+                                                llvm::Value* value);
+
   virtual absl::StatusOr<llvm::Value*> EmitCos(PrimitiveType prim_type,
                                                llvm::Value* value);
+
+  virtual absl::StatusOr<llvm::Value*> EmitCosh(PrimitiveType prim_type,
+                                                llvm::Value* value);
 
   virtual absl::StatusOr<llvm::Value*> EmitCosm1(PrimitiveType prim_type,
                                                  llvm::Value* value);
@@ -167,6 +204,9 @@ class ElementalIrEmitter : public IrBuilderMixin<ElementalIrEmitter> {
   virtual absl::StatusOr<llvm::Value*> EmitExp(PrimitiveType prim_type,
                                                llvm::Value* value,
                                                absl::string_view name);
+
+  virtual absl::StatusOr<llvm::Value*> EmitExp2(PrimitiveType prim_type,
+                                                llvm::Value* value);
 
   virtual absl::StatusOr<llvm::Value*> EmitExpm1(PrimitiveType prim_type,
                                                  llvm::Value* value);
@@ -225,10 +265,6 @@ class ElementalIrEmitter : public IrBuilderMixin<ElementalIrEmitter> {
       absl::Span<llvm::Value* const> accumulator_addrs,
       llvm::ArrayRef<llvm::Type*> accumulator_types, bool is_variadic);
 
-  // Composes a complex struct. imag may be nullptr for simple cast operations.
-  llvm::Value* EmitComposeComplex(const HloInstruction* op, llvm::Value* real,
-                                  llvm::Value* imag);
-
   // Emit `accumulator + lhs * rhs` for the given primitive type.
   llvm::Value* EmitMulAdd(llvm::Value* lhs, llvm::Value* rhs,
                           llvm::Value* accumulator,
@@ -276,7 +312,7 @@ class ElementalIrEmitter : public IrBuilderMixin<ElementalIrEmitter> {
 
   virtual absl::StatusOr<std::vector<llvm::Value*>> EmitThreadLocalCall(
       const HloComputation& callee, absl::Span<llvm::Value* const> parameters,
-      absl::string_view name, bool is_reducer) = 0;
+      absl::string_view name, bool is_reducer);
 
   absl::StatusOr<llvm::Value*> EmitElementalMap(
       const HloMapInstruction* map_instr,
@@ -308,11 +344,13 @@ class ElementalIrEmitter : public IrBuilderMixin<ElementalIrEmitter> {
   absl::StatusOr<llvm::Value*> EvaluatePolynomial(
       llvm::Type* type, llvm::Value* x, absl::Span<const double> coefficients);
 
-  virtual bool fast_min_max() = 0;
+  virtual bool fast_min_max();
 
-  llvm::IRBuilder<>* const b_;
+  llvm::IRBuilderBase* const b_;
 
   llvm::Module* module_;
+
+  Options options_;
 
   friend class ElementalIrEmitterForTests;
 };
@@ -320,7 +358,7 @@ class ElementalIrEmitter : public IrBuilderMixin<ElementalIrEmitter> {
 // Allow to instantiate IR emitter in tests.
 class ElementalIrEmitterForTests : public ElementalIrEmitter {
  public:
-  ElementalIrEmitterForTests(llvm::Module* module, llvm::IRBuilder<>* builder)
+  ElementalIrEmitterForTests(llvm::Module* module, llvm::IRBuilderBase* builder)
       : ElementalIrEmitter(module, builder) {}
 
   absl::Status TestElementalDot(const HloInstruction* hlo,

@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_SERVICE_GPU_GPU_DEVICE_INFO_FOR_TESTS_H_
 #define XLA_SERVICE_GPU_GPU_DEVICE_INFO_FOR_TESTS_H_
 
+#include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/device_description.h"
 
 namespace xla {
@@ -23,10 +24,32 @@ namespace gpu {
 
 class TestGpuDeviceInfo {
  public:
+  static stream_executor::DeviceDescription A100SXMDeviceInfo(
+      stream_executor::GpuComputeCapability cc =
+          stream_executor::GpuComputeCapability{
+              stream_executor::CudaComputeCapability(8, 0)});
   static stream_executor::DeviceDescription RTXA6000DeviceInfo(
       stream_executor::GpuComputeCapability cc =
-          stream_executor::CudaComputeCapability(8, 9));
+          stream_executor::GpuComputeCapability{
+              stream_executor::CudaComputeCapability(8, 9)});
+  static stream_executor::DeviceDescription H100SXMDeviceInfo(
+      stream_executor::GpuComputeCapability cc =
+          stream_executor::GpuComputeCapability{
+              stream_executor::CudaComputeCapability(9, 0)});
+  static stream_executor::DeviceDescription B200SXMDeviceInfo(
+      stream_executor::GpuComputeCapability cc =
+          stream_executor::GpuComputeCapability{
+              stream_executor::CudaComputeCapability(10, 0)});
+  static stream_executor::DeviceDescription VRNVL72DeviceInfo(
+      stream_executor::GpuComputeCapability cc =
+          stream_executor::GpuComputeCapability{
+              stream_executor::CudaComputeCapability(10, 7)});
   static stream_executor::DeviceDescription AMDMI210DeviceInfo();
+  static stream_executor::DeviceDescription AMDMI300DeviceInfo();
+  static stream_executor::DeviceDescription AMDMI350DeviceInfo();
+  static stream_executor::DeviceDescription AMDRX7900DeviceInfo();
+  // Returns default RTXA6000 or AMDMI210 device info
+  static stream_executor::DeviceDescription CudaOrRocmDeviceInfo();
 };
 
 }  // namespace gpu

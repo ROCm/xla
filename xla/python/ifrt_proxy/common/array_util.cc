@@ -14,18 +14,24 @@
 
 #include "xla/python/ifrt_proxy/common/array_util.h"
 
+#include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/cord.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "xla/python/ifrt/dtype.h"
 #include "xla/python/ifrt/shape.h"
-#include "tsl/platform/statusor.h"
+#include "xla/python/ifrt_proxy/common/array_util.pb.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace ifrt {
@@ -43,9 +49,8 @@ std::string StridesAsStr(const ArrayMemRegion::ByteStrides& strides) {
 absl::StatusOr<std::vector<int64_t>> DefaultByteStrides(const DType dtype,
                                                         const Shape& shape) {
   if (!dtype.byte_size().has_value()) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unsupported data type to query byte-strides for: ",
-                     dtype.DebugString()));
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Unsupported data type to query byte-strides for: ", dtype));
   }
   std::vector<int64_t> result(shape.dims().size());
   int64_t stride = *dtype.byte_size();
@@ -59,10 +64,18 @@ absl::StatusOr<std::vector<int64_t>> DefaultByteStrides(const DType dtype,
 absl::StatusOr<ArrayMemRegion> ArrayMemRegion::FromZerothElementPointer(
     const void* zeroth_element, const DType dtype, const Shape& shape,
     ByteStrides byte_strides) {
-  if (!dtype.byte_size().has_value()) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unsupported data type to construct ArrayMemRegion: ",
-                     dtype.DebugString()));
+  if (dtype.kind() == DType::kToken) {
+    return ArrayMemRegion(nullptr, 0);
+  }
+  int byte_size;
+  if (dtype.byte_size().has_value()) {
+    byte_size = *dtype.byte_size();
+  } else if (dtype.bit_size().has_value() && *dtype.bit_size() < 8) {
+    // IFRT uses 1 byte per element for S4 and S2.
+    byte_size = 1;
+  } else {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Unsupported data type to construct ArrayMemRegion: ", dtype));
   }
   // Below, we return an error for all situations where the zeroth_element
   // is different from mem_region_start.
@@ -70,16 +83,15 @@ absl::StatusOr<ArrayMemRegion> ArrayMemRegion::FromZerothElementPointer(
 
   if (!byte_strides.has_value() ||
       (byte_strides->empty() && shape.dims().empty())) {
-    return ArrayMemRegion(mem_region_start,
-                          dtype.byte_size().value() * shape.num_elements());
+    return ArrayMemRegion(mem_region_start, byte_size * shape.num_elements());
   }
   if (shape.num_elements() == 0) {
     return ArrayMemRegion(mem_region_start, 0);
   }
   if (shape.dims().size() != byte_strides->size()) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Shape has different dimensions from byte_strides: ",
-                     shape.DebugString(), " vs ", StridesAsStr(byte_strides)));
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Shape has different dimensions from byte_strides: ", shape, " vs ",
+        StridesAsStr(byte_strides)));
   }
   // Logic based on
   // https://numpy.org/doc/stable/reference/generated/numpy.ndarray.strides.html
@@ -93,10 +105,10 @@ absl::StatusOr<ArrayMemRegion> ArrayMemRegion::FromZerothElementPointer(
   // element_strides=[10,-1]).
   uint64_t last_element_byte_offset = 0;
   for (int i = 0; i < byte_strides->size(); ++i) {
-    int stride = (*byte_strides)[i];
+    int64_t stride = (*byte_strides)[i];
     if (shape.dims()[i] < 0) {
       return absl::InvalidArgumentError(
-          absl::StrCat("A shape dimension is negative: ", shape.DebugString()));
+          absl::StrCat("A shape dimension is negative: ", shape));
     } else if (shape.dims()[i] == 1) {
       // The stride shouldn't matter in this case, so continue without checking
       // validity of the given stride.
@@ -105,28 +117,53 @@ absl::StatusOr<ArrayMemRegion> ArrayMemRegion::FromZerothElementPointer(
       return absl::UnimplementedError(
           absl::StrCat("Negative or zero strides are not fully supported: ",
                        StridesAsStr(byte_strides)));
-    } else if (stride % dtype.byte_size().value() != 0) {
+    } else if (stride % byte_size != 0) {
       return absl::UnimplementedError(absl::StrCat(
           "byte_stride[", i, "] is not a multiple of the data-type's size: ",
-          StridesAsStr(byte_strides), ", dtype=", dtype.DebugString()));
+          StridesAsStr(byte_strides), ", dtype=", dtype));
     } else {
       // `shape.dims()[i]` cannot be negative (we explicitly check for this
       // above) or zero (we return early for `shape.num_elements() == 0`).
       DCHECK_GT(shape.dims()[i], 0);
-      last_element_byte_offset += (stride * (shape.dims()[i] - 1));
+      int64_t product;
+      if (__builtin_mul_overflow(stride, shape.dims()[i] - 1, &product)) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "byte_stride[", i, "] * (dim[", i,
+            "] - 1) overflows: stride=", stride, " dim=", shape.dims()[i]));
+      }
+      // Each product is independently in int64 range (checked above), but the
+      // uint64 accumulation of those products can still wrap. Example:
+      // shape=[2,2,2], strides=[INT64_MAX, INT64_MAX, 2] -> each mul succeeds
+      // and the running sum is 2^64 == 0.
+      const uint64_t term = static_cast<uint64_t>(product);
+      if (__builtin_add_overflow(last_element_byte_offset, term,
+                                 &last_element_byte_offset)) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "byte-stride span overflows uint64 while accumulating byte_stride[",
+            i, "] * (dim[", i, "] - 1): stride=", stride,
+            " dim=", shape.dims()[i]));
+      }
     }
   }
-  return ArrayMemRegion(mem_region_start,
-                        last_element_byte_offset + dtype.byte_size().value());
+  uint64_t total_size;
+  if (__builtin_add_overflow(last_element_byte_offset,
+                             static_cast<uint64_t>(byte_size), &total_size)) {
+    return absl::InvalidArgumentError(
+        "byte-stride span overflows uint64: last-element offset + dtype size");
+  }
+  return ArrayMemRegion(mem_region_start, total_size);
 }
 
 absl::StatusOr<ArrayMemRegion> ArrayMemRegion::FromMinimalMemRegion(
     absl::string_view mem_region, const DType dtype, const Shape& shape,
     ByteStrides byte_strides) {
+  if (dtype.kind() == DType::kToken) {
+    return ArrayMemRegion(nullptr, 0);
+  }
   // FromZerothElementPointer() currently returns an error for any situation
   // where the zeroth_element will is not equal to the place where the minimal
   // memory region starts.
-  TF_ASSIGN_OR_RETURN(
+  ABSL_ASSIGN_OR_RETURN(
       auto result,
       FromZerothElementPointer(mem_region.data(), dtype, shape, byte_strides));
 
@@ -134,8 +171,7 @@ absl::StatusOr<ArrayMemRegion> ArrayMemRegion::FromMinimalMemRegion(
     return absl::InvalidArgumentError(
         absl::StrCat("Incorrect size ", result.mem_region().size(), " vs ",
                      mem_region.size(), "; is provided memory region minimal? ",
-                     dtype.DebugString(), " ", shape.DebugString(), " ",
-                     StridesAsStr(byte_strides)));
+                     dtype, " ", shape, " ", StridesAsStr(byte_strides)));
   }
   CHECK_EQ(result.mem_region().data(), mem_region.data());
   return result;
@@ -149,6 +185,67 @@ void* ArrayMemRegion::zeroth_element() const {
   // ArrayMemRegion cannot yet be constructed for situations where the
   // zeroth element pointer is different from mem_region_start_.
   return mem_region_start_;
+}
+
+size_t ArrayMemRegion::nbytes() const { return nbytes_; }
+
+absl::StatusOr<std::unique_ptr<std::string>> SerializeStringHostBuffer(
+    absl::Span<const absl::Cord> cords) {
+  proto::StringArrayContents string_array_proto;
+  for (const auto& c : cords) {
+    string_array_proto.add_strings(std::string(c));
+  }
+  return std::make_unique<std::string>(string_array_proto.SerializeAsString());
+}
+
+absl::StatusOr<std::vector<absl::Cord>> DeserializeStringHostBufferFromString(
+    absl::string_view serialized_string_buffer) {
+  proto::StringArrayContents string_array_proto;
+  if (!string_array_proto.ParseFromString(serialized_string_buffer)) {
+    return absl::InvalidArgumentError(
+        "Failed to parse serialized string buffer");
+  }
+
+  std::vector<absl::Cord> result;
+  result.reserve(string_array_proto.strings_size());
+  for (const auto& s : string_array_proto.strings()) {
+    result.push_back(absl::Cord(s));
+  }
+  return result;
+}
+
+absl::Status DeserializeFromCordIntoPreallocatedStringHostBuffer(
+    const absl::Cord& serialized_string_buffer, int64_t num_elements,
+    absl::Cord* preallocated_buffer) {
+  proto::StringArrayContents string_array_proto;
+
+#if defined(PLATFORM_GOOGLE)
+  if (!string_array_proto.ParseFromString(serialized_string_buffer)) {
+#else
+  if (!string_array_proto.ParseFromString(  // No absl::Cord support in OSS.
+          std::string(serialized_string_buffer))) {
+#endif
+    return absl::InvalidArgumentError(
+        "Failed to parse serialized string buffer");
+  }
+
+  // `preallocated_buffer` was sized from the array shape, while the serialized
+  // buffer carries its own string count. Reject a mismatch before writing any
+  // element so an inconsistent buffer cannot write past the end of
+  // `preallocated_buffer`. This mirrors the element-count validation on the
+  // server-side string deserialization path.
+  if (string_array_proto.strings_size() != num_elements) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "String host buffer has ", string_array_proto.strings_size(),
+        " elements but shape requires ", num_elements, " elements"));
+  }
+
+  auto* current_cord = preallocated_buffer;
+  for (const auto& s : string_array_proto.strings()) {
+    *current_cord = s;
+    ++current_cord;
+  }
+  return absl::OkStatus();
 }
 
 }  // namespace proxy

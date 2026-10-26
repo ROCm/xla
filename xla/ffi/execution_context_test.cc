@@ -15,13 +15,16 @@ limitations under the License.
 
 #include "xla/ffi/execution_context.h"
 
+#include <gtest/gtest.h>
+
 #include <cstdint>
 #include <string>
 
 #include "absl/status/status.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/statusor.h"
-#include "tsl/platform/test.h"
+#include "xla/ffi/type_registry.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
 
 namespace xla::ffi {
 
@@ -61,8 +64,8 @@ TEST(ExecutionContextTest, InsertUserOwned) {
 
 TEST(ExecutionContextTest, InsertUserOwnedWithTypeId) {
   TF_ASSERT_OK_AND_ASSIGN(
-      ExecutionContext::TypeId type_id,
-      ExecutionContext::RegisterExternalTypeId("I32UserData"));
+      TypeRegistry::TypeId type_id,
+      TypeRegistry::AssignTypeId("I32UserData", TypeRegistry::TypeInfo{}));
 
   I32UserData user_data(42);
 

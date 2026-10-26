@@ -18,34 +18,34 @@ limitations under the License.
 
 #include <cstdint>
 #include <memory>
-#include <string>
 #include <vector>
 
-#include "absl/container/flat_hash_map.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "llvm/Support/ExtensibleRTTI.h"
 #include "xla/layout.h"
 #include "xla/pjrt/pjrt_compiler.h"
 #include "xla/pjrt/pjrt_device_description.h"
+#include "xla/python/ifrt/attribute_map.h"
+#include "xla/python/ifrt/rtti.h"
 #include "xla/python/ifrt/topology.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla::ifrt {
 
-class PjRtTopology final : public llvm::RTTIExtends<PjRtTopology, Topology> {
+class PjRtTopology final : public RTTIExtends<PjRtTopology, Topology> {
  public:
   explicit PjRtTopology(
       std::shared_ptr<const xla::PjRtTopologyDescription> description);
 
-  const std::shared_ptr<const xla::PjRtTopologyDescription>& description()
-      const {
-    return description_;
-  }
-
   absl::string_view platform_name() const override;
   absl::string_view platform_version() const override;
   PjRtPlatformId platform_id() const override;
+
+  const std::shared_ptr<const xla::PjRtTopologyDescription>& description()
+      const override {
+    return description_;
+  }
 
   std::vector<std::unique_ptr<const PjRtDeviceDescription>> DeviceDescriptions()
       const override;
@@ -54,15 +54,15 @@ class PjRtTopology final : public llvm::RTTIExtends<PjRtTopology, Topology> {
       PrimitiveType element_type,
       absl::Span<const int64_t> dims) const override;
 
-  absl::StatusOr<std::string> Serialize() const override;
+  absl::StatusOr<uint64_t> Fingerprint() const override;
 
-  const absl::flat_hash_map<std::string, PjRtDeviceAttribute>& Attributes()
-      const override;
+  const AttributeMap& Attributes() const override;
 
   static char ID;  // NOLINT
 
  private:
   std::shared_ptr<const xla::PjRtTopologyDescription> description_;
+  AttributeMap attributes_;
 };
 
 }  // namespace xla::ifrt

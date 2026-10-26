@@ -1,0 +1,199 @@
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+"""Lower-level functionality for build config.
+
+The functions in this file might be referred by tensorflow.bzl. They have to
+be separate to avoid cyclic references.
+"""
+
+load("@local_config_remote_execution//:remote_execution.bzl", "gpu_test_tags")
+load("@local_config_rocm//rocm:build_defs.bzl", "get_rbe_amdgpu_pool", "is_rocm_configured")
+load("@rules_ml_toolchain//py/rules_pywrap:pywrap.default.bzl", "use_pywrap_rules")
+load("//xla/tsl:package_groups.bzl", "DEFAULT_LOAD_VISIBILITY")
+load("//xla/tsl/platform/default:cuda_build_defs.bzl", "is_cuda_configured")
+
+visibility(DEFAULT_LOAD_VISIBILITY)
+
+# RBE settings for tests that require a GPU. This is used in exec_properties of rules
+# that need GPU access.
+GPU_TEST_PROPERTIES = {
+    "test.dockerRuntime": "nvidia",
+    "test.Pool": "gpu-pool",
+}
+
+ROCM_SINGLE_GPU_TEST_PROPERTIES = {
+    "test.Pool": get_rbe_amdgpu_pool(is_single_gpu = True),
+}
+
+ROCM_MULTI_GPU_TEST_PROPERTIES = {
+    "test.Pool": get_rbe_amdgpu_pool(is_single_gpu = False),
+}
+
+def tf_gpu_tests_tags():
+    """Gets tags for TensorFlow GPU tests based on the configured environment.
+
+    Returns:
+        A list of tags to be added to the test target.
+    """
+    if is_cuda_configured():
+        return ["requires-gpu-cuda", "gpu"] + gpu_test_tags()
+    elif is_rocm_configured():
+        return ["requires-gpu-rocm", "gpu"] + gpu_test_tags()
+    else:
+        # If neither CUDA nor ROCm is configured, we assume no GPU support.
+        # This is a fallback and should not be used in practice.
+        return ["requires-gpu", "gpu"] + gpu_test_tags()
+
+# terminology changes: saving tf_cuda_* for compatibility
+def tf_cuda_base_tests_tags():
+    """Base tags common to all GPU tests in OSS."""
+    return ["gpu"] + gpu_test_tags()
+
+def tf_cuda_tests_tags():
+    """Tags for single-GPU test targets in OSS (dynamically CUDA or ROCm)."""
+    return tf_gpu_tests_tags()
+
+def tf_cuda_2gpu_tests_tags():
+    """Tags for 2-GPU test targets in OSS."""
+    return tf_gpu_tests_tags() + [
+        "multi_gpu",
+        "manual",
+        "no_pip",
+    ]
+
+def tf_has_tag(kwargs, tag):
+    return ("tags" in kwargs and kwargs["tags"] != None and tag in kwargs["tags"])
+
+def tf_has_any_tag(kwargs, tags):
+    return any([tf_has_tag(kwargs, tag) for tag in tags])
+
+def tf_override_test_tags_by_target_name(name, tags):
+    """Temporary workaround for Google-internal builds. Do not use it, it will be removed."""
+    _ignore = name  # buildifier: disable=unused-variable
+    return tags
+
+def tf_exec_properties(kwargs):
+    """Gets execution_properties for TensorFlow GPU tests based on the provided tags.
+
+    Args:
+      kwargs: all arguments of the xla test target
+    Returns:
+        execution_properties with the execution pool names for rbe.
+    """
+    if is_rocm_configured() and tf_has_any_tag(kwargs, ["requires-gpu-rocm", "requires-gpu-amd"]):
+        if tf_has_tag(kwargs, "multi_gpu"):
+            return ROCM_MULTI_GPU_TEST_PROPERTIES
+        if tf_has_tag(kwargs, "gpu"):
+            return ROCM_SINGLE_GPU_TEST_PROPERTIES
+    elif tf_has_tag(kwargs, "remote-gpu"):
+        return GPU_TEST_PROPERTIES
+    return {}
+
+def tf_additional_profiler_deps():
+    return []
+
+def tf_additional_xla_deps_py():
+    return []
+
+def tf_additional_grpc_deps_py():
+    return []
+
+def tf_additional_license_deps():
+    return []
+
+def tf_additional_tpu_ops_deps():
+    return []
+
+# TODO(b/356020232): remove completely after migration is done
+# Include specific extra dependencies when building statically, or
+# another set of dependencies otherwise. If "macos" is provided, that
+# dependency list is used when using the framework_shared_object config
+# on MacOS platforms. If "macos" is not provided, the "otherwise" list is
+# used for all framework_shared_object platforms including MacOS.
+# buildifier: disable=function-docstring
+def if_static(extra_deps, otherwise = [], macos = []):
+    if use_pywrap_rules():
+        return extra_deps
+
+    ret = {
+        str(Label("//xla/tsl:framework_shared_object")): otherwise,
+        "//conditions:default": extra_deps,
+    }
+    if macos:
+        ret[str(Label("//xla/tsl:macos_with_framework_shared_object"))] = macos
+    return select(ret)
+
+# TODO(b/356020232): remove completely after migration is done
+def if_static_and_not_mobile(extra_deps, otherwise = []):
+    if use_pywrap_rules():
+        return extra_deps
+
+    return select({
+        str(Label("//xla/tsl:framework_shared_object")): otherwise,
+        str(Label("//xla/tsl:android")): otherwise,
+        str(Label("//xla/tsl:ios")): otherwise,
+        "//conditions:default": extra_deps,
+    })
+
+# TODO(b/356020232): remove completely after migration is done
+def if_pywrap(if_true = [], if_false = []):
+    return if_true if use_pywrap_rules() else if_false
+
+def if_llvm_aarch32_available(then, otherwise = []):
+    return select({
+        str(Label("//xla/tsl:aarch32_or_cross")): then,
+        "//conditions:default": otherwise,
+    })
+
+def if_llvm_aarch64_available(then, otherwise = []):
+    return select({
+        str(Label("//xla/tsl:aarch64_or_cross")): then,
+        "//conditions:default": otherwise,
+    })
+
+def if_llvm_arm_available(then, otherwise = []):
+    return select({
+        str(Label("//xla/tsl:arm_or_cross")): then,
+        "//conditions:default": otherwise,
+    })
+
+def if_llvm_hexagon_available(then, otherwise = []):
+    _ = then  # @unused
+    return otherwise
+
+def if_llvm_powerpc_available(then, otherwise = []):
+    return select({
+        str(Label("//xla/tsl:ppc64le_or_cross")): then,
+        "//conditions:default": otherwise,
+    })
+
+def if_llvm_riscv_available(then, otherwise = []):
+    return select({
+        str(Label("//xla/tsl:riscv64_or_cross")): then,
+        "//conditions:default": otherwise,
+    })
+
+def if_llvm_system_z_available(then, otherwise = []):
+    return select({
+        str(Label("//xla/tsl:s390x_or_cross")): then,
+        "//conditions:default": otherwise,
+    })
+
+def if_llvm_x86_available(then, otherwise = []):
+    return select({
+        str(Label("//xla/tsl:x86_or_cross")): then,
+        "//conditions:default": otherwise,
+    })

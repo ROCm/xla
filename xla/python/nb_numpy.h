@@ -26,10 +26,10 @@ limitations under the License.
 
 #include <cstdint>
 #include <optional>
-#include <string_view>
 
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "nanobind/nanobind.h"  // from @nanobind
+#include "nanobind/nanobind.h"
 #include "xla/tsl/python/lib/core/numpy.h"
 
 #if NPY_ABI_VERSION < 0x02000000
@@ -42,11 +42,12 @@ namespace xla {
 // initialization function. Otherwise PyArray_DescrCheck will be nullptr.
 class nb_dtype : public nanobind::object {
  public:
-  NB_OBJECT_DEFAULT(nb_dtype, object, "dtype", PyArray_DescrCheck);  // NOLINT
+  NB_OBJECT_DEFAULT(nb_dtype, object, "numpy.dtype",
+                    PyArray_DescrCheck);  // NOLINT
 
   explicit nb_dtype(const nanobind::str& format)
       : nb_dtype(from_args(format)) {}
-  explicit nb_dtype(std::string_view format)
+  explicit nb_dtype(absl::string_view format)
       : nb_dtype(from_args(nanobind::str(format.data(), format.size()))) {}
 
   static nb_dtype from_args(const nanobind::object& args);
@@ -71,7 +72,7 @@ class nb_dtype : public nanobind::object {
 
 class nb_numpy_ndarray : public nanobind::object {
  public:
-  NB_OBJECT_DEFAULT(nb_numpy_ndarray, object, "ndarray",
+  NB_OBJECT_DEFAULT(nb_numpy_ndarray, object, "numpy.ndarray",
                     PyArray_Check);  // NOLINT
 
   nb_numpy_ndarray(nb_dtype dtype, absl::Span<int64_t const> shape,

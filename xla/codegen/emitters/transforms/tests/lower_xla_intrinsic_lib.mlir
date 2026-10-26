@@ -1,0 +1,579 @@
+// Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// ==============================================================================
+// RUN: emitters_opt %s -split-input-file -xla-lower-xla-intrinsic-lib | FileCheck %s
+// RUN: emitters_opt %s -split-input-file \
+// RUN:   -xla-lower-xla-intrinsic-lib="cpu_features=+avx,+avx2,+avx512f" \
+// RUN:   | FileCheck %s --check-prefix=AVX512
+
+module {
+  func.func @exp_f64(%arg0: f64) -> f64 {
+    %ret = math.exp %arg0 : f64
+    return %ret : f64
+  }
+}
+
+// CHECK: func @exp_f64
+// CHECK: %[[RESULT:.*]] = call @xla.exp.f64(%arg0) : (f64) -> f64
+// CHECK: return %[[RESULT]] : f64
+
+// -----
+
+module {
+  func.func @exp_f32(%arg0: f32) -> f32 {
+    %ret = math.exp %arg0 : f32
+    return %ret : f32
+  }
+}
+
+// CHECK: func @exp_f32
+// CHECK-NOT: @xla.exp.f64
+// CHECK: math.exp %arg0 : f32
+// CHECK: return
+
+// -----
+
+module {
+  func.func @exp_f64_vector(%arg0: vector<4xf64>) -> vector<4xf64> {
+    %ret = math.exp %arg0 : vector<4xf64>
+    return %ret : vector<4xf64>
+  }
+}
+
+// CHECK: func @exp_f64_vector
+// CHECK-NOT: math.exp %arg0 : vector<4xf64>
+// CHECK: @xla.exp.v4f64
+
+// -----
+
+module {
+  func.func @trunc(%input: f32) -> bf16 {
+    %truncated = arith.truncf %input : f32 to bf16
+    func.return %truncated : bf16
+  }
+}
+// CHECK-LABEL: @trunc
+// CHECK-SAME: (%[[ARG:.*]]: f32) -> bf16
+// CHECK: %[[TRUNC_CALL:.*]] = call @xla.fptrunc.f32.to.bf16(%[[ARG]])
+// CHECK: return %[[TRUNC_CALL]]
+
+// -----
+
+module {
+  // CHECK-LABEL: @trunc
+  func.func @trunc_vector(%input: vector<8xf32>) -> vector<8xbf16> {
+    // CHECK-SAME: (%[[ARG:.*]]: vector<8xf32>) -> vector<8xbf16>
+    // CHECK: %[[TRUNC_CALL:.*]] = call @xla.fptrunc.v8f32.to.v8bf16(%[[ARG]])
+    %truncated = arith.truncf %input : vector<8xf32> to vector<8xbf16>
+    // CHECK: return %[[TRUNC_CALL]]
+    func.return %truncated : vector<8xbf16>
+  }
+}
+
+// -----
+
+module {
+  func.func @erf32(%arg0: f32) -> f32 {
+    %ret = math.erf %arg0 : f32
+    return %ret : f32
+  }
+}
+
+// CHECK-LABEL: @erf32
+// CHECK-NOT: math.erf
+// CHECK: %[[ERF_CALL:.*]] = call @xla.erf.f32
+// CHECK: return %[[ERF_CALL]]
+
+// -----
+
+module {
+  func.func @erf32_vector(%arg0: vector<4xf32>) -> vector<4xf32> {
+    %ret = math.erf %arg0 : vector<4xf32>
+    return %ret : vector<4xf32>
+  }
+}
+
+// CHECK-LABEL: @erf32_vector
+// CHECK-NOT: math.erf
+// CHECK: %[[ERF_CALL:.*]] = call @xla.erf.v4f32
+// CHECK: return %[[ERF_CALL]]
+
+// -----
+
+module {
+  func.func @erf64(%arg0: f64) -> f64 {
+    %ret = math.erf %arg0 : f64
+    return %ret : f64
+  }
+}
+
+// CHECK-LABEL: @erf64
+// CHECK-NOT: math.erf
+// CHECK: %[[ERF_CALL:.*]] = call @xla.erf.f64
+// CHECK: return %[[ERF_CALL]]
+
+
+// -----
+
+module {
+  func.func @erf64_vector(%arg0: vector<4xf64>) -> vector<4xf64> {
+    %ret = math.erf %arg0 : vector<4xf64>
+    return %ret : vector<4xf64>
+  }
+}
+
+// CHECK-LABEL: @erf64_vector
+// CHECK-NOT: math.erf
+// CHECK-COUNT-4: call @xla.erf.f64
+
+// -----
+
+module {
+  func.func @rsqrt(%arg0: f32) -> f32 {
+    %ret = math.rsqrt %arg0 : f32
+    return %ret : f32
+  }
+}
+
+// CHECK-LABEL: @xla.rsqrt.f32
+// CHECK-NOT: math.rsqrt
+// CHECK: %[[RSQRT_CALL:.*]] = call @xla.rsqrt.f32
+// CHECK: return %[[RSQRT_CALL]]
+
+// -----
+
+module {
+  func.func @rsqrt(%arg0: f64) -> f64 {
+    %ret = math.rsqrt %arg0 : f64
+    return %ret : f64
+  }
+}
+
+// CHECK-LABEL: @xla.rsqrt.f64
+// CHECK-NOT: math.rsqrt
+// CHECK: %[[RSQRT_CALL:.*]] = call @xla.rsqrt.f64
+// CHECK: return %[[RSQRT_CALL]]
+
+// -----
+
+// Use a vector length of 3 as we know that will never be supported.
+func.func @rsqrt_unsupported_vector_size(%arg0: vector<3xf32>) -> vector<3xf32> {
+  // CHECK: %[[IN0:.*]] = vector.extract %arg0[0]
+  // CHECK: %[[RSQRT0:.*]] = call @xla.rsqrt.f32(%[[IN0]])
+  // CHECK: %[[IN1:.*]] = vector.extract %arg0[1]
+  // CHECK: %[[RSQRT1:.*]] = call @xla.rsqrt.f32(%[[IN1]])
+  // CHECK: %[[IN2:.*]] = vector.extract %arg0[2]
+  // CHECK: %[[RSQRT2:.*]] = call @xla.rsqrt.f32(%[[IN2]])
+  // CHECK: %[[RESULT:.*]] = vector.from_elements %[[RSQRT0]], %[[RSQRT1]], %[[RSQRT2]]
+  %ret = math.rsqrt %arg0 : vector<3xf32>
+  // CHECK: return %[[RESULT]]
+  return %ret : vector<3xf32>
+}
+// -----
+
+func.func @exp_f16(%arg0: f16) -> f16 {
+  %ret = math.exp %arg0 : f16
+  return %ret : f16
+}
+// CHECK-LABEL: @exp_f16
+// CHECK: math.exp %arg0 : f16
+// CHECK: return
+
+
+// -----
+
+func.func @tanh_bf16_vector(%arg0: vector<4xbf16>) -> vector<4xbf16> {
+  %ret = math.tanh %arg0 : vector<4xbf16>
+  return %ret : vector<4xbf16>
+}
+// CHECK-LABEL: @tanh_bf16_vector
+// CHECK: %[[EXT:.*]] = arith.extf %arg0 : vector<4xbf16> to vector<4xf32>
+// CHECK: %[[CALL:.*]] = call @xla.tanh.v4f32(%[[EXT]])
+// CHECK: %[[TRUNC:.*]] = call @xla.fptrunc.v4f32.to.v4bf16(%[[CALL]])
+// CHECK: return %[[TRUNC]]
+
+// -----
+
+func.func @rsqrt_unsupported_f16_vector(%arg0: vector<3xf16>) -> vector<3xf16> {
+  %ret = math.rsqrt %arg0 : vector<3xf16>
+  return %ret : vector<3xf16>
+}
+// CHECK-LABEL: @rsqrt_unsupported_f16_vector
+// CHECK: %[[EXT:.*]] = arith.extf %arg0 : vector<3xf16> to vector<3xf32>
+// CHECK: %[[EX0:.*]] = vector.extract %[[EXT]][0]
+// CHECK: %[[C0:.*]] = call @xla.rsqrt.f32(%[[EX0]])
+// CHECK: %[[EX1:.*]] = vector.extract %[[EXT]][1]
+// CHECK: %[[C1:.*]] = call @xla.rsqrt.f32(%[[EX1]])
+// CHECK: %[[EX2:.*]] = vector.extract %[[EXT]][2]
+// CHECK: %[[C2:.*]] = call @xla.rsqrt.f32(%[[EX2]])
+// CHECK: %[[FROM:.*]] = vector.from_elements %[[C0]], %[[C1]], %[[C2]] : vector<3xf32>
+// CHECK: %[[TRUNC:.*]] = arith.truncf %[[FROM]] : vector<3xf32> to vector<3xf16>
+// CHECK: return %[[TRUNC]]
+
+
+
+// -----
+
+module {
+  func.func @atan_vector(%arg0: vector<4xf32>) -> vector<4xf32> {
+    %ret = math.atan %arg0 : vector<4xf32>
+    return %ret : vector<4xf32>
+  }
+}
+
+// CHECK-LABEL: @atan_vector
+// CHECK-NOT: math.atan
+// CHECK: %[[ATAN_CALL:.*]] = call @xla.atan.v4f32(%arg0) : (vector<4xf32>) -> vector<4xf32>
+// CHECK: return %[[ATAN_CALL]]
+
+// -----
+
+module {
+  func.func @atan_vector_unsupported(%arg0: vector<3xf32>) -> vector<3xf32> {
+    %ret = math.atan %arg0 : vector<3xf32>
+    return %ret : vector<3xf32>
+  }
+}
+
+// CHECK-LABEL: @atan_vector_unsupported
+// CHECK: %[[IN0:.*]] = vector.extract %arg0[0]
+// CHECK: %[[ATAN0:.*]] = call @xla.atan.f32(%[[IN0]])
+// CHECK: %[[IN1:.*]] = vector.extract %arg0[1]
+// CHECK: %[[ATAN1:.*]] = call @xla.atan.f32(%[[IN1]])
+// CHECK: %[[IN2:.*]] = vector.extract %arg0[2]
+// CHECK: %[[ATAN2:.*]] = call @xla.atan.f32(%[[IN2]])
+// CHECK: %[[RESULT:.*]] = vector.from_elements %[[ATAN0]], %[[ATAN1]], %[[ATAN2]]
+// CHECK: return %[[RESULT]]
+
+// -----
+
+module {
+  func.func @atan_f32(%arg0: f32) -> f32 {
+    %ret = math.atan %arg0 : f32
+    return %ret : f32
+  }
+}
+
+// CHECK-LABEL: @atan_f32
+// CHECK-NOT: math.atan
+// CHECK: %[[RESULT:.*]] = call @xla.atan.f32(%arg0) : (f32) -> f32
+// CHECK: return %[[RESULT]] : f32
+
+// -----
+
+module {
+  func.func @tanh_f32_vector_64(%arg0: vector<64xf32>) -> vector<64xf32> {
+    %ret = math.tanh %arg0 : vector<64xf32>
+    return %ret : vector<64xf32>
+  }
+}
+
+// CHECK-LABEL: @tanh_f32_vector_64
+// CHECK-NOT: math.tanh
+// CHECK: %[[INIT:.*]] = arith.constant dense<0.000000e+00> : vector<64xf32>
+// CHECK: %[[S0:.*]] = vector.extract_strided_slice %arg0 offsets = [0], sizes = [16], strides = [1] : vector<64xf32> to vector<16xf32>
+// CHECK: %[[C0:.*]] = call @xla.tanh.v16f32(%[[S0]])
+// CHECK: %[[I0:.*]] = vector.insert_strided_slice %[[C0]], %[[INIT]] offsets = [0], strides = [1] : vector<16xf32> into vector<64xf32>
+// CHECK: %[[S1:.*]] = vector.extract_strided_slice %arg0 offsets = [16], sizes = [16], strides = [1] : vector<64xf32> to vector<16xf32>
+// CHECK: %[[C1:.*]] = call @xla.tanh.v16f32(%[[S1]])
+// CHECK: %[[I1:.*]] = vector.insert_strided_slice %[[C1]], %[[I0]] offsets = [16], strides = [1] : vector<16xf32> into vector<64xf32>
+// CHECK: %[[S2:.*]] = vector.extract_strided_slice %arg0 offsets = [32], sizes = [16], strides = [1] : vector<64xf32> to vector<16xf32>
+// CHECK: %[[C2:.*]] = call @xla.tanh.v16f32(%[[S2]])
+// CHECK: %[[I2:.*]] = vector.insert_strided_slice %[[C2]], %[[I1]] offsets = [32], strides = [1] : vector<16xf32> into vector<64xf32>
+// CHECK: %[[S3:.*]] = vector.extract_strided_slice %arg0 offsets = [48], sizes = [16], strides = [1] : vector<64xf32> to vector<16xf32>
+// CHECK: %[[C3:.*]] = call @xla.tanh.v16f32(%[[S3]])
+// CHECK: %[[I3:.*]] = vector.insert_strided_slice %[[C3]], %[[I2]] offsets = [48], strides = [1] : vector<16xf32> into vector<64xf32>
+// CHECK: return %[[I3]] : vector<64xf32>
+
+// -----
+
+module {
+  func.func @tanh_bf16_vector_32(%arg0: vector<32xbf16>) -> vector<32xbf16> {
+    %ret = math.tanh %arg0 : vector<32xbf16>
+    return %ret : vector<32xbf16>
+  }
+}
+
+// CHECK-LABEL: @tanh_bf16_vector_32
+// CHECK-NOT: math.tanh
+// CHECK: %[[S0:.*]] = vector.extract_strided_slice %arg0 offsets = [0], sizes = [16], strides = [1] : vector<32xbf16> to vector<16xbf16>
+// CHECK: %[[EXT0:.*]] = arith.extf %[[S0]] : vector<16xbf16> to vector<16xf32>
+// CHECK: %[[C0:.*]] = call @xla.tanh.v16f32(%[[EXT0]])
+// CHECK: %[[TR0:.*]] = call @xla.fptrunc.v16f32.to.v16bf16(%[[C0]])
+// CHECK: %[[S1:.*]] = vector.extract_strided_slice %arg0 offsets = [16], sizes = [16], strides = [1] : vector<32xbf16> to vector<16xbf16>
+// CHECK: %[[EXT1:.*]] = arith.extf %[[S1]] : vector<16xbf16> to vector<16xf32>
+// CHECK: %[[C1:.*]] = call @xla.tanh.v16f32(%[[EXT1]])
+// CHECK: %[[TR1:.*]] = call @xla.fptrunc.v16f32.to.v16bf16(%[[C1]])
+// CHECK: return
+
+// -----
+
+func.func @log1p_f32_vector_16(%arg0: vector<16xf32>) -> vector<16xf32> {
+  %ret = math.log1p %arg0 : vector<16xf32>
+  return %ret : vector<16xf32>
+}
+// CHECK-LABEL: @log1p_f32_vector_16
+// CHECK-NOT: vector.extract_strided_slice
+// CHECK: %[[CALL:.*]] = call @xla.log1p.v16f32(%arg0) : (vector<16xf32>) -> vector<16xf32>
+// CHECK: return %[[CALL]]
+
+// -----
+
+func.func @erf_f32_vector_16(%arg0: vector<16xf32>) -> vector<16xf32> {
+  %ret = math.erf %arg0 : vector<16xf32>
+  return %ret : vector<16xf32>
+}
+// CHECK-LABEL: @erf_f32_vector_16
+// CHECK-NOT: vector.extract_strided_slice
+// CHECK: %[[CALL:.*]] = call @xla.erf.v16f32(%arg0) : (vector<16xf32>) -> vector<16xf32>
+// CHECK: return %[[CALL]]
+
+// -----
+
+func.func @trunc_vector_16(%arg0: vector<16xf32>) -> vector<16xbf16> {
+  %ret = arith.truncf %arg0 : vector<16xf32> to vector<16xbf16>
+  return %ret : vector<16xbf16>
+}
+// CHECK-LABEL: @trunc_vector_16
+// CHECK-NOT: vector.extract_strided_slice
+// CHECK: %[[CALL:.*]] = call @xla.fptrunc.v16f32.to.v16bf16(%arg0) : (vector<16xf32>) -> vector<16xbf16>
+// CHECK: return %[[CALL]]
+
+// -----
+
+// rsqrt vector variants are gated on CPU features.
+func.func @rsqrt_f32_vector_16(%arg0: vector<16xf32>) -> vector<16xf32> {
+  %ret = math.rsqrt %arg0 : vector<16xf32>
+  return %ret : vector<16xf32>
+}
+// CHECK-LABEL: @rsqrt_f32_vector_16
+// CHECK-NOT: @xla.rsqrt.v
+// CHECK-COUNT-16: call @xla.rsqrt.f32
+
+// AVX512-LABEL: @rsqrt_f32_vector_16
+// AVX512: %[[CALL:.*]] = call @xla.rsqrt.v16f32(%arg0) : (vector<16xf32>) -> vector<16xf32>
+// AVX512: return %[[CALL]]
+
+// -----
+
+module {
+  func.func @expm1_f32(%arg0: f32) -> f32 {
+    %ret = math.expm1 %arg0 : f32
+    return %ret : f32
+  }
+}
+
+// CHECK-LABEL: @expm1_f32
+// CHECK-NOT: math.expm1
+// CHECK: %[[RESULT:.*]] = call @xla.expm1.f32(%arg0) : (f32) -> f32
+// CHECK: return %[[RESULT]] : f32
+
+// -----
+
+module {
+  func.func @expm1_f32_vector(%arg0: vector<4xf32>) -> vector<4xf32> {
+    %ret = math.expm1 %arg0 : vector<4xf32>
+    return %ret : vector<4xf32>
+  }
+}
+
+// CHECK-LABEL: @expm1_f32_vector
+// CHECK-NOT: math.expm1
+// CHECK: %[[RESULT:.*]] = call @xla.expm1.v4f32(%arg0) : (vector<4xf32>) -> vector<4xf32>
+// CHECK: return %[[RESULT]] : vector<4xf32>
+
+// -----
+
+module {
+  func.func @expm1_f64(%arg0: f64) -> f64 {
+    %ret = math.expm1 %arg0 : f64
+    return %ret : f64
+  }
+}
+
+// CHECK-LABEL: @expm1_f64
+// CHECK-NOT: math.expm1
+// CHECK: %[[RESULT:.*]] = call @xla.expm1.f64(%arg0) : (f64) -> f64
+// CHECK: return %[[RESULT]] : f64
+
+// -----
+
+module {
+  func.func @expm1_f64_vector(%arg0: vector<4xf64>) -> vector<4xf64> {
+    %ret = math.expm1 %arg0 : vector<4xf64>
+    return %ret : vector<4xf64>
+  }
+}
+
+// CHECK-LABEL: @expm1_f64_vector
+// CHECK-NOT: math.expm1
+// CHECK: %[[RESULT:.*]] = call @xla.expm1.v4f64(%arg0) : (vector<4xf64>) -> vector<4xf64>
+// CHECK: return %[[RESULT]] : vector<4xf64>
+
+// -----
+
+// expm1 vector_16 variant is gated on CPU features (AVX512).
+func.func @expm1_f32_vector_16(%arg0: vector<16xf32>) -> vector<16xf32> {
+  %ret = math.expm1 %arg0 : vector<16xf32>
+  return %ret : vector<16xf32>
+}
+// CHECK-LABEL: @expm1_f32_vector_16
+// CHECK: %[[S0:.*]] = vector.extract_strided_slice %arg0 offsets = [0], sizes = [8], strides = [1] : vector<16xf32> to vector<8xf32>
+// CHECK: %[[C0:.*]] = call @xla.expm1.v8f32(%[[S0]])
+// CHECK: %[[S1:.*]] = vector.extract_strided_slice %arg0 offsets = [8], sizes = [8], strides = [1] : vector<16xf32> to vector<8xf32>
+// CHECK: %[[C1:.*]] = call @xla.expm1.v8f32(%[[S1]])
+// CHECK: return
+
+// AVX512-LABEL: @expm1_f32_vector_16
+// AVX512: %[[CALL:.*]] = call @xla.expm1.v16f32(%arg0) : (vector<16xf32>) -> vector<16xf32>
+// AVX512: return %[[CALL]]
+
+// -----
+
+func.func @sin_cos_vector(%arg0: vector<8xf32>, %arg1: vector<4xf64>) -> (vector<8xf32>, vector<4xf64>) {
+  %s = math.sin %arg0 : vector<8xf32>
+  %c = math.cos %arg1 : vector<4xf64>
+  return %s, %c : vector<8xf32>, vector<4xf64>
+}
+// CHECK-LABEL: @sin_cos_vector
+// CHECK-NOT: math.sin
+// CHECK-NOT: math.cos
+// CHECK: %[[SIN:.*]] = call @xla.sin.v8f32(%arg0) : (vector<8xf32>) -> vector<8xf32>
+// CHECK: %[[COS:.*]] = call @xla.cos.v4f64(%arg1) : (vector<4xf64>) -> vector<4xf64>
+// CHECK: return %[[SIN]], %[[COS]]
+
+// -----
+
+module {
+  func.func @sinh_f32(%arg0: f32) -> f32 {
+    %ret = math.sinh %arg0 : f32
+    return %ret : f32
+  }
+}
+
+// CHECK-LABEL: @sinh_f32
+// CHECK-NOT: math.sinh
+// CHECK: %[[RESULT:.*]] = call @xla.sinh.f32(%arg0) : (f32) -> f32
+// CHECK: return %[[RESULT]] : f32
+
+// -----
+
+module {
+  func.func @sinh_vector(%arg0: vector<8xf32>) -> vector<8xf32> {
+    %ret = math.sinh %arg0 : vector<8xf32>
+    return %ret : vector<8xf32>
+  }
+}
+
+// CHECK-LABEL: @sinh_vector
+// CHECK-NOT: math.sinh
+// CHECK: %[[SINH_CALL:.*]] = call @xla.sinh.v8f32(%arg0) : (vector<8xf32>) -> vector<8xf32>
+// CHECK: return %[[SINH_CALL]]
+// -----
+
+func.func @sin_cos_of_neg(%arg0: f32) -> (f32, f32) {
+  %n = arith.negf %arg0 : f32
+  %s = math.sin %n : f32
+  %c = math.cos %n : f32
+  return %s, %c : f32, f32
+}
+// CHECK-LABEL: @sin_cos_of_neg
+// CHECK-DAG: %[[SIN:.*]] = call @xla.sin.f32(%arg0) : (f32) -> f32
+// CHECK-DAG: %[[NEG_SIN:.*]] = arith.negf %[[SIN]] : f32
+// CHECK-DAG: %[[COS:.*]] = call @xla.cos.f32(%arg0) : (f32) -> f32
+// CHECK: return %[[NEG_SIN]], %[[COS]]
+
+// -----
+
+module {
+  func.func @cosh_f32(%arg0: f32) -> f32 {
+    %ret = math.cosh %arg0 : f32
+    return %ret : f32
+  }
+}
+
+// CHECK-LABEL: @cosh_f32
+// CHECK-NOT: math.cosh
+// CHECK: %[[RESULT:.*]] = call @xla.cosh.f32(%arg0) : (f32) -> f32
+// CHECK: return %[[RESULT]] : f32
+
+// -----
+
+module {
+  func.func @cosh_vector(%arg0: vector<8xf32>) -> vector<8xf32> {
+    %ret = math.cosh %arg0 : vector<8xf32>
+    return %ret : vector<8xf32>
+  }
+}
+
+// CHECK-LABEL: @cosh_vector
+// CHECK-NOT: math.cosh
+// CHECK: %[[COSH_CALL:.*]] = call @xla.cosh.v8f32(%arg0) : (vector<8xf32>) -> vector<8xf32>
+// CHECK: return %[[COSH_CALL]]
+
+// -----
+
+module {
+  func.func @asin_f32(%arg0: f32) -> f32 {
+    %ret = math.asin %arg0 : f32
+    return %ret : f32
+  }
+}
+
+// CHECK-LABEL: @asin_f32
+// CHECK-NOT: math.asin
+// CHECK: %[[RESULT:.*]] = call @xla.asin.f32(%arg0) : (f32) -> f32
+// CHECK: return %[[RESULT]] : f32
+
+// -----
+
+module {
+  func.func @asin_vector(%arg0: vector<8xf32>) -> vector<8xf32> {
+    %ret = math.asin %arg0 : vector<8xf32>
+    return %ret : vector<8xf32>
+  }
+}
+
+// CHECK-LABEL: @asin_vector
+// CHECK-NOT: math.asin
+// CHECK: %[[ASIN_CALL:.*]] = call @xla.asin.v8f32(%arg0) : (vector<8xf32>) -> vector<8xf32>
+// CHECK: return %[[ASIN_CALL]]
+
+// -----
+
+module {
+  func.func @acos_f32(%arg0: f32) -> f32 {
+    %ret = math.acos %arg0 : f32
+    return %ret : f32
+  }
+}
+
+// CHECK-LABEL: @acos_f32
+// CHECK-NOT: math.acos
+// CHECK: %[[RESULT:.*]] = call @xla.acos.f32(%arg0) : (f32) -> f32
+// CHECK: return %[[RESULT]] : f32
+
+// -----
+
+module {
+  func.func @acos_vector(%arg0: vector<8xf32>) -> vector<8xf32> {
+    %ret = math.acos %arg0 : vector<8xf32>
+    return %ret : vector<8xf32>
+  }
+}
+
+// CHECK-LABEL: @acos_vector
+// CHECK-NOT: math.acos
+// CHECK: %[[ACOS_CALL:.*]] = call @xla.acos.v8f32(%arg0) : (vector<8xf32>) -> vector<8xf32>
+// CHECK: return %[[ACOS_CALL]]

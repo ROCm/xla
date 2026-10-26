@@ -21,12 +21,12 @@ limitations under the License.
 // clang-format off
 #include "xla/tsl/python/lib/core/numpy.h"  // IWYU pragma: keep
 // clang-format on
-#include "numpy/ndarraytypes.h"
 #include "absl/base/attributes.h"
 #include "absl/base/call_once.h"
-#include "pybind11/gil.h"  // from @pybind11
-#include "pybind11/numpy.h"  // from @pybind11
-#include "pybind11/pybind11.h"  // from @pybind11
+#include "numpy/ndarraytypes.h"
+#include "pybind11/gil.h"
+#include "pybind11/numpy.h"
+#include "pybind11/pybind11.h"
 
 namespace tsl {
 namespace ml_dtypes {
@@ -61,6 +61,12 @@ struct MlDtypesInitInfo {
 
       numpy_dtypes.bfloat16 =
           py::dtype::from_args(ml_dtypes.attr("bfloat16")).num();
+      numpy_dtypes.float4_e2m1fn =
+          py::dtype::from_args(ml_dtypes.attr("float4_e2m1fn")).num();
+      numpy_dtypes.float8_e3m4 =
+          py::dtype::from_args(ml_dtypes.attr("float8_e3m4")).num();
+      numpy_dtypes.float8_e4m3 =
+          py::dtype::from_args(ml_dtypes.attr("float8_e4m3")).num();
       numpy_dtypes.float8_e4m3fn =
           py::dtype::from_args(ml_dtypes.attr("float8_e4m3fn")).num();
       numpy_dtypes.float8_e5m2 =
@@ -71,8 +77,12 @@ struct MlDtypesInitInfo {
           py::dtype::from_args(ml_dtypes.attr("float8_e4m3fnuz")).num();
       numpy_dtypes.float8_e5m2fnuz =
           py::dtype::from_args(ml_dtypes.attr("float8_e5m2fnuz")).num();
+      numpy_dtypes.float8_e8m0fnu =
+          py::dtype::from_args(ml_dtypes.attr("float8_e8m0fnu")).num();
       numpy_dtypes.int4 = py::dtype::from_args(ml_dtypes.attr("int4")).num();
       numpy_dtypes.uint4 = py::dtype::from_args(ml_dtypes.attr("uint4")).num();
+      numpy_dtypes.int2 = py::dtype::from_args(ml_dtypes.attr("int2")).num();
+      numpy_dtypes.uint2 = py::dtype::from_args(ml_dtypes.attr("uint2")).num();
     } catch (const std::exception& e) {
       py::gil_scoped_acquire acquire;
       py::print(e.what());
@@ -81,12 +91,17 @@ struct MlDtypesInitInfo {
 
     // Verify all types were successfully loaded.
     if (numpy_dtypes.bfloat16 == NPY_NOTYPE ||
+        numpy_dtypes.float4_e2m1fn == NPY_NOTYPE ||
+        numpy_dtypes.float8_e3m4 == NPY_NOTYPE ||
+        numpy_dtypes.float8_e4m3 == NPY_NOTYPE ||
         numpy_dtypes.float8_e4m3fn == NPY_NOTYPE ||
         numpy_dtypes.float8_e4m3fnuz == NPY_NOTYPE ||
         numpy_dtypes.float8_e4m3b11fnuz == NPY_NOTYPE ||
         numpy_dtypes.float8_e5m2 == NPY_NOTYPE ||
         numpy_dtypes.float8_e5m2fnuz == NPY_NOTYPE ||
-        numpy_dtypes.int4 == NPY_NOTYPE || numpy_dtypes.uint4 == NPY_NOTYPE) {
+        numpy_dtypes.float8_e8m0fnu == NPY_NOTYPE ||
+        numpy_dtypes.int4 == NPY_NOTYPE || numpy_dtypes.uint4 == NPY_NOTYPE ||
+        numpy_dtypes.int2 == NPY_NOTYPE || numpy_dtypes.uint2 == NPY_NOTYPE) {
       init_valid = false;
     }
 

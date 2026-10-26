@@ -19,15 +19,20 @@
 # files once XLA moves out of Tensorflow internally.
 # TODO(ddunleavy): Update this after METADATA files are consolidated.
 name: Check Contents
+permissions:
+  contents: read
 on:
   pull_request:
+  push:
+    branches:
+      - main
 
 env:
   # A bit tricky here: this lets us invoke python files outside of `bazel run`
   # as long as the python file has imports as if it expects bazel to invoke it,
   # and only depends on other python files in this workspace or the standard
   # library.
-  PYTHONPATH: ".."
+  PYTHONPATH: "."
 
 jobs:
   check-contents:
@@ -35,97 +40,50 @@ jobs:
     defaults:
       run:
         shell: bash
-    timeout-minutes: 1
+    timeout-minutes: 6
     if: |
       github.event.sender.type == 'User' ||
       contains(github.event.pull_request.body, 'FORCE_TEST_ACTIONS')
     steps:
       - name: "Checking out repository"
-        uses: actions/checkout@e2f20e631ae6d7dd3b768f56a5d2af784dd54791 # v2.5.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: "Fetch HEAD of main branch"
         run: git fetch origin main --depth=1
 
       # ----------------C++ checks----------------
       - name: "Check for tsl::{Status,StatusOr}"
         if: always() # We want to run all checks, not just til first failure
-        run: "python3 build_tools/lint/check_contents.py
-          --path_regex_exclusion '.github/workflows/check_contents\\.yml'
-          --prohibited_regex 'tsl::Status(Or)?'
-          --suppression_regex 'TENSORFLOW_STATUS_OK'
-          --failure_message 'Use plain Status(Or) rather than tsl::Status(Or) within XLA.'"
-
+        run: "python3 build_tools/lint/check_contents.py --path_regex_exclusion '.github/workflows/check_contents\\.yml' --prohibited_regex 'tsl::Status(Or)?' --suppression_regex 'TENSORFLOW_STATUS_OK' --failure_message 'Use plain Status(Or) rather than tsl::Status(Or) within XLA.'"
       - name: "Check for tsl::Status::OK()"
         if: always() # We want to run all checks, not just til first failure
-        run: "python3 build_tools/lint/check_contents.py
-          --path_regex_exclusion '.github/workflows/check_contents\\.yml'
-          --prohibited_regex 'tsl::Status::OK'
-          --failure_message 'Use OkStatus instead of Status::OK.'"
-
+        run: "python3 build_tools/lint/check_contents.py --path_regex_exclusion '.github/workflows/check_contents\\.yml' --prohibited_regex 'tsl::Status::OK' --failure_message 'Use OkStatus instead of Status::OK.'"
       - name: "Check for std::call_once"
-        if: always() # We want to run all checks, not just til first failure
-        run: "python3 build_tools/lint/check_contents.py
-          --path_regex_exclusion '.github/workflows/check_contents\\.yml'
-          --prohibited_regex 'std::call_once'
-          --failure_message 'Use absl::call_once instead of std::call_once'"
 
+        if: always() # We want to run all checks, not just til first failure
+        run: "python3 build_tools/lint/check_contents.py --path_regex_exclusion '.github/workflows/check_contents\\.yml' --prohibited_regex 'std::call_once' --failure_message 'Use absl::call_once instead of std::call_once'"
       - name: "Check for Abseil compatibility API"
         if: always() # We want to run all checks, not just til first failure
-        run: "python3 build_tools/lint/check_contents.py
-          --path_regex_exclusion '.github/workflows/check_contents\\.yml'
-          --prohibited_regex '\\b(absl::(\
-                              any|\
-                              get|\
-                              get_if|\
-                              make_any|\
-                              make_unique|\
-                              nullopt|\
-                              nullopt_t|\
-                              MakeUnique|\
-                              make_optional|\
-                              optional|\
-                              underlying_type_t|\
-                              variant|\
-                              visit\
-                              ))\\b'
-          --suppression_regex '(?i)non-std ok'
-          --failure_message 'Use standard library version instead of the Abseil compatibility API.'"
-
-      - name: "Use absl instead of Tensorflow/TSL functions/types"
+        run: "python3 build_tools/lint/check_contents.py --path_regex_exclusion '.github/workflows/check_contents\\.yml' --prohibited_regex '\\b(absl::(any|get|get_if|make_any|make_unique|nullopt|nullopt_t|MakeUnique|make_optional|optional|underlying_type_t|variant|visit))\\b' --suppression_regex '(?i)non-std ok' --failure_message 'Use standard library version instead of the Abseil compatibility API.'"
+      - name: "Check for std::string_view"
         if: always() # We want to run all checks, not just til first failure
-        run: "python3 build_tools/lint/check_contents.py
-          --path_regex_exclusion '.github/workflows/check_contents\\.yml'
-          --prohibited_regex '\\b(\
-                              gtl::FlatMap|\
-                              gtl::FlatSet|\
-                              gtl::InlinedVector|\
-                              gtl::optional|\
-                              strings::Appendf|\
-                              strings::Printf|\
-                              strings::safe_strto64|\
-                              strings::safe_strtof|\
-                              strings::StrAppend|\
-                              strings::StrCat|\
-                              str_util::|\
-                              tensorflow::StringPiece\
-                              )\\b'
-          --suppression_regex '(?i)non-absl ok'
-          --failure_message 'Use Abseil types and functions instead of those in Tensorflow/TSL.'"
+        run: "python3 build_tools/lint/check_contents.py --path_regex_exclusion '.github/workflows/check_contents\\.yml' 'xla/ffi/api/.*' --path_regex '.*\\.(h|cc|cpp)' --prohibited_regex '\\bstd::string_view\\b' --suppression_regex '(?i)non-absl ok' --failure_message 'Use the Abseil compatibility API (absl::string_view) instead of the standard library version.'"
+      - name: "Use absl instead of Tensorflow/TSL functions/types"
 
+        if: always() # We want to run all checks, not just til first failure
+        run: "python3 build_tools/lint/check_contents.py --path_regex_exclusion '.github/workflows/check_contents\\.yml' --prohibited_regex '\\b(gtl::FlatMap|gtl::FlatSet|gtl::InlinedVector|gtl::optional|strings::Appendf|strings::Printf|strings::safe_strto64|strings::safe_strtof|strings::StrAppend|strings::StrCat|str_util::|tensorflow::StringPiece)\\b' --suppression_regex '(?i)non-absl ok' --failure_message 'Use Abseil types and functions instead of those in Tensorflow/TSL.'"
+      - name: "Check for Header Guards"
+        if: always()
+        run: "python3 build_tools/lint/check_header_guards.py"
+      - name: "Check for TF Status Macros"
+        if: always()
+        run: "python3 build_tools/lint/check_contents.py --path_regex '.*\\.(h|cc|cpp)' --path_regex_exclusion 'xla/tsl/.*' 'xla/python/.*' 'xla/pjrt/.*' --prohibited_regex '\\bTF_(RETURN_IF_ERROR|ASSIGN_OR_RETURN)\\b' --failure_message 'Within XLA, you can now use RETURN_IF_ERROR/ASSIGN_OR_RETURN from xla/tsl/platform/status_macros.h rather than their TSL TF_ equivalents.'"
       # ----------------Python checks----------------
       - name: "Check for python print()"
         if: always() # We want to run all checks, not just til first failure
-        run: "python3 build_tools/lint/check_contents.py
-          --path_regex '.*\\.py'
-          --prohibited_regex '(^|\\n|\\s)print\\(.*\\)'
-          --suppression_regex 'DISABLE_DEBUG_PRINT_CHECK'
-          --failure_message 'Found debug print() statement left in the code.
-            Add DISABLE_DEBUG_PRINT_CHECK to disable'"
+        run: "python3 build_tools/lint/check_contents.py --path_regex '.*\\.py' --prohibited_regex '(^|\\n|\\s)print\\(.*\\)' --suppression_regex 'DISABLE_DEBUG_PRINT_CHECK' --failure_message 'Found debug print() statement left in the code. Add DISABLE_DEBUG_PRINT_CHECK to disable'"
 
       - name: "Check for mock.patch"
         if: always() # We want to run all checks, not just til first failure
-        run: "python3 build_tools/lint/check_contents.py
-          --path_regex '.*\\.py'
-          --prohibited_regex 'mock\\.patch\\('
-          --failure_message 'Please use match.patch.object instead of mock.patch.'"
-
-
+        run: "python3 build_tools/lint/check_contents.py --path_regex '.*\\.py' --prohibited_regex 'mock\\.patch\\(' --failure_message 'Please use match.patch.object instead of mock.patch.'"

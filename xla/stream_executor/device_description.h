@@ -22,242 +22,202 @@ limitations under the License.
 
 #include <cassert>
 #include <cstdint>
-#include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
-#include <vector>
 
-#include "absl/algorithm/container.h"
-#include "absl/strings/str_cat.h"
-#include "absl/strings/str_join.h"
-#include "absl/strings/str_split.h"
-#include "absl/strings/string_view.h"
+#include "absl/base/macros.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/status/statusor.h"
+#include "absl/types/span.h"
+#include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/device_description.pb.h"
 #include "xla/stream_executor/launch_dim.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
+#include "xla/stream_executor/semantic_version.h"
+#include "xla/stream_executor/sycl/oneapi_compute_capability.h"
+#include "xla/xla_data.pb.h"
 
 namespace stream_executor {
-namespace internal {
-class DeviceDescriptionBuilder;
-}  // namespace internal
 
-// CUDA compute capability, as reported by the device description.
-struct CudaComputeCapability {
-  int major = 0;
-  int minor = 0;
+// Describes the capabilities and performance characteristics of a specific
+// execution unit within a device, such as scalar units (e.g., CUDA Cores) or
+// matrix units (e.g., Tensor Cores).
+class ExecutionUnitDescription {
+ public:
+  // Information about operations on a particular datatype.
+  struct RateInfo {
+    int32_t units_per_core = 0;
+    float clock_rate_ghz = 0.;
+    // Note: Here FMA is counted as 1 operation. Models that count FMA as 2 ops
+    // need to multiply this number by 2 in their calculations.
+    int32_t ops_per_clock = 0;
 
-  // MSVC does not like "PASCAL" symbol.
-  enum CudaComputeCapabilities {
-    PASCAL_ = 6,
-    VOLTA = 7,
-    AMPERE = 8,
-    HOPPER = 9,
-    BLACKWELL = 10
+    bool operator==(const RateInfo& rhs) const {
+      return units_per_core == rhs.units_per_core &&
+             clock_rate_ghz == rhs.clock_rate_ghz &&
+             ops_per_clock == rhs.ops_per_clock;
+    }
+
+    bool operator!=(const RateInfo& rhs) const { return !(*this == rhs); }
   };
 
-  constexpr CudaComputeCapability() = default;
-  constexpr CudaComputeCapability(int major, int minor) {
-    this->major = major;
-    this->minor = minor;
-  }
-  // cuda arch format "major.minor", example: "8.6".
-  explicit CudaComputeCapability(const std::string &cuda_arch_name) {
-    std::vector<std::string> split = absl::StrSplit(cuda_arch_name, '.');
-    assert(split.size() == 2);
-    this->major = std::stoi(split[0]);
-    this->minor = std::stoi(split[1]);
+  // Sets or overwrites the `RateInfo` for a specific `dtype`.
+  void SetRateInfo(xla::PrimitiveType dtype, RateInfo rate_info) {
+    rate_infos_[dtype] = rate_info;
   }
 
-  explicit CudaComputeCapability(const CudaComputeCapabilityProto &proto) {
-    this->major = proto.major();
-    this->minor = proto.minor();
+  // Returns the `RateInfo` for a specific `dtype`, or `std::nullopt` if
+  // no information is available for the given dtype.
+  std::optional<RateInfo> GetRateInfo(xla::PrimitiveType dtype) const {
+    auto it = rate_infos_.find(dtype);
+    if (it == rate_infos_.end()) {
+      return std::nullopt;
+    }
+    return it->second;
   }
 
-  static CudaComputeCapability Hopper() {
-    return CudaComputeCapability{HOPPER, 0};
+  ExecutionUnitDescriptionProto ToProto() const;
+
+  static absl::StatusOr<ExecutionUnitDescription> FromProto(
+      const ExecutionUnitDescriptionProto& proto);
+
+  bool operator==(const ExecutionUnitDescription& other) const {
+    return rate_infos_ == other.rate_infos_;
   }
 
-  static CudaComputeCapability Volta() {
-    return CudaComputeCapability{VOLTA, 0};
-  }
-
-  static CudaComputeCapability Ampere() {
-    return CudaComputeCapability{AMPERE, 0};
-  }
-
-  bool IsAtLeast(int other_major, int other_minor = 0) const {
-    return IsAtLeast(CudaComputeCapability{other_major, other_minor});
-  }
-
-  bool IsAtLeast(const CudaComputeCapability &cc) const {
-    return !(*this < cc);
-  }
-
-  bool IsAtLeastVolta() const {
-    return major >= CudaComputeCapabilities::VOLTA;
-  }
-
-  bool IsAtLeastAmpere() const {
-    return major >= CudaComputeCapabilities::AMPERE;
-  }
-
-  bool IsAtLeastHopper() const {
-    return major >= CudaComputeCapabilities::HOPPER;
-  }
-
-  bool operator<(const CudaComputeCapability &other) const {
-    return ToPair() < other.ToPair();
-  }
-
-  bool operator==(const CudaComputeCapability &other) const {
-    return ToPair() == other.ToPair();
-  }
-
-  bool operator!=(const CudaComputeCapability &other) const {
+  bool operator!=(const ExecutionUnitDescription& other) const {
     return !(*this == other);
   }
 
-  // Maximum resident blocks per multiprocessor, values taken from
-  // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#compute-capabilities.
-  int GetMaxResidentBlocksPerSM() const {
-    if (IsAtLeast(8, 6)) {
-      return 16;
-    } else if (IsAtLeast(8)) {
-      return 32;
-    } else if (IsAtLeast(7, 5)) {
-      return 16;
-    }
-    return 32;
-  }
-
-  // Maximum resident warps per multiprocessor, values taken from
-  // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#compute-capabilities.
-  int GetMaxResidentWarpsPerSM() const {
-    if (IsAtLeast(8, 6)) {
-      return 48;
-    } else if (IsAtLeast(8)) {
-      return 64;
-    } else if (IsAtLeast(7, 5)) {
-      return 32;
-    }
-    return 64;
-  }
-
-  std::string ToString() const { return absl::StrCat(major, ".", minor); }
-
-  std::pair<int, int> ToPair() const { return std::make_pair(major, minor); }
-
-  CudaComputeCapabilityProto ToProto() const {
-    CudaComputeCapabilityProto proto;
-    proto.set_major(major);
-    proto.set_minor(minor);
-    return proto;
-  }
+ private:
+  absl::flat_hash_map<xla::PrimitiveType, RateInfo> rate_infos_;
 };
 
-// ROCm compute capability, as reported by the device description.
-class RocmComputeCapability {
+class GpuComputeCapability {
  public:
-  // gcn_arch_name example --  gfx90a:sramecc+:xnack-
-  // gfx_version is the "gfx90a" part of the gcn_arch_name
-  explicit RocmComputeCapability(const std::string &gcn_arch_name)
-      : gcn_arch_name_(gcn_arch_name) {}
+  GpuComputeCapability() = default;
+  GpuComputeCapability(const CudaComputeCapability& compute_capability)
+      : compute_capability_(compute_capability) {}
+  explicit GpuComputeCapability(const RocmComputeCapability& compute_capability)
+      : compute_capability_(compute_capability) {}
+  explicit GpuComputeCapability(
+      const OneAPIComputeCapability& compute_capability)
+      : compute_capability_(compute_capability) {}
 
-  explicit RocmComputeCapability(const RocmComputeCapabilityProto &proto)
-      : gcn_arch_name_(proto.gcn_arch_name()) {}
-
-  RocmComputeCapability() = default;
-  ~RocmComputeCapability() = default;
-
-  std::string gcn_arch_name() const { return gcn_arch_name_; }
-
-  std::string gfx_version() const {
-    std::vector<std::string> tokens = absl::StrSplit(gcn_arch_name_, ':');
-    return tokens[0];
+  GpuComputeCapability& operator=(
+      const CudaComputeCapability& compute_capability) {
+    compute_capability_ = compute_capability;
+    return *this;
   }
 
-  bool is_supported_gfx_version() const {
-    return absl::c_count(kSupportedGfxVersions, gfx_version()) != 0;
+  GpuComputeCapability& operator=(
+      const RocmComputeCapability& compute_capability) {
+    compute_capability_ = compute_capability;
+    return *this;
   }
 
-  std::string supported_gfx_versions_str() const {
-    return absl::StrJoin(kSupportedGfxVersions, ", ");
+  GpuComputeCapability& operator=(
+      const OneAPIComputeCapability& compute_capability) {
+    compute_capability_ = compute_capability;
+    return *this;
   }
 
-  bool gfx9_mi100() const { return gfx_version() == "gfx908"; }
-
-  bool gfx9_mi200() const { return gfx_version() == "gfx90a"; }
-
-  bool gfx9_mi300() const {
-    static constexpr absl::string_view kList[] = {"gfx940", "gfx941", "gfx942"};
-    return absl::c_count(kList, gfx_version()) != 0;
+  bool IsCuda() const {
+    return std::holds_alternative<CudaComputeCapability>(compute_capability_);
   }
 
-  bool gfx9_mi100_or_later() const {
-    static constexpr absl::string_view kList[] = {"gfx908", "gfx90a", "gfx940",
-                                                  "gfx941", "gfx942"};
-    return absl::c_count(kList, gfx_version()) != 0;
+  bool IsRocm() const {
+    return std::holds_alternative<RocmComputeCapability>(compute_capability_);
   }
 
-  bool gfx9_mi200_or_later() const {
-    static constexpr absl::string_view kList[] = {"gfx90a", "gfx940", "gfx941",
-                                                  "gfx942"};
-    return absl::c_count(kList, gfx_version()) != 0;
+  bool IsOneAPI() const {
+    return std::holds_alternative<OneAPIComputeCapability>(compute_capability_);
   }
 
-  bool navi21() const { return gfx_version() == "gfx1030"; }
-
-  bool navi31() const { return gfx_version() == "gfx1100"; }
-
-  bool has_nhwc_layout_support() const { return gfx9_mi100_or_later(); }
-
-  bool has_bf16_dtype_support() const { return gfx9_mi100_or_later(); }
-
-  bool has_fast_fp16_support() const {
-    return gfx9_mi100_or_later() || navi21() || navi31();
+  const CudaComputeCapability* cuda_compute_capability() const {
+    return std::get_if<CudaComputeCapability>(&compute_capability_);
   }
 
-  bool has_mfma_instr_support() const { return gfx9_mi100_or_later(); }
-
-  bool has_fp16_atomics_support() const {
-    // TODO(rocm): Check. This should be the same as has_fast_fp16_support().
-    return gfx9_mi200_or_later();
+  const RocmComputeCapability* rocm_compute_capability() const {
+    return std::get_if<RocmComputeCapability>(&compute_capability_);
   }
 
-  bool fence_before_barrier() const {
-    return gfx_version() != "gfx900" && gfx_version() != "gfx906";
+  const OneAPIComputeCapability* oneapi_compute_capability() const {
+    return std::get_if<OneAPIComputeCapability>(&compute_capability_);
   }
 
-  bool has_hipblaslt() const { return gfx9_mi200_or_later(); }
-
-  bool has_fp8_support() const { return gfx9_mi300(); }
-
-  RocmComputeCapabilityProto ToProto() const {
-    RocmComputeCapabilityProto proto;
-    proto.set_gcn_arch_name(gcn_arch_name_);
-    return proto;
+  std::string ToString() const {
+    if (auto ptr = cuda_compute_capability()) {
+      return ptr->ToString();
+    }
+    if (auto ptr = oneapi_compute_capability()) {
+      return ptr->ToString();
+    }
+    return rocm_compute_capability()->ToString();
   }
 
-  bool operator==(const RocmComputeCapability &other) const {
-    return gcn_arch_name_ == other.gcn_arch_name_;
+  GpuComputeCapabilityProto ToProto() const;
+
+  static absl::StatusOr<GpuComputeCapability> FromProto(
+      const GpuComputeCapabilityProto& proto);
+
+  friend bool operator==(const GpuComputeCapability& lhs,
+                         const GpuComputeCapability& rhs) {
+    return lhs.compute_capability_ == rhs.compute_capability_;
+  }
+
+  friend bool operator!=(const GpuComputeCapability& lhs,
+                         const GpuComputeCapability& rhs) {
+    return !(lhs == rhs);
   }
 
  private:
-  std::string gcn_arch_name_ = "gfx000";  // default to invalid arch.
-
-  static constexpr absl::string_view kSupportedGfxVersions[]{
-      "gfx900",                       // MI25
-      "gfx906",                       // MI50 / MI60
-      "gfx908",                       // MI100
-      "gfx90a",                       // MI200
-      "gfx940",  "gfx941", "gfx942",  // MI300
-      "gfx1030",                      // Navi21
-      "gfx1100"                       // Navi31
-  };
+  std::variant<CudaComputeCapability, RocmComputeCapability,
+               OneAPIComputeCapability>
+      compute_capability_;
 };
 
-using GpuComputeCapability =
-    std::variant<CudaComputeCapability, RocmComputeCapability>;
+// Information about NVLink/UALink.
+struct DeviceInterconnectInfo {
+  int active_links = 0;
+
+  // Uuid of the cluster to which this GPU belongs.
+  std::string cluster_uuid;
+  // ID of the fabric clique to which this GPU belongs.
+  std::string clique_id;
+
+  bool is_in_cluster() const {
+    return !cluster_uuid.empty() &&
+           cluster_uuid != "00000000-0000-0000-0000-000000000000";
+  }
+
+  bool operator==(const DeviceInterconnectInfo& other) const {
+    return active_links == other.active_links &&
+           cluster_uuid == other.cluster_uuid && clique_id == other.clique_id;
+  }
+  bool operator!=(const DeviceInterconnectInfo& other) const {
+    return !(*this == other);
+  }
+
+  DeviceInterconnectInfoProto ToProto() const {
+    DeviceInterconnectInfoProto proto;
+    proto.set_active_links(active_links);
+    proto.set_cluster_uuid(cluster_uuid);
+    proto.set_clique_id(clique_id);
+    return proto;
+  }
+
+  static absl::StatusOr<DeviceInterconnectInfo> FromProto(
+      const DeviceInterconnectInfoProto& proto) {
+    DeviceInterconnectInfo info;
+    info.active_links = proto.active_links();
+    info.cluster_uuid = proto.cluster_uuid();
+    info.clique_id = proto.clique_id();
+    return info;
+  }
+};
 
 // Data that describes the execution target of the StreamExecutor, in terms of
 // important logical parameters. These include dimensionality limits and
@@ -267,21 +227,39 @@ using GpuComputeCapability =
 // Thread-safe: immutable post-initialization.
 class DeviceDescription {
  public:
+  DeviceDescription() = default;
+
   // Returns the platform being run on; this value is primarily intended for
   // printing, and comes out something like "OpenCL 1.2" or "Compute Capability
   // 3.5".
-  const std::string &platform_version() const { return platform_version_; }
+  const std::string& platform_version() const { return platform_version_; }
 
-  // Returns the driver version interfacing with the underlying platform. Vendor
-  // dependent format.
-  const std::string &driver_version() const { return driver_version_; }
+  // Returns the driver version interfacing with the underlying platform.
+  // Note for CUDA this returns the CUDA Toolkit version the driver ships with.
+  SemanticVersion driver_version() const { return driver_version_; }
 
-  // Return the runtime version, if one is provided by the underlying platform.
-  // Vendor dependent format / usefulness.
-  const std::string &runtime_version() const { return runtime_version_; }
+  // Returns the kernel mode driver version.
+  SemanticVersion kernel_mode_driver_version() const {
+    return kernel_mode_driver_version_;
+  }
+
+  // Returns the runtime version.
+  SemanticVersion runtime_version() const { return runtime_version_; }
+
+  // Returns the toolkit version that the application was compiled against.
+  SemanticVersion compile_time_toolkit_version() const {
+    return compile_time_toolkit_version_;
+  }
+
+  // Returns the DNN version (cuDNN or hipDNN) - or 0.0.0 if not available.
+  SemanticVersion dnn_version() const { return dnn_version_; }
+
+  // Returns the version of the CUB library (these days part of CCCL) - or 0.0.0
+  // if not available.
+  SemanticVersion cub_version() const { return cub_version_; }
 
   // Returns the name that the device reports. Vendor dependent.
-  const std::string &name() const { return name_; }
+  const std::string& name() const { return name_; }
 
   // Gets a human-readable description of the device, e.g. "nvidia GPU
   // supporting sm75 with 32GB RAM, 80 SMs, ...".  This is intended to be the
@@ -291,11 +269,11 @@ class DeviceDescription {
   // This string is not guaranteed to be stable between versions.  Please DO NOT
   // rely on it never changing.  (Within one version of the code, it won't
   // change, don't worry.)
-  const std::string &model_str() const { return model_str_; }
+  const std::string& model_str() const { return model_str_; }
 
   // Returns the PCI bus identifier for this device, of the form
   // [domain]:[bus]:[device].[function]
-  const std::string &pci_bus_id() const { return pci_bus_id_; }
+  const std::string& pci_bus_id() const { return pci_bus_id_; }
 
   // Returns the NUMA node associated with this device, for use in
   // determining socket locality. If the NUMA node could not be determined, -1
@@ -310,47 +288,61 @@ class DeviceDescription {
   // in parallel. Corresponds to the number of "CUDA cores" for NVIDIA devices.
   int fpus_per_core() const { return fpus_per_core_; }
 
+  // Returns a pointer to the description of the scalar execution unit, or
+  // nullptr if not available.
+  // These units are typically referred to as "CUDA Cores" or "FP32/FP64/INT32
+  // Cores" on NVIDIA and "Stream Processors" on AMD devices.
+  const ExecutionUnitDescription* scalar_unit_description() const {
+    return scalar_unit_description_.has_value()
+               ? &scalar_unit_description_.value()
+               : nullptr;
+  }
+
+  // Returns a pointer to the description of the matrix execution unit, or
+  // nullptr if not available.
+  // These units are known as "Tensor Cores" on NVIDIA and "Matrix Cores" on
+  // AMD.
+  const ExecutionUnitDescription* matrix_unit_description() const {
+    return matrix_unit_description_.has_value()
+               ? &matrix_unit_description_.value()
+               : nullptr;
+  }
+
   // Returns the limit on the thread dimensionality values in each of the
   // respective dimensions. These limits affect what constitutes a legitimate
   // kernel launch request.
-  const ThreadDim &thread_dim_limit() const { return thread_dim_limit_; }
+  const ThreadDim& thread_dim_limit() const { return thread_dim_limit_; }
 
   // Returns the limit on the block dimensionality values in each of the
   // respective dimensions. These limits may affect what constitutes a
   // legitimate kernel launch request.
-  const BlockDim &block_dim_limit() const { return block_dim_limit_; }
+  const BlockDim& block_dim_limit() const { return block_dim_limit_; }
 
   // Returns the limit on the total number of threads that can be launched in a
   // single block; i.e. the limit on x * y * z dimensions of a ThreadDim.
   // This limit affects what constitutes a legitimate kernel launch request.
-  const int64_t &threads_per_block_limit() const {
-    return threads_per_block_limit_;
-  }
+  int64_t threads_per_block_limit() const { return threads_per_block_limit_; }
 
   // Returns the limit on the total number of threads that can be simultaneously
   // launched on a given multiprocessor.
-  const int64_t &threads_per_core_limit() const {
-    return threads_per_core_limit_;
-  }
+  int64_t threads_per_core_limit() const { return threads_per_core_limit_; }
 
   // Returns the number of threads per warp/wavefront.
-  const int64_t &threads_per_warp() const { return threads_per_warp_; }
+  constexpr int64_t threads_per_warp() const { return threads_per_warp_; }
 
   // Returns the limit on the total number of registers per core.
-  const int64_t &registers_per_core_limit() const {
-    return registers_per_core_limit_;
-  }
+  int64_t registers_per_core_limit() const { return registers_per_core_limit_; }
 
   // Returns the limit on the total number of registers that can be
   // simultaneously used by a block.
-  const int64_t &registers_per_block_limit() const {
+  int64_t registers_per_block_limit() const {
     return registers_per_block_limit_;
   }
 
   // Returns the number of address bits available to kernel code running on the
   // platform. This affects things like the maximum allocation size and perhaps
   // types used in kernel code such as size_t.
-  const int64_t &device_address_bits() const { return device_address_bits_; }
+  int64_t device_address_bits() const { return device_address_bits_; }
 
   // Returns the device memory size in bytes.
   int64_t device_memory_size() const { return device_memory_size_; }
@@ -363,6 +355,12 @@ class DeviceDescription {
   // host and device.)
   int64_t memory_bandwidth() const { return memory_bandwidth_; }
 
+  // Returns the device's memory clock rate in GHz.
+  float mem_clock_ghz() const { return mem_clock_ghz_; }
+
+  // Returns the PCIe memory bandwidth in bytes/sec.
+  int64_t pcie_bandwidth() const { return pcie_bandwidth_; }
+
   // Returns the device's core clock rate in GHz.
   float clock_rate_ghz() const { return clock_rate_ghz_; }
 
@@ -371,11 +369,11 @@ class DeviceDescription {
 
   // Returns the device vendor string, e.g., "NVIDIA Corporation", "Advanced
   // Micro Devices, Inc.", or "GenuineIntel".
-  const std::string &device_vendor() const { return device_vendor_; }
+  const std::string& device_vendor() const { return device_vendor_; }
 
   // Returns the CUDA compute capability if we're running on the CUDA platform.
   // If a CUDA compute capability is not available, the major version will be
-  // zero.
+  // negative.
   CudaComputeCapability cuda_compute_capability() const;
 
   // Returns the ROCm compute capability if we're running on the ROCm platform.
@@ -383,7 +381,12 @@ class DeviceDescription {
   // be "gfx000" (which is an invalid gfx arch).
   RocmComputeCapability rocm_compute_capability() const;
 
-  const GpuComputeCapability &gpu_compute_capability() const;
+  // Returns the oneAPI compute capability if we're running on the sycl
+  // platform. If a oneAPI compute capability is not available, the generation
+  // will be 0 which is invalid.
+  OneAPIComputeCapability oneapi_compute_capability() const;
+
+  const GpuComputeCapability& gpu_compute_capability() const;
 
   // Returns the maximum amount of shared memory present on a single core
   // (i.e. Streaming Multiprocessor on NVIDIA GPUs; Compute Unit for OpenCL
@@ -401,272 +404,316 @@ class DeviceDescription {
     return shared_memory_per_block_optin_;
   }
 
+  // Returns the maximum oversized shared memory available per block.
+  int64_t oversized_shared_memory_per_block() const {
+    return oversized_shared_memory_per_block_;
+  }
+
+  // Returns the amount of shared memory reserved by the CUDA driver per block.
+  int64_t reserved_shared_memory_per_block() const {
+    return reserved_shared_memory_per_block_;
+  }
+
+  // Returns the maximum number of thread blocks (CTAs) per multiprocessor.
+  int64_t max_blocks_per_multiprocessor() const {
+    return max_blocks_per_multiprocessor_;
+  }
+
   // L1 size varies because it can be dynamically
   // configured as shared memory; there is no easy way to query its actual size;
   // also we do not count what occupies cache, but rather claim that what is
   // much smaller than the cache size will likely stay in it.
-  constexpr int64_t l1_cache_size_per_SM() const {
-    return std::visit(
-        [](const auto &capability) -> int64_t {
-          if constexpr (std::is_same_v<std::decay_t<decltype(capability)>,
-                                       RocmComputeCapability>) {
-            // MI100 and MI200 has 16KB L1 cache per CU.
-            if (capability.gfx9_mi100() || capability.gfx9_mi200()) {
-              return 16 * 1024;
-            }
-            // MI300 has 32KB L1 cache per CU.
-            if (capability.gfx9_mi300()) {
-              return 32 * 1024;
-            }
-          }
-          // Default return for other GPUs (e.g., RTX A6000).
-          return 2 * 1024;
-        },
-        gpu_compute_capability_);
+  int64_t l1_cache_size_per_SM() const {
+    if (auto* capability = gpu_compute_capability_.rocm_compute_capability()) {
+      // MI100 and MI200 has 16KB L1 cache per CU.
+      if (capability->gfx9_mi100() || capability->gfx9_mi200()) {
+        return 16 * 1024;
+      }
+      // MI300 has 32KB L1 cache per CU.
+      if (capability->gfx9_mi300_series()) {
+        return 32 * 1024;
+      }
+    }
+    // Default return for other GPUs (e.g., RTX A6000).
+    return 2 * 1024;
   }
 
-  constexpr int64_t dram_to_l2_transaction_size_bytes() const {
-    return std::visit(
-        [](const auto &capability) -> int {
-          if constexpr (std::is_same_v<std::decay_t<decltype(capability)>,
-                                       RocmComputeCapability>) {
-            // DRAM->L2 bus is 128 Byte width for MI300.
-            if (capability.gfx9_mi300()) {
-              return 128;
-            }
-          }
-          // Cache line is 128B that is split into 4 sectors of 32B. Default
-          // transaction size from DRAM -> L2 = 64 Bytes = 2 sectors, since
-          // V100, but it can be also configured.
-          // https://developer.download.nvidia.com/video/gputechconf/gtc/2020/presentations/s21819-optimizing-applications-for-nvidia-ampere-gpu-architecture.pdf
-          // (page 10).
-          // return 64 Bytes by default.
-          return 64;
-        },
-        gpu_compute_capability_);
+  int64_t dram_to_l2_transaction_size_bytes() const {
+    if (auto* capability = gpu_compute_capability_.rocm_compute_capability()) {
+      // DRAM->L2 bus is 128 Byte width for MI300.
+      if (capability->gfx9_mi300_series()) {
+        return 128;
+      }
+    }
+    // Cache line is 128B that is split into 4 sectors of 32B. Default
+    // transaction size from DRAM -> L2 = 64 Bytes = 2 sectors, since
+    // V100, but it can be also configured.
+    // https://developer.download.nvidia.com/video/gputechconf/gtc/2020/presentations/s21819-optimizing-applications-for-nvidia-ampere-gpu-architecture.pdf
+    // (page 10).
+    // return 64 Bytes by default.
+    return 64;
   }
 
-  constexpr int64_t memory_transactions_per_clock() const {
-    return std::visit(
-        [](const auto &capability) -> int {
-          if constexpr (std::is_same_v<std::decay_t<decltype(capability)>,
-                                       RocmComputeCapability>) {
-            // 16 works well on MI300.
-            if (capability.gfx9_mi300()) {
-              return 16;
-            }
-          }
-          // Default return for other GPUs.
-          return 32;
-        },
-        gpu_compute_capability_);
+  int64_t memory_transactions_per_clock() const {
+    if (auto* capability = gpu_compute_capability_.rocm_compute_capability()) {
+      // 16 works well on MI300.
+      if (capability->gfx9_mi300_series()) {
+        return 16;
+      }
+    }
+    // Default return for other GPUs.
+    return 32;
   }
 
-  GpuDeviceInfoProto ToGpuProto() const;
+  const DeviceInterconnectInfo& device_interconnect_info() const {
+    return interconnect_info_;
+  }
+
+  uint64_t collective_memory_granularity() const {
+    return collective_memory_granularity_;
+  }
+  int locality_domain_count() const { return locality_domain_count_; }
+
+  bool confidential_computing_enabled() const {
+    return confidential_computing_enabled_;
+  }
+
+  ABSL_DEPRECATE_AND_INLINE() GpuDeviceInfoProto ToGpuProto() const {
+    return ToProto();
+  }
+  GpuDeviceInfoProto ToProto() const;
 
   std::string ToString() const;
 
-  explicit DeviceDescription(const GpuDeviceInfoProto &proto);
+  static absl::StatusOr<DeviceDescription> FromProto(
+      const GpuDeviceInfoProto& proto);
+
+  bool operator==(const DeviceDescription& other) const;
+  bool operator!=(const DeviceDescription& other) const {
+    return !(*this == other);
+  }
 
   // For string values that are not available via the underlying platform, this
   // value will be provided.
-  static const char *kUndefinedString;
+  static inline const char* const kUndefinedString = "<undefined>";
 
- private:
-  friend class internal::DeviceDescriptionBuilder;
+  void set_block_dim_limit_x(int64_t limit) { block_dim_limit_.x = limit; }
 
-  DeviceDescription();
+  void set_block_dim_limit_y(int64_t limit) { block_dim_limit_.y = limit; }
 
-  // For description of the following members, see the corresponding accessor
-  // above.
-  //
-  // N.B. If another field is added, update ToMap() above.
-  std::string device_vendor_;
-  std::string platform_version_;
-  std::string driver_version_;
-  std::string runtime_version_;
-  std::string pci_bus_id_;
-  std::string name_;
-  std::string model_str_;
+  void set_block_dim_limit_z(int64_t limit) { block_dim_limit_.z = limit; }
 
-  ThreadDim thread_dim_limit_;
-  BlockDim block_dim_limit_;
-
-  int64_t threads_per_core_limit_;
-  int64_t threads_per_block_limit_;
-  int64_t threads_per_warp_;
-
-  int64_t registers_per_core_limit_;
-  int64_t registers_per_block_limit_;
-
-  int64_t device_address_bits_;
-  int64_t device_memory_size_;
-  int64_t l2_cache_size_;
-  int64_t memory_bandwidth_;
-
-  // Shared memory limits on a given device.
-  int64_t shared_memory_per_core_;
-  int64_t shared_memory_per_block_;
-  int64_t shared_memory_per_block_optin_;
-
-  float clock_rate_ghz_;
-
-  GpuComputeCapability gpu_compute_capability_;
-
-  int numa_node_;
-  int core_count_;
-  int fpus_per_core_;
-  bool ecc_enabled_;
-};
-
-namespace internal {
-
-// Helper class the builds a device description, given that it has a large
-// number of fields that would be easily confused in constructor form.
-class DeviceDescriptionBuilder {
- public:
-  DeviceDescriptionBuilder() = default;
-
-  // For descriptions of the following fields, see comments on the corresponding
-  // DeviceDescription::* accessors above.
-
-  void set_gpu_compute_capability(GpuComputeCapability c) {
-    device_description_.gpu_compute_capability_ = c;
+  void set_device_vendor(std::string value) {
+    device_vendor_ = std::move(value);
   }
+  void set_platform_version(std::string value) {
+    platform_version_ = std::move(value);
+  }
+  void set_driver_version(const SemanticVersion& value) {
+    driver_version_ = value;
+  }
+  void set_kernel_mode_driver_version(const SemanticVersion& value) {
+    kernel_mode_driver_version_ = value;
+  }
+  void set_runtime_version(const SemanticVersion& value) {
+    runtime_version_ = value;
+  }
+  void set_dnn_version(const SemanticVersion& value) { dnn_version_ = value; }
+  void set_compile_time_toolkit_version(const SemanticVersion& value) {
+    compile_time_toolkit_version_ = value;
+  }
+  void set_cub_version(const SemanticVersion& value) { cub_version_ = value; }
+  void set_pci_bus_id(std::string value) { pci_bus_id_ = std::move(value); }
+  void set_name(std::string value) { name_ = std::move(value); }
+  void set_model_str(std::string value) { model_str_ = std::move(value); }
 
-  void set_block_dim_limit_x(int64_t limit) {
-    device_description_.block_dim_limit_.x = limit;
+  void set_thread_dim_limit(const ThreadDim& value) {
+    thread_dim_limit_ = value;
   }
-
-  void set_block_dim_limit_y(int64_t limit) {
-    device_description_.block_dim_limit_.y = limit;
-  }
-
-  void set_block_dim_limit_z(int64_t limit) {
-    device_description_.block_dim_limit_.z = limit;
-  }
-
-  void set_device_vendor(const std::string &value) {
-    device_description_.device_vendor_ = value;
-  }
-  void set_platform_version(const std::string &value) {
-    device_description_.platform_version_ = value;
-  }
-  void set_driver_version(const std::string &value) {
-    device_description_.driver_version_ = value;
-  }
-  void set_runtime_version(const std::string &value) {
-    device_description_.runtime_version_ = value;
-  }
-  void set_pci_bus_id(const std::string &value) {
-    device_description_.pci_bus_id_ = value;
-  }
-  void set_name(const std::string &value) { device_description_.name_ = value; }
-  void set_model_str(const std::string &value) {
-    device_description_.model_str_ = value;
-  }
-
-  void set_thread_dim_limit(const ThreadDim &value) {
-    device_description_.thread_dim_limit_ = value;
-  }
-  void set_block_dim_limit(const BlockDim &value) {
-    device_description_.block_dim_limit_ = value;
-  }
+  void set_block_dim_limit(const BlockDim& value) { block_dim_limit_ = value; }
 
   void set_threads_per_core_limit(int64_t value) {
-    device_description_.threads_per_core_limit_ = value;
+    threads_per_core_limit_ = value;
   }
   void set_threads_per_block_limit(int64_t value) {
-    device_description_.threads_per_block_limit_ = value;
+    threads_per_block_limit_ = value;
   }
-  void set_threads_per_warp(int64_t value) {
-    device_description_.threads_per_warp_ = value;
-  }
+  void set_threads_per_warp(int64_t value) { threads_per_warp_ = value; }
 
   void set_registers_per_core_limit(int64_t value) {
-    device_description_.registers_per_core_limit_ = value;
+    registers_per_core_limit_ = value;
   }
   void set_registers_per_block_limit(int64_t value) {
-    device_description_.registers_per_block_limit_ = value;
+    registers_per_block_limit_ = value;
   }
 
-  void set_device_address_bits(int64_t value) {
-    device_description_.device_address_bits_ = value;
-  }
-  void set_device_memory_size(int64_t value) {
-    device_description_.device_memory_size_ = value;
-  }
-  void set_l2_cache_size(int64_t value) {
-    device_description_.l2_cache_size_ = value;
-  }
-  void set_memory_bandwidth(int64_t value) {
-    device_description_.memory_bandwidth_ = value;
-  }
+  void set_device_address_bits(int64_t value) { device_address_bits_ = value; }
+  void set_device_memory_size(int64_t value) { device_memory_size_ = value; }
+  void set_l2_cache_size(int64_t value) { l2_cache_size_ = value; }
+  void set_memory_bandwidth(int64_t value) { memory_bandwidth_ = value; }
+  void set_pcie_bandwidth(int64_t value) { pcie_bandwidth_ = value; }
+  void set_mem_clock_ghz(float value) { mem_clock_ghz_ = value; }
 
   void set_shared_memory_per_core(int64_t value) {
-    device_description_.shared_memory_per_core_ = value;
+    shared_memory_per_core_ = value;
   }
   void set_shared_memory_per_block(int64_t value) {
-    device_description_.shared_memory_per_block_ = value;
+    shared_memory_per_block_ = value;
   }
   void set_shared_memory_per_block_optin(int64_t value) {
-    device_description_.shared_memory_per_block_optin_ = value;
+    shared_memory_per_block_optin_ = value;
+  }
+  void set_oversized_shared_memory_per_block(int64_t value) {
+    oversized_shared_memory_per_block_ = value;
+  }
+  void set_reserved_shared_memory_per_block(int64_t value) {
+    reserved_shared_memory_per_block_ = value;
+  }
+  void set_max_blocks_per_multiprocessor(int64_t value) {
+    max_blocks_per_multiprocessor_ = value;
   }
 
-  void set_clock_rate_ghz(float value) {
-    device_description_.clock_rate_ghz_ = value;
+  void set_clock_rate_ghz(float value) { clock_rate_ghz_ = value; }
+
+  void set_gpu_compute_capability(const GpuComputeCapability& c) {
+    gpu_compute_capability_ = c;
   }
 
-  void set_cuda_compute_capability(int major, int minor) {
-    device_description_.gpu_compute_capability_ =
-        CudaComputeCapability{major, minor};
+  void set_cuda_compute_capability(const CudaComputeCapability& cc) {
+    gpu_compute_capability_ = cc;
   }
 
   void set_rocm_compute_capability(std::string gcn_arch_name) {
-    device_description_.gpu_compute_capability_ =
-        RocmComputeCapability(gcn_arch_name);
+    gpu_compute_capability_ = RocmComputeCapability(std::move(gcn_arch_name));
   }
 
-  void set_numa_node(int value) { device_description_.numa_node_ = value; }
-  void set_core_count(int value) { device_description_.core_count_ = value; }
-  void set_fpus_per_core(int value) {
-    device_description_.fpus_per_core_ = value;
-  }
-  void set_ecc_enabled(bool value) { device_description_.ecc_enabled_ = value; }
-
-  // Returns a built DeviceDescription with ownership transferred to the
-  // caller. There are currently no restrictions on which fields must be set in
-  // order to build the descriptor.
-  //
-  // Once the description is built, this builder object should be discarded.
-  std::unique_ptr<DeviceDescription> Build() {
-    return std::make_unique<DeviceDescription>(device_description_);
+  void set_oneapi_compute_capability(uint32_t ip_version) {
+    gpu_compute_capability_ = OneAPIComputeCapability(ip_version);
   }
 
-  DeviceDescription BuildObject() { return device_description_; }
+  void set_numa_node(int value) { numa_node_ = value; }
+  void set_core_count(int value) { core_count_ = value; }
+  void set_fpus_per_core(int value) { fpus_per_core_ = value; }
+  void set_ecc_enabled(bool value) { ecc_enabled_ = value; }
+  void set_collective_memory_granularity(uint64_t value) {
+    collective_memory_granularity_ = value;
+  }
+  void set_confidential_computing_enabled(bool value) {
+    confidential_computing_enabled_ = value;
+  }
+  void set_locality_domain_count(int value) { locality_domain_count_ = value; }
+
+  void set_device_interconnect_info(DeviceInterconnectInfo info) {
+    interconnect_info_ = std::move(info);
+  }
+
+  void set_scalar_unit_description(ExecutionUnitDescription descr) {
+    scalar_unit_description_ = std::move(descr);
+  }
+
+  void set_matrix_unit_description(ExecutionUnitDescription descr) {
+    matrix_unit_description_ = std::move(descr);
+  }
+
+  enum class CompareOptions {
+    kIgnoreVersionNumbers,  // Ignores driver, kernel mode driver, runtime,
+                            // compile time toolkit, dnn, and cub versions.
+    kPortable,  // Ignores all fields that differ between hosts and between
+                // devices on the same host.
+  };
+
+  bool EqualsTo(const DeviceDescription& other,
+                absl::Span<const CompareOptions> compare_options = {}) const;
+
+  // Returns a copy of the device description with device-specific fields
+  // cleared.
+  DeviceDescription DeviceSpecificFieldsCleared() const;
 
  private:
-  DeviceDescription device_description_;
+  // LINT.IfChange
+  // For description of the following members, see the corresponding accessor
+  // above.
+  std::string device_vendor_ = kUndefinedString;
+  std::string platform_version_ = kUndefinedString;
+  std::string pci_bus_id_ = kUndefinedString;
+  std::string name_ = kUndefinedString;
+  std::string model_str_ = kUndefinedString;
 
-  DeviceDescriptionBuilder(const DeviceDescriptionBuilder &) = delete;
-  void operator=(const DeviceDescriptionBuilder &) = delete;
+  template <typename T>
+  static constexpr T kUninitialized = T(-1);
+
+  ThreadDim thread_dim_limit_{kUninitialized<uint64_t>,
+                              kUninitialized<uint64_t>,
+                              kUninitialized<uint64_t>};
+  BlockDim block_dim_limit_{kUninitialized<uint64_t>, kUninitialized<uint64_t>,
+                            kUninitialized<uint64_t>};
+
+  int64_t threads_per_core_limit_ = kUninitialized<int64_t>;
+  int64_t threads_per_block_limit_ = kUninitialized<int64_t>;
+  int64_t threads_per_warp_ = kUninitialized<int64_t>;
+
+  int64_t registers_per_core_limit_ = kUninitialized<int64_t>;
+  int64_t registers_per_block_limit_ = kUninitialized<int64_t>;
+
+  int64_t device_address_bits_ = kUninitialized<int64_t>;
+  int64_t device_memory_size_ = kUninitialized<int64_t>;
+  int64_t l2_cache_size_ = kUninitialized<int64_t>;
+
+  int64_t memory_bandwidth_ = kUninitialized<int64_t>;
+  int64_t pcie_bandwidth_ = kUninitialized<int64_t>;
+  float mem_clock_ghz_ = kUninitialized<float>;
+
+  // Shared memory limits on a given device.
+  int64_t shared_memory_per_core_ = kUninitialized<int64_t>;
+  int64_t shared_memory_per_block_ = kUninitialized<int64_t>;
+  int64_t shared_memory_per_block_optin_ = kUninitialized<int64_t>;
+  int64_t oversized_shared_memory_per_block_ = kUninitialized<int64_t>;
+  int64_t reserved_shared_memory_per_block_ = kUninitialized<int64_t>;
+  int64_t max_blocks_per_multiprocessor_ = kUninitialized<int64_t>;
+
+  float clock_rate_ghz_ = kUninitialized<float>;
+
+  GpuComputeCapability gpu_compute_capability_{};
+
+  int numa_node_ = kUninitialized<int>;
+  int core_count_ = kUninitialized<int>;
+  int fpus_per_core_ = kUninitialized<int>;
+  bool ecc_enabled_ = false;
+
+  std::optional<ExecutionUnitDescription> scalar_unit_description_;
+  std::optional<ExecutionUnitDescription> matrix_unit_description_;
+
+  SemanticVersion driver_version_{0, 0, 0};
+  SemanticVersion kernel_mode_driver_version_{0, 0, 0};
+  SemanticVersion runtime_version_{0, 0, 0};
+  SemanticVersion compile_time_toolkit_version_{0, 0, 0};
+  SemanticVersion dnn_version_{0, 0, 0};
+  SemanticVersion cub_version_{0, 0, 0};
+
+  DeviceInterconnectInfo interconnect_info_;
+  uint64_t collective_memory_granularity_ = 0;
+  bool confidential_computing_enabled_ = false;
+  int locality_domain_count_ = 0;
+
+  // Please keep the fields in sync with the proto.
+  // LINT.ThenChange(//tensorflow/compiler/xla/stream_executor/device_description.proto)
 };
 
-}  // namespace internal
+std::string MakeComputeCapabilityAttributeString(const DeviceDescription& desc);
 
 // Returns whether the given thread_dim is acceptable given the limits described
 // in device_description. For detailed reasons for failing the predicate, enable
 // VLOG(2) for this module.
-bool ThreadDimOk(const DeviceDescription &device_description,
-                 const ThreadDim &thread_dim);
+bool ThreadDimOk(const DeviceDescription& device_description,
+                 const ThreadDim& thread_dim);
 
 // Calculate the number of threads/blocks required to process element_count
 // elements. Note that you can still end up with more threads than
 // element_count due to rounding, so kernels often start with an "is this
 // thread id in the element_count range?" test.
-void CalculateDimensionality(const DeviceDescription &device_description,
-                             int64_t element_count, int64_t *threads_per_block,
-                             int64_t *block_count);
+void CalculateDimensionality(const DeviceDescription& device_description,
+                             int64_t element_count, int64_t* threads_per_block,
+                             int64_t* block_count);
 
 }  // namespace stream_executor
 

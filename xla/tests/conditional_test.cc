@@ -13,20 +13,52 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <random>
+#include <array>
+#include <cstdint>
+#include <memory>
+#include <string>
 #include <utility>
+#include <vector>
 
-#include "xla/client/xla_builder.h"
-#include "xla/client/xla_computation.h"
-#include "xla/tests/client_library_test_base.h"
+#include "absl/log/check.h"
+#include "absl/status/status_matchers.h"
+#include "absl/strings/str_cat.h"
+#include "xla/array2d.h"
+#include "xla/error_spec.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/testlib/test_helpers.h"
+#include "xla/literal.h"
+#include "xla/literal_util.h"
+#include "xla/service/hlo_runner_interface.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/tests/client_library_test_runner_mixin.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
 #include "xla/tests/literal_test_util.h"
-#include "xla/tests/test_macros.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/tsl/platform/threadpool.h"
 
 namespace xla {
 namespace {
 
-class ConditionalOpTest : public ClientLibraryTestBase {
+using ::absl_testing::IsOkAndHolds;
+
+constexpr ErrorSpec kErrorSpec{0.001};
+
+class ConditionalOpTest : public ClientLibraryTestRunnerMixin<
+                              HloInterpreterReferenceMixin<HloTestBase>> {
  protected:
+  void SetUp() override {
+    ClientLibraryTestRunnerMixin<
+        HloInterpreterReferenceMixin<HloTestBase>>::SetUp();
+    mutable_debug_options()->set_xla_test_add_command_buffer_mode(true);
+  }
+
   XlaComputation CreateR0ConstantComputation(float value) {
     XlaBuilder builder("Constant");
     Parameter(&builder, 0, empty_tuple_, "tuple");
@@ -169,7 +201,6 @@ class ConditionalOpTest : public ClientLibraryTestBase {
   Shape tuple_2_r1s2f32_ = ShapeUtil::MakeTupleShape(
       {ShapeUtil::MakeShape(F32, {2}), ShapeUtil::MakeShape(F32, {2})});
   Shape empty_tuple_ = ShapeUtil::MakeTupleShape({});
-  ErrorSpec error_spec_{0.001};
 };
 
 // Test fixture to run indexed conditional (switch/case) tests with varying
@@ -178,7 +209,7 @@ class CaseOpTest : public ConditionalOpTest,
                    public ::testing::WithParamInterface<int> {};
 
 // Test true and false computations that do not take any parameters.
-XLA_TEST_F(ConditionalOpTest, Parameters0) {
+TEST_F(ConditionalOpTest, Parameters0) {
   XlaBuilder builder(TestName());
   XlaOp pred;
   auto pred_arg = CreateR0Parameter<bool>(true, 0, "pred", &builder, &pred);
@@ -187,41 +218,47 @@ XLA_TEST_F(ConditionalOpTest, Parameters0) {
   auto false_computation = CreateR0ConstantComputation(12.0f);
   Conditional(pred, operands, true_computation, operands, false_computation);
 
-  ComputeAndCompareR0<float>(&builder, 56.0f, {pred_arg.get()}, error_spec_);
+  ComputeAndCompareR0<float>(&builder, 56.0f, {&pred_arg}, kErrorSpec);
 }
 
 // Test branch computations that do not take any parameters.
-XLA_TEST_P(CaseOpTest, Parameters0) {
-  int num_branches = GetParam();
+TEST_P(CaseOpTest, Parameters0) {
+  const int num_branches = GetParam();
+
+  XlaBuilder builder(TestName());
+  const XlaOp branch_index =
+      Parameter(&builder, 0, ShapeUtil::MakeShape(S32, {}), "branch_index_arg");
+  auto operand = Tuple(&builder, {});
+  std::vector<XlaOp> operands(num_branches, operand);
+  std::vector<XlaComputation> branches;
+  branches.reserve(num_branches);
+  std::vector<const XlaComputation*> branches_p(num_branches);
+  for (int i = 0; i < num_branches; ++i) {
+    branches.push_back(CreateR0ConstantComputation(static_cast<float>(i) * 10));
+    branches_p[i] = &branches[i];
+  }
+  Conditional(branch_index, branches_p, operands);
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       HloModuleFromXlaBuilder(&builder, execution_options()));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> executable,
+                       test_runner().CreateExecutable(std::move(module),
+                                                      /*run_hlo_passes=*/true));
   for (int bi = -1; bi <= num_branches; ++bi) {
     SCOPED_TRACE(bi);
-    XlaBuilder builder(TestName());
-    XlaOp branch_index;
-    auto branch_index_arg = CreateR0Parameter<int32_t>(
-        bi, 0, "branch_index_arg", &builder, &branch_index);
-    auto operand = Tuple(&builder, {});
-
-    std::vector<XlaOp> operands(num_branches, operand);
-    std::vector<XlaComputation> branches;
-    branches.reserve(num_branches);
-    std::vector<const XlaComputation*> branches_p(num_branches);
-    for (int i = 0; i < num_branches; ++i) {
-      branches.emplace_back(
-          CreateR0ConstantComputation(static_cast<float>(i) * 10));
-      branches_p[i] = &branches[i];
-    }
-    Conditional(branch_index, branches_p, operands);
-
-    float expected = 10 * static_cast<float>((bi < 0 || bi >= num_branches)
-                                                 ? num_branches - 1
-                                                 : bi);
-    ComputeAndCompareR0<float>(&builder, expected, {branch_index_arg.get()},
-                               error_spec_);
+    const Literal expected = LiteralUtil::CreateR0<float>(
+        10 * static_cast<float>(
+                 (bi < 0 || bi >= num_branches) ? num_branches - 1 : bi));
+    const Literal branch_index_arg = LiteralUtil::CreateR0<int32_t>(bi);
+    ASSERT_OK_AND_ASSIGN(const Literal result,
+                         test_runner().ExecuteWithExecutable(
+                             executable.get(), {&branch_index_arg}));
+    EXPECT_TRUE(LiteralTestUtil::Near(expected, result, kErrorSpec));
   }
 }
 
 // Test true and false computations that take in 1 parameter.
-XLA_TEST_F(ConditionalOpTest, Parameters1) {
+TEST_F(ConditionalOpTest, Parameters1) {
   XlaBuilder builder(TestName());
   XlaOp pred;
   auto pred_arg = CreateR0Parameter<bool>(false, 0, "pred", &builder, &pred);
@@ -230,51 +267,56 @@ XLA_TEST_F(ConditionalOpTest, Parameters1) {
   auto identity = CreateR0IdentityComputation();
   Conditional(pred, operand1, identity, operand2, identity);
 
-  ComputeAndCompareR0<float>(&builder, 12.0f, {pred_arg.get()}, error_spec_);
+  ComputeAndCompareR0<float>(&builder, 12.0f, {&pred_arg}, kErrorSpec);
 }
 
 // Test branch computations that take in 1 parameter.
-XLA_TEST_P(CaseOpTest, Parameters1) {
-  int num_branches = GetParam();
+TEST_P(CaseOpTest, Parameters1) {
+  const int num_branches = GetParam();
+
+  XlaBuilder builder(TestName());
+  const XlaOp branch_index =
+      Parameter(&builder, 0, ShapeUtil::MakeShape(S32, {}), "branch_index_arg");
+  std::vector<XlaComputation> branches;
+  branches.reserve(num_branches);
+  std::vector<const XlaComputation*> branches_p(num_branches);
+  std::vector<XlaOp> operands;
+  operands.reserve(num_branches);
+  std::vector<Literal> expecteds(num_branches);
+  for (int i = 0; i < num_branches; ++i) {
+    std::unique_ptr<XlaBuilder> sb =
+        builder.CreateSubBuilder(absl::StrCat("branch_", i));
+    Add(ConstantR0<float>(sb.get(), static_cast<float>(i)),
+        Parameter(sb.get(), 0, r0f32_, "p0"));
+    branches.push_back(sb->BuildAndNoteError());
+    branches_p[i] = &branches[i];
+    const float fi = static_cast<float>(i);
+    operands.push_back(ConstantR0<float>(&builder, 10 * fi + 7));
+    expecteds[i] = LiteralUtil::CreateR0<float>(10 * fi + 7 + fi);
+  }
+  Conditional(branch_index, branches_p, operands);
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       HloModuleFromXlaBuilder(&builder, execution_options()));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> executable,
+                       test_runner().CreateExecutable(std::move(module),
+                                                      /*run_hlo_passes=*/true));
   for (int bi = -1; bi <= num_branches; ++bi) {
     SCOPED_TRACE(bi);
-    XlaBuilder builder(TestName());
-    XlaOp branch_index;
-    auto branch_index_arg = CreateR0Parameter<int32_t>(
-        bi, 0, "branch_index_arg", &builder, &branch_index);
-
-    auto make_branch = [&builder, this](int i) {
-      auto sb = builder.CreateSubBuilder(absl::StrCat("branch_", i));
-      Add(ConstantR0<float>(sb.get(), static_cast<float>(i)),
-          Parameter(sb.get(), 0, r0f32_, "p0"));
-      return sb->BuildAndNoteError();
-    };
-    std::vector<XlaComputation> branches;
-    branches.reserve(num_branches);
-    std::vector<const XlaComputation*> branches_p(num_branches);
-    std::vector<XlaOp> operands;
-    operands.reserve(num_branches);
-    std::vector<float> expecteds(num_branches);
-    for (int i = 0; i < num_branches; ++i) {
-      branches.emplace_back(make_branch(i));
-      branches_p[i] = &branches[i];
-      auto fi = static_cast<float>(i);
-      operands.emplace_back(ConstantR0<float>(&builder, 10 * fi + 7));
-      expecteds[i] = 10 * fi + 7 + fi;
-    }
-
-    Conditional(branch_index, branches_p, operands);
-    float expected = (bi < 0 || bi >= num_branches)
-                         ? expecteds[num_branches - 1]
-                         : expecteds[bi];
-    ComputeAndCompareR0<float>(&builder, expected, {branch_index_arg.get()},
-                               error_spec_);
+    const Literal& expected = (bi < 0 || bi >= num_branches)
+                                  ? expecteds[num_branches - 1]
+                                  : expecteds[bi];
+    const Literal branch_index_arg = LiteralUtil::CreateR0<int32_t>(bi);
+    ASSERT_OK_AND_ASSIGN(const Literal result,
+                         test_runner().ExecuteWithExecutable(
+                             executable.get(), {&branch_index_arg}));
+    EXPECT_TRUE(LiteralTestUtil::Near(expected, result, kErrorSpec));
   }
 }
 
 // Test conditional with two different computations in the true and false cases
 // that take in different arguments.
-XLA_TEST_F(ConditionalOpTest, DiffComputationsDiffArgs) {
+TEST_F(ConditionalOpTest, DiffComputationsDiffArgs) {
   XlaBuilder builder(TestName());
   XlaOp pred;
   auto pred_arg = CreateR0Parameter<bool>(false, 0, "pred", &builder, &pred);
@@ -283,12 +325,12 @@ XLA_TEST_F(ConditionalOpTest, DiffComputationsDiffArgs) {
   Conditional(pred, operand1, CreateR0CeilComputation(), operand2,
               CreateR0FloorComputation());
 
-  ComputeAndCompareR0<float>(&builder, 12.0f, {pred_arg.get()}, error_spec_);
+  ComputeAndCompareR0<float>(&builder, 12.0f, {&pred_arg}, kErrorSpec);
 }
 
 // Test conditional with two different computations in the true and false cases
 // that take in the same arguments.
-XLA_TEST_F(ConditionalOpTest, DiffComputationsSameArg) {
+TEST_F(ConditionalOpTest, DiffComputationsSameArg) {
   XlaBuilder builder(TestName());
   XlaOp pred;
   auto pred_arg = CreateR0Parameter<bool>(false, 0, "pred", &builder, &pred);
@@ -296,12 +338,12 @@ XLA_TEST_F(ConditionalOpTest, DiffComputationsSameArg) {
   Conditional(pred, operand, CreateR0CeilComputation(), operand,
               CreateR0FloorComputation());
 
-  ComputeAndCompareR0<float>(&builder, 12.0f, {pred_arg.get()}, error_spec_);
+  ComputeAndCompareR0<float>(&builder, 12.0f, {&pred_arg}, kErrorSpec);
 }
 
 // Test conditional with the same computation in the true and false cases but
 // take in different arguments.
-XLA_TEST_F(ConditionalOpTest, SameComputationDiffArgs) {
+TEST_F(ConditionalOpTest, SameComputationDiffArgs) {
   XlaBuilder builder(TestName());
   XlaOp pred;
   auto pred_arg = CreateR0Parameter<bool>(false, 0, "pred", &builder, &pred);
@@ -310,12 +352,12 @@ XLA_TEST_F(ConditionalOpTest, SameComputationDiffArgs) {
   auto floor = CreateR0FloorComputation();
   Conditional(pred, operand1, floor, operand2, floor);
 
-  ComputeAndCompareR0<float>(&builder, 12.0f, {pred_arg.get()}, error_spec_);
+  ComputeAndCompareR0<float>(&builder, 12.0f, {&pred_arg}, kErrorSpec);
 }
 
 // Test conditional with the same computation in the true and false cases that
 // take in the same arguments.
-XLA_TEST_F(ConditionalOpTest, SameComputationSameArg) {
+TEST_F(ConditionalOpTest, SameComputationSameArg) {
   XlaBuilder builder(TestName());
   XlaOp pred;
   auto pred_arg = CreateR0Parameter<bool>(false, 0, "pred", &builder, &pred);
@@ -323,12 +365,12 @@ XLA_TEST_F(ConditionalOpTest, SameComputationSameArg) {
   auto floor = CreateR0FloorComputation();
   Conditional(pred, operand, floor, operand, floor);
 
-  ComputeAndCompareR0<float>(&builder, 12.0f, {pred_arg.get()}, error_spec_);
+  ComputeAndCompareR0<float>(&builder, 12.0f, {&pred_arg}, kErrorSpec);
 }
 
 // Test conditional with different instances of the same computation in the true
 // and false cases.
-XLA_TEST_F(ConditionalOpTest, SameComputationDiffInstances) {
+TEST_F(ConditionalOpTest, SameComputationDiffInstances) {
   XlaBuilder builder(TestName());
   XlaOp pred;
   auto pred_arg = CreateR0Parameter<bool>(false, 0, "pred", &builder, &pred);
@@ -337,11 +379,11 @@ XLA_TEST_F(ConditionalOpTest, SameComputationDiffInstances) {
   Conditional(pred, operand1, CreateR0FloorComputation(), operand2,
               CreateR0FloorComputation());
 
-  ComputeAndCompareR0<float>(&builder, 12.0f, {pred_arg.get()}, error_spec_);
+  ComputeAndCompareR0<float>(&builder, 12.0f, {&pred_arg}, kErrorSpec);
 }
 
 // Test the case when a call invokes a computation that contains a conditional.
-XLA_TEST_F(ConditionalOpTest, ConditionalWithCall) {
+TEST_F(ConditionalOpTest, ConditionalWithCall) {
   Shape r0bool = ShapeUtil::MakeShape(PRED, {});
   XlaBuilder inner_builder(TestName() + ".inner_conditional");
   auto pred_cond = Parameter(&inner_builder, 0, r0bool, "param0");
@@ -358,12 +400,12 @@ XLA_TEST_F(ConditionalOpTest, ConditionalWithCall) {
   auto operand2 = ConstantR0<float>(&builder, 12.6f);
   Call(&builder, inner_builder_result, {pred, operand1, operand2});
 
-  ComputeAndCompareR0<float>(&builder, 12.0f, {pred_arg.get()}, error_spec_);
+  ComputeAndCompareR0<float>(&builder, 12.0f, {&pred_arg}, kErrorSpec);
 }
 
 // Test true and false computations that take in 2 parameters and predicate is
 // true.
-XLA_TEST_F(ConditionalOpTest, Parameters2TrueBranch) {
+TEST_F(ConditionalOpTest, Parameters2TrueBranch) {
   XlaBuilder builder(TestName());
   XlaOp pred;
   auto pred_arg = CreateR0Parameter<bool>(true, 0, "pred", &builder, &pred);
@@ -373,12 +415,12 @@ XLA_TEST_F(ConditionalOpTest, Parameters2TrueBranch) {
   Conditional(pred, operands, CreateR0TupleAddComputation(), operands,
               CreateR0TupleSubComputation());
 
-  ComputeAndCompareR0<float>(&builder, 68.0f, {pred_arg.get()}, error_spec_);
+  ComputeAndCompareR0<float>(&builder, 68.0f, {&pred_arg}, kErrorSpec);
 }
 
 // Test true and false computations that take in 2 parameters and predicate is
 // false.
-XLA_TEST_F(ConditionalOpTest, Parameters2FalseBranch) {
+TEST_F(ConditionalOpTest, Parameters2FalseBranch) {
   XlaBuilder builder(TestName());
   XlaOp pred;
   auto pred_arg = CreateR0Parameter<bool>(false, 0, "pred", &builder, &pred);
@@ -388,12 +430,12 @@ XLA_TEST_F(ConditionalOpTest, Parameters2FalseBranch) {
   Conditional(pred, operands, CreateR0TupleAddComputation(), operands,
               CreateR0TupleSubComputation());
 
-  ComputeAndCompareR0<float>(&builder, 44.0f, {pred_arg.get()}, error_spec_);
+  ComputeAndCompareR0<float>(&builder, 44.0f, {&pred_arg}, kErrorSpec);
 }
 
 // Test true and false computations that take in 2 array parameters and
 // predicate is true.
-XLA_TEST_F(ConditionalOpTest, Parameters2ArrayTrueBranch) {
+TEST_F(ConditionalOpTest, Parameters2ArrayTrueBranch) {
   XlaBuilder builder(TestName());
   XlaOp pred;
   auto pred_arg = CreateR0Parameter<bool>(true, 0, "pred", &builder, &pred);
@@ -403,44 +445,51 @@ XLA_TEST_F(ConditionalOpTest, Parameters2ArrayTrueBranch) {
   Conditional(pred, operands, CreateR1TupleAddComputation(), operands,
               CreateR1TupleSubComputation());
 
-  ComputeAndCompareR1<float>(&builder, {34.0f, 67.0f}, {pred_arg.get()},
-                             error_spec_);
+  ComputeAndCompareR1<float>(&builder, {34.0f, 67.0f}, {&pred_arg}, kErrorSpec);
 }
 
 // Test branch computations that take in 2 array parameters.
-XLA_TEST_P(CaseOpTest, Parameters2Array) {
-  int num_branches = GetParam();
+TEST_P(CaseOpTest, Parameters2Array) {
+  const int num_branches = GetParam();
+
+  XlaBuilder builder(TestName());
+  const XlaOp branch_index =
+      Parameter(&builder, 0, ShapeUtil::MakeShape(S32, {}), "branch_index_arg");
+  const XlaOp operand1 = ConstantR1<float>(&builder, {24.0f, 56.0f});
+  const XlaOp operand2 = ConstantR1<float>(&builder, {10.0f, 11.0f});
+  const XlaOp operands = Tuple(&builder, {operand1, operand2});
+  std::vector<XlaComputation> branches;
+  branches.reserve(num_branches);
+  std::vector<const XlaComputation*> branches_p(num_branches);
+  for (int i = 0; i < num_branches; ++i) {
+    std::unique_ptr<XlaBuilder> sb =
+        builder.CreateSubBuilder(absl::StrCat("branch_", i));
+    const XlaOp p = Parameter(sb.get(), 0, tuple_2_r1s2f32_, "p0");
+    Add(Mul(ConstantR0<float>(sb.get(), static_cast<float>(i)),
+            GetTupleElement(p, 0)),
+        GetTupleElement(p, 1));
+    branches.push_back(sb->BuildAndNoteError());
+    branches_p[i] = &branches[i];
+  }
+  Conditional(branch_index, branches_p,
+              std::vector<XlaOp>(num_branches, operands));
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       HloModuleFromXlaBuilder(&builder, execution_options()));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> executable,
+                       test_runner().CreateExecutable(std::move(module),
+                                                      /*run_hlo_passes=*/true));
   for (int bi = -1; bi <= num_branches; ++bi) {
     SCOPED_TRACE(bi);
-    XlaBuilder builder(TestName());
-    XlaOp branch_index;
-    auto branch_index_arg =
-        CreateR0Parameter<int32_t>(bi, 0, "pred", &builder, &branch_index);
-    auto operand1 = ConstantR1<float>(&builder, {24.0f, 56.0f});
-    auto operand2 = ConstantR1<float>(&builder, {10.0f, 11.0f});
-    auto operands = Tuple(&builder, {operand1, operand2});
-    auto make_branch = [&builder, this](int i) {
-      auto sb = builder.CreateSubBuilder(absl::StrCat("branch_", i));
-      auto p = Parameter(sb.get(), 0, tuple_2_r1s2f32_, "p0");
-      Add(Mul(ConstantR0<float>(sb.get(), static_cast<float>(i)),
-              GetTupleElement(p, 0)),
-          GetTupleElement(p, 1));
-      return sb->BuildAndNoteError();
-    };
-    std::vector<XlaComputation> branches;
-    branches.reserve(num_branches);
-    std::vector<const XlaComputation*> branches_p(num_branches);
-    for (int i = 0; i < num_branches; ++i) {
-      branches.emplace_back(make_branch(i));
-      branches_p[i] = &branches[i];
-    }
-    Conditional(branch_index, branches_p,
-                std::vector<XlaOp>(num_branches, operands));
-    auto modified_bi = static_cast<float>(
+    const Literal branch_index_arg = LiteralUtil::CreateR0<int32_t>(bi);
+    const float modified_bi = static_cast<float>(
         (bi < 0 || bi >= num_branches) ? num_branches - 1 : bi);
-    ComputeAndCompareR1<float>(
-        &builder, {24.0f * modified_bi + 10, 56.0f * modified_bi + 11},
-        {branch_index_arg.get()}, error_spec_);
+    const Literal expected = LiteralUtil::CreateR1<float>(
+        {24.0f * modified_bi + 10, 56.0f * modified_bi + 11});
+    ASSERT_OK_AND_ASSIGN(const Literal result,
+                         test_runner().ExecuteWithExecutable(
+                             executable.get(), {&branch_index_arg}));
+    EXPECT_TRUE(LiteralTestUtil::Near(expected, result, kErrorSpec));
   }
 }
 
@@ -449,7 +498,7 @@ INSTANTIATE_TEST_SUITE_P(CaseOpTest_Instantiation, CaseOpTest,
 
 // Test true and false computations that take in 2 array parameters and
 // predicate is false.
-XLA_TEST_F(ConditionalOpTest, Parameters2ArrayFalseBranch) {
+TEST_F(ConditionalOpTest, Parameters2ArrayFalseBranch) {
   XlaBuilder builder(TestName());
   XlaOp pred;
   auto pred_arg = CreateR0Parameter<bool>(false, 0, "pred", &builder, &pred);
@@ -459,12 +508,11 @@ XLA_TEST_F(ConditionalOpTest, Parameters2ArrayFalseBranch) {
   Conditional(pred, operands, CreateR1TupleAddComputation(), operands,
               CreateR1TupleSubComputation());
 
-  ComputeAndCompareR1<float>(&builder, {14.0f, 45.0f}, {pred_arg.get()},
-                             error_spec_);
+  ComputeAndCompareR1<float>(&builder, {14.0f, 45.0f}, {&pred_arg}, kErrorSpec);
 }
 
 // Test true and false computations that return a tuple of scalars.
-XLA_TEST_F(ConditionalOpTest, ReturnTupleOfScalars) {
+TEST_F(ConditionalOpTest, ReturnTupleOfScalars) {
   XlaBuilder builder(TestName());
   XlaOp pred;
   auto pred_arg = CreateR0Parameter<bool>(false, 0, "pred", &builder, &pred);
@@ -473,15 +521,15 @@ XLA_TEST_F(ConditionalOpTest, ReturnTupleOfScalars) {
   Conditional(pred, operands, CreateR0TupleCeilComputation(), operands,
               CreateR0TupleFloorComputation());
 
-  ComputeAndCompareTuple(
+  ComputeAndCompareLiteral(
       &builder,
       LiteralUtil::MakeTupleFromSlices({LiteralUtil::CreateR0<float>(12.0f),
                                         LiteralUtil::CreateR0<float>(25.0f)}),
-      {pred_arg.get()}, error_spec_);
+      {&pred_arg}, kErrorSpec);
 }
 
 // Test true and false computations that return a tuple of arrays.
-XLA_TEST_F(ConditionalOpTest, ReturnTupleOfArrays) {
+TEST_F(ConditionalOpTest, ReturnTupleOfArrays) {
   XlaBuilder builder(TestName());
   XlaOp pred;
   auto pred_arg = CreateR0Parameter<bool>(true, 0, "pred", &builder, &pred);
@@ -491,16 +539,16 @@ XLA_TEST_F(ConditionalOpTest, ReturnTupleOfArrays) {
   Conditional(pred, operands, CreateR1TupleCeilComputation(), operands,
               CreateR1TupleFloorComputation());
 
-  ComputeAndCompareTuple(&builder,
-                         LiteralUtil::MakeTupleFromSlices(
-                             {LiteralUtil::CreateR1<float>({13.0f, 16.0f}),
-                              LiteralUtil::CreateR1<float>({26.0f, 30.0f})}),
-                         {pred_arg.get()}, error_spec_);
+  ComputeAndCompareLiteral(&builder,
+                           LiteralUtil::MakeTupleFromSlices(
+                               {LiteralUtil::CreateR1<float>({13.0f, 16.0f}),
+                                LiteralUtil::CreateR1<float>({26.0f, 30.0f})}),
+                           {&pred_arg}, kErrorSpec);
 }
 
 // Test true and false computations that return a tuple of a predicate, a
 // scalar, and an array.
-XLA_TEST_F(ConditionalOpTest, ReturnTupleofPredicateScalarArray) {
+TEST_F(ConditionalOpTest, ReturnTupleofPredicateScalarArray) {
   XlaBuilder true_builder(TestName() + ".true");
   {
     Parameter(&true_builder, 0, empty_tuple_, "tuple");
@@ -530,66 +578,71 @@ XLA_TEST_F(ConditionalOpTest, ReturnTupleofPredicateScalarArray) {
   Conditional(pred, operands, std::move(true_builder_result).value(), operands,
               std::move(false_builder_result).value());
 
-  ComputeAndCompareTuple(&builder,
-                         LiteralUtil::MakeTupleFromSlices(
-                             {LiteralUtil::CreateR0<bool>(true),
-                              LiteralUtil::CreateR0<float>(12.2f),
-                              LiteralUtil::CreateR1<float>({12.8f, 14.6f})}),
-                         {pred_arg.get()}, error_spec_);
+  ComputeAndCompareLiteral(&builder,
+                           LiteralUtil::MakeTupleFromSlices(
+                               {LiteralUtil::CreateR0<bool>(true),
+                                LiteralUtil::CreateR0<float>(12.2f),
+                                LiteralUtil::CreateR1<float>({12.8f, 14.6f})}),
+                           {&pred_arg}, kErrorSpec);
 }
 
 // Test true and false computations that return a nested tuple.
-XLA_TEST_F(ConditionalOpTest, ReturnNestedTuple) {
+TEST_F(ConditionalOpTest, ReturnNestedTuple) {
   XlaBuilder true_builder(TestName() + ".true");
   {
     Parameter(&true_builder, 0, empty_tuple_, "tuple");
-    auto true_constant1 = ConstantR0<float>(&true_builder, 12.2f);
-    auto true_constant2 = ConstantR1<float>(&true_builder, {12.8f, 14.6f});
-    auto true_constant3 = ConstantR1<float>(&true_builder, {25.4f, 29.8f});
-    auto true_constant4 = ConstantR0<float>(&true_builder, 35.6f);
+    const XlaOp true_constant1 = ConstantR0<float>(&true_builder, 12.2f);
+    const XlaOp true_constant2 =
+        ConstantR1<float>(&true_builder, {12.8f, 14.6f});
+    const XlaOp true_constant3 =
+        ConstantR1<float>(&true_builder, {25.4f, 29.8f});
+    const XlaOp true_constant4 = ConstantR0<float>(&true_builder, 35.6f);
     Tuple(&true_builder,
           {Tuple(&true_builder, {true_constant1, true_constant2}),
            Tuple(&true_builder, {true_constant3, true_constant4})});
   }
-  auto true_builder_result = true_builder.Build();
-  EXPECT_IS_OK(true_builder_result.status());
+  ASSERT_OK_AND_ASSIGN(XlaComputation true_comp, true_builder.Build());
 
   XlaBuilder false_builder(TestName() + ".false");
   {
     Parameter(&false_builder, 0, empty_tuple_, "tuple");
-    auto false_constant1 = ConstantR0<float>(&false_builder, 46.6f);
-    auto false_constant2 = ConstantR1<float>(&false_builder, {54.4f, 58.4f});
-    auto false_constant3 = ConstantR1<float>(&false_builder, {62.1f, 67.4f});
-    auto false_constant4 = ConstantR0<float>(&false_builder, 9.3f);
+    const XlaOp false_constant1 = ConstantR0<float>(&false_builder, 46.6f);
+    const XlaOp false_constant2 =
+        ConstantR1<float>(&false_builder, {54.4f, 58.4f});
+    const XlaOp false_constant3 =
+        ConstantR1<float>(&false_builder, {62.1f, 67.4f});
+    const XlaOp false_constant4 = ConstantR0<float>(&false_builder, 9.3f);
     Tuple(&false_builder,
           {Tuple(&false_builder, {false_constant1, false_constant2}),
            Tuple(&false_builder, {false_constant3, false_constant4})});
   }
-  auto false_builder_result = false_builder.Build();
-  EXPECT_IS_OK(false_builder_result.status());
+  ASSERT_OK_AND_ASSIGN(XlaComputation false_comp, false_builder.Build());
 
   XlaBuilder builder(TestName());
   XlaOp pred;
-  auto pred_arg = CreateR0Parameter<bool>(false, 0, "pred", &builder, &pred);
-  auto operands = Tuple(&builder, {});
-  Conditional(pred, operands, std::move(true_builder_result).value(), operands,
-              std::move(false_builder_result).value());
+  const Literal pred_arg =
+      CreateR0Parameter<bool>(false, 0, "pred", &builder, &pred);
+  const XlaOp operands = Tuple(&builder, {});
+  const XlaOp result = Conditional(pred, operands, std::move(true_comp),
+                                   operands, std::move(false_comp));
+  // Flatten nested tuple for PjRt.
+  const XlaOp e0 = GetTupleElement(result, 0);
+  const XlaOp e1 = GetTupleElement(result, 1);
+  Tuple(&builder, {GetTupleElement(e0, 0), GetTupleElement(e0, 1),
+                   GetTupleElement(e1, 0), GetTupleElement(e1, 1)});
 
-  ComputeAndCompareTuple(
-      &builder,
-      LiteralUtil::MakeTupleFromSlices(
-          {LiteralUtil::MakeTupleFromSlices(
-               {LiteralUtil::CreateR0<float>(46.6f),
-                LiteralUtil::CreateR1<float>({54.4f, 58.4f})}),
-           LiteralUtil::MakeTupleFromSlices(
-               {LiteralUtil::CreateR1<float>({62.1f, 67.4f}),
-                LiteralUtil::CreateR0<float>(9.3f)})}),
-      {pred_arg.get()}, error_spec_);
+  ComputeAndCompareLiteral(&builder,
+                           LiteralUtil::MakeTupleFromSlices(
+                               {LiteralUtil::CreateR0<float>(46.6f),
+                                LiteralUtil::CreateR1<float>({54.4f, 58.4f}),
+                                LiteralUtil::CreateR1<float>({62.1f, 67.4f}),
+                                LiteralUtil::CreateR0<float>(9.3f)}),
+                           {&pred_arg}, kErrorSpec);
 }
 
 // Test conditional that takes in scalar operands in the form of external
 // params.
-XLA_TEST_F(ConditionalOpTest, ScalarOperandsFromExternalParams) {
+TEST_F(ConditionalOpTest, ScalarOperandsFromExternalParams) {
   Shape r0bool = ShapeUtil::MakeShape(PRED, {});
   XlaBuilder builder(TestName());
 
@@ -602,14 +655,13 @@ XLA_TEST_F(ConditionalOpTest, ScalarOperandsFromExternalParams) {
   Conditional(pred, operand1, CreateR0CeilComputation(), operand2,
               CreateR0FloorComputation());
 
-  ComputeAndCompareR0<float>(
-      &builder, 57.0f,
-      {pred_arg.get(), operand1_param.get(), operand2_param.get()},
-      error_spec_);
+  ComputeAndCompareR0<float>(&builder, 57.0f,
+                             {&pred_arg, &operand1_param, &operand2_param},
+                             kErrorSpec);
 }
 
 // Test conditional that takes in array operands in the form of external params.
-XLA_TEST_F(ConditionalOpTest, ArrayOperandsFromExternalParams) {
+TEST_F(ConditionalOpTest, ArrayOperandsFromExternalParams) {
   Shape r0bool = ShapeUtil::MakeShape(PRED, {});
   XlaBuilder builder(TestName());
 
@@ -622,14 +674,13 @@ XLA_TEST_F(ConditionalOpTest, ArrayOperandsFromExternalParams) {
   Conditional(pred, operand1, CreateR1CeilComputation(), operand2,
               CreateR1FloorComputation());
 
-  ComputeAndCompareR1<float>(
-      &builder, {10.0f, 11.0f},
-      {pred_arg.get(), operand1_param.get(), operand2_param.get()},
-      error_spec_);
+  ComputeAndCompareR1<float>(&builder, {10.0f, 11.0f},
+                             {&pred_arg, &operand1_param, &operand2_param},
+                             kErrorSpec);
 }
 
 // Test the case where one conditional is nested within another.
-XLA_TEST_F(ConditionalOpTest, NestedConditionals) {
+TEST_F(ConditionalOpTest, NestedConditionals) {
   XlaBuilder inner_builder(TestName() + ".inner_conditional");
   {
     Shape r0bool = ShapeUtil::MakeShape(PRED, {});
@@ -655,11 +706,11 @@ XLA_TEST_F(ConditionalOpTest, NestedConditionals) {
   Conditional(pred1, tuple_operand, std::move(inner_builder_result).value(),
               operand3, CreateR0IdentityComputation());
 
-  ComputeAndCompareR0<float>(&builder, 12.0f,
-                             {pred1_arg.get(), pred2_arg.get()}, error_spec_);
+  ComputeAndCompareR0<float>(&builder, 12.0f, {&pred1_arg, &pred2_arg},
+                             kErrorSpec);
 }
 
-XLA_TEST_F(ConditionalOpTest, ConditionalInNestedComputation) {
+TEST_F(ConditionalOpTest, ConditionalInNestedComputation) {
   XlaBuilder inner_builder(TestName() + ".inner_conditional");
   {
     Shape r0bool = ShapeUtil::MakeShape(PRED, {});
@@ -682,11 +733,11 @@ XLA_TEST_F(ConditionalOpTest, ConditionalInNestedComputation) {
   auto tuple_operand = Tuple(&builder, {pred, operand1, operand2});
   Call(&builder, std::move(inner_builder_result).value(), {tuple_operand});
 
-  ComputeAndCompareR0<float>(&builder, 12.0f, {pred_arg.get()}, error_spec_);
+  ComputeAndCompareR0<float>(&builder, 12.0f, {&pred_arg}, kErrorSpec);
 }
 
 // Test a mismatch in the shape of the true operand and true computation.
-XLA_TEST_F(ConditionalOpTest, ShapeMismatch) {
+TEST_F(ConditionalOpTest, ShapeMismatch) {
   XlaBuilder builder(TestName());
   auto pred = ConstantR0<bool>(&builder, true);
   auto operand1 = ConstantR0<float>(&builder, 56.0f);
@@ -702,7 +753,7 @@ XLA_TEST_F(ConditionalOpTest, ShapeMismatch) {
                                    "only parameter of branch computation 0"));
 }
 
-XLA_TEST_F(ConditionalOpTest, SwappedInputsInSequentialConditionals) {
+TEST_F(ConditionalOpTest, SwappedInputsInSequentialConditionals) {
   Shape tuple_shape = ShapeUtil::MakeTupleShape({r0f32_, r0f32_});
   XlaComputation swapper;
   {
@@ -735,28 +786,36 @@ XLA_TEST_F(ConditionalOpTest, SwappedInputsInSequentialConditionals) {
     main = builder.Build().value();
   }
 
-  auto test_swap = [&](float a, float b) {
-    XlaBuilder builder(TestName());
-    XlaOp x, y;
-    auto x_arg = CreateR0Parameter<float>(a, 0, "x", &builder, &x);
-    auto y_arg = CreateR0Parameter<float>(b, 1, "y", &builder, &y);
-    auto tuple_operand = Tuple(&builder, {x, y});
-    Call(&builder, main, {tuple_operand});
+  XlaBuilder builder(TestName());
+  const XlaOp x = Parameter(&builder, 0, r0f32_, "x");
+  const XlaOp y = Parameter(&builder, 1, r0f32_, "y");
+  const XlaOp tuple_operand = Tuple(&builder, {x, y});
+  Call(&builder, main, {tuple_operand});
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       HloModuleFromXlaBuilder(&builder, execution_options()));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<OpaqueExecutable> executable,
+      CreateExecutable(std::move(module), /*run_hlo_passes=*/true));
 
-    ComputeAndCompareTuple(
-        &builder,
-        LiteralUtil::MakeTupleFromSlices(
-            {LiteralUtil::CreateR0<float>(a), LiteralUtil::CreateR0<float>(b)}),
-        {x_arg.get(), y_arg.get()}, error_spec_);
+  const auto test_swap =
+      [&, this](float a,
+                float b) -> absl::StatusOr<::testing::AssertionResult> {
+    const Literal x_arg = LiteralUtil::CreateR0<float>(a);
+    const Literal y_arg = LiteralUtil::CreateR0<float>(b);
+    const Literal expected = LiteralUtil::MakeTupleFromSlices(
+        {LiteralUtil::CreateR0<float>(a), LiteralUtil::CreateR0<float>(b)});
+    ABSL_ASSIGN_OR_RETURN(const Literal result,
+                          test_runner().ExecuteWithExecutable(
+                              executable.get(), {&x_arg, &y_arg}));
+    return LiteralTestUtil::Near(expected, result, kErrorSpec);
   };
-
-  test_swap(3.11f, 9.4f);
-  test_swap(11.24f, 5.55f);
+  EXPECT_THAT(test_swap(3.11f, 9.4f), IsOkAndHolds(true));
+  EXPECT_THAT(test_swap(11.24f, 5.55f), IsOkAndHolds(true));
 }
 
 // Test conditional that duplicates tuple elements in the then and else
 // computations. This is a regression test for b/112550242.
-XLA_TEST_F(ConditionalOpTest, DuplicateElementsConditional) {
+TEST_F(ConditionalOpTest, DuplicateElementsConditional) {
   const Shape scalar = ShapeUtil::MakeShape(S32, {});
   const Shape tuple2 = ShapeUtil::MakeTupleShape({scalar, scalar});
   XlaComputation then_comp;
@@ -778,31 +837,116 @@ XLA_TEST_F(ConditionalOpTest, DuplicateElementsConditional) {
     else_comp = builder.Build().value();
   }
 
-  {
-    // Pred is true case.
-    std::vector<Literal> args;
-    args.push_back(LiteralUtil::MakeTupleFromSlices(
-        {LiteralUtil::CreateR0<int32_t>(123),
-         LiteralUtil::CreateR0<int32_t>(-42)}));
-    args.push_back(LiteralUtil::CreateR0<bool>(true));
-    XlaBuilder builder(TestName() + ".main");
-    auto p = Parameter(&builder, 0, tuple2, "p0");
-    auto p_pred = Parameter(&builder, 1, ShapeUtil::MakeShape(PRED, {}), "p1");
-    Conditional(p_pred, p, then_comp, p, else_comp);
-    ComputeAndCompare(&builder, args);
+  XlaBuilder builder(TestName() + ".main");
+  auto p0 = Parameter(&builder, 0, scalar, "p0.0");
+  auto p1 = Parameter(&builder, 1, scalar, "p0.1");
+  auto p = Tuple(&builder, {p0, p1});
+  auto p_pred = Parameter(&builder, 2, ShapeUtil::MakeShape(PRED, {}), "p1");
+  Conditional(p_pred, p, then_comp, p, else_comp);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       HloModuleFromXlaBuilder(&builder, execution_options()));
+
+  const std::array<Literal, 4> args = {
+      LiteralUtil::CreateR0<int32_t>(123), LiteralUtil::CreateR0<int32_t>(-42),
+      LiteralUtil::CreateR0<bool>(true), LiteralUtil::CreateR0<bool>(false)};
+  const std::array<const Literal*, 3> true_args = {&args[0], &args[1],
+                                                   &args[2]};
+  const std::array<const Literal*, 3> false_args = {&args[0], &args[1],
+                                                    &args[3]};
+
+  // Compute reference values. Because this test is not parameterized, we need
+  // to manually invoke the test runner and reference runner.
+  ASSERT_OK_AND_ASSIGN(Literal true_reference,
+                       reference_runner().Execute(module->Clone(), true_args,
+                                                  /*run_hlo_passes=*/true));
+  ASSERT_OK_AND_ASSIGN(Literal false_reference,
+                       reference_runner().Execute(module->Clone(), false_args,
+                                                  /*run_hlo_passes=*/true));
+
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<OpaqueExecutable> executable,
+      CreateExecutable(std::move(module), /*run_hlo_passes=*/true));
+  ASSERT_OK_AND_ASSIGN(Literal true_result, test_runner().ExecuteWithExecutable(
+                                                executable.get(), true_args));
+  ASSERT_OK_AND_ASSIGN(
+      Literal false_result,
+      test_runner().ExecuteWithExecutable(executable.get(), false_args));
+  EXPECT_TRUE(LiteralTestUtil::Equal(true_reference, true_result));
+  EXPECT_TRUE(LiteralTestUtil::Equal(false_reference, false_result));
+}
+
+using ConditionalOpHloTest = HloTestBase;
+
+TEST_F(ConditionalOpHloTest, ParallelExecution) {
+  // Test conditional works when an executable is executed in parallel.
+  const char* const hlo_string = R"(
+  HloModule m
+
+  true_computation {
+    param = f32[8,8] parameter(0)
+    ROOT dot = f32[8,8] dot(param, param), lhs_contracting_dims={1}, rhs_contracting_dims={1}
   }
+
+  false_computation {
+    param = f32[8,8] parameter(0)
+    ROOT dot = f32[8,8] dot(param, param), lhs_contracting_dims={0}, rhs_contracting_dims={0}
+  }
+
+  ENTRY entry_computation {
+    p = pred[] parameter(0)
+    x = f32[8,8] parameter(1)
+    ROOT conditional = f32[8,8] conditional(p, x, x), true_computation=true_computation, false_computation=false_computation
+  }
+  )";
+
+  // Create literal where even rows are 1.0 and odd rows are 0.0.
+  Array2D<float> input_array(8, 8);
+  for (int i = 0; i < 8; ++i) {
+    for (int j = 0; j < 8; ++j) {
+      input_array(i, j) = (i % 2 == 0) ? 1.0f : 0.0f;
+    }
+  }
+  Literal input_literal = LiteralUtil::CreateR2FromArray2D(input_array);
+
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnVerifiedModule(hlo_string));
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto executable,
+      CreateExecutable(std::move(module), /*run_hlo_passes=*/true));
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      Literal true_result,
+      test_runner().ExecuteWithExecutable(
+          executable.get(),
+          {LiteralUtil::CreateR0<bool>(true), input_literal.Clone()}));
+  TF_ASSERT_OK_AND_ASSIGN(
+      Literal false_result,
+      test_runner().ExecuteWithExecutable(
+          executable.get(),
+          {LiteralUtil::CreateR0<bool>(false), input_literal.Clone()}));
+
+  constexpr int kNumThreads = 50;
+  std::vector<Literal> results(kNumThreads);
   {
-    // Pred is false case.
-    std::vector<Literal> args;
-    args.push_back(LiteralUtil::MakeTupleFromSlices(
-        {LiteralUtil::CreateR0<int32_t>(123),
-         LiteralUtil::CreateR0<int32_t>(-42)}));
-    args.push_back(LiteralUtil::CreateR0<bool>(false));
-    XlaBuilder builder(TestName() + ".main");
-    auto p = Parameter(&builder, 0, tuple2, "p0");
-    auto p_pred = Parameter(&builder, 1, ShapeUtil::MakeShape(PRED, {}), "p1");
-    Conditional(p_pred, p, then_comp, p, else_comp);
-    ComputeAndCompare(&builder, args);
+    tsl::thread::ThreadPool thread_pool(tsl::Env::Default(),
+                                        "conditional_test_pool", kNumThreads);
+    for (int i = 0; i < kNumThreads; ++i) {
+      thread_pool.Schedule([this, i, &input_literal, &executable, &results]() {
+        TF_ASSERT_OK_AND_ASSIGN(
+            results[i],
+            test_runner().ExecuteWithExecutable(
+                executable.get(), {LiteralUtil::CreateR0<bool>(i % 2 == 1),
+                                   input_literal.Clone()}));
+      });
+    }
+  }
+  // Threadpool destructor waits for all threads to finish
+  for (int i = 0; i < kNumThreads; ++i) {
+    if (i % 2 == 1) {
+      ASSERT_EQ(results[i], true_result) << "i: " << i;
+    } else {
+      ASSERT_EQ(results[i], false_result) << "i: " << i;
+    }
   }
 }
 

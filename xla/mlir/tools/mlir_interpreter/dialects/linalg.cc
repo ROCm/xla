@@ -13,7 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "mlir/Dialect/Linalg/IR/Linalg.h"  // from @llvm-project
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 
 // clang-format erroneously puts the Linalg header above.
 #include <algorithm>   // NOLINT
@@ -25,8 +25,8 @@ limitations under the License.
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Support/LLVM.h"
 #include "xla/mlir/tools/mlir_interpreter/dialects/util.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/interpreter.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/interpreter_value.h"
@@ -149,7 +149,7 @@ llvm::SmallVector<InterpreterValue> Map(InterpreterState& state,
       isa<TensorType>(op.getInit().getType()) ? init.Clone() : init;
 
   InterpreterScope scope(state);
-  SmallVector<int64_t> ivs(output.View().Rank());
+  SmallVector<int64_t> ivs(output.View().num_dimensions());
   scope.SetSideChannel(std::make_shared<IterationIndexSideChannel>(ivs));
   for (const auto& indices : output.View().Indices()) {
     std::copy(indices.begin(), indices.end(), ivs.begin());
@@ -276,7 +276,7 @@ SmallVector<InterpreterValue> Dot(InterpreterState&, linalg::DotOp op,
                                   InterpreterValue acc) {
   const auto& lhs = inputs[0];
   const auto& rhs = inputs[1];
-  if (op.getOutputs()[0].getType().isa<TensorType>()) {
+  if (mlir::isa<TensorType>(op.getOutputs()[0].getType())) {
     acc = acc.Clone();
   }
   DispatchScalarType(op.getOutputs()[0].getType(), [&](auto dummy) {
@@ -300,7 +300,7 @@ SmallVector<InterpreterValue> Vecmat(InterpreterState&, linalg::VecmatOp op,
                                      InterpreterValue acc) {
   const auto& lhs = inputs[0];
   const auto& rhs = inputs[1];
-  if (op.getOutputs()[0].getType().isa<TensorType>()) {
+  if (mlir::isa<TensorType>(op.getOutputs()[0].getType())) {
     acc = acc.Clone();
   }
   DispatchScalarType(op.getOutputs()[0].getType(), [&](auto dummy) {

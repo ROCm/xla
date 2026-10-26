@@ -25,8 +25,10 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "grpcpp/server.h"
+#include "xla/python/ifrt/attribute_map.h"
 #include "xla/python/ifrt/client.h"
 #include "xla/python/ifrt_proxy/common/grpc_ifrt_service.grpc.pb.h"
+#include "xla/python/ifrt_proxy/server/grpc_service_impl.h"
 
 namespace xla {
 namespace ifrt {
@@ -47,8 +49,10 @@ class GrpcServer {
   static absl::StatusOr<std::unique_ptr<GrpcServer>>
   CreateFromIfrtClientFactory(
       absl::string_view address,
-      absl::AnyInvocable<absl::StatusOr<std::shared_ptr<xla::ifrt::Client>>()>
-          backend_ifrt_client_factory);
+      absl::AnyInvocable<absl::StatusOr<std::shared_ptr<xla::ifrt::Client>>(
+          AttributeMap initialization_data)>
+          backend_ifrt_client_factory,
+      GrpcServiceImpl::Options options = {});
 
   // Starts shutting down the server and waits until it properly shuts down.
   ~GrpcServer();

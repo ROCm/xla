@@ -15,19 +15,28 @@ limitations under the License.
 
 #include "xla/service/llvm_ir/llvm_loop.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <numeric>
-#include <optional>
+#include <string>
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/log/check.h"
 #include "absl/strings/str_cat.h"
-#include "llvm/IR/Constants.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Metadata.h"
+#include "tsl/platform/platform.h"
+#include "xla/layout_util.h"
+#include "xla/service/llvm_ir/ir_array.h"
 #include "xla/service/llvm_ir/llvm_util.h"
-#include "xla/shape_util.h"
-#include "xla/types.h"
-#include "tsl/platform/logging.h"
+#include "xla/shape.h"
+#include "xla/tsl/platform/logging.h"
 
 namespace xla {
 namespace llvm_ir {
@@ -47,7 +56,7 @@ ForLoop::ForLoop(absl::string_view prefix, absl::string_view suffix,
 
 /* static */ std::unique_ptr<ForLoop> ForLoop::EmitForLoop(
     absl::string_view prefix, llvm::Value* start_index, llvm::Value* end_index,
-    llvm::Value* step, llvm::IRBuilder<>* b, UnrollMode unroll_mode,
+    llvm::Value* step, llvm::IRBuilderBase* b, UnrollMode unroll_mode,
     bool prevent_vectorization) {
   std::unique_ptr<ForLoop> loop(new ForLoop(prefix, /*suffix=*/"", start_index,
                                             end_index, step, unroll_mode,
@@ -56,7 +65,7 @@ ForLoop::ForLoop(absl::string_view prefix, absl::string_view suffix,
   return loop;
 }
 
-void ForLoop::Emit(llvm::IRBuilder<>* b) {
+void ForLoop::Emit(llvm::IRBuilderBase* b) {
   // The preheader block is the block the builder is currently emitting
   // code into.
   preheader_bb_ = b->GetInsertBlock();
@@ -65,13 +74,13 @@ void ForLoop::Emit(llvm::IRBuilder<>* b) {
   if (insert_point == preheader_bb_->end()) {
     // We're emitting the loop at the end of a basic block. Verify there is no
     // terminator (eg, branch) in the basic block.
-    CHECK_EQ(nullptr, preheader_bb_->getTerminator());
+    CHECK(!preheader_bb_->hasTerminator());
 
     exit_bb_ = CreateLoopBB("loop_exit", b);
   } else {
     // We're emitting the loop into the middle of a basic block. splitBasicBlock
     // requires that this basic block be well-formed (have a terminator).
-    CHECK_NE(nullptr, preheader_bb_->getTerminator());
+    CHECK(preheader_bb_->hasTerminator());
 
     // Split the preheader to create an exit basic block. The exit basic block
     // will contain all instructions at or after insert_point.
@@ -96,15 +105,18 @@ void ForLoop::Emit(llvm::IRBuilder<>* b) {
   llvm::Function* func = preheader_bb_->getParent();
   b->SetInsertPoint(&func->getEntryBlock(),
                     func->getEntryBlock().getFirstInsertionPt());
-  llvm::Value* indvar_address = b->CreateAlloca(
-      start_index_->getType(), nullptr, GetQualifiedName("invar_address"));
+  // Use EmitAllocaAtFunctionEntryWithCount which handles AMD GPU address space
+  // correctly
+  llvm::Value* indvar_address = llvm_ir::EmitAllocaAtFunctionEntryWithCount(
+      start_index_->getType(), nullptr, GetQualifiedName("invar_address"), b,
+      0);
 
   // Preheader basic block.
   // Initialize induction variable starting index. Create branch to the header.
   b->SetInsertPoint(preheader_bb_);
   b->CreateStore(start_index_, indvar_address);
   // The preheader should not have a branch yet.
-  CHECK_EQ(preheader_bb_->getTerminator(), nullptr);
+  CHECK(!preheader_bb_->hasTerminator());
   b->CreateBr(header_bb_);
 
   // Header basic block.
@@ -126,26 +138,27 @@ void ForLoop::Emit(llvm::IRBuilder<>* b) {
   llvm::Value* indvar_inc = b->CreateAdd(indvar, step, "invar.inc",
                                          /*HasNUW=*/true, /*HasNSW=*/true);
   b->CreateStore(indvar_inc, indvar_address);
-  llvm::BranchInst* back_branch = b->CreateBr(header_bb_);
+  llvm::UncondBrInst* back_branch = b->CreateBr(header_bb_);
 
   std::vector<llvm::Metadata*> loop_metadata = GetLoopMetadata(b);
   if (!loop_metadata.empty()) {
     llvm::LLVMContext* ctx = &start_index_->getContext();
-    auto temp_node = llvm::MDNode::getTemporary(*ctx, std::nullopt);
+    auto temp_node = llvm::MDNode::getTemporary(*ctx, {});
     loop_metadata.insert(loop_metadata.begin(), temp_node.get());
     auto loop_id = llvm::MDNode::get(*ctx, loop_metadata);
     loop_id->replaceOperandWith(0, loop_id);
     back_branch->setMetadata(llvm::LLVMContext::MD_loop, loop_id);
   }
 
-  // Re-point the IR builder to the loop exit block.
-  b->SetInsertPoint(exit_bb_);
+  // Re-point the IR builder to the loop exit block, inserting before any
+  // instructions the split moved there (e.g. the original terminator).
+  b->SetInsertPoint(exit_bb_, exit_bb_->getFirstInsertionPt());
 }
 
-std::vector<llvm::Metadata*> ForLoop::GetLoopMetadata(llvm::IRBuilder<>* b) {
+std::vector<llvm::Metadata*> ForLoop::GetLoopMetadata(llvm::IRBuilderBase* b) {
   const char* const kLlvmLoopUnrollDisableMDName = "llvm.loop.unroll.disable";
   const char* const kLlvmLoopUnrollFullMDName = "llvm.loop.unroll.full";
-  const char* const kLlvmLoopVectorizeMDName = "llvm.loop.vectorize.enable";
+  const char* const kLlvmLoopVectorizeMDName = "llvm.loop.vectorize.disable";
   llvm::LLVMContext* ctx = &start_index_->getContext();
 
   std::vector<llvm::Metadata*> result;
@@ -156,8 +169,7 @@ std::vector<llvm::Metadata*> ForLoop::GetLoopMetadata(llvm::IRBuilder<>* b) {
 
   if (prevent_vectorization_) {
     result.push_back(llvm::MDNode::get(
-        *ctx, {llvm::MDString::get(*ctx, kLlvmLoopVectorizeMDName),
-               llvm::ConstantAsMetadata::get(b->getFalse())}));
+        *ctx, {llvm::MDString::get(*ctx, kLlvmLoopVectorizeMDName)}));
   }
 
   if (unroll_mode_ == xla::llvm_ir::UnrollMode::kFullyUnroll) {
@@ -172,7 +184,7 @@ std::string ForLoop::GetQualifiedName(absl::string_view name) {
 }
 
 llvm::BasicBlock* ForLoop::CreateLoopBB(absl::string_view name,
-                                        llvm::IRBuilder<>* b) {
+                                        llvm::IRBuilderBase* b) {
   return CreateBasicBlock(insert_before_bb_, GetQualifiedName(name), b);
 }
 
@@ -235,7 +247,7 @@ std::unique_ptr<ForLoop> ForLoopNest::AddLoop(int64_t start_index,
 
 IrArray::Index ForLoopNest::AddLoopsForShape(const Shape& shape,
                                              absl::string_view suffix) {
-  std::vector<int64_t> dimensions(shape.rank());
+  std::vector<int64_t> dimensions(shape.dimensions().size());
   std::iota(dimensions.begin(), dimensions.end(), 0);
   return IrArray::Index(AddLoopsForShapeOnDimensions(shape, dimensions, suffix),
                         shape, index_type_);
@@ -244,7 +256,7 @@ IrArray::Index ForLoopNest::AddLoopsForShape(const Shape& shape,
 std::vector<llvm::Value*> ForLoopNest::AddLoopsForShapeOnDimensions(
     const Shape& shape, absl::Span<const int64_t> dimensions,
     absl::string_view suffix) {
-  std::vector<llvm::Value*> multi_index(shape.dimensions_size());
+  std::vector<llvm::Value*> multi_index(shape.dimensions().size());
   for (int64_t dimension : dimensions) {
     std::unique_ptr<llvm_ir::ForLoop> loop = AddLoop(
         /*start_index=*/0,
@@ -278,11 +290,13 @@ std::vector<llvm::Value*> ForLoopNest::EmitOperandArrayLoopNest(
       AddLoopsForShapeOnDimensions(shape, dimensions, name_suffix);
   // Verify every dimension except the 'dimension_to_skip' dimension was set in
   // the index.
-  for (size_t dimension = 0; dimension < multi_index.size(); ++dimension) {
-    if (dimension == dimension_to_skip) {
-      DCHECK_EQ(nullptr, multi_index[dimension]);
-    } else {
-      DCHECK_NE(nullptr, multi_index[dimension]);
+  if constexpr (tsl::kIsDebugBuild) {
+    for (size_t dimension = 0; dimension < multi_index.size(); ++dimension) {
+      if (dimension == dimension_to_skip) {
+        DCHECK_EQ(nullptr, multi_index[dimension]);
+      } else {
+        DCHECK_NE(nullptr, multi_index[dimension]);
+      }
     }
   }
   return multi_index;

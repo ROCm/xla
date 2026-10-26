@@ -15,32 +15,35 @@ limitations under the License.
 
 #include <memory>
 
+#include "absl/log/check.h"
+#include "absl/status/statusor.h"
 #include "absl/types/span.h"
-#include "xla/client/global_data.h"
 #include "xla/client/local_client.h"
-#include "xla/client/xla_builder.h"
-#include "xla/client/xla_computation.h"
-#include "xla/statusor.h"
-#include "xla/test.h"
-#include "xla/test_helpers.h"
-#include "xla/tests/client_library_test_base.h"
-#include "xla/tests/test_macros.h"
+#include "xla/execution_options_util.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/testlib/test_helpers.h"
+#include "xla/service/service.h"
+#include "xla/tests/local_client_test_base.h"
 
 namespace xla {
 namespace {
 
 using ::testing::HasSubstr;
 
-class DeallocationTest : public ClientLibraryTestBase {
+class DeallocationTest : public LocalClientTestBase {
  protected:
   // Build and execute the given computation then verify the results can be
   // transferred from the device successfully.
   std::unique_ptr<GlobalData> ExecuteAndCheckTransfer(
       XlaBuilder* builder, absl::Span<GlobalData* const> arguments) {
     XlaComputation computation = builder->Build().value();
+    ExecutionOptions execution_options = CreateDefaultExecutionOptions();
     auto global_data =
-        client_->Execute(computation, arguments, &execution_options_).value();
-    TF_CHECK_OK(client_->Transfer(*global_data).status());
+        local_client_->Execute(computation, arguments, &execution_options)
+            .value();
+    CHECK_OK(local_client_->Transfer(*global_data).status());
     return global_data;
   }
 };
@@ -53,11 +56,11 @@ TEST_F(DeallocationTest, DeallocateScalar) {
   // A result can be transferred an arbitrary number of times.  Add an extra
   // transfer here so we're not just testing that a second call to Transfer
   // fails.
-  ASSERT_IS_OK(client_->Transfer(*global_data).status());
+  ASSERT_IS_OK(local_client_->Transfer(*global_data).status());
 
-  ASSERT_IS_OK(client_->Unregister(*global_data));
+  ASSERT_IS_OK(local_client_->Unregister(*global_data));
 
-  auto transfer_status = client_->Transfer(*global_data);
+  auto transfer_status = local_client_->Transfer(*global_data);
   ASSERT_FALSE(transfer_status.ok());
   ASSERT_THAT(transfer_status.status().message(),
               HasSubstr("was previously deallocated"));
@@ -68,9 +71,9 @@ TEST_F(DeallocationTest, DeallocateVector) {
   ConstantR1<float>(&builder, {1.0, 2.0, 3.0, 4.0});
   auto global_data = ExecuteAndCheckTransfer(&builder, {});
 
-  ASSERT_IS_OK(client_->Unregister(*global_data));
+  ASSERT_IS_OK(local_client_->Unregister(*global_data));
 
-  auto transfer_status = client_->Transfer(*global_data);
+  auto transfer_status = local_client_->Transfer(*global_data);
   ASSERT_FALSE(transfer_status.ok());
   ASSERT_THAT(transfer_status.status().message(),
               HasSubstr("was previously deallocated"));
@@ -81,29 +84,29 @@ TEST_F(DeallocationTest, DeallocateEmptyVector) {
   ConstantR1<float>(&builder, {});
   auto global_data = ExecuteAndCheckTransfer(&builder, {});
 
-  ASSERT_IS_OK(client_->Unregister(*global_data));
+  ASSERT_IS_OK(local_client_->Unregister(*global_data));
 
-  auto transfer_status = client_->Transfer(*global_data);
+  auto transfer_status = local_client_->Transfer(*global_data);
   ASSERT_FALSE(transfer_status.ok());
   ASSERT_THAT(transfer_status.status().message(),
               HasSubstr("was previously deallocated"));
 }
 
-XLA_TEST_F(DeallocationTest, DeallocateTuple) {
+TEST_F(DeallocationTest, DeallocateTuple) {
   XlaBuilder builder(TestName());
   Tuple(&builder, {ConstantR0<float>(&builder, 42.0),
                    ConstantR1<float>(&builder, {1.0, 2.0, 3.0})});
   auto global_data = ExecuteAndCheckTransfer(&builder, {});
 
-  ASSERT_IS_OK(client_->Unregister(*global_data));
+  ASSERT_IS_OK(local_client_->Unregister(*global_data));
 
-  auto transfer_status = client_->Transfer(*global_data);
+  auto transfer_status = local_client_->Transfer(*global_data);
   ASSERT_FALSE(transfer_status.ok());
   ASSERT_THAT(transfer_status.status().message(),
               HasSubstr("was previously deallocated"));
 }
 
-XLA_TEST_F(DeallocationTest, DeallocateTupleWithRepeatedElements) {
+TEST_F(DeallocationTest, DeallocateTupleWithRepeatedElements) {
   XlaBuilder builder(TestName());
   auto element = ConstantR0<float>(&builder, 42.0);
   auto inner_tuple =
@@ -111,15 +114,15 @@ XLA_TEST_F(DeallocationTest, DeallocateTupleWithRepeatedElements) {
   Tuple(&builder, {element, inner_tuple, element});
   auto global_data = ExecuteAndCheckTransfer(&builder, {});
 
-  ASSERT_IS_OK(client_->Unregister(*global_data));
+  ASSERT_IS_OK(local_client_->Unregister(*global_data));
 
-  auto transfer_status = client_->Transfer(*global_data);
+  auto transfer_status = local_client_->Transfer(*global_data);
   ASSERT_FALSE(transfer_status.ok());
   ASSERT_THAT(transfer_status.status().message(),
               HasSubstr("was previously deallocated"));
 }
 
-XLA_TEST_F(DeallocationTest, DeallocateNestedTuple) {
+TEST_F(DeallocationTest, DeallocateNestedTuple) {
   XlaBuilder builder(TestName());
   auto inner_tuple =
       Tuple(&builder, {ConstantR0<float>(&builder, 42.0),
@@ -127,9 +130,9 @@ XLA_TEST_F(DeallocationTest, DeallocateNestedTuple) {
   Tuple(&builder, {inner_tuple, ConstantR1<float>(&builder, {0.123, 0.456})});
   auto global_data = ExecuteAndCheckTransfer(&builder, {});
 
-  ASSERT_IS_OK(client_->Unregister(*global_data));
+  ASSERT_IS_OK(local_client_->Unregister(*global_data));
 
-  auto transfer_status = client_->Transfer(*global_data);
+  auto transfer_status = local_client_->Transfer(*global_data);
   ASSERT_FALSE(transfer_status.ok());
   ASSERT_THAT(transfer_status.status().message(),
               HasSubstr("was previously deallocated"));

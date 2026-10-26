@@ -15,11 +15,17 @@ limitations under the License.
 
 #include "xla/pjrt/semaphore.h"
 
+#include <cstdint>
+#include <utility>
+
+#include "absl/log/check.h"
+#include "absl/synchronization/mutex.h"
 #include "tsl/platform/logging.h"
 
 namespace xla {
 
-Semaphore::Semaphore(int64_t capacity) : value_(capacity) {
+Semaphore::Semaphore(int64_t capacity)
+    : value_(capacity), max_capacity_(capacity) {
   CHECK_GE(capacity, 0);
 }
 
@@ -36,12 +42,22 @@ void Semaphore::Acquire(int64_t amount) {
 
   mu_.LockWhen(absl::Condition(&CanAcquire, &args));
   value_ -= amount;
-  mu_.Unlock();
+  mu_.unlock();
+}
+
+bool Semaphore::TryAcquire(int64_t amount) {
+  CHECK_GE(amount, 0);
+  absl::MutexLock lock(mu_);
+  if (value_ >= amount) {
+    value_ -= amount;
+    return true;
+  }
+  return false;
 }
 
 void Semaphore::Release(int64_t amount) {
   CHECK_GE(amount, 0);
-  absl::MutexLock lock(&mu_);
+  absl::MutexLock lock(mu_);
   value_ += amount;
 }
 
@@ -52,17 +68,19 @@ Semaphore::ScopedReservation::~ScopedReservation() {
 }
 
 Semaphore::ScopedReservation::ScopedReservation(
-    ScopedReservation&& other) noexcept {
-  semaphore_ = other.semaphore_;
-  amount_ = other.amount_;
-  other.semaphore_ = nullptr;
-}
+    ScopedReservation&& other) noexcept
+    : semaphore_(std::exchange(other.semaphore_, nullptr)),
+      amount_(std::exchange(other.amount_, 0)) {}
 
 Semaphore::ScopedReservation& Semaphore::ScopedReservation::operator=(
     ScopedReservation&& other) noexcept {
-  semaphore_ = other.semaphore_;
-  amount_ = other.amount_;
-  other.semaphore_ = nullptr;
+  if (this != &other) {
+    if (semaphore_) {
+      semaphore_->Release(amount_);
+    }
+    semaphore_ = std::exchange(other.semaphore_, nullptr);
+    amount_ = std::exchange(other.amount_, 0);
+  }
   return *this;
 }
 

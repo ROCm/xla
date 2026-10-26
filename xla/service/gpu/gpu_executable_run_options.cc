@@ -15,38 +15,73 @@ limitations under the License.
 
 #include "xla/service/gpu/gpu_executable_run_options.h"
 
-#include <map>
+#include <functional>
 #include <optional>
 #include <utility>
+#include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "xla/backends/gpu/collectives/gpu_collectives.h"
 #include "xla/executable_run_options.h"
-#include "xla/service/global_device_id.h"
-#include "xla/service/gpu/runtime/nccl_clique_key.h"
+#include "xla/runtime/device_id.h"
 
-namespace xla {
-namespace gpu {
+namespace xla::gpu {
 
 GpuExecutableRunOptions& GpuExecutableRunOptions::set_gpu_global_device_ids(
-    std::optional<std::map<int, GlobalDeviceId>> gpu_global_device_ids) {
+    std::optional<DeviceIdMap> gpu_global_device_ids) {
   gpu_global_device_ids_ = std::move(gpu_global_device_ids);
   return *this;
 }
 
-const std::optional<std::map<int, GlobalDeviceId>>&
+const std::optional<GpuExecutableRunOptions::DeviceIdMap>&
 GpuExecutableRunOptions::gpu_global_device_ids() const {
   return gpu_global_device_ids_;
 }
 
-GpuExecutableRunOptions& GpuExecutableRunOptions::set_nccl_clique_id_callback(
-    NcclCliqueIdCallback nccl_clique_id_callback) {
-  nccl_clique_id_callback_ = std::move(nccl_clique_id_callback);
+GpuExecutableRunOptions& GpuExecutableRunOptions::set_clique_id_callback(
+    CliqueIdCallback clique_id_callback) {
+  clique_id_callback_ = std::move(clique_id_callback);
   return *this;
 }
 
-const NcclCliqueIdCallback& GpuExecutableRunOptions::nccl_clique_id_callback()
-    const {
-  return nccl_clique_id_callback_;
+const CliqueIdCallback& GpuExecutableRunOptions::clique_id_callback() const {
+  return clique_id_callback_;
 }
 
-}  // namespace gpu
-}  // namespace xla
+GpuExecutableRunOptions& GpuExecutableRunOptions::set_collectives(
+    GpuCollectives* collectives) {
+  collectives_ = collectives;
+  return *this;
+}
+
+GpuCollectives* GpuExecutableRunOptions::collectives() const {
+  return collectives_;
+}
+
+GpuExecutableRunOptions& GpuExecutableRunOptions::set_incarnations(
+    absl::flat_hash_map<GlobalDeviceId, IncarnationId> incarnations) {
+  incarnations_ = std::move(incarnations);
+  return *this;
+}
+
+const std::optional<absl::flat_hash_map<GlobalDeviceId, IncarnationId>>&
+GpuExecutableRunOptions::incarnations() const {
+  return incarnations_;
+}
+
+GpuExecutableRunOptions&
+GpuExecutableRunOptions::set_execution_timeout_handlers(
+    std::function<std::vector<ExecutionTimeoutHandler>()> handlers) {
+  execution_timeout_handlers_ = std::move(handlers);
+  return *this;
+}
+
+std::vector<ExecutionTimeoutHandler>
+GpuExecutableRunOptions::execution_timeout_handlers() const {
+  if (!execution_timeout_handlers_) {
+    return {};
+  }
+  return execution_timeout_handlers_();
+}
+
+}  // namespace xla::gpu

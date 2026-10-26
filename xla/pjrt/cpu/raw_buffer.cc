@@ -1,0 +1,252 @@
+/* Copyright 2025 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include "xla/pjrt/cpu/raw_buffer.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <utility>
+
+#include "absl/algorithm/container.h"
+#include "absl/base/casts.h"
+#include "absl/functional/any_invocable.h"
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
+#include "absl/types/span.h"
+#include "tsl/platform/casts.h"
+#include "tsl/profiler/lib/connected_traceme.h"
+#include "tsl/profiler/lib/traceme.h"
+#include "xla/backends/cpu/alignment.h"
+#include "xla/future.h"
+#include "xla/layout.h"
+#include "xla/layout_util.h"
+#include "xla/literal.h"
+#include "xla/pjrt/async_work_runner.h"
+#include "xla/pjrt/common_pjrt_client.h"
+#include "xla/pjrt/cpu/abstract_cpu_buffer.h"
+#include "xla/pjrt/cpu/cpu_device_memory.h"
+#include "xla/pjrt/cpu/cpu_event.h"
+#include "xla/pjrt/device_event.h"
+#include "xla/pjrt/device_event_utils.h"
+#include "xla/pjrt/pjrt_client.h"
+#include "xla/pjrt/raw_buffer.h"
+#include "xla/pjrt/transpose.h"
+#include "xla/pjrt/utils.h"
+#include "xla/primitive_util.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/tsl/concurrency/async_value.h"
+#include "xla/tsl/concurrency/async_value_ref.h"
+#include "xla/tsl/concurrency/ref_count.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/threadpool.h"
+#include "xla/util.h"
+#include "xla/xla_data.pb.h"
+
+namespace xla {
+
+constexpr size_t kSmallDataTransferByteSize = 102400;  // 100 KiB
+
+void CpuTrackedDeviceEventPromise::Set(PjRtDeviceEventRef event) {
+  av_->ForwardTo(event.down_cast<CpuEvent>());
+}
+
+void CpuTrackedDeviceEventPromise::SetReady() {
+  av_->ForwardTo(tsl::MakeAvailableAsyncValueRef<CpuEvent>());
+}
+
+tsl::AsyncValueRef<CpuEvent> AfterAllCpuEvents(
+    absl::Span<const PjRtDeviceEventRef> events) {
+  tsl::AsyncValueRef<CpuEvent> definition_event;
+  if (events.empty()) {
+    return tsl::MakeAvailableAsyncValueRef<CpuEvent>();
+  }
+  if (events.size() == 1) {
+    return events[0].down_cast<CpuEvent>();
+  }
+
+  tsl::CountDownAsyncValueRef<CpuEvent> after_all(events.size());
+  for (auto& ev : events) {
+    ev.down_cast<CpuEvent>().AndThen([after_all](absl::Status status) mutable {
+      after_all.CountDown(std::move(status));
+    });
+  }
+  return std::move(after_all).AsRef();
+}
+
+PjRtDeviceEventRef ToCpuEvent(tsl::Future<void> future) {
+  auto async_value_ref = tsl::MakeConstructedAsyncValueRef<CpuEvent>();
+  future.OnReady([async_value_ref](absl::Status status) mutable {
+    if (!status.ok()) {
+      async_value_ref.SetError(std::move(status));
+    } else {
+      async_value_ref.SetStateConcrete();
+    }
+  });
+
+  return PjRtDeviceEventRef(async_value_ref);
+}
+
+/*static*/ absl::StatusOr<tsl::RCReference<CpuRawBuffer>>
+CpuRawBuffer::Allocate(PjRtMemorySpace* memory_space, size_t size_bytes,
+                       const CpuDeviceMemory::Allocator& allocator) {
+  ABSL_ASSIGN_OR_RETURN(auto memory,
+                        CpuDeviceMemory::Allocate(size_bytes, allocator));
+  return tsl::MakeRef<CpuRawBuffer>(memory_space, std::move(memory), size_bytes,
+                                    /*is_mutable=*/true);
+}
+
+/*static*/ absl::StatusOr<tsl::RCReference<CpuRawBuffer>>
+CpuRawBuffer::ImportForeignMemory(
+    void* data, absl::AnyInvocable<void() &&> on_delete_callback,
+    size_t on_device_bytes_count, PjRtMemorySpace* memory_space,
+    bool is_mutable) {
+  if ((absl::bit_cast<std::uintptr_t>(data) & (cpu::MinAlign() - 1)) != 0) {
+    return InvalidArgument(
+        "Can't create a view of buffer with unaligned data, ptr: %#x is not "
+        "aligned to %d bytes. ",
+        reinterpret_cast<std::uintptr_t>(data), cpu::MinAlign());
+  }
+  return tsl::MakeRef<CpuRawBuffer>(
+      memory_space,
+      CpuDeviceMemory::CreateForeignMemory(data, on_device_bytes_count,
+                                           std::move(on_delete_callback)),
+      on_device_bytes_count, is_mutable);
+}
+
+size_t CpuRawBuffer::GetOnDeviceSizeInBytes() const { return buffer_size_; }
+
+void* CpuRawBuffer::GetHostPointer() const { return buffer_->untyped_data(); }
+
+absl::Status CpuRawBuffer::ValidateSlice(int64_t offset, int64_t slice_size) {
+  size_t buffer_size = GetOnDeviceSizeInBytes();
+  if (offset < 0 || offset > buffer_size || buffer_size - offset < slice_size) {
+    return InvalidArgument(
+        "Invalid slicing of buffer size %lld with "
+        "invalid offset %lld, slice size %lld",
+        buffer_size, offset, slice_size);
+  }
+  return absl::OkStatus();
+}
+
+absl::StatusOr<PjRtRawBufferRef> CpuRawBuffer::Slice(int64_t offset,
+                                                     int64_t slice_size) {
+  ABSL_RETURN_IF_ERROR(ValidateSlice(offset, slice_size));
+  auto sliced_memory =
+      CpuDeviceMemory::CreateSlicedMemory(buffer_, offset, slice_size);
+  return tsl::MakeRef<CpuRawBuffer>(memory_space_, std::move(sliced_memory),
+                                    slice_size, is_mutable_);
+}
+
+absl::StatusOr<PjRtDeviceEventRef>
+CpuRawBuffer::CopyRawHostToDeviceAndReturnEvent(
+    const void* src, int64_t offset, int64_t transfer_size,
+    PjRtDeviceEventRefVector dependencies) {
+  ABSL_RETURN_IF_ERROR(ValidateSlice(offset, transfer_size));
+
+  if (dependencies.empty()) {
+    std::memcpy(static_cast<uint8_t*>(GetHostPointer()) + offset, src,
+                transfer_size);
+    return PjRtDeviceEventRef(tsl::MakeAvailableAsyncValueRef<CpuEvent>());
+  }
+
+  auto event = tsl::MakeConstructedAsyncValueRef<CpuEvent>();
+
+  auto run_copy = [buf = tsl::FormRef(this), src, offset, transfer_size,
+                   dependencies, event]() mutable {
+    absl::Status dep_status = GetErrors(dependencies);
+    if (!dep_status.ok()) {
+      event.SetError(dep_status);
+      return;
+    }
+    std::memcpy(static_cast<uint8_t*>(buf->GetHostPointer()) + offset, src,
+                transfer_size);
+    event.SetStateConcrete();
+  };
+
+  auto* client = absl::down_cast<CommonPjRtClient*>(memory_space()->client());
+  ExecuteWhenReady(dependencies, client->async_work_runner(),
+                   std::move(run_copy));
+
+  return PjRtDeviceEventRef(std::move(event));
+}
+
+absl::StatusOr<PjRtDeviceEventRef>
+CpuRawBuffer::CopyRawDeviceToHostAndReturnEvent(
+    void* dst, int64_t offset, int64_t transfer_size,
+    PjRtDeviceEventRefVector dependencies) {
+  ABSL_RETURN_IF_ERROR(ValidateSlice(offset, transfer_size));
+
+  if (dependencies.empty()) {
+    std::memcpy(dst, static_cast<uint8_t*>(GetHostPointer()) + offset,
+                transfer_size);
+    return PjRtDeviceEventRef(tsl::MakeAvailableAsyncValueRef<CpuEvent>());
+  }
+
+  auto event = tsl::MakeConstructedAsyncValueRef<CpuEvent>();
+
+  auto run_copy = [buf = tsl::FormRef(this), dst, offset, transfer_size,
+                   dependencies, event]() mutable {
+    absl::Status dep_status = GetErrors(dependencies);
+    if (!dep_status.ok()) {
+      event.SetError(dep_status);
+      return;
+    }
+    std::memcpy(dst, static_cast<uint8_t*>(buf->GetHostPointer()) + offset,
+                transfer_size);
+    event.SetStateConcrete();
+  };
+
+  auto* client = absl::down_cast<CommonPjRtClient*>(memory_space()->client());
+  ExecuteWhenReady(dependencies, client->async_work_runner(),
+                   std::move(run_copy));
+
+  return PjRtDeviceEventRef(std::move(event));
+}
+
+absl::StatusOr<PjRtDeviceEventRef> CpuRawBuffer::MakeAllocationReadyEvent() {
+  return PjRtDeviceEventRef(tsl::MakeAvailableAsyncValueRef<CpuEvent>());
+}
+
+void CpuRawBuffer::CopyTo(
+    PjRtRawBufferRef dst_raw_buffer,
+    PjRtDeviceEventPromiseRef definition_event_promise,
+    PjRtDeviceEventPromiseRef src_usage_event_promise,
+    absl::AnyInvocable<void(absl::Status) &&> allocation_event) {
+  if (allocation_event) {
+    std::move(allocation_event)(absl::OkStatus());
+  }
+  auto other_event = dst_raw_buffer->CopyRawHostToDeviceAndReturnEvent(
+      GetHostPointer(), 0, GetOnDeviceSizeInBytes());
+  if (!other_event.ok()) {
+    definition_event_promise.SetError(other_event.status());
+    src_usage_event_promise.SetError(other_event.status());
+    return;
+  }
+  (*other_event)
+      .AndThen([src_usage_event_promise = std::move(src_usage_event_promise),
+                src_buffer = tsl::FormRef(this)]() {
+        src_usage_event_promise.Set(
+            PjRtDeviceEventRef(tsl::MakeAvailableAsyncValueRef<CpuEvent>()));
+      });
+  definition_event_promise.Set(*std::move(other_event));
+}
+
+}  // namespace xla

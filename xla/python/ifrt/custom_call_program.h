@@ -20,22 +20,23 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "llvm/Support/ExtensibleRTTI.h"
+#include "absl/strings/cord.h"
 #include "xla/python/ifrt/array_spec.h"
 #include "xla/python/ifrt/compiler.h"
-#include "xla/python/ifrt/device.h"
+#include "xla/python/ifrt/device_list.h"
 #include "xla/python/ifrt/program.h"
+#include "xla/python/ifrt/rtti.h"
+#include "xla/tsl/concurrency/ref_count.h"
 
 namespace xla {
 namespace ifrt {
 
 // Wraps a custom call program that expresses a runtime-specific execution.
-struct CustomCallProgram
-    : public llvm::RTTIExtends<CustomCallProgram, Program> {
+struct CustomCallProgram : public RTTIExtends<CustomCallProgram, Program> {
   // Specification for a single array. The sharding of all input and output
   // specs must use only the devices in `devices`.
   CustomCallProgram(std::string type, std::string name,
-                    std::string serialized_program_text, DeviceList devices,
+                    absl::Cord serialized_program_text, DeviceListRef devices,
                     std::vector<ArraySpec> input_specs,
                     std::vector<ArraySpec> output_specs)
       : type(std::move(type)),
@@ -56,10 +57,10 @@ struct CustomCallProgram
 
   // Serialized custom call program. The interpretation of the program text
   // depends `type`.
-  std::string serialized_program_text;
+  absl::Cord serialized_program_text;
 
   // List of devices to compile and run the custom call program on.
-  DeviceList devices;
+  DeviceListRef devices;
 
   // Specification for input and output arrays. The custom call program must
   // expect to receive input arrays and return output arrays both following the
@@ -74,7 +75,7 @@ struct CustomCallProgram
 // the custom call program does not use any other runtime objects for
 // compilation.
 struct CustomCallCompileOptions
-    : llvm::RTTIExtends<CustomCallCompileOptions, CompileOptions> {
+    : RTTIExtends<CustomCallCompileOptions, CompileOptions> {
   CustomCallCompileOptions() = default;
   ~CustomCallCompileOptions() override = default;
 

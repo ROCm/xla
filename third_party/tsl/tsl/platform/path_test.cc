@@ -17,12 +17,15 @@ limitations under the License.
 
 #include <string>
 
-#include "tsl/platform/env.h"
-#include "tsl/platform/stringpiece.h"
-#include "tsl/platform/test.h"
+#include "absl/strings/string_view.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/test.h"
 
 namespace tsl {
 namespace io {
+
+using ::testing::EndsWith;
+using ::testing::StartsWith;
 
 TEST(PathTest, JoinPath) {
   EXPECT_EQ("/foo/bar", JoinPath("/foo", "bar"));
@@ -106,8 +109,8 @@ TEST(PathTest, CleanPath) {
 
 #define EXPECT_PARSE_URI(uri, scheme, host, path)  \
   do {                                             \
-    StringPiece u(uri);                            \
-    StringPiece s, h, p;                           \
+    absl::string_view u(uri);                      \
+    absl::string_view s, h, p;                     \
     ParseURI(u, &s, &h, &p);                       \
     EXPECT_EQ(scheme, s);                          \
     EXPECT_EQ(host, h);                            \
@@ -160,7 +163,7 @@ TEST(PathTest, CommonPathPrefix) {
 }
 
 TEST(PathTest, GetTestWorkspaceDir) {
-  constexpr tsl::StringPiece kOriginalValue = "original value";
+  constexpr absl::string_view kOriginalValue = "original value";
   std::string dir;
 
   dir = kOriginalValue;
@@ -193,7 +196,7 @@ TEST(PathTest, GetTestWorkspaceDir) {
 }
 
 TEST(PathTest, GetTestUndeclaredOutputsDir) {
-  constexpr tsl::StringPiece kOriginalValue = "original value";
+  constexpr absl::string_view kOriginalValue = "original value";
   std::string dir;
 
   dir = kOriginalValue;
@@ -211,7 +214,7 @@ TEST(PathTest, GetTestUndeclaredOutputsDir) {
 }
 
 TEST(PathTest, ResolveTestPrefixesKeepsThePathUnchanged) {
-  constexpr tsl::StringPiece kOriginalValue = "original value";
+  constexpr absl::string_view kOriginalValue = "original value";
   std::string resolved_path;
 
   resolved_path = kOriginalValue;
@@ -232,7 +235,7 @@ TEST(PathTest, ResolveTestPrefixesKeepsThePathUnchanged) {
 }
 
 TEST(PathTest, ResolveTestPrefixesCanResolveTestWorkspace) {
-  constexpr tsl::StringPiece kOriginalValue = "original value";
+  constexpr absl::string_view kOriginalValue = "original value";
   std::string resolved_path;
 
   tsl::setenv("TEST_SRCDIR", "/repo/src", /*overwrite=*/true);
@@ -260,7 +263,7 @@ TEST(PathTest, ResolveTestPrefixesCanResolveTestWorkspace) {
 }
 
 TEST(PathTest, ResolveTestPrefixesCannotResolveTestWorkspace) {
-  constexpr tsl::StringPiece kOriginalValue = "original value";
+  constexpr absl::string_view kOriginalValue = "original value";
   std::string resolved_path;
 
   tsl::unsetenv("TEST_SRCDIR");
@@ -272,7 +275,7 @@ TEST(PathTest, ResolveTestPrefixesCannotResolveTestWorkspace) {
 }
 
 TEST(PathTest, ResolveTestPrefixesCanResolveTestUndeclaredOutputsDir) {
-  constexpr tsl::StringPiece kOriginalValue = "original value";
+  constexpr absl::string_view kOriginalValue = "original value";
   std::string resolved_path;
 
   tsl::setenv("TEST_UNDECLARED_OUTPUTS_DIR", "/test/outputs",
@@ -305,7 +308,7 @@ TEST(PathTest, ResolveTestPrefixesCanResolveTestUndeclaredOutputsDir) {
 }
 
 TEST(PathTest, ResolveTestPrefixesCannotResolveTestUndeclaredOutputsDir) {
-  constexpr tsl::StringPiece kOriginalValue = "original value";
+  constexpr absl::string_view kOriginalValue = "original value";
   std::string resolved_path;
 
   tsl::unsetenv("TEST_UNDECLARED_OUTPUTS_DIR");
@@ -314,6 +317,20 @@ TEST(PathTest, ResolveTestPrefixesCannotResolveTestUndeclaredOutputsDir) {
   EXPECT_FALSE(
       ResolveTestPrefixes("TEST_UNDECLARED_OUTPUTS_DIR", resolved_path));
   EXPECT_EQ(resolved_path, kOriginalValue);
+}
+
+TEST(PathTest, GetTempFilenameWithDirectory) {
+  std::string tmp_dir = tsl::testing::TmpDir();
+  auto r = GetTempFilename(tmp_dir, "");
+  EXPECT_OK(r);
+  EXPECT_THAT(*r, StartsWith(tmp_dir));
+  r = GetTempFilename(tmp_dir, ".txt");
+  EXPECT_OK(r);
+  EXPECT_THAT(*r, EndsWith(".txt"));
+}
+
+TEST(PathTest, GetTempFilename) {
+  EXPECT_THAT(GetTempFilename(".txt"), EndsWith(".txt"));
 }
 
 }  // namespace io

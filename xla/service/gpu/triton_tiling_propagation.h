@@ -75,6 +75,7 @@ class TensorIterationSpec {
     // These are the sizes of the HLO dimensions which make up this basic
     // iteration.
     std::vector<int64_t> subfragments;
+    int64_t broadcast_multiplier = 1;
 
     bool is_sliced() const { return count != sliced_count; }
 
@@ -152,29 +153,21 @@ namespace triton_fusion {
 // instructions between source and target.
 class DimensionOrder {
  public:
-  // Softmax fusions have a fixed tiling scheme. These numbers are chosen to
-  // reflect that reductions in softmax fusions currently happen on the minor-
-  // most dimension (dimensions_minor(0)) and the rest (1+) is treated as a
-  // single non-tiled batch dimension. The numbers have to match those the
-  // emitter uses in the queries to the analysis.
-  static constexpr int kSoftmaxReductionDimension = 0;
-  static constexpr int kSoftmaxBatchDimension = 1;
-
-  static DimensionOrder FromDotOperandOrOutput(
-      const HloInstruction& hlo, int split_k_dimension_index = -1);
-
-  static DimensionOrder FromSoftmaxRoot(const HloInstruction& hlo);
+  static DimensionOrder FromDotOperandOrOutput(const HloInstruction& hlo);
 
   // Description of a continuous fragment of one dimension of a tensor.
   class Fragment {
    public:
-    explicit Fragment(int dst_dim_number, int64_t count)
+    explicit Fragment(int dst_dim_number, int64_t count,
+                      int64_t broadcast_size = 1)
         : dst_dim_number_(dst_dim_number),
           count_(count),
           slice_start_(0),
-          sliced_count_(count) {}
+          sliced_count_(count),
+          broadcast_multiplier_(broadcast_size) {}
 
     std::string ToString() const;
+    std::string ToLongString() const;
 
     // Label carrying the dimension number of an defining operation.
     int dst_dim_number() const { return dst_dim_number_; }
@@ -191,11 +184,28 @@ class DimensionOrder {
     }
     void set_count(int64_t count) { count_ = count; }
 
+    // Broadcast multiplier (1 for non-broadcast).
+    // If we broadcast non-trivial fragments of a dimension, then the
+    // broadcast multiplier is the size of the broadcast.
+    // For example, if we have a dimension of size 8 and we broadcast it to
+    // size 2048, then the broadcast multiplier is 256.
+    // This is used to adjust the stride and the advancement of the pointer.
+    // We need this piece of info for covering the cases when we do subchannel
+    // dequantisation with the sequences of ops like
+    // [m,y]scales -> [m,x,y]broadcast -> [m,x*y]bitcast -> multiply -> matmul.
+    // In this example x is the broadcast multiplier.
+    void set_broadcast_multiplier(int64_t broadcast_multiplier) {
+      broadcast_multiplier_ = broadcast_multiplier;
+    }
+    bool has_broadcast_multiplier() const { return broadcast_multiplier_ > 1; }
+    int64_t broadcast_multiplier() const { return broadcast_multiplier_; }
+
    private:
     const int dst_dim_number_;
     int64_t count_;
     int64_t slice_start_;
     int64_t sliced_count_;
+    int64_t broadcast_multiplier_;
   };
   using Fragments = std::vector<Fragment>;
   using FragmentOrders = absl::flat_hash_map<int, std::vector<int>>;
@@ -211,6 +221,7 @@ class DimensionOrder {
   FragmentOrders& DimFragmentsOrders() { return dim_fragments_orders_; }
 
   std::string ToString() const;
+  std::string ToLongString() const;
 
   TensorIterationSpec ToTensorIterationSpec() const;
 
@@ -237,14 +248,9 @@ struct DotProperties {
   // Index of dot dimension that can be split.
   // Currently typically LHS non-contracting one.
   const int splittable_dimension_index;
+  // Size of the contracting dimension (K).
+  const int64_t contracting_dim_size;
 };
-struct SoftmaxProperties {
-  const int softmax_reduction_dimension;
-  const int softmax_batch_dimension;
-};
-// HeroProperties depend only on the hero op and they don't change as we
-// change the fusion.
-using HeroProperties = std::variant<DotProperties, SoftmaxProperties>;
 
 // A special value for splittable_dimension_major_part_size.
 inline constexpr int kNoSplitRequirement = 1;
@@ -258,13 +264,11 @@ struct DotRequirements {
   // dimension must be the given value.
   int64_t splittable_dimension_major_part_size;
 };
-struct SoftmaxRequirements {};
-// Requirements can change depending on what we fuse.
-using Requirements = std::variant<DotRequirements, SoftmaxRequirements>;
-using RequirementsOrError = std::variant<Requirements, FusionDecision>;
 
-RequirementsOrError CombineRequirements(Requirements a,
-                                        RequirementsOrError b_or_error);
+using DotRequirementsOrError = std::variant<DotRequirements, FusionDecision>;
+
+DotRequirementsOrError CombineDotRequirements(
+    DotRequirements a, DotRequirementsOrError b_or_error);
 
 enum class TransformDirection { kInputToOutput, kOutputToInput };
 using DimOrderMap = absl::flat_hash_map<const HloInstruction*, DimensionOrder>;
@@ -274,7 +278,7 @@ using DimOrderMapOrError = std::variant<DimOrderMap, FusionDecision>;
 // dimension orders through an HLO.
 struct DimOrdersAndReqs {
   DimOrderMap dim_orders;
-  Requirements requirements;
+  DotRequirements requirements;
 };
 using DimOrdersAndReqsOrError = std::variant<DimOrdersAndReqs, FusionDecision>;
 
@@ -284,7 +288,7 @@ using DimOrdersAndReqsOrError = std::variant<DimOrdersAndReqs, FusionDecision>;
 // fusion.
 DimOrdersAndReqsOrError GetPropagatedDimOrdersAndRequirements(
     const HloInstruction& hlo, const DimensionOrder& src_dim_order,
-    TransformDirection direction, const HeroProperties& properties);
+    TransformDirection direction, const DotProperties& properties);
 // If fusing the instruction is possible *and profitable* then it propagates
 // the `src_dim_order` (describing one side of `hlo`) to the other side and
 // returns those dim orders and the requirements that they impose on the
@@ -298,7 +302,13 @@ GetPropagatedDimOrdersAndRequirementsIfProfitablyFusible(
     const std::optional<int>& src_operand_index,
     const DimensionOrder& src_dim_order,
     const se::GpuComputeCapability& gpu_version,
-    const HeroProperties& properties);
+    const DotProperties& properties);
+
+// Returns true whether the given instruction is worth fusing as an input.
+bool IsInputWorthFusing(const HloInstruction& hlo);
+
+// Returns true whether the given instruction is worth fusing as an output.
+bool IsOutputWorthFusing(const HloInstruction& hlo);
 
 }  // namespace triton_fusion
 }  // namespace gpu

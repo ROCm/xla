@@ -20,49 +20,114 @@ limitations under the License.
 #include <cstdint>
 #include <vector>
 
+#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/service/gpu/hlo_traversal.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/utils/hlo_traversal.h"
+#include "xla/service/gpu/alias_info.h"
+#include "xla/service/gpu/hlo_fusion_analysis.h"
+#include "xla/service/gpu/launch_dimensions.h"
 #include "xla/service/instruction_fusion.h"
 #include "xla/stream_executor/device_description.h"
 
 // TODO(b/112957171): Extract logic to determine fusibility of HLO ops from
-// GpuInstructionFusion, FusionMerger, and GpuMultiOutputFusion.
+// GpuInstructionFusion, FusionMerger, and MultiOutputFusion.
 
 namespace xla {
 namespace gpu {
-
-// Check if the operation accesses the same inputs multiple times
-// while generating its outputs.
-bool IfFusedReadsElementsMultipleTimes(const HloInstruction& instr);
-
-// Check if the operation is memory or computationally expensive
-// to repeat.
-bool IsExpensiveToRepeat(const HloInstruction& instr);
 
 // Fusion passes frequently do checks across all pairs of "interesting" nodes.
 // Computing e.g. FusionFitsInBudget(a, b) requires computing expensive
 // properties of `a` and `b` individually.  This cache lets us avoid recomputing
 // those properties n^2 times.
 //
+// Thread-safe: concurrent queries use shared reader locks on cache hits and
+// exclusive writer locks only on cache misses or invalidations.
+//
 // Invariant: After modifying or removing a fusion node, call Invalidate(node).
-struct FusionInfoCache {
+class FusionInfoCache {
  public:
+  explicit FusionInfoCache(const se::DeviceDescription& device_info)
+      : device_info_(device_info) {}
+
   // Must be called after modifying or removing a fusion node (or other node
-  // that's part of this cache).
-  void Invalidate(const HloInstruction* instr) {
-    shared_memory_usage.erase(instr);
-    num_unnested_reductions.erase(instr);
+  // that's part of this cache). Acquires an exclusive lock on `mutex_` to
+  // erase cached properties for `instr` across all maps.
+  void Invalidate(const HloInstruction* instr) ABSL_LOCKS_EXCLUDED(mutex_) {
+    absl::MutexLock lock(mutex_);
+    shared_memory_usage_.erase(instr);
+    num_unnested_reductions_.erase(instr);
+    contains_scan_.erase(instr);
+    contains_significant_reduce_.erase(instr);
   }
 
-  // The rest of the members of this class are for internal use within
-  // gpu_fusible. You shouldn't need to use them yourself.
-  absl::flat_hash_map<const HloInstruction*, int64_t> shared_memory_usage;
-  absl::flat_hash_map<const HloInstruction*, int64_t> num_unnested_reductions;
+  // Returns expected shared memory usage of a given instruction in bytes.
+  int64_t GetSharedMemoryUsage(const HloInstruction& instr)
+      ABSL_LOCKS_EXCLUDED(mutex_);
+
+  // Returns the number of unnested reductions in the instruction output.
+  int64_t GetNumUnnestedReductions(const HloInstruction& instr)
+      ABSL_LOCKS_EXCLUDED(mutex_);
+
+  // Returns whether the instruction is a scan or, in the case of a fusion,
+  // contains a scan operation.
+  bool ContainsScan(const HloInstruction& instr) ABSL_LOCKS_EXCLUDED(mutex_);
+
+  // Returns whether the instruction is a significant reduction (reducing by a
+  // factor of at least 16) or, in the case of a fusion, contains one.
+  bool ContainsSignificantReduce(const HloInstruction& instr)
+      ABSL_LOCKS_EXCLUDED(mutex_);
+
+ private:
+  // Evaluates `compute` directly for non-fusion instructions (which are O(1) to
+  // check and do not traverse a subcomputation). For fusion instructions, looks
+  // up `instr` in `cache_member` under a shared reader lock, computes the
+  // property outside `mutex_` on a cache miss so concurrent threads are not
+  // blocked during fusion traversal, and inserts the result under an exclusive
+  // writer lock.
+  //
+  // Note: Users only call Invalidate() on top-level instructions, not
+  // instructions inside fusion nodes. Therefore, only top-level instructions
+  // may be cached here, and `compute` must not recursively query this cache for
+  // instructions inside a fusion.
+  template <typename Value, typename ComputeFn>
+  Value GetOrCompute(const HloInstruction& instr,
+                     absl::flat_hash_map<const HloInstruction*, Value>
+                         FusionInfoCache::* cache_member,
+                     ComputeFn&& compute) ABSL_LOCKS_EXCLUDED(mutex_) {
+    if (instr.opcode() != HloOpcode::kFusion) {
+      return compute();
+    }
+    {
+      absl::ReaderMutexLock lock(mutex_);
+      const auto& cache = this->*cache_member;
+      if (auto it = cache.find(&instr); it != cache.end()) {
+        return it->second;
+      }
+    }
+    Value value = compute();
+    absl::MutexLock lock(mutex_);
+    return (this->*cache_member).emplace(&instr, value).first->second;
+  }
+
+  const se::DeviceDescription& device_info_;
+
+  absl::Mutex mutex_;
+
+  absl::flat_hash_map<const HloInstruction*, int64_t> shared_memory_usage_
+      ABSL_GUARDED_BY(mutex_);
+  absl::flat_hash_map<const HloInstruction*, int64_t> num_unnested_reductions_
+      ABSL_GUARDED_BY(mutex_);
+  absl::flat_hash_map<const HloInstruction*, bool> contains_scan_
+      ABSL_GUARDED_BY(mutex_);
+  absl::flat_hash_map<const HloInstruction*, bool> contains_significant_reduce_
+      ABSL_GUARDED_BY(mutex_);
 };
 
 // Returns the computations within `module` whose instructions can still be
@@ -71,10 +136,6 @@ struct FusionInfoCache {
 std::vector<HloComputation*> GetFusibleComputations(
     const HloModule& module,
     const absl::flat_hash_set<absl::string_view>& execution_threads);
-
-// Returns projected shared memory usage of a given instruction in bytes.
-int64_t SharedMemoryUsage(const HloInstruction& instr,
-                          FusionInfoCache* cache = nullptr);
 
 inline constexpr int64_t MaxOperandsAndOutputsPerFusion() { return 96; }
 
@@ -100,23 +161,39 @@ bool TransposesMinorDimension(const HloInstruction* instr);
 // Note that reduction ops are lowered in different ways. Reduce input fusions
 // are lowered by IrEmitterUnnested::EmitReductionToVector and must be rooted at
 // reduction-to-vector ops. Other reduction ops are lowered by
-// GpuElementalIrEmitter and fused like elementwise ops.
+// compiler/xla/backends/gpu/codegen/emitters.
 
 // Whether `instr` is an input fusion rooted at a reduction-to-vector op or a
 // multi-output input fusion with at least one reduction-to-vector op root.
-bool IsReduceInputFusion(const HloInstruction& instr);
+bool IsReduceInputFusion(const HloInstruction& instr,
+                         const se::DeviceDescription& device_info);
 
 // Whether `instr` is fusible as root of a reduce input fusions, i.e. `instr`
 // is either an unfused reduction-to-vector op or a reduce input fusion.
-bool IsInputFusibleReduction(const HloInstruction& instr);
+bool IsInputFusibleReduction(const HloInstruction& instr,
+                             const se::DeviceDescription& device_info);
 
 // Whether `instr` is a nestable variadic reduction
 // or a loop fusion rooted with such.
-bool IsNestableVariadicReduction(const HloInstruction& instr);
+bool IsNestableVariadicReduction(const HloInstruction& instr,
+                                 const se::DeviceDescription& device_info);
+
+// Whether `instr` is a nestable variadic reduce-window
+// or a loop fusion rooted with such.
+bool IsNestableVariadicReduceWindow(const HloInstruction& instr);
 
 // Whether `instr` is fusible as root of a scatter input fusions, i.e. `instr`
 // is either an unfused scatter op or a scatter input fusion.
 bool IsInputFusibleScatter(const HloInstruction& instr);
+
+// Determines whether the combination of `instr1` and `instr2` into a (possibly
+// multi-output) fusion fits within the maximum number of parameters that can be
+// passed to a kernel. If the fusion is a producer/consumer fusion and `instr1`
+// is the consumer and `instr2` is the producer, set consumer_producer_fusion to
+// true to enable more fusion.
+FusionDecision FusionFitsInParameterLimit(
+    const HloInstruction& instr1, const HloInstruction& instr2,
+    bool is_consumer_producer_fusion = false);
 
 // Determines whether the combination of `instr1` and `instr2` into a (possibly
 // multi-output) fusion fits within a "budget" -- i.e., does have more operands
@@ -129,22 +206,17 @@ FusionDecision FusionFitsInBudget(const HloInstruction& instr1,
                                   bool is_consumer_producer_fusion = false,
                                   FusionInfoCache* cache = nullptr);
 
-// Check if fusing producer and consumer will generate a heavy computation, e.g.
-// producer has a complex computation per output and consumer calls this
-// computations multiple times.
-bool CreatesHeavyComputation(const HloInstruction& producer,
-                             const HloInstruction& consumer);
-
 // Returns the instruction that determines the emitter used for lowering,
 // sometimes referred to as "the real hero".
 const HloInstruction* GetRealHeroForMultiOutputFusion(
-    const HloInstruction& instr);
+    const HloInstruction& instr, const se::DeviceDescription& device_info);
 
 // Whether 'hero1' and 'hero2' are compatible if the two fusions containing
 // 'hero1' and 'hero2' are merged together. For example merging two fusions with
 // a reduction hero and a transpose here, respectively, does not work.
-FusionDecision FusionHeroesAreCompatible(const HloInstruction* hero1,
-                                         const HloInstruction* hero2);
+FusionDecision FusionHeroesAreCompatible(
+    const HloInstruction* hero1, const HloInstruction* hero2,
+    const se::DeviceDescription& device_info);
 
 // Whether instruction shapes are compatible for multi-output fusion, i.e.
 // whether the emitters support lowering the resulting fusion.
@@ -154,31 +226,29 @@ FusionDecision FusionHeroesAreCompatible(const HloInstruction* hero1,
 // input fusions only. It is up to the caller to ensure the instructions
 // themselves are fusible!
 FusionDecision ShapesCompatibleForMultiOutputFusion(
-    const HloInstruction& instr1, const HloInstruction& instr2);
+    const HloInstruction& instr1, const HloInstruction& instr2,
+    const se::DeviceDescription& device_info);
 
 // Whether fusing producer into consumer creates a scatter fusion that cannot be
 // handled by the scatter emitter.
 FusionDecision CanEmitInputFusedScatter(const HloInstruction& producer,
                                         const HloInstruction& consumer);
 
-// Whether the instructions are compatible for producer-consumer fusion
-// i.e. whether the producer and consumer are loop/input fusible and
-// they are not library calls.
-// Used both by instruction fusion and fusion-fusion merging.
-FusionDecision IsProducerConsumerFusible(const HloInstruction& producer,
-                                         const HloInstruction& consumer);
-
 // Whether the producer is a valid candidate for a multi-output fusion.
 // That is, the root tuple of the multi-output fusion will contain the results
 // of both, the producer and consumer.
-FusionDecision IsProducerMultiOutputFusible(const HloInstruction& producer);
+FusionDecision IsProducerMultiOutputFusible(
+    const HloInstruction& producer, const GpuAliasInfo* alias_info,
+    const se::DeviceDescription& device_info);
 // Whether `instr` is a candidate for sibling fusion or as a consumer in
 // a producer-consumer multi-output fusion.
-bool IsFusibleAsMultiOutputFusionRoot(const HloInstruction& instr);
+bool IsFusibleAsMultiOutputFusionRoot(const HloInstruction& instr,
+                                      const se::DeviceDescription& device_info);
 
 // Determines the fusion kind to be used when fusing into `consumer`.
-HloInstruction::FusionKind ChooseFusionKind(const HloInstruction& producer,
-                                            const HloInstruction& consumer);
+HloInstruction::FusionKind ChooseFusionKind(
+    const HloInstruction& producer, const HloInstruction& consumer,
+    const se::DeviceDescription& device_info);
 
 // Returns whether `consumer` is the only non-root user of `instr`.
 bool IsConsumerTheOnlyNonRootUser(const HloInstruction& instr,
@@ -186,7 +256,7 @@ bool IsConsumerTheOnlyNonRootUser(const HloInstruction& instr,
 
 // Returns number of instructions in the fusible `instr`. If `instr` is not a
 // fusion instruction, 1 is returned.
-size_t GetInstrCountOfFusible(const HloInstruction& instr);
+int64_t GetInstrCountOfFusible(const HloInstruction& instr);
 
 // Returns the outputs of the fusible `instr`.
 absl::InlinedVector<const HloInstruction*, 2> GetOutputsOfFusible(
@@ -215,12 +285,31 @@ size_t GetOutputSizeOfFusible(const HloInstruction& instr);
 std::vector<const HloInstruction*> GetFusionRoots(
     const HloComputation& computation);
 
-// Whether the instruction is a Triton Softmax fusion.
-bool IsTritonSoftmaxFusion(const HloInstruction& instr);
+// Whether the instruction is a generic Triton fusion.
+bool IsGenericTritonFusion(const HloInstruction& instr);
 
-// Whether the fusion will likely behave poorly with vectorization due to the
-// instructions it contains.
-bool MayPreventVectorization(const HloFusionAdaptor& fusion);
+// Whether there is an expected performance drop when unrolling due to the
+// instructions contained in the fusion, e.g. potential register spilling or not
+// enough parallelism.
+bool MayCausePerformanceDropIfUnrolled(const HloFusionAdaptor& fusion);
+
+// Returns the max loop unroll factor.
+int64_t MaxUnrollFactor(const HloFusionAnalysis* analysis = nullptr);
+
+int ComputeLoopFusionConfig(const HloFusionAnalysis& analysis);
+
+int ComputeLoopFusionConfig(const HloFusionAnalysis& analysis,
+                            const Shape& shape);
+
+// Returns whether the instruction is a scan or, in the case of a fusion,
+// contains a scan operation.
+bool ContainsScan(const HloInstruction& instr,
+                  FusionInfoCache* cache = nullptr);
+
+// Returns whether the instruction is a significant reduction (reducing by a
+// factor of at least 16) or, in the case of a fusion, contains one.
+bool ContainsSignificantReduce(const HloInstruction& instr,
+                               FusionInfoCache* cache = nullptr);
 
 }  // namespace gpu
 }  // namespace xla

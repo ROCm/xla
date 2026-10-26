@@ -1,4 +1,4 @@
-/* Copyright 2019 The TensorFlow Authors All Rights Reserved.
+/* Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,9 +18,9 @@ limitations under the License.
 #include <string>
 
 #include "absl/strings/str_cat.h"
-#include "tsl/platform/test.h"
-#include "tsl/platform/test_benchmark.h"
-#include "tsl/profiler/backends/cpu/annotation_stack.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/tsl/platform/test_benchmark.h"
+#include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
 
 namespace tsl {
 namespace profiler {
@@ -95,7 +95,9 @@ void BM_ScopedAnnotationEnabled_Nested(::testing::benchmark::State& state) {
   AnnotationStack::Enable(true);
   for (auto s : state) {
     ScopedAnnotation trace(annotation);
-    { ScopedAnnotation trace(annotation); }
+    {
+      ScopedAnnotation trace(annotation);
+    }
   }
   AnnotationStack::Enable(false);
 }

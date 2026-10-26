@@ -15,29 +15,39 @@ limitations under the License.
 
 #include "xla/service/sharding_remover.h"
 
-#include <memory>
-#include <optional>
-#include <string>
-#include <utility>
+#include <algorithm>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "tsl/platform/errors.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "tsl/platform/errors.h"
+#include "xla/service/spmd/shard_barrier_partitioner.h"
+#include "xla/service/spmd/shardy/constants.h"
 
 namespace xla {
 
 // Remove Sharding custom-call instruction by assigning its users to
 // to its operand.
-absl::StatusOr<bool> ShardingRemover::Run(
+absl::StatusOr<bool> ShardingRemover::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   bool changed = false;
 
   const absl::flat_hash_set<absl::string_view> to_remove_sharding_ops = {
-      "Sharding", "SPMDShardToFullShape", "SPMDFullToShardShape"};
+      "Sharding",
+      "SPMDShardToFullShape",
+      "SPMDFullToShardShape",
+      sdy::kShardingGroupCustomCallTargetName,
+      sdy::kPropagationBarrierCustomCallTargetName,
+      sdy::kFuncResultShardingTargetName,
+      spmd::kShardBarrierFrom,
+      spmd::kShardBarrierTo};
 
   for (HloComputation* computation : module->computations(execution_threads)) {
     auto instructions = computation->MakeInstructionPostOrder();
@@ -52,17 +62,32 @@ absl::StatusOr<bool> ShardingRemover::Run(
       }
       CHECK(instruction->operand_count() == 1)
           << "Sharding instruction must have exactly one operand";
-      TF_RETURN_IF_ERROR(instruction->ReplaceAllUsesWith(
+
+      // ShardingGroupOp is dangling so we just remove it.
+      if (instruction->custom_call_target() ==
+          sdy::kShardingGroupCustomCallTargetName) {
+        ABSL_RETURN_IF_ERROR(computation->RemoveInstruction(instruction));
+        continue;
+      }
+
+      ABSL_RETURN_IF_ERROR(instruction->ReplaceAllUsesWith(
           instruction->mutable_operand(0), name()));
       changed = true;
 
       // We do not DCE sharding custom-call, so replace sharding custom-call
       // with a copy instead, so that it can be DCE-ed in later passes.
-      if (instruction->custom_call_target() == "Sharding") {
+      if (instruction->custom_call_target() == "Sharding" ||
+          instruction->custom_call_target() ==
+              sdy::kFuncResultShardingTargetName ||
+          instruction->custom_call_target() ==
+              sdy::kPropagationBarrierCustomCallTargetName ||
+          instruction->custom_call_target() == spmd::kShardBarrierFrom ||
+          instruction->custom_call_target() == spmd::kShardBarrierTo) {
         auto copy = computation->AddInstruction(
             HloInstruction::CreateUnary(instruction->shape(), HloOpcode::kCopy,
                                         instruction->mutable_operand(0)));
-        TF_RETURN_IF_ERROR(computation->ReplaceInstruction(instruction, copy));
+        ABSL_RETURN_IF_ERROR(
+            computation->ReplaceInstruction(instruction, copy));
         instruction = copy;
       }
     }

@@ -29,6 +29,7 @@ limitations under the License.
 #include "absl/random/gaussian_distribution.h"
 #include "absl/random/random.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
@@ -38,24 +39,26 @@ limitations under the License.
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
-#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
-#include "mlir/IR/MLIRContext.h"  // from @llvm-project
-#include "mlir/IR/Operation.h"  // from @llvm-project
-#include "mlir/IR/OwningOpRef.h"  // from @llvm-project
-#include "mlir/IR/SymbolTable.h"  // from @llvm-project
-#include "mlir/IR/TypeRange.h"  // from @llvm-project
-#include "mlir/IR/Value.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
-#include "mlir/Support/LogicalResult.h"  // from @llvm-project
-#include "mlir/Tools/ParseUtilities.h"  // from @llvm-project
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/OwningOpRef.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/TypeRange.h"
+#include "mlir/IR/Types.h"
+#include "mlir/IR/Value.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Support/LogicalResult.h"
+#include "mlir/Tools/ParseUtilities.h"
+#include "tsl/platform/statusor.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/interpreter.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/interpreter_value.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/tensor_or_memref.h"
+#include "xla/mlir/tools/mlir_replay/public/execution_trace.pb.h"
 #include "xla/mlir/tools/mlir_replay/public/execution_trace_utils.h"
 #include "xla/service/hlo.pb.h"
-#include "tsl/platform/statusor.h"
 
 namespace mlir {
 namespace interpreter {
@@ -65,7 +68,7 @@ absl::StatusOr<SmallVector<InterpreterValue>> LoadArgs(
     const xla::HloSnapshot& snapshot, TypeRange types) {
   SmallVector<InterpreterValue> result;
   for (const auto& [arg, type] : llvm::zip(snapshot.arguments(), types)) {
-    TF_ASSIGN_OR_RETURN(auto converted, LiteralToValue(arg, type));
+    ABSL_ASSIGN_OR_RETURN(auto converted, LiteralToValue(arg, type));
     result.push_back(std::move(converted));
   }
   return result;
@@ -76,7 +79,7 @@ template <typename T, template <typename _> class rng_t>
 mlir::interpreter::InterpreterValue RandomTensor(absl::BitGenRef bitgen,
                                                  mlir::Type type) {
   llvm::SmallVector<int64_t> shape;
-  auto shaped_ty = type.dyn_cast<mlir::ShapedType>();
+  auto shaped_ty = mlir::dyn_cast<mlir::ShapedType>(type);
   if (shaped_ty) {
     shape = llvm::to_vector(shaped_ty.getShape());
   }
@@ -100,8 +103,9 @@ mlir::interpreter::InterpreterValue RandomTensor(absl::BitGenRef bitgen,
 
 mlir::FailureOr<mlir::interpreter::InterpreterValue> MakeRandomInput(
     absl::BitGenRef bitgen, mlir::Type type) {
-  auto elem_ty =
-      type.isa<ShapedType>() ? type.cast<ShapedType>().getElementType() : type;
+  auto elem_ty = mlir::isa<ShapedType>(type)
+                     ? mlir::cast<ShapedType>(type).getElementType()
+                     : type;
   if (elem_ty.isF32()) {
     return RandomTensor<float, absl::gaussian_distribution>(bitgen, type);
   }
@@ -118,7 +122,8 @@ mlir::FailureOr<mlir::interpreter::InterpreterValue> MakeRandomInput(
     return RandomTensor<int64_t, absl::uniform_int_distribution>(bitgen, type);
   }
   if (elem_ty.isInteger(1)) {
-    return {{TensorOrMemref<bool>::Empty(type.cast<ShapedType>().getShape())}};
+    return {
+        {TensorOrMemref<bool>::Empty(mlir::cast<ShapedType>(type).getShape())}};
   }
 
   llvm::errs() << "Unsupported type: ";
@@ -209,8 +214,8 @@ absl::StatusOr<SmallVector<InterpreterValue>> Run(
   }
 
   auto args_to_buffers = ExtractXlaBufferAssignment(main);
-  TF_ASSIGN_OR_RETURN(auto args,
-                      LoadArgs(snapshot, main.getBody().getArgumentTypes()));
+  ABSL_ASSIGN_OR_RETURN(auto args,
+                        LoadArgs(snapshot, main.getBody().getArgumentTypes()));
   auto out_args =
       main.getBody().getBlocks().front().getArguments().drop_front(args.size());
 
@@ -250,8 +255,8 @@ absl::StatusOr<SmallVector<InterpreterValue>> Run(
   if (trace) {
     options.listener = &tracer;
   }
-  TF_ASSIGN_OR_RETURN(auto results,
-                      RunInterpreter(symbols, main, args, options));
+  ABSL_ASSIGN_OR_RETURN(auto results,
+                        RunInterpreter(symbols, main, args, options));
 
   if (results.empty()) {
     return out_buffers;

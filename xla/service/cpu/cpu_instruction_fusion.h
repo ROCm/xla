@@ -16,7 +16,14 @@ limitations under the License.
 #ifndef XLA_SERVICE_CPU_CPU_INSTRUCTION_FUSION_H_
 #define XLA_SERVICE_CPU_CPU_INSTRUCTION_FUSION_H_
 
+#include <cstdint>
+
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "xla/hlo/analysis/hlo_reachability.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/service/fusion_node_indexing_evaluation.h"
 #include "xla/service/instruction_fusion.h"
@@ -26,32 +33,52 @@ namespace cpu {
 
 class CpuInstructionFusion : public InstructionFusion {
  public:
-  CpuInstructionFusion()
-      : InstructionFusion(CpuInstructionFusion::IsExpensive) {}
+  explicit CpuInstructionFusion(const AliasInfo* alias_info,
+                                bool may_duplicate = true)
+      : InstructionFusion(CpuInstructionFusion::IsExpensive, alias_info,
+                          may_duplicate) {}
   ~CpuInstructionFusion() override = default;
 
-  using HloPassInterface::Run;
-  absl::StatusOr<bool> Run(HloModule* module,
-                           const absl::flat_hash_set<absl::string_view>&
-                               execution_threads) override {
-    fusion_node_evaluations_.clear();
-    return InstructionFusion::Run(module, execution_threads);
+  // Returns the threshold for a constant to be considered a large constant.
+  static constexpr int64_t GetLargeConstantThresholdBytes() {
+    constexpr int64_t kLargeConstantThresholdBytes = 10000;
+    return kLargeConstantThresholdBytes;
   }
 
  protected:
   FusionDecision ShouldFuse(HloInstruction* consumer,
                             int64_t operand_index) override;
+  HloInstructionSet ComputeGloballyUnfusible(
+      absl::Span<HloInstruction* const> post_order,
+      const HloReachabilityMap& reachability) override;
   HloInstruction::FusionKind ChooseKind(
       const HloInstruction* producer, const HloInstruction* consumer) override;
 
+  absl::StatusOr<bool> RunImpl(HloModule* module,
+                               const absl::flat_hash_set<absl::string_view>&
+                                   execution_threads) override {
+    fusion_node_evaluations_.clear();
+    ComputeInstructionsToSkip(module, execution_threads);
+    return InstructionFusion::RunImpl(module, execution_threads);
+  }
+
  private:
+  static bool IsExpensive(const HloInstruction& instruction);
+
   HloInstruction* FuseInstruction(HloInstruction* fusion_instruction,
                                   HloInstruction* producer) override;
+
+  bool ShouldSkip(const HloInstruction* inst) const;
+  void ComputeInstructionsToSkip(
+      HloModule* module,
+      const absl::flat_hash_set<absl::string_view>& execution_threads);
 
   // Keep track of the number of times each instruction inside a fusion node is
   // indexed with different index vectors.
   absl::flat_hash_map<const HloInstruction*, FusionNodeIndexingEvaluation>
       fusion_node_evaluations_;
+
+  absl::flat_hash_set<const HloInstruction*> instructions_to_skip_;
 };
 
 }  // namespace cpu

@@ -18,12 +18,15 @@ limitations under the License.
 // This file contains TritonFusionAnalysis and FusionContext.
 
 #include <map>
+#include <optional>
 #include <string>
 
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "xla/autotuning.pb.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/service/gpu/triton_tiling_propagation.h"
 #include "xla/xla_data.pb.h"
 
@@ -32,29 +35,29 @@ namespace gpu {
 
 // Analysis of tensor iteration orders within tiled fusions.
 class TritonFusionAnalysis {
-  absl::Status ExecuteForDotFusion(const HloInstruction& dot, int split_k);
-  absl::Status ExecuteForSoftmaxFusion(const HloInstruction& root);
+  absl::Status ExecuteForDotFusion(const HloInstruction& dot);
 
  public:
   // Execute the analysis of a fusion computation.
-  // `split_k` indicates whether this operation was converted to the split-K
-  // form and tells the analysis how to interpret the batch dimensions.
   static absl::StatusOr<TritonFusionAnalysis> Execute(
-      const HloComputation& computation, int split_k = 1);
+      const HloComputation& computation);
 
-  // Execute the analysis of a produce-consumer fusion. Returns absl::OkStatus,
-  // if the analysis can find a valid tiling for the producer-consumer fusion.
-  // `split_k` indicates whether this operation was converted to the split-K
-  // form and tells the analysis how to interpret the batch dimensions.
-  static absl::Status ExecuteForProducerConsumer(const HloInstruction& producer,
-                                                 const HloInstruction& consumer,
-                                                 int split_k = 1);
+  // Execute the analysis of a dot instruction until it reaches the computation
+  // boundaries.
+  static absl::StatusOr<TritonFusionAnalysis> Execute(
+      const HloInstruction& dot);
 
   // A scope is an HLO graph that can be tiled efficiently using same or
-  // compatible tile shapes on all operations. GEMM fusion has 3 or 4 scopes
-  // defined by left operand, right operand, optional meta (third operand) and
-  // output.
-  enum class Scope { LHS = 0, RHS = 1, META = 2, OUTPUT = 3 };
+  // compatible tile shapes on all operations. GEMM dot fusion has 3 scopes
+  // defined by left operand, right operand and output. GEMM scaled dot fusion
+  // has 5 scopes (also includes scale operands).
+  enum class Scope {
+    LHS = 0,
+    RHS = 1,
+    LHS_SCALE = 2,
+    RHS_SCALE = 3,
+    OUTPUT = 4,
+  };
 
   using IterationSpecByInstructionMap =
       ConstHloInstructionMap<TensorIterationSpec>;
@@ -85,31 +88,49 @@ class TritonFusionAnalysis {
 
   std::string ToString() const;
 
+  // Returns an error if the batch dimension of the parameter with the type S4
+  // is the minor one. This check uses the collected data about the mapping the
+  // dimensions of dot to the corresponding parameters. This is important
+  // because there could be a transpose between the dot and the parameter.
+  bool IsBatchDimMinorForInt4Parameter(const HloInstruction& dot,
+                                       Scope scope) const;
+
+  // Block scaled dot support.
+  bool is_scaled_dot() const { return is_scaled_dot_; }
+
+  std::optional<int64_t> lhs_scale_block_size() const {
+    return lhs_scale_block_size_;
+  }
+  std::optional<int64_t> rhs_scale_block_size() const {
+    return rhs_scale_block_size_;
+  }
+
  private:
   IterationSpecByInstructionByScopeMap iter_specs_;
   // HLO computation parameters per scope.
   std::map<Scope, ConstHloInstructionSet> parameters_;
+  // Scaled dot has additional scale scopes.
+  bool is_scaled_dot_ = false;
+  std::optional<int64_t> lhs_scale_block_size_;
+  std::optional<int64_t> rhs_scale_block_size_;
 };
 
 // The details of the Triton fusion / tiling propagation are in a separate
 // namespace to avoid littering the xla::gpu namespace.
 namespace triton_fusion {
 class FusionContext {
-  FusionContext(HeroProperties properties, Requirements requirements)
+  FusionContext(DotProperties properties, DotRequirements requirements)
       : properties_(properties), requirements_(requirements) {}
 
  public:
   // Create fusion context from a dot operand according to
   // the currently supported configurations.
   static absl::StatusOr<FusionContext> FromDotOperand(const HloInstruction& dot,
-                                                      int operand_number,
-                                                      int split_k = 1);
+                                                      int operand_number);
 
   // Create fusion context from dot's output.
-  static FusionContext FromDotOutput(const HloInstruction& dot, int split_k,
+  static FusionContext FromDotOutput(const HloInstruction& dot,
                                      DotRequirements requirements);
-
-  static FusionContext FromSoftmaxRoot(const HloInstruction&);
 
   // Add dimension orders from `update` to `dim_orders_` and update
   // `requirements_` if all of them are compatible.
@@ -122,13 +143,13 @@ class FusionContext {
       const HloInstruction& origin, ConstHloInstructionSet& parameters,
       ConstHloInstructionMap<TensorIterationSpec>& iter_specs);
 
-  const HeroProperties& hero_properties() const { return properties_; }
+  const DotProperties& dot_properties() const { return properties_; }
   const DimOrderMap& dim_orders() const { return dim_orders_; }
-  const Requirements& requirements() const { return requirements_; }
+  const DotRequirements& requirements() const { return requirements_; }
 
  private:
-  const HeroProperties properties_;
-  Requirements requirements_;
+  const DotProperties properties_;
+  DotRequirements requirements_;
   DimOrderMap dim_orders_;
 };
 

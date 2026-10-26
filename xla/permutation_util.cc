@@ -15,9 +15,11 @@ limitations under the License.
 
 #include "xla/permutation_util.h"
 
-#include <vector>
+#include <algorithm>
+#include <cstdint>
 
 #include "absl/container/inlined_vector.h"
+#include "absl/types/span.h"
 
 namespace xla {
 
@@ -32,34 +34,15 @@ bool IsPermutation(absl::Span<const int64_t> permutation) {
   return true;
 }
 
-std::vector<int64_t> InversePermutation(
-    absl::Span<const int64_t> input_permutation) {
-  DCHECK(IsPermutation(input_permutation));
-  std::vector<int64_t> output_permutation(input_permutation.size(), -1);
-  for (size_t i = 0; i < input_permutation.size(); ++i) {
-    output_permutation[input_permutation[i]] = i;
+void MoveSingleElement(absl::Span<int64_t> permutation, int64_t from,
+                       int64_t to) {
+  if (from < to) {
+    std::rotate(permutation.begin() + from, permutation.begin() + from + 1,
+                permutation.begin() + to + 1);
+  } else if (from > to) {
+    std::rotate(permutation.begin() + to, permutation.begin() + from,
+                permutation.begin() + from + 1);
   }
-  return output_permutation;
-}
-
-std::vector<int64_t> ComposePermutations(absl::Span<const int64_t> p1,
-                                         absl::Span<const int64_t> p2) {
-  CHECK_EQ(p1.size(), p2.size());
-  std::vector<int64_t> output;
-  output.reserve(p1.size());
-  for (size_t i = 0; i < p1.size(); ++i) {
-    output.push_back(p1.at(p2.at(i)));
-  }
-  return output;
-}
-
-bool IsIdentityPermutation(absl::Span<const int64_t> permutation) {
-  for (int64_t i = 0; i < permutation.size(); ++i) {
-    if (permutation[i] != i) {
-      return false;
-    }
-  }
-  return true;
 }
 
 }  // namespace xla

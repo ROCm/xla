@@ -24,8 +24,8 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/notification.h"
 #include "xla/service/gpu/backend_configs.pb.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/test.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/test.h"
 
 namespace xla {
 namespace {
@@ -37,7 +37,7 @@ const int kNumRepetitions = 100;
 // since the == operator does not canonicalize the raw strings before comparing
 // them.
 constexpr absl::string_view kRawString =
-    R"({"operation_queue_id":"0","wait_on_operation_queues":[],"fusion_backend_config":{"kind":"__triton_gemm","triton_gemm_config":{"block_m":"256","block_n":"256","block_k":"32","split_k":"1","num_stages":"1","num_warps":"16","num_ctas":"1"}},"force_earliest_schedule":false})";
+    R"({"operation_queue_id":"0","fusion_backend_config":{"kind":"__triton_gemm","triton_gemm_config":{"block_m":"256","block_n":"256","block_k":"32","split_k":"1","num_stages":"1","num_warps":"16","num_ctas":"1","is_tma_allowed":false,"is_warp_specialization_allowed":false,"waves_per_eu":"0","group_size":"0","mfma_size":"0"}},"force_earliest_schedule":false,"reification_cost":[],"device_type":"DEVICE_TYPE_INVALID"})";
 
 template <typename Input, typename CheckFn>
 void RunThreaded(Input input, CheckFn check_fn) {

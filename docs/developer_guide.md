@@ -4,7 +4,7 @@ This guide shows you how to get started developing the XLA project.
 
 Before you begin, complete the following prerequisites:
 
-1.  Go to [CONTRIBUTING.md](../CONTRIBUTING.md) and review the contribution
+1.  Go to [Contributing page](contributing.md) and review the contribution
     process.
 2.  If you haven't already done so, sign the
     [Contributor License Agreement](https://cla.developers.google.com/about).
@@ -18,12 +18,16 @@ the repository, and create a pull request.
 ## Get the code
 
 1.  Create a fork of the [XLA repository](https://github.com/openxla/xla).
-2.  Clone your fork of the repo, replacing `<USER>` with your GitHub username:
+2.  Clone your fork of the repo, replacing `{USER}` with your GitHub username:
+
     ```sh
-    git clone https://github.com/<USER>/xla.git
+    git clone https://github.com/{USER}/xla.git
     ```
+
 3.  Change into the `xla` directory: `cd xla`
+
 4.  Configure the remote upstream repo:
+
     ```sh
     git remote add upstream https://github.com/openxla/xla.git
     ```
@@ -38,30 +42,82 @@ the repository, and create a pull request.
     is unavailable, you can [install Bazel](https://bazel.build/install)
     manually.
 
-2.  Create and run a
-    [TensorFlow Docker container](https://www.tensorflow.org/install/docker).
+2.  Create and run the
+    [ml-build](https://us-docker.pkg.dev/ml-oss-artifacts-published/ml-public-container/ml-build)
+    Docker container.
 
-    To get the TensorFlow Docker image for both CPU and GPU building, run the
-    following command:
+    To set up a Docker container for building XLA with support for both CPU and
+    GPU, run the following command:
 
     ```sh
-    docker run --name xla -w /xla -it -d --rm -v $PWD:/xla tensorflow/build:latest-python3.9 bash
+    docker run -itd --rm \
+      --name xla \
+      -w /xla \
+      -v $PWD:/xla \
+      us-docker.pkg.dev/ml-oss-artifacts-published/ml-public-container/ml-build:latest \
+      bash
     ```
+
+    If building with GPU/CUDA support, add `--gpus all` to grant the container
+    access to all available GPUs. This enables automatic detection of CUDA
+    compute capabilities.
 
 ## Build
 
-Build for CPU:
+Configure for CPU:
 
 ```sh
 docker exec xla ./configure.py --backend=CPU
-docker exec xla bazel build --test_output=all --spawn_strategy=sandboxed //xla/...
 ```
 
-Build for GPU:
+Configure for GPU:
 
 ```sh
 docker exec xla ./configure.py --backend=CUDA
-docker exec xla bazel build --test_output=all --spawn_strategy=sandboxed //xla/...
+```
+
+CUDA compute capabilities will be detected automatically by running
+`nvidia-smi`. If GPUs are not available during the build, you must specify
+the compute capabilities manually. For example:
+
+```sh
+# Automatically detects compute capabilities (requires GPUs)
+./configure.py --backend=CUDA
+
+# Manually specify compute capabilities (for builds without GPUs)
+./configure.py --backend=CUDA --cuda_compute_capabilities="9.0"
+```
+
+Build:
+
+```sh
+docker exec xla bazel build \
+  --spawn_strategy=sandboxed \
+  --test_output=all \
+  //xla/...
+```
+
+**Note:** You can build XLA on a machine without GPUs. In that case:
+
+- Do **not** use `--gpus all` flag when starting the Docker container.
+- During `./configure.py`, manually specify the CUDA compute capabilities
+using the `--cuda_compute_capabilities` flag.
+
+**Note:** Thanks to hermetic CUDA rules, you don't need to build XLA inside a
+Docker container. You can build XLA for GPU directly on your machine - even if
+it doesn't have a GPU or the NVIDIA driver installed.
+
+```sh
+# Automatically detects compute capabilities (requires GPUs)
+./configure.py --backend=CUDA
+
+# Manually specify compute capabilities (for builds without GPUs)
+./configure.py --backend=CUDA --cuda_compute_capabilities="9.0"
+
+bazel build \
+  --spawn_strategy=sandboxed \
+  --test_output=all \
+  //xla/...
 ```
 
 Your first build will take quite a while because it has to build the entire
@@ -75,4 +131,34 @@ When you're ready to send changes for review, create a
 [pull request](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/about-pull-requests).
 
 To learn about the XLA code review philosophy, see
-[Code reviews](code_reviews.md).
+[Review Process](contributing.md#review-process).
+
+## Static Analysis (Clang-Tidy)
+
+To maintain code quality, XLA uses `clang-tidy` for static analysis and include
+verification.
+
+### How to Run
+
+There are two ways to execute checks. Running it against specific targets can be
+done with:
+
+```sh
+bazel build --config=clang-tidy //path/to:target1 //path/to:target2
+```
+
+There is a helper script that is also used in CI workflows that runs it against
+git diff from feature branch against the upstream main.
+
+```sh
+# Make sure the main is updated.
+git fetch origin main
+bazel run //build_tools/ci:run_clang_tidy
+```
+
+The helper script also allows to automagically fix clang-tidy errors where
+possible.
+
+```sh
+bazel run //build_tools/ci:run_clang_tidy -- --fix
+```

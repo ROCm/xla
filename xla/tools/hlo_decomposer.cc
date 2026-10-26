@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/tools/hlo_decomposer.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -24,7 +25,8 @@ limitations under the License.
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
-#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "tsl/platform/statusor.h"
 #include "xla/hlo/ir/hlo_clone_context.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -32,10 +34,35 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/call_graph.h"
 #include "xla/service/compilation_environments.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 namespace {
+
+// Appends the leaf elements of `instruction` to `elements`, decomposing any
+// tuple-shaped instruction via GetTupleElement instructions so that a flat
+// tuple can be constructed without nesting tuples.
+void AppendFlattenedTupleElements(HloInstruction* instruction,
+                                  HloComputation::Builder& builder,
+                                  std::vector<HloInstruction*>& elements) {
+  if (!instruction->shape().IsTuple()) {
+    elements.push_back(instruction);
+    return;
+  }
+  for (int64_t i = 0; i < instruction->shape().tuple_shapes().size(); ++i) {
+    HloInstruction* gte = builder.AddInstruction(
+        HloInstruction::CreateGetTupleElement(instruction, i));
+    AppendFlattenedTupleElements(gte, builder, elements);
+  }
+}
+
+void AddFlatTupleRoot(const std::vector<HloInstruction*>& instructions,
+                      HloComputation::Builder& builder) {
+  std::vector<HloInstruction*> tuple_elements;
+  for (HloInstruction* instruction : instructions) {
+    AppendFlattenedTupleElements(instruction, builder, tuple_elements);
+  }
+  builder.AddInstruction(HloInstruction::CreateTuple(tuple_elements));
+}
 
 // Returns whether it makes sense to run the given instruction in isolation
 // (e.g. whether it can run without dependent instructions).
@@ -107,8 +134,9 @@ absl::StatusOr<std::vector<std::unique_ptr<HloModule>>> DecomposeHloModule(
     return true;
   };
 
-  TF_ASSIGN_OR_RETURN(std::vector<std::unique_ptr<HloModule>> isolated_modules,
-                      Decompose(module));
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<std::unique_ptr<HloModule>> isolated_modules,
+      Decompose(module));
   for (auto& module : isolated_modules) {
     if (should_add_module(module.get())) {
       modules.push_back(std::move(module));
@@ -117,8 +145,11 @@ absl::StatusOr<std::vector<std::unique_ptr<HloModule>>> DecomposeHloModule(
   return modules;
 }
 
-std::unique_ptr<HloModule> ExtractInstructionIntoNewModule(
-    const std::vector<HloInstruction*>& instructions) {
+std::unique_ptr<HloModule> ExtractCollectiveOperationsIntoNewModule(
+    const std::vector<HloInstruction*>& instructions,
+    const absl::flat_hash_set<HloOpcode>& done_ops,
+    const absl::flat_hash_set<HloOpcode>& non_optimized_ops,
+    bool return_tuple) {
   CHECK(!instructions.empty());
   HloInstruction& first_instruction = *instructions[0];
   auto new_hlo_module = std::make_unique<HloModule>(
@@ -129,26 +160,52 @@ std::unique_ptr<HloModule> ExtractInstructionIntoNewModule(
   int parameter_number = 0;
   HloComputation::Builder builder("entry_computation");
   HloCloneContext clone_context(new_hlo_module.get());
-  std::vector<HloInstruction*> new_instructions;
+  std::vector<HloInstruction*> result_instructions;
+  absl::flat_hash_map<std::string, HloInstruction*> start_op_map;
   for (auto* hlo : instructions) {
-    std::vector<HloInstruction*> new_operands;
-    for (const HloInstruction* operand : hlo->operands()) {
-      std::unique_ptr<HloInstruction> new_parameter =
-          HloInstruction::CreateParameter(parameter_number, operand->shape(),
-                                          operand->name());
-      ++parameter_number;
-      new_operands.push_back(builder.AddInstruction(std::move(new_parameter)));
+    if (done_ops.contains(hlo->opcode())) {
+      std::vector<HloInstruction*> new_operands;
+      for (const HloInstruction* operand : hlo->operands()) {
+        if (start_op_map.contains(operand->name())) {
+          new_operands.push_back(start_op_map[operand->name()]);
+        }
+      }
+      result_instructions.push_back(
+          builder.AddInstruction(hlo->CloneWithNewOperands(
+              hlo->shape(), new_operands, &clone_context)));
+    } else {
+      std::vector<HloInstruction*> new_operands;
+      for (const HloInstruction* operand : hlo->operands()) {
+        std::unique_ptr<HloInstruction> new_parameter =
+            HloInstruction::CreateParameter(parameter_number, operand->shape(),
+                                            operand->name());
+        ++parameter_number;
+        new_operands.push_back(
+            builder.AddInstruction(std::move(new_parameter)));
+      }
+      std::unique_ptr<HloInstruction> new_instruction =
+          hlo->CloneWithNewOperands(hlo->shape(), new_operands, &clone_context);
+      HloInstruction* new_instr_ptr =
+          builder.AddInstruction(std::move(new_instruction));
+      if (non_optimized_ops.contains(hlo->opcode())) {
+        result_instructions.push_back(new_instr_ptr);
+      }
+      start_op_map[hlo->name()] = new_instr_ptr;
     }
-    std::unique_ptr<HloInstruction> new_instruction =
-        hlo->CloneWithNewOperands(hlo->shape(), new_operands, &clone_context);
-    new_instructions.push_back(
-        builder.AddInstruction(std::move(new_instruction)));
   }
 
-  std::unique_ptr<HloInstruction> tuple_instruction =
-      HloInstruction::CreateTuple(new_instructions);
-  builder.AddInstruction(std::move(tuple_instruction));
-  new_hlo_module->AddEntryComputationWithLayouts(builder.Build());
+  if (return_tuple) {
+    AddFlatTupleRoot(result_instructions, builder);
+  }
+  HloComputation* entry_computation =
+      new_hlo_module->AddEntryComputationWithLayouts(builder.Build());
+  // Preserve the execution thread so the extracted module stays internally
+  // consistent: a cloned instruction embedded below the entry (e.g. a fusion
+  // wrapping an op that lives on a non-"main" thread) still carries its
+  // original execution_thread, and HloVerifier requires the calling
+  // computation's thread to match.
+  entry_computation->SetExecutionThread(
+      first_instruction.parent()->execution_thread());
   return new_hlo_module;
 }
 
@@ -171,16 +228,19 @@ std::unique_ptr<HloModule> ExtractInstructionIntoNewModule(
   std::unique_ptr<HloInstruction> new_instruction =
       hlo.CloneWithNewOperands(hlo.shape(), new_operands, &clone_context);
   builder.AddInstruction(std::move(new_instruction));
-  new_hlo_module->AddEntryComputationWithLayouts(builder.Build());
+  HloComputation* entry_computation =
+      new_hlo_module->AddEntryComputationWithLayouts(builder.Build());
+  // See the comment in ExtractCollectiveOperationsIntoNewModule above.
+  entry_computation->SetExecutionThread(hlo.parent()->execution_thread());
   return new_hlo_module;
 }
 
-std::unique_ptr<HloModule> ExtractProducerConsumerIntoNewModule(
-    const HloInstruction& producer, const HloInstruction& consumer) {
+std::unique_ptr<HloModule> ExtractProducerConsumersIntoNewModule(
+    const HloInstruction& producer) {
   auto new_hlo_module =
       std::make_unique<HloModule>("extracted", HloModuleConfig{},
                                   std::make_unique<CompilationEnvironments>(
-                                      consumer.GetModule()->comp_envs()));
+                                      producer.GetModule()->comp_envs()));
   int parameter_number = 0;
   HloComputation::Builder builder("entry_computation");
   HloCloneContext clone_context(new_hlo_module.get());
@@ -201,33 +261,42 @@ std::unique_ptr<HloModule> ExtractProducerConsumerIntoNewModule(
   absl::flat_hash_map<const HloInstruction*, HloInstruction*> operand_map;
   operand_map.emplace(&producer, new_producer);
 
-  absl::InlinedVector<HloInstruction*, 8> consumer_operands;
-  for (const HloInstruction* operand : consumer.operands()) {
-    auto it = operand_map.find(operand);
-    if (it != operand_map.end()) {
-      consumer_operands.push_back(it->second);
-    } else {
-      HloInstruction* new_parameter =
-          builder.AddInstruction(HloInstruction::CreateParameter(
-              parameter_number, operand->shape(), operand->name()));
-      ++parameter_number;
-
-      consumer_operands.push_back(new_parameter);
+  std::vector<HloInstruction*> consumer_outputs;
+  for (const HloInstruction* c : producer.users()) {
+    absl::InlinedVector<HloInstruction*, 8> consumer_operands;
+    for (const HloInstruction* operand : c->operands()) {
+      auto it = operand_map.find(operand);
+      if (it != operand_map.end()) {
+        consumer_operands.push_back(it->second);
+      } else {
+        HloInstruction* new_parameter =
+            builder.AddInstruction(HloInstruction::CreateParameter(
+                parameter_number, operand->shape(), operand->name()));
+        ++parameter_number;
+        consumer_operands.push_back(new_parameter);
+      }
     }
+    consumer_outputs.push_back(builder.AddInstruction(c->CloneWithNewOperands(
+        c->shape(), consumer_operands, &clone_context)));
   }
-  builder.AddInstruction(consumer.CloneWithNewOperands(
-      consumer.shape(), consumer_operands, &clone_context));
 
-  new_hlo_module->AddEntryComputationWithLayouts(builder.Build());
+  if (consumer_outputs.size() > 1) {
+    AddFlatTupleRoot(consumer_outputs, builder);
+  }
+
+  HloComputation* entry_computation =
+      new_hlo_module->AddEntryComputationWithLayouts(builder.Build());
+  // See the comment in ExtractCollectiveOperationsIntoNewModule above.
+  entry_computation->SetExecutionThread(producer.parent()->execution_thread());
   return new_hlo_module;
 }
 
 std::unique_ptr<HloModule> ExtractComputationIntoNewModule(
     const HloComputation& computation) {
-  auto new_hlo_module =
-      std::make_unique<HloModule>("extracted", HloModuleConfig{},
-                                  std::make_unique<CompilationEnvironments>(
-                                      computation.parent()->comp_envs()));
+  auto new_hlo_module = std::make_unique<HloModule>(
+      std::string(computation.name()), HloModuleConfig{},
+      std::make_unique<CompilationEnvironments>(
+          computation.parent()->comp_envs()));
   HloCloneContext clone_context(new_hlo_module.get());
   new_hlo_module->AddEntryComputationWithLayouts(
       computation.CloneInContext(clone_context));

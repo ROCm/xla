@@ -18,19 +18,30 @@ limitations under the License.
 #include <string>
 
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "tsl/platform/statusor.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/util.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 namespace gpu {
 
+namespace {
+constexpr absl::string_view kCuDnnFusionKind = "__cudnn$fusion";
+}  // namespace
+
+bool IsCublasLtGemm(const HloInstruction& hlo) {
+  return IsCublasLtMatmul(hlo) || IsCublasLtMatmulF8(hlo) ||
+         IsCublasLtMatmulMx(hlo) || IsCublasLtGroupedMatmul(hlo);
+}
+
 bool IsCublasGemm(const HloInstruction& hlo) {
-  return IsLegacyCublasMatmul(hlo) || IsCublasLtMatmul(hlo) ||
-         IsCublasLtMatmulF8(hlo);
+  return IsLegacyCublasMatmul(hlo) || IsCublasLtGemm(hlo);
 }
 
 bool IsLegacyCublasMatmul(const HloInstruction& hlo) {
@@ -43,9 +54,31 @@ bool IsCublasLtMatmul(const HloInstruction& hlo) {
          hlo.custom_call_target() == kCublasLtMatmulCallTarget;
 }
 
+bool IsNonFusedCublasLtMatmul(const HloInstruction& hlo) {
+  if (!IsCublasLtMatmul(hlo)) {
+    return false;
+  }
+  auto gpu_config = hlo.backend_config<GpuBackendConfig>();
+  if (!gpu_config.ok()) {
+    return false;
+  }
+  const auto& gemm_config = gpu_config->gemm_backend_config();
+  return gemm_config.epilogue() == GemmBackendConfig::DEFAULT;
+}
+
+bool IsCublasLtGroupedMatmul(const HloInstruction& hlo) {
+  return hlo.opcode() == HloOpcode::kCustomCall &&
+         hlo.custom_call_target() == kCublasLtGroupedMatmulCallTarget;
+}
+
 bool IsCublasLtMatmulF8(const HloInstruction& hlo) {
   return hlo.opcode() == HloOpcode::kCustomCall &&
          hlo.custom_call_target() == kCublasLtMatmulF8CallTarget;
+}
+
+bool IsCublasLtMatmulMx(const HloInstruction& hlo) {
+  return hlo.opcode() == HloOpcode::kCustomCall &&
+         hlo.custom_call_target() == kCublasLtMatmulMxCallTarget;
 }
 
 bool IsTriangularSolve(const HloInstruction& hlo) {
@@ -53,47 +86,21 @@ bool IsTriangularSolve(const HloInstruction& hlo) {
          hlo.custom_call_target() == kTriangularSolveCallTarget;
 }
 
-const absl::string_view kGemmCallTarget = "__cublas$gemm";
-const absl::string_view kCublasLtMatmulCallTarget = "__cublas$lt$matmul";
-const absl::string_view kCublasLtMatmulF8CallTarget = "__cublas$lt$matmul$f8";
-const absl::string_view kTriangularSolveCallTarget = "__cublas$triangularSolve";
+bool IsCudnnFusion(const HloInstruction& hlo) {
+  if (hlo.opcode() != HloOpcode::kFusion) {
+    return false;
+  }
 
-const absl::string_view kCudnnConvBackwardInputCallTarget =
-    "__cudnn$convBackwardInput";
-const absl::string_view kCudnnConvBackwardFilterCallTarget =
-    "__cudnn$convBackwardFilter";
-const absl::string_view kCudnnConvBiasActivationForwardCallTarget =
-    "__cudnn$convBiasActivationForward";
-const absl::string_view kCudnnConvForwardCallTarget = "__cudnn$convForward";
-const absl::string_view kCudnnConvForwardGraphCallTarget =
-    "__cudnn$convForwardGraph";
-const absl::string_view kCudnnConvReorderFilterCallTarget =
-    "__cudnn$convReorderFilter";
-const absl::string_view kCudnnConvReorderFilterAndBiasCallTarget =
-    "__cudnn$convReorderFilterAndBias";
+  if (hlo.fusion_kind() != HloInstruction::FusionKind::kCustom) {
+    return false;
+  }
 
-const absl::string_view kCudnnNormCallTarget = "__cudnn$norm";
-
-// fMHA forward call targets.
-const absl::string_view kCudnnfMHASoftmaxCallTarget = "__cudnn$fmhaSoftmax";
-const absl::string_view kCudnnfMHAScaleBiasSoftmaxDropoutCallTarget =
-    "__cudnn$fmhaScaleBiasSoftmaxDropout";
-const absl::string_view kCudnnfMHAScaleBiasSoftmaxCallTarget =
-    "__cudnn$fmhaScaleBiasSoftmax";
-const absl::string_view kCudnnfMHASoftmaxDropoutCallTarget =
-    "__cudnn$fmhaSoftmaxDropout";
-
-// fMHA backward call targets.
-const absl::string_view kCudnnfMHASoftmaxBackwardCallTarget =
-    "__cudnn$fmhaSoftmaxBackward";
-const absl::string_view kCudnnfMHAScaleBiasSoftmaxDropoutBackwardCallTarget =
-    "__cudnn$fmhaScaleBiasSoftmaxDropoutBackward";
-const absl::string_view kCudnnfMHAScaleBiasSoftmaxBackwardCallTarget =
-    "__cudnn$fmhaScaleBiasSoftmaxBackward";
-const absl::string_view kCudnnfMHASoftmaxDropoutBackwardCallTarget =
-    "__cudnn$fmhaSoftmaxDropoutBackward";
-
-const absl::string_view kCubDeviceRadixSortTarget = "__cub$DeviceRadixSort";
+  auto gpu_config = hlo.backend_config<GpuBackendConfig>();
+  if (gpu_config.ok()) {
+    return gpu_config->fusion_backend_config().kind() == kCuDnnFusionKind;
+  }
+  return false;
+}
 
 bool IsCustomCallToDnnConvolution(const HloInstruction& hlo) {
   if (hlo.opcode() != HloOpcode::kCustomCall) {
@@ -122,6 +129,16 @@ bool IsCustomCallToDnnNorm(const HloInstruction& hlo) {
   }
   const auto& target = hlo.custom_call_target();
   return target == kCudnnNormCallTarget;
+}
+
+bool IsFwdCustomCallTofMHAF8(const HloInstruction& hlo) {
+  return hlo.opcode() == HloOpcode::kCustomCall &&
+         hlo.custom_call_target() == kCudnnfMHASoftmaxF8CallTarget;
+}
+
+bool IsBwdCustomCallTofMHAF8(const HloInstruction& hlo) {
+  return hlo.opcode() == HloOpcode::kCustomCall &&
+         hlo.custom_call_target() == kCudnnfMHASoftmaxBackwardF8CallTarget;
 }
 
 bool IsFwdCustomCallTofMHA(const HloInstruction& hlo) {
@@ -157,9 +174,19 @@ bool IsCustomCallTofMHA(const HloInstruction& hlo) {
   return (IsFwdCustomCallTofMHA(hlo) || IsBwdCustomCallTofMHA(hlo));
 }
 
-bool IsCubDeviceRadixSort(const HloInstruction& hlo) {
+bool IsCustomCallTofMHAF8(const HloInstruction& hlo) {
+  return IsFwdCustomCallTofMHAF8(hlo) || IsBwdCustomCallTofMHAF8(hlo);
+}
+
+bool IsCustomCallToBlockScaledDot(const HloInstruction& hlo) {
   return hlo.opcode() == HloOpcode::kCustomCall &&
-         hlo.custom_call_target() == kCubDeviceRadixSortTarget;
+         hlo.custom_call_target() == kCudnnBlockScaledDotCallTarget;
+}
+
+bool IsCubDeviceRadixSortNoScratchSize(const HloInstruction& hlo) {
+  return hlo.opcode() == HloOpcode::kCustomCall &&
+         hlo.custom_call_target() ==
+             kCubDeviceRadixSortUnassignedScratchSizeTarget;
 }
 
 absl::StatusOr<CudnnConvKind> GetCudnnConvKind(
@@ -208,9 +235,12 @@ absl::StatusOr<CudnnfMHAKind> GetCudnnfMHAKind(
     return CudnnfMHAKind::kScaleBiasSoftmax;
   if (target == kCudnnfMHAScaleBiasSoftmaxDropoutCallTarget)
     return CudnnfMHAKind::kScaleBiasSoftmaxDropout;
+  if (target == kCudnnfMHASoftmaxF8CallTarget) return CudnnfMHAKind::kSoftmaxF8;
   // backward
   if (target == kCudnnfMHASoftmaxDropoutBackwardCallTarget)
     return CudnnfMHAKind::kBackwardSoftmaxDropout;
+  if (target == kCudnnfMHASoftmaxBackwardF8CallTarget)
+    return CudnnfMHAKind::kBackwardSoftmaxF8;
   if (target == kCudnnfMHASoftmaxBackwardCallTarget)
     return CudnnfMHAKind::kBackwardSoftmax;
   if (target == kCudnnfMHAScaleBiasSoftmaxBackwardCallTarget)
@@ -222,6 +252,8 @@ absl::StatusOr<CudnnfMHAKind> GetCudnnfMHAKind(
 
 std::string CudnnfMHAKindToString(CudnnfMHAKind kind) {
   switch (kind) {
+    case CudnnfMHAKind::kSoftmaxF8:
+      return "fmha_softmax_f8";
     case CudnnfMHAKind::kSoftmax:
       return "fmha_softmax";
     case CudnnfMHAKind::kSoftmaxDropout:
@@ -231,6 +263,8 @@ std::string CudnnfMHAKindToString(CudnnfMHAKind kind) {
     case CudnnfMHAKind::kScaleBiasSoftmax:
       return "fmha_bias_softmax";
     // backward
+    case CudnnfMHAKind::kBackwardSoftmaxF8:
+      return "fmha_softmax_backward_f8";
     case CudnnfMHAKind::kBackwardSoftmax:
       return "fmha_softmax_backward";
     case CudnnfMHAKind::kBackwardSoftmaxDropout:
@@ -276,8 +310,8 @@ absl::StatusOr<std::string> GetFMHAInstructionPrefix(
 
 // Give fmha instruction a more useful name than "custom-call.42".
 absl::Status SetFMHAInstructionName(HloModule* module, HloInstruction* fmha) {
-  TF_ASSIGN_OR_RETURN(std::string fmha_prefix,
-                      GetFMHAInstructionPrefix(fmha->custom_call_target()));
+  ABSL_ASSIGN_OR_RETURN(std::string fmha_prefix,
+                        GetFMHAInstructionPrefix(fmha->custom_call_target()));
   module->SetAndUniquifyInstrName(fmha, fmha_prefix);
   return absl::OkStatus();
 }

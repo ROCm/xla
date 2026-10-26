@@ -20,30 +20,42 @@ limitations under the License.
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "mlir/IR/BuiltinOps.h"
 #include "xla/client/executable_build_options.h"
-#include "xla/client/xla_computation.h"
+#include "xla/hlo/builder/xla_computation.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/layout.h"
 #include "xla/pjrt/layout_mode.h"
+#include "xla/service/computation_layout.h"
 #include "xla/service/computation_placer.h"
 #include "xla/shape.h"
-#include "xla/statusor.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
 
 using MemorySpaceColor = int;
+// Make sure to choose a delimiter that will never show up in the attribute
+// strings (e.g., Layout or Memory Space strings).
+inline constexpr absl::string_view kAttrValueDelimiter = ";";
+
+inline constexpr absl::string_view kArgLayoutModesAttr = "arg_layout_modes";
+inline constexpr absl::string_view kOutLayoutModesAttr = "out_layout_modes";
+inline constexpr absl::string_view kArgMemorySpacesAttr = "arg_memory_spaces";
+inline constexpr absl::string_view kOutMemorySpacesAttr = "out_memory_spaces";
 
 // Returns the num_replicas, num_partitions and device assignment given a
 // ExecutableBuildOptions and whether we want a portable executable.
 absl::Status ParseDeviceAssignmentCompileOptions(
     bool compile_portable_executable, ExecutableBuildOptions* build_options,
-    std::function<StatusOr<DeviceAssignment>(int, int)>
+    std::function<absl::StatusOr<DeviceAssignment>(int, int)>
         GetDefaultDeviceAssignmentFunction,
     int* num_replicas, int* num_partitions,
     std::shared_ptr<DeviceAssignment>* device_assignment);
@@ -68,18 +80,6 @@ absl::StatusOr<std::vector<MemorySpaceColor>> GetArgMemoryKinds(
 absl::StatusOr<std::vector<MemorySpaceColor>> GetOutputMemoryKinds(
     mlir::ModuleOp module);
 
-// Populates the frontend attributes "arg_layout_mode" and "out_layout_mode" in
-// xla_computation based on `module`. This function must be called before the
-// LayoutMode getters below work correctly on `computation`.
-absl::Status AddLayoutModesToFrontendAttrs(mlir::ModuleOp module,
-                                           XlaComputation& xla_computation);
-
-// Populates the frontend attributes "arg_memory_kinds" and "out_memory_kinds"
-// in xla_computation based on `module`. This function must be called before the
-// LayoutMode getters below work correctly on `computation`.
-absl::Status AddMemoryKindsToFrontendAttrs(mlir::ModuleOp module,
-                                           XlaComputation& xla_computation);
-
 // Returns the LayoutMode for each argument of the computations. Checks for the
 // "arg_layout_mode" frontend attribute, and if not present, assumes
 // LayoutMode::Mode::kDefault.
@@ -100,6 +100,22 @@ absl::StatusOr<std::vector<MemorySpaceColor>> GetArgMemoryKinds(
 absl::StatusOr<std::vector<MemorySpaceColor>> GetOutputMemoryKinds(
     const XlaComputation& computation);
 
+// Populates the frontend attributes map with serialized layout modes and
+// memory spaces.
+void PopulateFrontendAttributesMap(
+    google::protobuf::Map<std::string, std::string>& frontend_attrs_map,
+    const std::vector<LayoutMode>& arg_layout_modes,
+    const std::vector<LayoutMode>& out_layout_modes,
+    const std::vector<MemorySpaceColor>& arg_memory_spaces,
+    const std::vector<MemorySpaceColor>& out_memory_spaces);
+
+// Returns xla shape with layout set to reflect the given layout mode.
+absl::StatusOr<Shape> LayoutModeToXlaShape(
+    const LayoutMode& layout_mode, const Shape& unsharded_shape,
+    const Shape& sharded_shape, MemorySpaceColor memory_space,
+    std::function<absl::StatusOr<Shape>(Shape)>
+        choose_compact_layout_for_shape_function);
+
 // Returns (arg shapes, output shape) with properly-set Layouts that can
 // be passed to XLA to reflect arg_layout_modes and out_layout_modes.
 absl::StatusOr<std::pair<std::vector<Shape>, Shape>> LayoutModesToXlaShapes(
@@ -107,7 +123,7 @@ absl::StatusOr<std::pair<std::vector<Shape>, Shape>> LayoutModesToXlaShapes(
     std::vector<LayoutMode> out_layout_modes,
     const std::vector<MemorySpaceColor>& arg_memory_spaces,
     const std::vector<MemorySpaceColor>& out_memory_spaces,
-    std::function<StatusOr<Shape>(Shape)>
+    std::function<absl::StatusOr<Shape>(Shape)>
         choose_compact_layout_for_shape_function);
 
 // Generates useful data structures for communciating desired layouts to XLA:
@@ -120,7 +136,7 @@ LayoutModesToXla(const XlaComputation& computation,
                  std::vector<LayoutMode> out_layout_modes,
                  const std::vector<MemorySpaceColor>& arg_memory_spaces,
                  const std::vector<MemorySpaceColor>& out_memory_spaces,
-                 std::function<StatusOr<Shape>(Shape)>
+                 std::function<absl::StatusOr<Shape>(Shape)>
                      choose_compact_layout_for_shape_function,
                  ExecutableBuildOptions& build_options);
 
@@ -128,18 +144,21 @@ LayoutModesToXla(const XlaComputation& computation,
 // ExecutableBuildOptions.
 absl::Status DetermineArgumentLayoutsFromCompileOptions(
     const XlaComputation& computation,
-    std::function<StatusOr<Shape>(Shape)>
+    std::function<absl::StatusOr<Shape>(Shape)>
         choose_compact_layout_for_shape_function,
     std::optional<std::vector<Shape>>& argument_layouts,
     ExecutableBuildOptions* build_options,
     std::vector<const Shape*>* argument_layout_pointers);
 
 // Executables can donate buffers so that buffers can be aliased from inputs
-// to outputs. This function returns a sorted vector of parameters that must be
+// to outputs. This function returns a sorted vector of parameters that may be
 // donated when executable is run. tuple_inputs reflects the option that
 // executable was compiled with.
-absl::StatusOr<std::vector<int>> ComputeParametersThatMustBeDonated(
+absl::StatusOr<std::vector<int>> ComputeParametersThatMayBeDonated(
     const HloModule& hlo_module, bool tuple_inputs);
+absl::StatusOr<std::vector<int>> ComputeParametersThatMayBeDonated(
+    const HloInputOutputAliasConfig& config, int num_parameters,
+    bool tuple_inputs);
 
 // Return max parallelism level.
 int DefaultThreadPoolSize();
@@ -165,6 +184,28 @@ absl::Status TestBufferDonationClashes(
     void* opaque_key,
     absl::flat_hash_map<const void*, std::pair<bool, int>>& donation_clashes,
     bool is_donated, int arg_idx, int replica, int partition);
+
+// Capitalizes the first character in a string, which can be empty.
+std::string MakeAsciiTitlecase(absl::string_view s);
+void MakeAsciiTitlecase(std::string* s);
+
+// Returns a list of each parameter's layout. If the parameters are tupled,
+// returns an untupled list. Must only be called if all array parameters have
+// layouts set. Non-array parameters (such as token or opaque parameters) are
+// returned as default-constructed `xla::Layout()`; this is a different
+// behavior from `ComputationLayout::FlattenedParameterLayouts()`, and it is
+// geared towards use with PjRt APIs.
+absl::StatusOr<std::vector<Layout>> FlattenedParameterLayouts(
+    const ComputationLayout& computation_layout);
+
+// Returns a list of each output's layout. If the result shape is a tuple,
+// returns an untupled list. Must only be called if all array outputs have
+// layouts set. Non-array outputs (such as token or opaque outputs) are
+// returned as default-constructed `xla::Layout()` (which is a different
+// behavior from `ComputationLayout::FlattenedResultLayouts()`, and it is
+// geared towards use with PjRt APIs.
+absl::StatusOr<std::vector<Layout>> FlattenedResultLayouts(
+    const ComputationLayout& computation_layout);
 
 }  // namespace xla
 

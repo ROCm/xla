@@ -23,23 +23,30 @@
 #include <string>
 #include <vector>
 
+#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/container/node_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
-#include "llvm/Support/ExtensibleRTTI.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/layout.h"
 #include "xla/pjrt/pjrt_executable.h"
+#include "xla/pjrt/pjrt_layout.h"
 #include "xla/python/ifrt/array.h"
+#include "xla/python/ifrt/attribute_map.h"
 #include "xla/python/ifrt/client.h"
 #include "xla/python/ifrt/device.h"
+#include "xla/python/ifrt/device_list.h"
 #include "xla/python/ifrt/executable.h"
-#include "xla/python/ifrt/future.h"
 #include "xla/python/ifrt/host_callback.h"
+#include "xla/python/ifrt/rtti.h"
+#include "xla/python/ifrt/user_context.h"
 #include "xla/python/ifrt_proxy/client/rpc_helper.h"
+#include "xla/tsl/concurrency/future.h"
 #include "xla/tsl/concurrency/ref_count.h"
 #include "xla/xla_data.pb.h"
 
@@ -48,16 +55,13 @@ namespace ifrt {
 namespace proxy {
 
 class LoadedExecutable final
-    : public llvm::RTTIExtends<LoadedExecutable, xla::ifrt::LoadedExecutable> {
+    : public RTTIExtends<LoadedExecutable, xla::ifrt::LoadedExecutable> {
  public:
   LoadedExecutable(xla::ifrt::Client* client,
                    std::shared_ptr<RpcHelper> rpc_helper, uint64_t handle,
-                   std::string name, int num_devices,
-                   std::vector<xla::ifrt::LoadedExecutable::LogicalDeviceIds>
-                       addressable_device_logical_device_ids,
+                   std::string name, std::optional<DeviceListRef> devices,
                    std::vector<xla::ifrt::Device*> addressable_devices,
                    absl::StatusOr<std::optional<std::string>> fingerprint,
-                   Future<> ready_future,
                    std::vector<tsl::RCReference<xla::ifrt::LoadedHostCallback>>
                        loaded_host_callbacks,
                    std::vector<uint64_t> loaded_host_callback_handles);
@@ -67,39 +71,48 @@ class LoadedExecutable final
   xla::ifrt::Client* client() const override;
   absl::string_view name() const override;
   absl::StatusOr<std::optional<std::string>> Fingerprint() const override;
+  absl::StatusOr<std::shared_ptr<const xla::ifrt::ExecutableVersion>>
+  executable_version() const override {
+    return absl::UnimplementedError("Not implemented");
+  }
   absl::StatusOr<std::string> Serialize() const override;
-  Future<> GetReadyFuture() const override;
+  absl::StatusOr<std::string> GetHumanReadableProgramText() const override;
+  xla::ifrt::UserContextRef user_context() const override {
+    return user_context_;
+  }
 
-  int num_devices() const override;
   int64_t SizeOfGeneratedCodeInBytes() const override;
   absl::StatusOr<CompiledMemoryStats> GetCompiledMemoryStats() const override;
 
   std::optional<std::vector<OpSharding>> GetParameterShardings() const override;
+  absl::StatusOr<absl::Span<const int>> GetDonatableInputIndices()
+      const override;
   std::optional<std::vector<OpSharding>> GetOutputShardings() const override;
-  absl::StatusOr<std::vector<std::unique_ptr<Layout>>> GetParameterLayouts()
-      const override;
-  absl::StatusOr<std::vector<std::unique_ptr<Layout>>> GetOutputLayouts()
-      const override;
+  absl::StatusOr<std::vector<std::shared_ptr<const xla::PjRtLayout>>>
+  GetParameterLayouts() const override;
+  absl::StatusOr<std::vector<std::shared_ptr<const xla::PjRtLayout>>>
+  GetOutputLayouts() const override;
   absl::StatusOr<std::vector<std::vector<absl::string_view>>>
   GetOutputMemoryKinds() const override;
   absl::StatusOr<std::vector<std::shared_ptr<HloModule>>> GetHloModules()
       const override;
 
-  absl::StatusOr<absl::flat_hash_map<std::string,
-                                     xla::ifrt::Executable::CostAnalysisValue>>
-  GetCostAnalysis() const override;
+  absl::StatusOr<xla::ifrt::AttributeMap> GetCostAnalysis() const override;
 
+  // The following may return an OK status even if the underlying IFRT backend
+  // would (eagerly) return an error. If that happens, the fields of the
+  // returned `ExecuteResult` will resolve to the error (for example,
+  // `result->status.Await()` will return the error, where `result` is the
+  // returned value from the `Execute()` call).
   absl::StatusOr<ExecuteResult> Execute(
-      absl::Span<tsl::RCReference<xla::ifrt::Array>> args,
-      const ExecuteOptions& options,
-      std::optional<DeviceList> devices) override;
+      absl::Span<xla::ifrt::ArrayRef> args, const ExecuteOptions& options,
+      std::optional<xla::ifrt::DeviceListRef> devices) override;
+  absl::StatusOr<ExecuteBundleResult> ExecuteBundle(
+      absl::Span<BundleRef> args, const ExecuteOptions& options) override;
 
-  Future<> Delete() override;
-  bool IsDeleted() const override;
+  std::optional<DeviceListRef> devices() const override;
 
-  absl::Span<const LogicalDeviceIds> addressable_device_logical_ids()
-      const override;
-  absl::Span<xla::ifrt::Device* const> addressable_devices() const override;
+  void SetDeleteOptions(const DeleteOptions& options) override;
 
   static char ID;  // NOLINT
 
@@ -108,8 +121,10 @@ class LoadedExecutable final
     std::optional<std::vector<xla::OpSharding>> parameter_shardings;
     std::optional<std::vector<xla::OpSharding>> output_shardings;
 
-    absl::StatusOr<std::vector<xla::Layout>> parameter_layouts;
-    absl::StatusOr<std::vector<xla::Layout>> output_layouts;
+    absl::StatusOr<std::vector<std::shared_ptr<const xla::PjRtLayout>>>
+        parameter_layouts;
+    absl::StatusOr<std::vector<std::shared_ptr<const xla::PjRtLayout>>>
+        output_layouts;
 
     // Elements in `output_memory_kinds` point to elements in `memory_kinds`.
     // Required since `GetOutputMemoryKinds()` returns `absl::string_view`.
@@ -117,27 +132,53 @@ class LoadedExecutable final
     absl::node_hash_set<std::string> memory_kinds;
     absl::StatusOr<std::vector<std::vector<absl::string_view>>>
         output_memory_kinds;
+
+    absl::StatusOr<std::vector<int>> donatable_input_indices;
+
+    std::optional<absl::flat_hash_set<int>> donatable_input_indices_set;
+
+    absl::StatusOr<CompiledMemoryStats> compiled_memory_stats;
+
+    int64_t size_of_generated_code_in_bytes;
   };
 
-  void PollLoadedHostCallback(
-      uint64_t handle,
-      tsl::RCReference<xla::ifrt::LoadedHostCallback> loaded_host_callback);
+  tsl::Future<> FetchExecuteResult(uint64_t status_handle,
+                                   std::optional<uint64_t> device_time_key);
 
   xla::ifrt::Client* client_;
   std::shared_ptr<RpcHelper> rpc_helper_;
 
   const uint64_t handle_;
   const std::string name_;
-  const int num_devices_;
-  const std::vector<xla::ifrt::LoadedExecutable::LogicalDeviceIds>
-      addressable_device_logical_device_ids_;
-  const std::vector<xla::ifrt::Device*> addressable_devices_;
+  const std::optional<DeviceListRef> devices_;
   const absl::StatusOr<std::optional<std::string>> fingerprint_;
-  const Future<> ready_future_;
+  const xla::ifrt::UserContextRef user_context_;
+
+  class OutputSpecCache;
+  const std::unique_ptr<OutputSpecCache> output_spec_cache_;
 
   // Metadata queried when the executable is created. Declared as `mutable`
   // since `Future::Await()` is not const.
-  mutable Future<std::shared_ptr<Metadata>> metadata_future_;
+  mutable tsl::Future<std::shared_ptr<Metadata>> metadata_future_;
+
+  // The cached value of `GetCostAnalysis()`. The value is obtained from the
+  // proxy-server the first time that the user invokes `GetCostAnalysis()`, and
+  // is cached afterwards.
+  mutable absl::Mutex cost_analysis_mu_;
+  mutable std::optional<absl::StatusOr<xla::ifrt::AttributeMap>>
+      cost_analysis_response_ ABSL_GUARDED_BY(cost_analysis_mu_);
+
+  // The cached value of `GetHumanReadableProgramText()`. The value is obtained
+  // from the proxy-server the first time that the user invokes
+  // `GetHumanReadableProgramText()`, and is cached afterwards.
+  mutable absl::Mutex human_readable_program_text_mu_;
+  mutable std::optional<absl::StatusOr<std::string>>
+      human_readable_program_text_
+          ABSL_GUARDED_BY(human_readable_program_text_mu_);
+
+  absl::Mutex delete_options_mu_;
+  std::optional<DeleteOptions> delete_options_
+      ABSL_GUARDED_BY(delete_options_mu_);
 };
 
 }  // namespace proxy

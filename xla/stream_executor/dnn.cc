@@ -38,12 +38,15 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/types/span.h"
-#include "xla/stream_executor/data_type.h"
-#include "xla/stream_executor/device_memory.h"
-#include "xla/stream_executor/numeric_options.h"
-#include "tsl/lib/strings/proto_serialization.h"
 #include "tsl/platform/ml_dtypes.h"
-#include "tsl/protobuf/dnn.pb.h"
+#include "xla/stream_executor/data_type.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/engine_options.h"
+#include "xla/stream_executor/scratch_allocator.h"
+#include "xla/stream_executor/stream.h"
+#include "xla/tsl/lib/strings/proto_serialization.h"
+#include "xla/tsl/protobuf/dnn.pb.h"
+#include "xla/util.h"
 
 namespace stream_executor {
 namespace dnn {
@@ -54,7 +57,9 @@ bool ProtoMapIsSubset(const google::protobuf::Map<int64_t, int64_t>& x,
                       const google::protobuf::Map<int64_t, int64_t>& y) {
   for (const auto& ypair : y) {
     const auto it = x.find(ypair.first);
-    if (it == x.end() || it->second != ypair.second) return false;
+    if (it == x.end() || it->second != ypair.second) {
+      return false;
+    }
   }
   return true;
 }
@@ -66,10 +71,14 @@ bool ProtoMapsEqual(const google::protobuf::Map<int64_t, int64_t>& x,
 
 }  // namespace
 
+constexpr DataType ToDataType<tsl::float4_e2m1fn>::value;
+constexpr DataType ToDataType<tsl::float8_e3m4>::value;
+constexpr DataType ToDataType<tsl::float8_e4m3>::value;
 constexpr DataType ToDataType<tsl::float8_e4m3fn>::value;
 constexpr DataType ToDataType<tsl::float8_e4m3fnuz>::value;
 constexpr DataType ToDataType<tsl::float8_e5m2>::value;
 constexpr DataType ToDataType<tsl::float8_e5m2fnuz>::value;
+constexpr DataType ToDataType<tsl::float8_e8m0fnu>::value;
 constexpr DataType ToDataType<float>::value;
 constexpr DataType ToDataType<double>::value;
 constexpr DataType ToDataType<Eigen::half>::value;
@@ -84,7 +93,6 @@ AlgorithmDesc::AlgorithmDesc(
     int64_t engine_id,
     const std::vector<std::pair<int64_t, int64_t>>& tuning_knobs,
     std::optional<uint64_t> workspace_size) {
-  proto_.set_is_cudnn_frontend(true);
   proto_.set_algo_id(engine_id);
   if (workspace_size) {
     proto_.mutable_workspace_size()->set_value(*workspace_size);
@@ -99,34 +107,23 @@ uint64_t AlgorithmDesc::hash() const {
 }
 
 bool AlgorithmDesc::operator==(const AlgorithmDesc& other) const {
-  if (is_cudnn_frontend()) {
-    return other.is_cudnn_frontend() && algo_id() == other.algo_id() &&
-           ProtoMapsEqual(proto_.tuning_knobs(), other.proto_.tuning_knobs());
-  }
-  return !other.is_cudnn_frontend() && algo_id() == other.algo_id() &&
-         tensor_ops_enabled() == other.tensor_ops_enabled();
+  return algo_id() == other.algo_id() &&
+         ProtoMapsEqual(proto_.tuning_knobs(), other.proto_.tuning_knobs());
 }
 
 std::string AlgorithmDesc::ToString() const {
-  if (is_cudnn_frontend()) {
-    // Format similarly to cudnn_frontend::ExecutionPlan::getTag(), e.g.
-    // "eng2{k1=2,k3=4}".
-    absl::btree_map<int64_t, int64_t> tuning_knobs_sorted;
-    absl::c_copy(proto_.tuning_knobs(),
-                 std::inserter(tuning_knobs_sorted, tuning_knobs_sorted.end()));
-    return absl::StrFormat(
-        "eng%d{%s}", proto_.algo_id(),
-        absl::StrJoin(
-            tuning_knobs_sorted, ",",
-            [](std::string* out, const std::pair<int64_t, int64_t>& pair) {
-              absl::StrAppendFormat(out, "k%d=%d", pair.first, pair.second);
-            }));
-  }
-  if (tensor_ops_enabled()) {
-    return absl::StrCat(algo_id(), "#TC");
-  } else {
-    return absl::StrCat(algo_id());
-  }
+  // Format similarly to cudnn_frontend::ExecutionPlan::getTag(), e.g.
+  // "eng2{k1=2,k3=4}".
+  absl::btree_map<int64_t, int64_t> tuning_knobs_sorted;
+  absl::c_copy(proto_.tuning_knobs(),
+               std::inserter(tuning_knobs_sorted, tuning_knobs_sorted.end()));
+  return absl::StrFormat(
+      "eng%d{%s}", proto_.algo_id(),
+      absl::StrJoin(
+          tuning_knobs_sorted, ",",
+          [](std::string* out, const std::pair<int64_t, int64_t>& pair) {
+            absl::StrAppendFormat(out, "k%d=%d", pair.first, pair.second);
+          }));
 }
 
 std::vector<std::pair<int64_t, int64_t>> AlgorithmDesc::TuningKnobs() const {
@@ -139,17 +136,17 @@ std::vector<std::pair<int64_t, int64_t>> AlgorithmDesc::TuningKnobs() const {
 }
 
 absl::Status DnnSupport::GetConvolveRunners(
-    bool /* use_cudnn_frontend */, dnn::ConvolutionKind /*kind*/,
-    dnn::DataType /*input_type*/, dnn::DataType /*output_type*/,
-    Stream* /*stream*/, const dnn::BatchDescriptor& /*input_descriptor*/,
-    DeviceMemoryBase /*input_data*/,
+    dnn::ConvolutionKind /*kind*/, dnn::DataType /*input_type*/,
+    dnn::DataType /*output_type*/, Stream* /*stream*/,
+    const dnn::BatchDescriptor& /*input_descriptor*/,
+    DeviceAddressBase /*input_data*/,
     const dnn::FilterDescriptor& /*filter_descriptor*/,
-    DeviceMemoryBase /*filter_data*/,
+    DeviceAddressBase /*filter_data*/,
     const dnn::BatchDescriptor& /*output_descriptor*/,
-    DeviceMemoryBase /*output_data*/,
+    DeviceAddressBase /*output_data*/,
     const dnn::ConvolutionDescriptor& /*convolution_descriptor*/,
     bool /*use_fallback*/, ScratchAllocator* /*scratch_allocator*/,
-    const NumericOptions& /*numeric_options*/,
+    const EngineOptions& /*engine_options*/,
     std::vector<std::unique_ptr<const dnn::ConvRunner>>* /*exec_plans*/) {
   return absl::UnimplementedError("GetConvolveRunners not implemented.");
 }
@@ -172,7 +169,7 @@ absl::Status DnnSupport::GetGraphConvolveRunners(
     const dnn::FilterDescriptor& /*filter_descriptor*/,
     const dnn::BatchDescriptor& /*output_descriptor*/,
     const dnn::ConvolutionDescriptor& /*convolution_descriptor*/,
-    bool /*use_fallback*/, const NumericOptions& /*numeric_options*/,
+    bool /*use_fallback*/, const EngineOptions& /*engine_options*/,
     std::vector<std::unique_ptr<const dnn::GraphConvRunner>>* /*exec_plans*/,
     std::string /*serialized_graph*/) {
   return absl::UnimplementedError("GetGraphConvolveRunners not implemented.");
@@ -192,26 +189,25 @@ DnnSupport::GraphConvolveRunnerFromDesc(
 }
 
 absl::Status DnnSupport::GetFusedConvolveRunners(
-    bool use_cudnn_frontend, dnn::ConvolutionKind kind,
-    dnn::DataType element_type, dnn::DataType bias_type,
-    dnn::DataType output_type, double conv_input_scale, double side_input_scale,
-    double leakyrelu_alpha, Stream* stream,
+    dnn::ConvolutionKind kind, dnn::DataType element_type,
+    dnn::DataType bias_type, dnn::DataType output_type, double conv_input_scale,
+    double side_input_scale, double leakyrelu_alpha, Stream* stream,
     const dnn::BatchDescriptor& input_descriptor,
     const dnn::FilterDescriptor& filter_descriptor,
     const dnn::BatchDescriptor& bias_descriptor,
     const dnn::BatchDescriptor& output_descriptor,
     const dnn::ConvolutionDescriptor& convolution_descriptor, bool use_fallback,
-    dnn::ActivationMode activation_mode, const NumericOptions& numeric_options,
+    dnn::ActivationMode activation_mode, const EngineOptions& engine_options,
     std::vector<std::unique_ptr<const dnn::FusedConvRunner>>* out_exec_plans) {
   return absl::UnimplementedError("GetFusedConvolveRunners not implemented.");
 }
 
 absl::Status DnnSupport::GetFusedMatmulRunners(
-    bool use_cudnn_frontend, dnn::DataType element_type,
-    dnn::DataType bias_type, dnn::DataType output_type, Stream* stream,
-    bool trans_a, bool trans_b, uint64_t m, uint64_t n, uint64_t k, int64_t lda,
-    int64_t ldb, int64_t ldc, dnn::ActivationMode activation_mode,
-    bool use_fallback, const NumericOptions& numeric_options,
+    dnn::DataType element_type, dnn::DataType bias_type,
+    dnn::DataType output_type, Stream* stream, bool trans_a, bool trans_b,
+    uint64_t m, uint64_t n, uint64_t k, int64_t lda, int64_t ldb, int64_t ldc,
+    dnn::ActivationMode activation_mode, bool use_fallback,
+    const EngineOptions& engine_options,
     std::vector<std::unique_ptr<const dnn::FusedMatmulRunner>>*
         out_exec_plans) {
   return absl::UnimplementedError("GetFusedMatmulRunners not implemented.");
@@ -249,51 +245,15 @@ DnnSupport::NormRunnerFromDesc(
   return absl::UnimplementedError("NormRunnerFromDesc not implemented.");
 }
 
-absl::StatusOr<std::unique_ptr<const dnn::FusedMHARunner>>
-DnnSupport::FusedMHARunnerFromDesc(
-    Stream* stream, const dnn::AlgorithmDesc& algorithm_desc,
-    const dnn::MatmulTensorDescriptor& bmm1_lhs_descriptor,
-    const dnn::MatmulTensorDescriptor& bmm1_rhs_descriptor,
-    const dnn::MatmulTensorDescriptor& bmm2_rhs_descriptor,
-    const dnn::MatmulTensorDescriptor& intermediate_bmm2_lhs_descriptor,
-    const dnn::TensorDescriptor& output_descriptor,
-    std::optional<dnn::TensorDescriptor> activation_descriptor,
-    std::optional<dnn::TensorDescriptor> bias_descriptor, double scale,
-    std::optional<double> dropout_rate, std::optional<int64_t> seed,
-    dnn::FMHAMaskKind mask_type) {
-  return absl::UnimplementedError("FusedMHARunnerFromDesc not implemented.");
-}
-
-absl::StatusOr<std::unique_ptr<const dnn::FusedMHABackwardRunner>>
-DnnSupport::FusedMHABackwardRunnerFromDesc(
-    Stream* stream, const dnn::AlgorithmDesc& algorithm_desc,
-    const MatmulTensorDescriptor& bmm1_grad_gemm1_rhs_descriptor,
-    const MatmulTensorDescriptor& bmm1_grad_gemm2_rhs_descriptor,
-    const MatmulTensorDescriptor& bmm2_grad_gemm1_lhs_descriptor,
-    const MatmulTensorDescriptor& bmm2_grad_gemm2_rhs_descriptor,
-    const MatmulTensorDescriptor& d_output_descriptor,
-    const TensorDescriptor& d_bmm1_lhs_descriptor,
-    const TensorDescriptor& d_bmm1_rhs_descriptor,
-    const TensorDescriptor& d_bmm2_rhs_descriptor,
-    std::optional<dnn::TensorDescriptor> d_s_descriptor,
-    std::optional<dnn::TensorDescriptor> d_bias_descriptor,
-    std::optional<dnn::TensorDescriptor> fwd_output_descriptor,
-    std::optional<dnn::TensorDescriptor> bias_descriptor, double scale,
-    std::optional<double> dropout_rate, std::optional<int64_t> seed,
-    dnn::FMHAMaskKind mask_type) {
-  return absl::UnimplementedError(
-      "FusedMHABackwardRunnerFromDesc not implemented.");
-}
-
 bool DnnSupport::GetMIOpenConvolveAlgorithms(
     dnn::ConvolutionKind /*kind*/, dnn::DataType /*element_type*/,
     dnn::DataType /*output_type*/, Stream* /*stream*/,
     const dnn::BatchDescriptor& /*input_descriptor*/,
-    DeviceMemoryBase input_data,
+    DeviceAddressBase input_data,
     const dnn::FilterDescriptor& /*filter_descriptor*/,
-    DeviceMemoryBase filter_data,
+    DeviceAddressBase filter_data,
     const dnn::BatchDescriptor& /*output_descriptor*/,
-    DeviceMemoryBase output_data,
+    DeviceAddressBase output_data,
     const dnn::ConvolutionDescriptor& /*convolution_descriptor*/,
     ScratchAllocator* scratch_allocator,
     std::vector<ProfileResult>* /*out_algorithms*/) {
@@ -307,10 +267,10 @@ bool DnnSupport::GetRnnAlgorithms(std::vector<AlgorithmDesc>* out_algorithms) {
 absl::Status DnnSupport::DoPoolForward(
     DataType element_type, Stream* stream,
     const dnn::PoolingDescriptor& pooling_dimensions,
-    const NumericOptions& numeric_options,
-    const dnn::BatchDescriptor& input_dimensions, DeviceMemoryBase input_data,
-    const dnn::BatchDescriptor& output_dimensions, DeviceMemoryBase output_data,
-    ScratchAllocator* workspace_allocator) {
+    const EngineOptions& engine_options,
+    const dnn::BatchDescriptor& input_dimensions, DeviceAddressBase input_data,
+    const dnn::BatchDescriptor& output_dimensions,
+    DeviceAddressBase output_data, ScratchAllocator* workspace_allocator) {
   // Ignore numeric options. Subclasses can override this method to use it.
   return DoPoolForward(element_type, stream, pooling_dimensions,
                        input_dimensions, input_data, output_dimensions,
@@ -320,29 +280,16 @@ absl::Status DnnSupport::DoPoolForward(
 absl::Status DnnSupport::DoPoolBackward(
     DataType element_type, Stream* stream,
     const dnn::PoolingDescriptor& pooling_dimensions,
-    const NumericOptions& numeric_options,
-    const dnn::BatchDescriptor& input_dimensions, DeviceMemoryBase input_data,
-    const dnn::BatchDescriptor& output_dimensions, DeviceMemoryBase output_data,
-    DeviceMemoryBase input_diff_data, DeviceMemoryBase output_diff_data,
-    ScratchAllocator* workspace_allocator) {
+    const EngineOptions& engine_options,
+    const dnn::BatchDescriptor& input_dimensions, DeviceAddressBase input_data,
+    const dnn::BatchDescriptor& output_dimensions,
+    DeviceAddressBase output_data, DeviceAddressBase input_diff_data,
+    DeviceAddressBase output_diff_data, ScratchAllocator* workspace_allocator) {
   // Ignore numeric options. Subclasses can override this method to use it.
   return DoPoolBackward(element_type, stream, pooling_dimensions,
                         input_dimensions, input_data, output_dimensions,
                         output_data, input_diff_data, output_diff_data,
                         workspace_allocator);
-}
-
-std::string QuantizedActivationModeString(QuantizedActivationMode mode) {
-  switch (mode) {
-    case dnn::QuantizedActivationMode::k8Bit:
-      return "uint8";
-    case dnn::QuantizedActivationMode::k16Bit:
-      return "uint16";
-    case dnn::QuantizedActivationMode::k32Bit:
-      return "int32";
-    default:
-      return absl::StrCat("unknown: ", static_cast<int32_t>(mode));
-  }
 }
 
 std::string ActivationModeString(ActivationMode mode) {
@@ -367,17 +314,6 @@ std::string ActivationModeString(ActivationMode mode) {
       return "leakyrelu";
     default:
       return absl::StrCat("unknown: ", static_cast<int32_t>(mode));
-  }
-}
-
-std::string ElementwiseOperationString(ElementwiseOperation op) {
-  switch (op) {
-    case ElementwiseOperation::kAdd:
-      return "add";
-    case ElementwiseOperation::kMultiply:
-      return "multiply";
-    default:
-      return absl::StrCat("unknown: ", static_cast<int32_t>(op));
   }
 }
 
@@ -436,17 +372,6 @@ std::string PadAlignmentString(PadAlignment alignment) {
 
 std::ostream& operator<<(std::ostream& str, dnn::PadAlignment alignment) {
   return str << PadAlignmentString(alignment);
-}
-
-std::string ShortPoolingModeString(PoolingMode mode) {
-  switch (mode) {
-    case PoolingMode::kMaximum:
-      return "Max";
-    case PoolingMode::kAverage:
-      return "Avg";
-    default:
-      return absl::StrCat("unknown: ", static_cast<int32_t>(mode));
-  }
 }
 
 struct ConvDimIndices {
@@ -539,7 +464,10 @@ ConvDimIndices GetDimIndices(const FilterLayout& layout, const int data_dims) {
 
 std::vector<int64_t> ReorderDims(const std::vector<int64_t>& input,
                                  const DataLayout& from, const DataLayout& to) {
-  if (from == to) return input;
+  CHECK_GE(input.size(), 2);
+  if (from == to) {
+    return input;
+  }
 
   ConvDimIndices from_indices = GetDimIndices(from, input.size());
   ConvDimIndices to_indices = GetDimIndices(to, input.size());
@@ -561,7 +489,10 @@ std::vector<int64_t> ReorderDims(const std::vector<int64_t>& input,
 std::vector<int64_t> ReorderDims(const std::vector<int64_t>& input,
                                  const FilterLayout& from,
                                  const FilterLayout& to) {
-  if (from == to) return input;
+  CHECK_GE(input.size(), 2);
+  if (from == to) {
+    return input;
+  }
 
   ConvDimIndices from_indices = GetDimIndices(from, input.size());
   ConvDimIndices to_indices = GetDimIndices(to, input.size());
@@ -610,8 +541,9 @@ TensorDescriptor::GetPhysicalDimensionsMajorToMinor() const {
     int64_t logical = minor_to_major_.at(minor_to_major_.size() - 1 - physical);
     logical_to_physical[logical] = physical;
   }
-  if (dimensions_.size() != minor_to_major_.size())
+  if (dimensions_.size() != minor_to_major_.size()) {
     return absl::InternalError("Dimensions size should match the layout size.");
+  }
 
   std::vector<int64_t> physical_dims(dimensions_.size());
   for (int64_t i = 0; i < physical_dims.size(); ++i) {
@@ -621,6 +553,9 @@ TensorDescriptor::GetPhysicalDimensionsMajorToMinor() const {
 }
 
 std::vector<int64_t> TensorDescriptor::GetPhysicalStridesMajorToMinor() const {
+  if (ndims() == 0) {
+    return {};
+  }
   std::vector<int64_t> phys_dims = GetPhysicalDimensionsMajorToMinor().value();
   std::vector<int64_t> phys_strides(ndims());
   phys_strides[ndims() - 1] = 1;
@@ -663,23 +598,17 @@ std::string TensorDescriptor::ToString() const {
 
 absl::StatusOr<std::vector<int64_t>>
 MatmulTensorDescriptor::GetNonContractingDims() const {
-  std::vector<int64_t> non_contracting_dims;
-  for (int64_t dim = 0; dim < tensor_.dimensions().size(); ++dim) {
-    bool is_batch = absl::c_count(batch_dimension_numbers_, dim) != 0;
-    bool is_contracting = absl::c_count(contracting_dim_, dim) != 0;
-    if (is_batch && is_contracting)
-      return absl::InternalError(
-          "A dimension cannot be both a batch dimension and a contracting "
-          "dimension.");
-    if (!(is_batch || is_contracting)) non_contracting_dims.push_back(dim);
-  }
+  auto nc = xla::GetNonContractingDims(
+      tensor_.dimensions().size(), contracting_dim_, batch_dimension_numbers_);
+  std::vector<int64_t> non_contracting_dims(nc.begin(), nc.end());
 
   if (batch_dimension_numbers_.size() + contracting_dim_.size() +
           non_contracting_dims.size() !=
-      tensor_.dimensions().size())
+      tensor_.dimensions().size()) {
     return absl::InternalError(
         "Batch_dimension_numbers, contracting_dim and non_contracting_dims "
         "should sum up to the total number of dimensions.");
+  }
   return non_contracting_dims;
 }
 
@@ -695,10 +624,11 @@ MatmulTensorDescriptor::MakeCudnnCompatible(const std::vector<int64_t>& vec,
   std::vector<int64_t> non_contracting_dims = GetNonContractingDims().value();
   if (batch_dimension_numbers_.size() + contracting_dim_.size() +
           non_contracting_dims.size() !=
-      vec.size())
+      vec.size()) {
     return absl::InternalError(
         "Batch_dimension_numbers, contracting_dim and non_contracting_dims "
         "should sum up to the total number of dimensions.");
+  }
   if (is_lhs) /* lhs -> {b0, b1,....bk, m, k} */ {
     for (int i = 0; i < non_contracting_dims.size(); i++) {
       cudnn_compatible[batch_dim_size + i] = vec.at(non_contracting_dims.at(i));
@@ -775,8 +705,7 @@ std::vector<int64_t> BatchDescriptor::full_dims(
   std::vector<int64_t> bdyx_dims(ndims() + 2);
   bdyx_dims[0] = count();
   bdyx_dims[1] = feature_map_count();
-  std::copy(spatial_size().begin(), spatial_size().end(),
-            bdyx_dims.begin() + 2);
+  absl::c_copy(spatial_size(), bdyx_dims.begin() + 2);
   return ReorderDims(bdyx_dims, DataLayout::kBatchDepthYX, layout);
 }
 
@@ -811,13 +740,6 @@ std::vector<int64_t> BatchDescriptor::vectorized_strides(
     phys_strides[i] = phys_strides[i + 1] * phys_dims[i + 1];
   }
   return ReorderDims(phys_strides, this->layout(), layout);
-}
-
-void BatchDescriptor::CloneFrom(const BatchDescriptor& other) {
-  tensor_ = other.tensor_;
-  value_max_ = other.value_max_;
-  value_min_ = other.value_min_;
-  quantized_activation_mode_ = other.quantized_activation_mode_;
 }
 
 std::string BatchDescriptor::ToString() const {
@@ -882,34 +804,6 @@ int64_t BatchDescriptor::NodesAcrossFeatureMaps() const {
   return NodesPerFeatureMap() * feature_map_count();
 }
 
-int64_t BatchDescriptor::ElementCount() const {
-  return count() * feature_map_count() * NodesPerFeatureMap();
-}
-
-int64_t BatchDescriptor::FullyConnectedWeightCount(
-    const BatchDescriptor& input, const BatchDescriptor& output) {
-  return input.NodesAcrossFeatureMaps() * output.NodesAcrossFeatureMaps();
-}
-
-int64_t BatchDescriptor::FullyConnectedBiasCount(
-    const BatchDescriptor& output) {
-  return output.NodesAcrossFeatureMaps();
-}
-
-BatchDescriptor BatchDescriptor::DepthConcatenateOutputDescriptor(
-    absl::Span<const dnn::BatchDescriptor> inputs) {
-  if (inputs.empty()) {
-    return BatchDescriptor();
-  }
-  int feature_map_count = 0;
-  for (const auto& dimensions : inputs) {
-    feature_map_count += dimensions.feature_map_count();
-  }
-  BatchDescriptor output = inputs[0];
-  output.set_feature_map_count(feature_map_count);
-  return output;
-}
-
 TensorDescriptorProto BatchDescriptor::ToProto(DataType data_type) const {
   CHECK_EQ(0.0, value_max_);
   CHECK_EQ(0.0, value_min_);
@@ -931,10 +825,6 @@ FilterDescriptor::FilterDescriptor() : FilterDescriptor(/*ndims=*/2) {}
 
 FilterDescriptor::~FilterDescriptor() {}
 
-void FilterDescriptor::CloneFrom(const FilterDescriptor& other) {
-  tensor_ = other.tensor_;
-}
-
 std::string FilterDescriptor::ToString() const {
   std::string desc = absl::StrFormat(
       "{output_feature_map_count: %d input_feature_map_count: %d "
@@ -949,52 +839,12 @@ std::string FilterDescriptor::ToString() const {
   return desc;
 }
 
-std::string FilterDescriptor::ToShortString() const {
-  // All the constituent strings are less than 15 characters, so the
-  // small string optimization ensures that there will be at most one
-  // heap memory allocation.
-  std::string od = absl::StrCat("od", output_feature_map_count());
-  std::string id = absl::StrCat("id", input_feature_map_count());
-
-  std::string spatial = "s";
-  for (int i = 0; i < ndims(); i++) {
-    absl::StrAppendFormat(&spatial, "%d ", input_filter_dims()[i]);
-  }
-
-  switch (layout()) {
-    case FilterLayout::kOutputInputYX:
-      return absl::StrCat(od, id, spatial);
-    case FilterLayout::kOutputYXInput:
-      return absl::StrCat(od, spatial, id);
-    case FilterLayout::kOutputInputYX4:
-    case FilterLayout::kOutputInputYX32:
-    case FilterLayout::kOutputInputYX32_CudnnReordered:
-      return absl::StrCat(od, id, spatial, "(VECT_C)");
-    case FilterLayout::kInputYXOutput:
-      return absl::StrCat(id, spatial, od);
-    case FilterLayout::kYXInputOutput:
-      return absl::StrCat(spatial, id, od);
-    default:
-      LOG(FATAL) << "Unknown layout " << static_cast<int32_t>(layout());
-      return "";  // Avoid return warning (unreachable)
-  }
-}
-
-int64_t FilterDescriptor::ComputeWeightCount() const {
-  int64_t ret = output_feature_map_count() * input_feature_map_count();
-  for (int i = 0; i < ndims(); i++) {
-    ret *= input_filter_dims()[i];
-  }
-  return ret;
-}
-
 std::vector<int64_t> FilterDescriptor::full_dims(
     const FilterLayout& layout) const {
   std::vector<int64_t> oiyx_dims(ndims() + 2);
   oiyx_dims[0] = output_feature_map_count();
   oiyx_dims[1] = input_feature_map_count();
-  std::copy(input_filter_dims().begin(), input_filter_dims().end(),
-            oiyx_dims.begin() + 2);
+  absl::c_copy(input_filter_dims(), oiyx_dims.begin() + 2);
   return ReorderDims(oiyx_dims, FilterLayout::kOutputInputYX, layout);
 }
 
@@ -1064,22 +914,7 @@ std::string ConvolutionDescriptor::ToString() const {
   return absl::StrFormat(
       "{zero_padding: %s pad_alignment: %s filter_strides: %s dilation_rates: "
       "%s}",
-      padding, PadAlignmentString(pad_alignment()), strides, dilations);
-}
-
-std::string ConvolutionDescriptor::ToShortString() const {
-  std::string desc;
-  for (int i = 0; i < ndims(); i++) {
-    if (i > 0) absl::StrAppend(&desc, "_");
-    absl::StrAppendFormat(&desc, "p%d:%d", i, padding()[i]);
-  }
-  for (int i = 0; i < ndims(); i++) {
-    absl::StrAppendFormat(&desc, "_s%d:%d", i, strides()[i]);
-  }
-  for (int i = 0; i < ndims(); i++) {
-    absl::StrAppendFormat(&desc, "_d%d:%d", i, dilations()[i]);
-  }
-  return desc;
+      padding, PadAlignmentString(PadAlignment::kDefault), strides, dilations);
 }
 
 // -- PoolingDescriptor
@@ -1094,45 +929,6 @@ PoolingDescriptor::PoolingDescriptor(int ndims)
 
 PoolingDescriptor::PoolingDescriptor() : PoolingDescriptor(/*ndims=*/2) {}
 
-void PoolingDescriptor::CloneFrom(const PoolingDescriptor& other) {
-  mode_ = other.mode_;
-  ndims_ = other.ndims_;
-  window_ = other.window_;
-  padding_ = other.padding_;
-  strides_ = other.strides_;
-  propagate_nans_ = other.propagate_nans_;
-}
-
-std::string PoolingDescriptor::ToString() const {
-  const char* mode_string =
-      mode_ == dnn::PoolingMode::kMaximum ? "kMaximum" : "kAverage";
-
-  std::string window, strides, padding;
-  for (int i = 0; i < ndims_; i++) {
-    absl::StrAppendFormat(&window, "%d ", window_[i]);
-    absl::StrAppendFormat(&strides, "%d ", strides_[i]);
-    absl::StrAppendFormat(&padding, "%d", padding_[i]);
-  }
-
-  const char* propagate_string = propagate_nans_ ? "Yes" : "No";
-
-  return absl::StrFormat(
-      "{mode: %s window: %s strides: %s padding: %s propagate NaNs: %s}",
-      mode_string, window, strides, padding, propagate_string);
-}
-
-std::string PoolingDescriptor::ToShortString() const {
-  std::string window, strides, padding;
-  for (int i = 0; i < ndims_; i++) {
-    absl::StrAppendFormat(&window, "_w%d:%d", i, window_[i]);
-    absl::StrAppendFormat(&strides, "_s%d:%d", i, strides_[i]);
-    absl::StrAppendFormat(&padding, "_p%d:%d", i, padding_[i]);
-  }
-  return absl::StrCat(mode_ == dnn::PoolingMode::kMaximum ? "max" : "avg",
-                      window, strides, padding,
-                      propagate_nans_ ? "propagate_nans" : "ignore_nans");
-}
-
 // -- NormalizeDescriptor
 
 NormalizeDescriptor::NormalizeDescriptor()
@@ -1142,28 +938,6 @@ NormalizeDescriptor::NormalizeDescriptor()
       beta_(0.0),
       wrap_around_(false),
       segment_size_(0) {}
-
-void NormalizeDescriptor::CloneFrom(const NormalizeDescriptor& other) {
-  bias_ = other.bias_;
-  range_ = other.range_;
-  alpha_ = other.alpha_;
-  beta_ = other.beta_;
-  wrap_around_ = other.wrap_around_;
-  segment_size_ = other.segment_size_;
-}
-
-std::string NormalizeDescriptor::ToString() const {
-  return absl::StrFormat(
-      "{bias: %f range: %d alpha: %f beta: %f wrap_around: %d "
-      "segment_size: %d}",
-      bias_, range_, alpha_, beta_, wrap_around_, segment_size_);
-}
-
-std::string NormalizeDescriptor::ToShortString() const {
-  return absl::StrCat("bias:", bias_, "_range:", range_, "_alpha:", alpha_,
-                      "_beta:", beta_, "_wrap:", wrap_around_,
-                      "_size:", segment_size_);
-}
 
 bool DnnSupport::IsStatusOk(const absl::Status& status, bool report_error) {
   if (status.ok()) {
@@ -1178,11 +952,11 @@ bool DnnSupport::IsStatusOk(const absl::Status& status, bool report_error) {
 absl::Status DnnSupport::DoCtcLoss(
     Stream* stream, dnn::DataType element_type,
     const RnnStateTensorDescriptor& probs_desc,
-    const DeviceMemoryBase probs_data, absl::Span<const int> labels_data,
+    const DeviceAddressBase probs_data, absl::Span<const int> labels_data,
     absl::Span<const int> labels_lengths_data,
-    absl::Span<const int> input_lengths_data, DeviceMemoryBase costs_data,
-    const RnnStateTensorDescriptor& grads_desc, DeviceMemoryBase grads_data,
-    DeviceMemory<uint8_t> scratch_memory, int ctc_loss_algo_id) {
+    absl::Span<const int> input_lengths_data, DeviceAddressBase costs_data,
+    const RnnStateTensorDescriptor& grads_desc, DeviceAddressBase grads_data,
+    DeviceAddress<uint8_t> scratch_memory, int ctc_loss_algo_id) {
   return absl::UnimplementedError("CtcLoss not implemented");
 }
 

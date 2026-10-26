@@ -17,14 +17,17 @@ limitations under the License.
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
 #include "absl/time/time.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/file_system.h"
-#include "tsl/platform/logging.h"
 #include "tsl/platform/random.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/file_system.h"
+#include "xla/tsl/platform/logging.h"
 
 namespace tsl {
 
@@ -78,7 +81,7 @@ absl::Status RetryingUtils::CallWithRetries(
       // at a higher level.
       return absl::Status(
           absl::StatusCode::kAborted,
-          strings::StrCat(
+          absl::StrCat(
               "All ", config.max_retries,
               " retry attempts failed. The last failure: ", status.message()));
     }

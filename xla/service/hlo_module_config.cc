@@ -24,14 +24,21 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/escaping.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
+#include "tsl/platform/statusor.h"
 #include "xla/service/computation_layout.h"
+#include "xla/service/computation_placer.h"
 #include "xla/service/hlo.pb.h"
+#include "xla/service/schedule_config.h"
+#include "xla/service/sharding_config.h"
+#include "xla/shape.h"
 #include "xla/shape_layout.h"
 #include "xla/xla.pb.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -63,16 +70,19 @@ std::string HloModuleConfig::compilation_cache_key() const {
   if (entry_computation_layout_.has_value()) {
     for (const ShapeLayout& param_layout :
          entry_computation_layout_->parameter_layouts()) {
-      params.push_back(param_layout.shape().DebugString());
+      params.push_back(param_layout.shape().ToString());
     }
     StrAppend(&key, absl::StrJoin(params, ", "), ") => ",
-              entry_computation_layout_->result_shape().SerializeAsString());
+              entry_computation_layout_->result_shape()
+                  .ToProto()
+                  .SerializeAsString());
   }
   if (seed() != 0) {
-    // TODO(b/32083678): force recompilation to reset global state.
     static std::atomic<int> counter{0};
     StrAppend(&key, "forcing recompile ", counter++);
   }
+  StrAppend(&key, "::optimization_level=", optimization_level());
+  StrAppend(&key, "::memory_fitting_level=", memory_fitting_level());
   if (replica_count() != 1) {
     StrAppend(&key, "::replica_count=", replica_count());
   }
@@ -95,7 +105,14 @@ std::string HloModuleConfig::compilation_cache_key() const {
     StrAppend(&key, "::fdo_profile=", absl::BytesToHexString(fdo_profile()));
   }
   if (device_memory_size() != 0) {
-    StrAppend(&key, "::device_memory_size=", device_memory_size());
+    StrAppend(&key, "::device_address_size=", device_memory_size());
+  }
+  StrAppend(&key, "::use_shardy_partitioner=", use_shardy_partitioner());
+  if (partition_size() != 0) {
+    StrAppend(&key, "::partition_size=", partition_size());
+  }
+  if (page_size_kib() != 0) {
+    StrAppend(&key, "::page_size_kib=", page_size_kib());
   }
   return key;
 }
@@ -213,7 +230,7 @@ static void AssignStructFusionConfig(HloModuleConfig& config,
     }
     module_config.push_back(std::move(temp));
   }
-  *config.mutable_fusion_config() = std::move(module_config);
+  config.set_fusion_config(std::move(module_config));
 }
 
 static void AssignStructDotConfig(HloModuleConfig& config,
@@ -255,10 +272,10 @@ static void AssignStructPhaseOrderingConfig(HloModuleConfig& config,
     }
     module_config.push_back(std::move(temp));
   }
-  *config.mutable_phase_ordering_config() = std::move(module_config);
+  config.set_phase_ordering_config(std::move(module_config));
 }
 
-absl::StatusOr<HloModuleConfigProto> HloModuleConfig::ToProto() const {
+HloModuleConfigProto HloModuleConfig::ToProto() const {
   HloModuleConfigProto proto;
   if (has_entry_computation_layout()) {
     *proto.mutable_entry_computation_layout() =
@@ -279,6 +296,8 @@ absl::StatusOr<HloModuleConfigProto> HloModuleConfig::ToProto() const {
   for (int64_t partitioning_id : auto_spmd_partitioning_mesh_ids_) {
     proto.add_auto_spmd_partitioning_mesh_ids(partitioning_id);
   }
+  proto.set_optimization_level(optimization_level_);
+  proto.set_memory_fitting_level(memory_fitting_level_);
   proto.set_deduplicate_hlo(deduplicate_hlo_);
   proto.set_intra_op_parallelism_threads(intra_op_parallelism_threads_);
   proto.set_device_type(device_type_);
@@ -286,7 +305,7 @@ absl::StatusOr<HloModuleConfigProto> HloModuleConfig::ToProto() const {
 
   if (has_static_device_assignment()) {
     auto proto_assignment = proto.mutable_static_device_assignment();
-    TF_RETURN_IF_ERROR(static_device_assignment_->Serialize(proto_assignment));
+    static_device_assignment_->Serialize(proto_assignment);
   }
   AssignProtoShardableValueUpdatePairs(
       proto.mutable_shardable_value_update_pairs(),
@@ -321,6 +340,10 @@ absl::StatusOr<HloModuleConfigProto> HloModuleConfig::ToProto() const {
   proto.set_allow_separate_sharding_programs(allow_separate_sharding_programs_);
   proto.set_fdo_profile(fdo_profile_);
   proto.set_device_memory_size(device_memory_size_);
+  proto.set_use_shardy_partitioner(use_shardy_partitioner_);
+  proto.set_partition_size(partition_size_);
+  *proto.mutable_sharding_config() = ShardingConfig::ToProto(sharding_config_);
+  *proto.mutable_schedule_config() = ScheduleConfig::ToProto(schedule_config_);
   return proto;
 }
 
@@ -329,7 +352,9 @@ HloModuleConfig::CreateFromProto(const HloModuleConfigProto& proto) {
   auto config = std::make_unique<HloModuleConfig>();
 
   if (proto.has_entry_computation_layout()) {
-    auto comp_layout = ProgramShape{proto.entry_computation_layout()};
+    ABSL_ASSIGN_OR_RETURN(
+        auto comp_layout,
+        ProgramShape::FromProto(proto.entry_computation_layout()));
     config->SetComputationLayoutIfExists(comp_layout);
   } else {
     config->clear_entry_computation_layout();
@@ -349,6 +374,8 @@ HloModuleConfig::CreateFromProto(const HloModuleConfigProto& proto) {
   config->auto_spmd_partitioning_mesh_ids_.assign(
       proto.auto_spmd_partitioning_mesh_ids().begin(),
       proto.auto_spmd_partitioning_mesh_ids().end());
+  config->optimization_level_ = proto.optimization_level();
+  config->memory_fitting_level_ = proto.memory_fitting_level();
   config->deduplicate_hlo_ = proto.deduplicate_hlo();
   config->intra_op_parallelism_threads_ = proto.intra_op_parallelism_threads();
   config->device_type_ = proto.device_type();
@@ -356,7 +383,7 @@ HloModuleConfig::CreateFromProto(const HloModuleConfigProto& proto) {
     config->debug_options_ = proto.debug_options();
   }
   if (proto.has_static_device_assignment()) {
-    TF_ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         std::unique_ptr<DeviceAssignment> device_assignment,
         DeviceAssignment::Deserialize(proto.static_device_assignment()));
     config->static_device_assignment_ = std::move(*device_assignment);
@@ -390,6 +417,10 @@ HloModuleConfig::CreateFromProto(const HloModuleConfigProto& proto) {
       proto.allow_separate_sharding_programs();
   config->fdo_profile_ = proto.fdo_profile();
   config->device_memory_size_ = proto.device_memory_size();
+  config->use_shardy_partitioner_ = proto.use_shardy_partitioner();
+  config->partition_size_ = proto.partition_size();
+  config->sharding_config_ = ShardingConfig::FromProto(proto.sharding_config());
+  config->schedule_config_ = ScheduleConfig::FromProto(proto.schedule_config());
   return std::move(config);
 }
 

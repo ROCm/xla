@@ -13,27 +13,46 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <gtest/gtest.h>
+
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "absl/memory/memory.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/Triple.h"
+#include "xla/backends/cpu/codegen/target_machine_features.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/service/compiler.h"
 #include "xla/service/cpu/cpu_compiler.h"
 #include "xla/service/cpu/test_target_triple_helper.h"
-#include "xla/test.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/util.h"
 
 namespace xla {
 namespace {
-class CodegenReduceOnArchWithNoVectorRegisters : public HloTestBase {};
+class CodegenReduceOnArchWithNoVectorRegisters
+    : public HloHardwareIndependentTestBase {};
 
 absl::StatusOr<unsigned int> GetTargetVectorRegisterByteSize(
     std::string triple) {
   // Unfortunately we need a lot of boilerplate to get to an
   // llvm::TargetMachine.
 
+  llvm::Triple target_triple(triple);
   std::string error;
   const llvm::Target* target =
-      llvm::TargetRegistry::lookupTarget(triple, error);
+      llvm::TargetRegistry::lookupTarget(target_triple, error);
   if (target == nullptr) {
     return Internal("TargetRegistry::lookupTarget failed: %s", error);
   }
@@ -46,9 +65,10 @@ absl::StatusOr<unsigned int> GetTargetVectorRegisterByteSize(
 
   std::unique_ptr<llvm::TargetMachine> target_machine =
       absl::WrapUnique(target->createTargetMachine(
-          /*TT=*/triple, /*CPU=*/"", /*Features=*/"", llvm::TargetOptions{},
+          /*TT=*/target_triple, /*CPU=*/"", /*Features=*/"",
+          llvm::TargetOptions{},
           /*RM=*/std::nullopt));
-  cpu::LLVMTargetMachineFeatures target_machine_features(target_machine.get());
+  cpu::TargetMachineFeatures target_machine_features(target_machine.get());
   return target_machine_features.vector_register_byte_size(*function);
 }
 
@@ -69,22 +89,19 @@ ENTRY main {
 }
 )";
 
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> hlo_module,
-                          ParseAndReturnVerifiedModule(text));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> hlo_module,
+                       ParseAndReturnVerifiedModule(text));
   cpu::CpuCompiler cpu_compiler;
-  auto module_group = std::make_unique<HloModuleGroup>("group");
-  module_group->push_back(std::move(hlo_module));
 
   // Check that the GetTargetVectorRegisterByteSize is itself working.
-  TF_ASSERT_OK_AND_ASSIGN(
-      unsigned vector_register_byte_size_for_x86_64,
-      GetTargetVectorRegisterByteSize(kTargetTripleForHost));
+  ASSERT_OK_AND_ASSIGN(unsigned vector_register_byte_size_for_x86_64,
+                       GetTargetVectorRegisterByteSize(kTargetTripleForHost));
   ASSERT_EQ(vector_register_byte_size_for_x86_64, 16);
 
   std::string triple = "i686-none-android";
 
-  TF_ASSERT_OK_AND_ASSIGN(unsigned vector_register_byte_size,
-                          GetTargetVectorRegisterByteSize(triple));
+  ASSERT_OK_AND_ASSIGN(unsigned vector_register_byte_size,
+                       GetTargetVectorRegisterByteSize(triple));
 
   // This test is supposed to check whether the XLA CPU vectorized reduction
   // codegen works correctly for architectures that do not have vector
@@ -99,9 +116,9 @@ ENTRY main {
       /*entry_point_name=*/"main",
       cpu::CpuAotCompilationOptions::RelocationModel::BigPic);
 
-  TF_ASSERT_OK_AND_ASSIGN(
-      std::vector<std::unique_ptr<AotCompilationResult>> aot_compilation_result,
-      cpu_compiler.CompileAheadOfTime(std::move(module_group),
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<std::unique_ptr<CompiledModule>> aot_compilation_result,
+      cpu_compiler.CompileAheadOfTime(std::move(hlo_module),
                                       aot_compilation_options));
   EXPECT_EQ(aot_compilation_result.size(), 1);
 }

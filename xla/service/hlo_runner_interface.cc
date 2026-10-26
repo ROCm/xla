@@ -15,30 +15,21 @@ limitations under the License.
 
 #include "xla/service/hlo_runner_interface.h"
 
-#include "xla/service/hlo_parser.h"
+#include <memory>
+#include <utility>
+#include <vector>
+
+#include "absl/log/check.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/types/span.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/literal.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 
-/*static*/ absl::StatusOr<std::unique_ptr<HloModule>>
-HloRunnerInterface::CreateModuleFromString(const absl::string_view hlo_string,
-                                           const DebugOptions& debug_options) {
-  HloModuleConfig config;
-  config.set_debug_options(debug_options);
-  return ParseAndReturnUnverifiedModule(hlo_string, config);
-}
-
 namespace {
-
-// Creates an HloModule from the given proto.
-absl::StatusOr<std::unique_ptr<HloModule>> HloProtoToModule(
-    const HloProto& proto, const DebugOptions& debug_options) {
-  TF_ASSIGN_OR_RETURN(HloModuleConfig config,
-                      HloModule::CreateModuleConfigFromProto(proto.hlo_module(),
-                                                             debug_options));
-  TF_ASSIGN_OR_RETURN(auto module,
-                      HloModule::CreateFromProto(proto.hlo_module(), config));
-  return std::move(module);
-}
 template <class T>
 std::vector<T*> MakePointerVector(absl::Span<T> input_vec) {
   std::vector<T*> output_pointers;
@@ -48,84 +39,46 @@ std::vector<T*> MakePointerVector(absl::Span<T> input_vec) {
   }
   return output_pointers;
 }
-
 }  // namespace
-
-/*static*/ absl::StatusOr<std::unique_ptr<HloModule>>
-HloRunnerInterface::ReadModuleFromBinaryProtoFile(
-    const std::string& filename, const DebugOptions& debug_options) {
-  HloProto proto;
-  TF_RETURN_IF_ERROR(
-      tsl::ReadBinaryProto(tsl::Env::Default(), filename, &proto));
-  return HloProtoToModule(proto, debug_options);
-}
-
-/*static*/ absl::StatusOr<std::unique_ptr<HloModule>>
-HloRunnerInterface::ReadModuleFromTextProtoFile(
-    const std::string& filename, const DebugOptions& debug_options) {
-  HloProto proto;
-  TF_RETURN_IF_ERROR(tsl::ReadTextProto(tsl::Env::Default(), filename, &proto));
-  return HloProtoToModule(proto, debug_options);
-}
-
-/*static*/ absl::StatusOr<std::unique_ptr<HloModule>>
-HloRunnerInterface::ReadModuleFromHloTextFile(
-    const std::string& filename, const DebugOptions& debug_options) {
-  std::string hlo_string;
-  TF_RETURN_IF_ERROR(
-      tsl::ReadFileToString(tsl::Env::Default(), filename, &hlo_string));
-  HloModuleConfig config;
-  config.set_debug_options(debug_options);
-  return ParseAndReturnUnverifiedModule(hlo_string, config);
-}
-
-/*static*/ absl::StatusOr<std::unique_ptr<HloModule>>
-HloRunnerInterface::ReadModuleFromModuleBinaryProtofile(
-    const std::string& filename, const DebugOptions& debug_options) {
-  HloModuleProto module_proto;
-  TF_RETURN_IF_ERROR(
-      tsl::ReadBinaryProto(tsl::Env::Default(), filename, &module_proto));
-
-  TF_ASSIGN_OR_RETURN(
-      HloModuleConfig module_config,
-      HloModule::CreateModuleConfigFromProto(module_proto, debug_options));
-
-  return HloModule::CreateFromProto(module_proto, module_config);
-}
 
 absl::StatusOr<Literal> HloRunnerInterface::Execute(
     std::unique_ptr<HloModule> module, absl::Span<const Literal> arguments,
-    bool run_hlo_passes, ExecutionProfile* profile) {
+    bool run_hlo_passes) {
   // Construct a vector of plain pointers for the arguments.
   auto argument_pointers = MakePointerVector<const Literal>(arguments);
   return Execute(
       /*module=*/std::move(module),
       /*arguments=*/argument_pointers,
-      /*run_hlo_passes=*/run_hlo_passes,
-      /*profile=*/profile);
+      /*run_hlo_passes=*/run_hlo_passes);
 }
 
 absl::StatusOr<Literal> HloRunnerInterface::ExecuteWithBufferAssignment(
     std::unique_ptr<HloModule> module,
     const BufferAssignmentProto* buffer_assignment_proto,
-    absl::Span<const Literal> arguments, bool run_hlo_passes,
-    ExecutionProfile* profile) {
+    absl::Span<const Literal> arguments, bool run_hlo_passes) {
   // Construct a vector of plain pointers for the arguments.
   auto argument_pointers = MakePointerVector<const Literal>(arguments);
   return ExecuteWithBufferAssignment(
       /*module=*/std::move(module),
       /*buffer_assignment_proto=*/buffer_assignment_proto,
       /*arguments=*/argument_pointers,
-      /*run_hlo_passes=*/run_hlo_passes,
-      /*profile=*/profile);
+      /*run_hlo_passes=*/run_hlo_passes);
 }
 
 absl::StatusOr<Literal> HloRunnerInterface::ExecuteWithExecutable(
-    Executable* executable, absl::Span<const Literal> arguments,
-    ExecutionProfile* profile) {
+    OpaqueExecutable* executable, absl::Span<const Literal> arguments) {
   // Construct a vector of plain pointers for the arguments.
   auto argument_pointers = MakePointerVector<const Literal>(arguments);
-  return ExecuteWithExecutable(executable, argument_pointers, profile);
+  return ExecuteWithExecutable(executable, argument_pointers);
+}
+
+absl::StatusOr<Literal> HloRunnerInterface::ExecuteWithExecutable(
+    OpaqueExecutable* executable, absl::Span<const Literal* const> arguments) {
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<absl::StatusOr<Literal>> results,
+      ExecuteWithExecutable(executable, arguments, /*num_repeats=*/1));
+  CHECK_EQ(results.size(), 1);
+  return std::move(results[0]);
 }
 
 }  // namespace xla

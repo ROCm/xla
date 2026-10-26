@@ -16,7 +16,6 @@ limitations under the License.
 #ifndef MLIR_HLO_MHLO_TRANSFORMS_REWRITERS_H
 #define MLIR_HLO_MHLO_TRANSFORMS_REWRITERS_H
 
-#include <functional>
 #include <memory>
 
 #include "mlir/IR/MLIRContext.h"
@@ -24,155 +23,90 @@ limitations under the License.
 #include "mlir/Transforms/DialectConversion.h"
 
 namespace mlir {
-namespace bufferization {
-class BufferizeTypeConverter;
-}  // namespace bufferization
 namespace mhlo {
 
-// Rewrite patterns for broadcast to equivalent broadcast_in_dim legalization.
-void populateBroadcastToBroadcastInDimPatterns(MLIRContext *context,
-                                               RewritePatternSet *patterns);
+struct ChloLegalizeToHighLevelMhloPassOptions;
 
 // Collection of rewrite patterns for lowering a general dot product.
-void populateGeneralDotOpLoweringPatterns(RewritePatternSet *patterns,
-                                          MLIRContext *ctx);
+void populateGeneralDotOpLoweringPatterns(RewritePatternSet* patterns,
+                                          MLIRContext* ctx);
 
 // Collection of rewrite patterns for lowering complex operations to equivalent
 // float operations.
-void populateComplexLoweringPatterns(MLIRContext *context,
-                                     RewritePatternSet *patterns);
+void populateComplexLoweringPatterns(MLIRContext* context,
+                                     RewritePatternSet* patterns);
 
-void populateOptimizeMhloPatterns(MLIRContext *context,
-                                  RewritePatternSet *patterns);
-
-// Rewrite patterns for create_token to equivalent after_all legalization.
-void populateCreateTokenToAfterAllPatterns(mlir::MLIRContext *context,
-                                           RewritePatternSet *patterns);
-
-// Rewrite patterns for cross-replica-sum to equivalent all_reduce legalization.
-void populateCrossReplicaSumToAllReducePatterns(mlir::MLIRContext *context,
-                                                RewritePatternSet *patterns);
+void populateOptimizeMhloPatterns(MLIRContext* context,
+                                  RewritePatternSet* patterns);
 
 // Rewrite patterns for dot to equivalent dot_general legalization.
-void populateDotToDotGeneralPatterns(mlir::MLIRContext *context,
-                                     RewritePatternSet *patterns);
+void populateDotToDotGeneralPatterns(mlir::MLIRContext* context,
+                                     RewritePatternSet* patterns);
 
 // Rewrite patterns for einsum to equivalent dot_general legalization.
-void populateEinsumToDotGeneralPatterns(mlir::MLIRContext *context,
-                                        RewritePatternSet *patterns);
-
-// Rewrite patterns for gather to equivalent torch index select legalization.
-void populateGatherToTorchIndexSelectPatterns(mlir::MLIRContext *context,
-                                              RewritePatternSet *patterns);
+void populateEinsumToDotGeneralPatterns(mlir::MLIRContext* context,
+                                        RewritePatternSet* patterns);
 
 // Rewrite patterns for torch index select to equivalent gather legalization.
-void populateTorchIndexSelectToGatherPatterns(mlir::MLIRContext *context,
-                                              RewritePatternSet *patterns);
-
-void populateMhloToStdPatterns(RewritePatternSet *patterns, MLIRContext *ctx);
-
-// Collection of rewrite patterns for lowering all mhlo ops to their
-// lmhlo counterparts.
-void populateDynamicHloToLhloConversionPattern(
-    MLIRContext *context, bufferization::BufferizeTypeConverter *converter,
-    RewritePatternSet *patterns);
-
-// Collection of rewrite patterns for lowering of HLO to LHLO dialect.
-void populateHloToLhloConversionPattern(
-    MLIRContext *context, bufferization::BufferizeTypeConverter *converter,
-    RewritePatternSet *patterns);
+void populateTorchIndexSelectToGatherPatterns(mlir::MLIRContext* context,
+                                              RewritePatternSet* patterns);
 
 // Collection of rewrite patterns for lowering of HLO to arithmetic dialect.
-void populateHloToArithmeticConversionPatterns(RewritePatternSet *patterns);
+void populateHloToArithmeticConversionPatterns(RewritePatternSet* patterns);
 
 // Collection of rewrite patterns for lowering pointwise HLO ops with scalar
 // arguments to arithmetic dialect.
 void populateScalarHloToArithmeticConversionPatterns(
-    MLIRContext *context, TypeConverter &typeConverter,
-    RewritePatternSet *patterns,
-    llvm::function_ref<bool(Operation *)> filterFn = nullptr);
+    MLIRContext* context, TypeConverter& typeConverter,
+    RewritePatternSet* patterns,
+    llvm::function_ref<bool(Operation*)> filterFn = nullptr);
 
 // Collection of rewrite patterns for lowering of HLO to Linalg dialect.
-void populateHloToLinalgConversionPattern(MLIRContext *context,
-                                          TypeConverter &typeConverter,
-                                          RewritePatternSet *patterns,
+void populateHloToLinalgConversionPattern(MLIRContext* context,
+                                          TypeConverter& typeConverter,
+                                          RewritePatternSet* patterns,
                                           bool enablePrimitiveOps = false);
-
-// Collection of rewrite patterns for lowering of HLO dim operations.
-void populateShapeComputationPatterns(MLIRContext *context,
-                                      RewritePatternSet *patterns);
 
 // Converter to signless intergers to be used with linalg conversion patterns.
 std::unique_ptr<TypeConverter> createHloToLinalgTypeConverter();
 
 // Sets up legality definitions for materializing broadcasts.
-void setupMaterializeBroadcastsLegality(MLIRContext *context,
-                                        ConversionTarget *conversionTarget);
+void setupMaterializeBroadcastsLegality(MLIRContext* context,
+                                        ConversionTarget* conversionTarget);
 
 // Populates a collection of rewrite patterns for materializing broadcast
 // attributes to equivalent sequences of ops.
-void populateMaterializeBroadcastsPatterns(MLIRContext *context,
-                                           RewritePatternSet *patterns);
-
-// Populates a collection of rewrite patterns to realize element-wise operations
-// on ranked tensors where possible.
-void populateTransformUnrankedHloPatterns(MLIRContext *context,
-                                          RewritePatternSet *patterns);
-
-void populateDynamicShapeFusionPatterns(MLIRContext *context,
-                                        RewritePatternSet *patterns);
+void populateMaterializeBroadcastsPatterns(MLIRContext* context,
+                                           RewritePatternSet* patterns);
 
 // Populate a collection of conversion patterns for un-fusing
 // batch_norm_inference into constituent HLO ops.
-void populateUnfuseBatchNormInferencePattern(MLIRContext *context,
-                                             RewritePatternSet *patterns);
+void populateUnfuseBatchNormInferencePattern(MLIRContext* context,
+                                             RewritePatternSet* patterns);
 
 // Populate a collection of conversion patterns for un-fusing
 // batch_norm_training into constituent HLO ops.
-void populateUnfuseBatchNormTrainingPattern(MLIRContext *context,
-                                            RewritePatternSet *patterns);
+void populateUnfuseBatchNormTrainingPattern(MLIRContext* context,
+                                            RewritePatternSet* patterns);
 
 // Populate a collection of conversion patterns for un-fusing
 // // batch_norm_inference and batch_norm_training into constituent HLO ops.
-inline void populateUnfuseBatchNormPatterns(MLIRContext *context,
-                                            RewritePatternSet *patterns) {
+inline void populateUnfuseBatchNormPatterns(MLIRContext* context,
+                                            RewritePatternSet* patterns) {
   populateUnfuseBatchNormInferencePattern(context, patterns);
   populateUnfuseBatchNormTrainingPattern(context, patterns);
 }
 
 // Populates patterns that translate the trigonometric operations from the
 // standard dialect to approximations that do not use intrinsics.
-void populateTrigonometricToApproximationPatterns(MLIRContext *context,
-                                                  RewritePatternSet *patterns);
-
-// Populate patterns to prepare moving dynamic broadcasts up over element-wise
-// operations and broadcast the operands rather than the result. This will
-// eventually allow for larger fusions.
-void populateMergeAssumingOpsPatterns(MLIRContext *context,
-                                      RewritePatternSet *patterns);
-
-// Populate patterns for iterative shape reification.
-void populateShapeReificationPatterns(MLIRContext *, RewritePatternSet *);
+void populateTrigonometricToApproximationPatterns(MLIRContext* context,
+                                                  RewritePatternSet* patterns);
 
 // Populate patterns to group reduction and parallel dimensions of reduction
 // operations and realize them through equivalent 1D or 2D reductions.
-void populateGroupReductionDimensionsPatterns(MLIRContext *context,
-                                              RewritePatternSet *patterns,
+void populateGroupReductionDimensionsPatterns(MLIRContext* context,
+                                              RewritePatternSet* patterns,
                                               bool preferColumnsReductions);
-
-/// Populate sparse tensor specific rewriting patterns.
-void populateSparseRewritingPatterns(RewritePatternSet *patterns,
-                                     MLIRContext *ctx);
-
-/// Populates sparse ops in CHLO to linalg rewriting patterns.
-void populateLegalizeSparseCHLOPatterns(MLIRContext *context,
-                                        TypeConverter &typeConverter,
-                                        RewritePatternSet *patterns);
-
-/// Populate sparse ops to mhlo.CustomCall patterns.
-void populateLegalizeSparseOpsToCustomCallPatterns(MLIRContext *context,
-                                                   TypeConverter &typeConverter,
-                                                   RewritePatternSet *patterns);
 
 }  // namespace mhlo
 
@@ -180,14 +114,17 @@ namespace chlo {
 
 // Populates direct translations between CHLO and MHLO ops for higher level
 // MHLO ops like TopK and Erf.
-void populateChloToHighLevelMhloOpPatterns(MLIRContext *context,
-                                           RewritePatternSet *patterns);
+void populateChloToHighLevelMhloOpPatterns(
+    MLIRContext* context, RewritePatternSet* patterns,
+    const mhlo::ChloLegalizeToHighLevelMhloPassOptions& options);
+void populateChloToHighLevelMhloOpPatterns(MLIRContext* context,
+                                           RewritePatternSet* patterns);
 
 // Populates direct translations between CHLO->MHLO high level ops
 // and CHLO->StableHLO->MHLO patterns.
-void populateChloToHloPatterns(MLIRContext *context,
-                               TypeConverter *typeConverter,
-                               RewritePatternSet *patterns);
+void populateChloToHloPatterns(MLIRContext* context,
+                               TypeConverter* typeConverter,
+                               RewritePatternSet* patterns);
 
 }  // namespace chlo
 
@@ -197,18 +134,26 @@ namespace stablehlo {
 // Also see `stablehlo::registerFuncOpsForTypeConversion` for helper patterns
 // which make sure `func.func`, `func.call` and `func.return` which involve
 // illegal types also get converted.
-void populateHloToStablehloPatterns(RewritePatternSet *patterns,
-                                    TypeConverter *converter,
-                                    MLIRContext *context,
-                                    bool allowExperimentalFeatures);
+//
+// allowXlaFeatures: If true, allows ops that are not in StableHLO to remain as
+// MHLO ops.
+void populateHloToStablehloPatterns(RewritePatternSet* patterns,
+                                    TypeConverter* converter,
+                                    MLIRContext* context,
+                                    bool allowExperimentalFeatures,
+                                    bool allowXlaFeatures);
 
 // Populates StableHLO ops to MHLO ops rewriting patterns.
 // Also see `stablehlo::registerFuncOpsForTypeConversion` for helper patterns
 // which make sure `func.func`, `func.call` and `func.return` which involve
 // illegal types also get converted.
-void populateStablehloToHloPatterns(RewritePatternSet *patterns,
-                                    TypeConverter *converter,
-                                    MLIRContext *context);
+void populateStablehloToHloPatterns(RewritePatternSet* patterns,
+                                    TypeConverter* converter,
+                                    MLIRContext* context);
+
+// Sets up legality definitions for StableHLO ops and non-StableHLO ops that
+// may have StableHLO operands.
+void setupStablehloToHloConversionTarget(ConversionTarget& target);
 
 }  // namespace stablehlo
 

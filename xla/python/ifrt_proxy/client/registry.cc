@@ -22,6 +22,7 @@
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -29,6 +30,7 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "xla/python/ifrt/client.h"
+#include "xla/python/ifrt_proxy/client/global_flags.h"
 
 namespace xla {
 namespace ifrt {
@@ -46,7 +48,7 @@ struct Registry {
 };
 
 Registry* registry() {
-  static auto* r = new Registry();
+  static auto* const r = new Registry();
   return r;
 }
 
@@ -54,7 +56,7 @@ Registry* registry() {
 
 void RegisterClientFactory(absl::string_view transport_name,
                            FactoryFn factory) {
-  absl::MutexLock l(&registry()->mu);
+  absl::MutexLock l(registry()->mu);
   const bool inserted =
       registry()
           ->factories.insert({std::string(transport_name), factory})
@@ -77,10 +79,13 @@ absl::StatusOr<std::unique_ptr<xla::ifrt::Client>> CreateClient(
 
   const absl::string_view transport_name = proxy_server_address.substr(0, pos);
   const absl::string_view address = proxy_server_address.substr(pos + 3);
+  LOG(INFO) << "Attempting to create IFRT proxy client with transport name "
+            << transport_name << " to address '" << address
+            << "' and with global client flags " << *GetGlobalClientFlags();
 
   FactoryFn factory;
   {
-    absl::MutexLock l(&registry()->mu);
+    absl::MutexLock l(registry()->mu);
     const auto it = registry()->factories.find(transport_name);
     if (it == registry()->factories.end()) {
       return absl::NotFoundError(
@@ -94,7 +99,17 @@ absl::StatusOr<std::unique_ptr<xla::ifrt::Client>> CreateClient(
     factory = it->second;
   }
 
-  return factory(address, options);
+  ClientConnectionOptions actual_options = options;
+  if (GetGlobalClientFlags()->crash_on_disconnect) {
+    actual_options.on_disconnect = [](absl::Status s) {
+      QCHECK(false)
+          << "Connection to IFRT proxy server failed and the client is "
+          << "configured to crash on disconnect. Connection failure status: "
+          << s;
+    };
+  }
+
+  return factory(address, actual_options);
 }
 
 }  // namespace proxy

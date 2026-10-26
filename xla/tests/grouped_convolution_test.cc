@@ -13,21 +13,31 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <optional>
+#include <gtest/gtest.h>
+
+#include <cstdint>
+#include <iterator>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
-#include "xla/client/xla_computation.h"
-#include "xla/execution_options_util.h"
-#include "xla/service/despecializer.h"
-#include "xla/service/float_normalization.h"
-#include "xla/status_macros.h"
-#include "xla/test.h"
-#include "xla/tests/client_library_test_base.h"
-#include "xla/tests/hlo_test_base.h"
-#include "xla/tests/test_macros.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
+#include "xla/error_spec.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/transforms/despecializer.h"
+#include "xla/hlo/transforms/simplifiers/float_normalization.h"
+#include "xla/literal.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
 #include "xla/tests/test_utils.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace {
@@ -47,12 +57,7 @@ struct GroupedConvolution2DSpec {
   std::vector<int64_t> output_layout;
 };
 
-class GroupedConvolution2DTest
-    : public HloTestBase,
-      public ::testing::WithParamInterface<
-          ::testing::tuple<GroupedConvolution2DSpec, bool>> {};
-
-static std::vector<GroupedConvolution2DSpec> GetConv2DTestCases() {
+std::vector<GroupedConvolution2DSpec> GetConv2DTestCases() {
   std::vector<GroupedConvolution2DSpec> config_set;
   // Add to this set if you want a new test configuration.
   // Rule : the penultimate number must be divisible by the last number.
@@ -227,37 +232,36 @@ std::string BuildHloTextGroupedConvolution2D(
   }
 }
 
-XLA_TEST_P(GroupedConvolution2DTest, DoIt) {
+class GroupedConvolution2DTest
+    : public HloInterpreterReferenceMixin<HloTestBase>,
+      public ::testing::WithParamInterface<
+          ::testing::tuple<GroupedConvolution2DSpec, bool>> {};
+
+TEST_P(GroupedConvolution2DTest, DoIt) {
   const GroupedConvolution2DSpec& spec = ::testing::get<0>(GetParam());
   bool use_bfloat16 = ::testing::get<1>(GetParam());
-
-#ifdef XLA_BACKEND_DOES_NOT_SUPPORT_BFLOAT16
-  if (use_bfloat16) {
-    return;
-  }
-#endif
 
   const std::string hlo_text =
       BuildHloTextGroupedConvolution2D(spec, use_bfloat16);
 
-  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{0.01, 0.01},
-                            [](HloModule* module) -> absl::Status {
-                              BFloat16MixedPrecisionRemoval remover;
-                              TF_RETURN_IF_ERROR(remover.Run(module).status());
-                              Despecializer despecializer;
-                              return despecializer.Run(module).status();
-                            }));
+  EXPECT_TRUE(RunAndCompare(
+      hlo_text, ErrorSpec{0.01, 0.01}, [](HloModule* module) -> absl::Status {
+        BFloat16MixedPrecisionRemoval remover;
+        ABSL_RETURN_IF_ERROR(remover.Run(module).status());
+        Despecializer despecializer;
+        return despecializer.Run(module).status();
+      }));
 }
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     GroupedConvolution2DTestWithRandomIndices, GroupedConvolution2DTest,
     ::testing::Combine(::testing::ValuesIn(GetConv2DTestCases()),
                        ::testing::Bool()),
     GroupedConvolution2DTestDataToString);
 
-using GroupedConvolutionTest = HloTestBase;
+using GroupedConvolutionTest = HloInterpreterReferenceMixin<HloTestBase>;
 
-XLA_TEST_F(GroupedConvolutionTest, BackwardInputConvolution) {
+TEST_F(GroupedConvolutionTest, BackwardInputConvolution) {
   auto module = ParseAndReturnVerifiedModule(R"(
   HloModule convolution_module
 

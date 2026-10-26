@@ -18,18 +18,22 @@ limitations under the License.
 
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
+#include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "mlir/IR/Diagnostics.h"  // from @llvm-project
-#include "mlir/IR/OpImplementation.h"  // from @llvm-project
-#include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/OpImplementation.h"
+#include "mlir/Support/LogicalResult.h"
 
 namespace xla {
 namespace ifrt {
@@ -38,25 +42,41 @@ namespace ifrt {
 //
 // The assembly format is
 //   $dim_shards to $permutation on $axis_sizes
+
+// If the sharding contains unreduced axes, the format is
+//   $dim_shards to $permutation on $axis_sizes unreduced $unreduced_axes
 //
 // `dim_shards` has rank matching the tensor. Its sizes tell how to distribute
 // the corresponding dimensions of the tensor to the mesh axes. The `dim_shards`
 // then will be mapped to the `permutation` of axes in `minor_to_major`,
-// uniquely determining the slice of tensor on each logical device. For example:
+// uniquely determining the slice of tensor on each logical device. Note that
+// the `dim_shards` are listed in major to minor order, while the `axis_sizes`
+// are listed in minor to major order (both before and after `permutation` is
+// applied).
+// `unreduced_axes` is a list of mesh axes (prior to permutation) that are
+// unreduced instead of replicated. For example:
 //
-// 2x1x3 to [1,0] on 3x2
+// 2x1x3 to [1,0] on 2x3
 //   means to shard a rank-3 tensor into 2 slices in dim-0 and 3 slices in
 //   dim-2. The 6 slices will be distributed to 6 logical devices in the order
-//   of 0,3,1,4,2,5.
+//   of 0,2,4,1,3,5. Equivalent to HloSharding `{devices=[2,1,3]<=[3,2]T(1,0)}`.
 //
-// 2x1 to [0,1] on 2x3
+// 2x1 to [0,1] on 3x2
 //   means to shard a rank-2 tensor into 2 slices in dim-0. The 2 slices will
 //   be distributed to 2 groups replicated on the 3 devices in each group. The
-//   groups of logical devices are (0,1,2), (3,4,5).
+//   groups of logical devices are (0,1,2), (3,4,5). Equivalent to HloSharding
+//   `{devices=[2,1,3]<=[2,3]T(0,1) last_tile_dim_replicate}`.
 //
 // 4 to [1,0] on 2x2
 //   means to shard a rank-1 tensor into 4 slices. The 4 slices will be
-//   distributed to 4 logical devices in the order of 0,2,1,3.
+//   distributed to 4 logical devices in the order of 0,2,1,3. Equivalent to
+//   HloSharding `{devices=[4]<=[2,2]T(1,0)}`.
+//
+// 2x1 to [0,1] on 3x2 unreduced [0]
+//   means to shard a rank-2 tensor into 2 slices in dim-0. The 2 slices will
+//   be distributed to 2 groups that are unreduced across the 3 devices in each
+//   group. The groups of logical devices are (0,1,2), (3,4,5). Equivalent to
+//   HloSharding `{devices=[2,1,3]<=[2,3]T(0,1) last_tile_dims={unreduced}}`.
 //
 // 1x1 to [0,1] on 2
 //   is invalid, because `permutation` and `axis_sizes` has different sizes.
@@ -64,9 +84,14 @@ namespace ifrt {
 // 2x2 to [0] on 2
 //   is invalid, because the 4 slices can't be distributed to 2 devices.
 //
-// 1x2 to [0,1] on 3x2
+// 1x2 to [1,0] on 3x2
 //   is invalid, because the 2 slices on dim-1 can't be distributed to 3 devices
 //   in axis-0.
+//
+// 2x1 to [0,1] on 3x2 unreduced [1]
+//   is invalid, because the unreduced axis cannot be split into multiple slices
+//   along the first dimension. Its corresponding `dim_shards` value is 2 and
+//   must be 1.
 //
 // See `support` directory for conversions with other sharding annotations.
 class ShardingParam {
@@ -89,13 +114,35 @@ class ShardingParam {
     }
 
     // Produces a flat list of device ids according to the permutation.
-    void ToDeviceList(llvm::SmallVectorImpl<int>& out_devices) const;
+    void ToDeviceList(absl::InlinedVector<int, 4>& out_devices) const;
   };
 
-  ShardingParam(llvm::ArrayRef<int64_t> dim_shards, MinorToMajor minor_to_major)
-      : dim_shards_(dim_shards), minor_to_major_(minor_to_major) {}
+  ShardingParam(std::vector<int64_t> dim_shards, MinorToMajor minor_to_major,
+                std::vector<int> unreduced_axes = {})
+      : dim_shards_(std::move(dim_shards)),
+        minor_to_major_(std::move(minor_to_major)),
+        unreduced_axes_(std::move(unreduced_axes)) {}
 
   static mlir::FailureOr<ShardingParam> Parse(mlir::AsmParser& ods_parser);
+
+  // Parses V1 of ShardingParam. This method is meant to be used in the VIFRT
+  // dialect to parse versioned ShardingParams.
+  static mlir::FailureOr<ShardingParam> ParseV1(mlir::AsmParser& ods_parser);
+
+  // Parses V2 of ShardingParam. This method is meant to be used in the VIFRT
+  // dialect to parse versioned ShardingParams.
+  static mlir::FailureOr<ShardingParam> ParseV2(mlir::AsmParser& ods_parser);
+
+  // Prints V1 of ShardingParam. This method is meant to be used in the VIFRT
+  // dialect to print versioned ShardingParams.
+  static void PrintV1(mlir::AsmPrinter& ods_printer,
+                      const ShardingParam& sharding);
+
+  // Prints V2 of ShardingParam. This method is meant to be used in the VIFRT
+  // dialect to print versioned ShardingParams.
+  static void PrintV2(mlir::AsmPrinter& ods_printer,
+                      const ShardingParam& sharding);
+
   absl::Status verify() const;
   mlir::LogicalResult verify(
       llvm::function_ref<mlir::InFlightDiagnostic()> emit_error) const;
@@ -117,9 +164,13 @@ class ShardingParam {
   llvm::ArrayRef<int64_t> dim_shards() const { return dim_shards_; }
   const MinorToMajor& minor_to_major() const { return minor_to_major_; }
 
+  // Returns the indices of unreduced mesh axes.
+  llvm::ArrayRef<int> unreduced_axes() const { return unreduced_axes_; }
+
   bool operator==(const ShardingParam& other) const {
     return dim_shards_ == other.dim_shards_ &&
-           minor_to_major_ == other.minor_to_major_;
+           minor_to_major_ == other.minor_to_major_ &&
+           unreduced_axes_ == other.unreduced_axes_;
   }
 
   bool operator!=(const ShardingParam& other) const {
@@ -127,16 +178,29 @@ class ShardingParam {
   }
 
   llvm::hash_code hash_value() const {
-    return llvm::hash_combine(dim_shards(),
-                              llvm::ArrayRef<int>(minor_to_major_.permutation),
-                              llvm::ArrayRef<int>(minor_to_major_.axis_sizes));
+    return llvm::hash_combine(
+        dim_shards(), llvm::ArrayRef<int>(minor_to_major_.permutation),
+        llvm::ArrayRef<int>(minor_to_major_.axis_sizes), unreduced_axes());
+  }
+
+  template <typename H>
+  friend H AbslHashValue(H h, const ShardingParam& value) {
+    h = H::combine(std::move(h), value.dim_shards_);
+    h = H::combine_contiguous(std::move(h),
+                              value.minor_to_major_.permutation.data(),
+                              value.minor_to_major_.permutation.size());
+    h = H::combine(std::move(h), value.unreduced_axes_);
+    return H::combine_contiguous(std::move(h),
+                                 value.minor_to_major_.axis_sizes.data(),
+                                 value.minor_to_major_.axis_sizes.size());
   }
 
   std::string DebugString() const;
 
  private:
-  llvm::SmallVector<int64_t, 4> dim_shards_;
+  std::vector<int64_t> dim_shards_;
   MinorToMajor minor_to_major_;
+  std::vector<int> unreduced_axes_;
 };
 
 llvm::hash_code hash_value(ShardingParam sharding);

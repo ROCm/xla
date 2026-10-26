@@ -15,15 +15,17 @@ limitations under the License.
 
 #include "xla/mlir/utils/type_util.h"
 
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
-#include "mlir/IR/Builders.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "mlir/IR/Types.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "llvm/Support/Casting.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Types.h"
+#include "mlir/Support/LLVM.h"
 #include "xla/primitive_util.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -32,16 +34,28 @@ absl::StatusOr<mlir::Type> ConvertPrimitiveTypeToMlirType(
   switch (type) {
     case xla::PrimitiveType::PRED:
       return b.getI1Type();
+    case xla::PrimitiveType::F4E2M1FN:
+      return b.getType<mlir::Float4E2M1FNType>();
+    case xla::PrimitiveType::F6E3M2FN:
+      return b.getType<mlir::Float6E3M2FNType>();
+    case xla::PrimitiveType::F6E2M3FN:
+      return b.getType<mlir::Float6E2M3FNType>();
     case xla::PrimitiveType::F8E5M2:
-      return b.getFloat8E5M2Type();
+      return b.getType<mlir::Float8E5M2Type>();
+    case xla::PrimitiveType::F8E4M3:
+      return b.getType<mlir::Float8E4M3Type>();
     case xla::PrimitiveType::F8E4M3FN:
-      return b.getFloat8E4M3FNType();
+      return b.getType<mlir::Float8E4M3FNType>();
     case xla::PrimitiveType::F8E4M3B11FNUZ:
-      return b.getFloat8E4M3B11FNUZType();
+      return b.getType<mlir::Float8E4M3B11FNUZType>();
     case xla::PrimitiveType::F8E5M2FNUZ:
-      return b.getFloat8E5M2FNUZType();
+      return b.getType<mlir::Float8E5M2FNUZType>();
     case xla::PrimitiveType::F8E4M3FNUZ:
-      return b.getFloat8E4M3FNUZType();
+      return b.getType<mlir::Float8E4M3FNUZType>();
+    case xla::PrimitiveType::F8E3M4:
+      return b.getType<mlir::Float8E3M4Type>();
+    case xla::PrimitiveType::F8E8M0FNU:
+      return b.getType<mlir::Float8E8M0FNUType>();
     case xla::PrimitiveType::F16:
       return b.getF16Type();
     case xla::PrimitiveType::BF16:
@@ -62,7 +76,7 @@ absl::StatusOr<mlir::Type> ConvertPrimitiveTypeToMlirType(
                 : mlir::IntegerType::Signless);
       }
       if (xla::primitive_util::IsComplexType(type)) {
-        TF_ASSIGN_OR_RETURN(
+        ABSL_ASSIGN_OR_RETURN(
             mlir::Type component_type,
             xla::ConvertPrimitiveTypeToMlirType(
                 xla::primitive_util::ComplexComponentType(type), b));
@@ -74,29 +88,57 @@ absl::StatusOr<mlir::Type> ConvertPrimitiveTypeToMlirType(
 }
 
 xla::PrimitiveType ConvertMlirTypeToPrimitiveType(mlir::Type type) {
-  if (type.isFloat8E5M2()) {
+  if (llvm::isa<mlir::Float4E2M1FNType>(type)) {
+    return xla::PrimitiveType::F4E2M1FN;
+  }
+  if (llvm::isa<mlir::Float6E3M2FNType>(type)) {
+    return xla::PrimitiveType::F6E3M2FN;
+  }
+  if (llvm::isa<mlir::Float6E2M3FNType>(type)) {
+    return xla::PrimitiveType::F6E2M3FN;
+  }
+  if (llvm::isa<mlir::Float8E5M2Type>(type)) {
     return xla::PrimitiveType::F8E5M2;
-  } else if (type.isFloat8E4M3FN()) {
+  }
+  if (llvm::isa<mlir::Float8E4M3Type>(type)) {
+    return xla::PrimitiveType::F8E4M3;
+  }
+  if (llvm::isa<mlir::Float8E4M3FNType>(type)) {
     return xla::PrimitiveType::F8E4M3FN;
-  } else if (type.isFloat8E4M3B11FNUZ()) {
+  }
+  if (llvm::isa<mlir::Float8E4M3B11FNUZType>(type)) {
     return xla::PrimitiveType::F8E4M3B11FNUZ;
-  } else if (type.isFloat8E4M3FNUZ()) {
+  }
+  if (llvm::isa<mlir::Float8E4M3FNUZType>(type)) {
     return xla::PrimitiveType::F8E4M3FNUZ;
-  } else if (type.isFloat8E5M2FNUZ()) {
+  }
+  if (llvm::isa<mlir::Float8E5M2FNUZType>(type)) {
     return xla::PrimitiveType::F8E5M2FNUZ;
-  } else if (type.isBF16()) {
+  }
+  if (llvm::isa<mlir::Float8E3M4Type>(type)) {
+    return xla::PrimitiveType::F8E3M4;
+  }
+  if (llvm::isa<mlir::Float8E8M0FNUType>(type)) {
+    return xla::PrimitiveType::F8E8M0FNU;
+  }
+  if (type.isBF16()) {
     return xla::PrimitiveType::BF16;
-  } else if (type.isF16()) {
+  }
+  if (type.isF16()) {
     return xla::PrimitiveType::F16;
-  } else if (type.isF32()) {
+  }
+  if (type.isF32()) {
     return xla::PrimitiveType::F32;
-  } else if (type.isF64()) {
+  }
+  if (type.isF64()) {
     return xla::PrimitiveType::F64;
-  } else if (auto complex_type = mlir::dyn_cast<mlir::ComplexType>(type)) {
+  }
+  if (auto complex_type = mlir::dyn_cast<mlir::ComplexType>(type)) {
     mlir::Type element_ty = complex_type.getElementType();
     return xla::primitive_util::ComplexType(
         ConvertMlirTypeToPrimitiveType(element_ty));
-  } else if (auto integer_type = mlir::dyn_cast<mlir::IntegerType>(type)) {
+  }
+  if (auto integer_type = mlir::dyn_cast<mlir::IntegerType>(type)) {
     bool is_unsigned = integer_type.isUnsigned();
     if (integer_type.getWidth() == 1) {
       return xla::PrimitiveType::PRED;

@@ -1,6 +1,21 @@
-load("@tsl//tsl/platform:rules_cc.bzl", "cc_library")
-load("//xla:xla.bzl", "xla_cc_test")
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+load("//xla:xla.default.bzl", "xla_cc_test")
 load("//xla/tsl:tsl.default.bzl", "filegroup")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -11,9 +26,10 @@ package(
 # Public XLA FFI API
 #===-------------------------------------------------------------------------------------------===//
 
-# XLA FFI is a header only library that does not have any dependencies on XLA. The intent is that
-# users that do want to register custom FFI handlers with XLA should copy these headers to their
-# project, build a shared object with an XLA FFI handler implementation, and load it at run time.
+# XLA FFI is a header only library that does not have any dependencies on XLA or any other
+# external libraries. The intent is that users that do want to register custom FFI handlers with XLA
+# should copy these headers to their project, build a shared object with an XLA FFI handler
+# implementation and load it at run time.
 #
 # `api.h` and `ffi.h` headers provide a C++ library for decoding XLA FFI C API structs into a more
 # user friendly C++ types. Shared objects defining XLA FFI handlers should be built with private
@@ -22,6 +38,10 @@ package(
 #
 # `ffi.h` defines builtin decoding for canonical XLA types, but users can add their own decodings
 # with template specializations.
+#
+# IMPORTANT: It is critical that exported FFI headers do not have any dependencies on XLA or any
+# other libraries, because it allows external FFI users to simply copy the headers to their project
+# and do not worry about build configuration or dependencies.
 
 # A user of the FFI interface will only need the three headers included in the `all_headers`
 # filegroup: `api.h`, `c_api.h`, and `ffi.h`.
@@ -30,30 +50,46 @@ filegroup(
     srcs = [
         "api.h",
         "c_api.h",
+        "collectives_api.h",
+        "collectives_c_api.h",
+        "collectives_ffi.h",
         "ffi.h",
+        "record_api.h",
+        "record_c_api.h",
+        "record_ffi.h",
     ],
 )
 
 filegroup(
     name = "api_headers",
-    srcs = ["api.h"],
+    srcs = [
+        "api.h",
+        "collectives_api.h",
+        "record_api.h",
+    ],
 )
 
 filegroup(
     name = "c_api_headers",
-    srcs = ["c_api.h"],
+    srcs = [
+        "c_api.h",
+        "collectives_c_api.h",
+        "record_c_api.h",
+    ],
 )
 
 cc_library(
     name = "api",
     hdrs = [":api_headers"],
-    visibility = ["//visibility:private"],
-    deps = [":c_api"],
+    visibility = ["//xla/ffi:__pkg__"],
+    deps = [
+        ":c_api",
+    ],
 )
 
 cc_library(
     name = "c_api",
-    hdrs = ["c_api.h"],
+    hdrs = [":c_api_headers"],
 )
 
 cc_library(
@@ -71,25 +107,109 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "record_api",
+    hdrs = ["record_api.h"],
+    deps = [
+        ":api",
+        ":c_api",
+    ],
+)
+
+cc_library(
+    name = "record_ffi",
+    hdrs = ["record_ffi.h"],
+    deps = [
+        ":api",
+        ":c_api",
+        ":ffi",
+        ":record_api",
+    ],
+)
+
+cc_library(
+    name = "collectives_api",
+    hdrs = ["collectives_api.h"],
+    deps = [
+        ":c_api",
+    ],
+)
+
+cc_library(
+    name = "collectives_ffi",
+    hdrs = ["collectives_ffi.h"],
+    deps = [
+        ":collectives_api",
+        ":ffi",
+    ],
+)
+
 xla_cc_test(
     name = "ffi_test",
     srcs = ["ffi_test.cc"],
     deps = [
+        ":c_api",
         ":ffi",
+        "//xla:custom_options",
+        "//xla:executable_run_options",
+        "//xla:shape_util",
         "//xla:xla_data_proto_cc",
+        "//xla/ffi:attribute_map",
         "//xla/ffi:call_frame",
         "//xla/ffi:execution_context",
-        "//xla/ffi:ffi_api",
-        "//xla/stream_executor:device_memory",
-        "//xla/stream_executor:device_memory_allocator",
+        "//xla/ffi:execution_state",
+        "//xla/ffi:ffi_api",  # buildcleaner: keep
+        "//xla/ffi:invoke",
+        "//xla/ffi:type_registry",
+        "//xla/stream_executor:device_address",
+        "//xla/stream_executor:device_address_allocator",
+        "//xla/tsl/concurrency:async_value",
+        "//xla/tsl/lib/core:status_test_util",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:test",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/functional:overload",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/strings",
-        "@tsl//tsl/lib/core:status_test_util",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:status_matchers",
-        "@tsl//tsl/platform:test",
-        "@tsl//tsl/platform:test_benchmark",
-        "@tsl//tsl/platform:test_main",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:span",
+        "@com_google_googletest//:gtest",
+        "@eigen_archive//:eigen3",
+    ],
+)
+
+xla_cc_test(
+    name = "record_ffi_test",
+    srcs = ["record_ffi_test.cc"],
+    deps = [
+        ":c_api",
+        ":ffi",
+        ":record_api",
+        ":record_ffi",
+        "//xla/ffi:call_frame",
+        "//xla/ffi:ffi_api",  # buildcleaner: keep
+        "//xla/ffi:invoke",
+        "//xla/tsl/platform:test_main",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
+xla_cc_test(
+    name = "collectives_ffi_test",
+    srcs = ["collectives_ffi_test.cc"],
+    deps = [
+        ":c_api",
+        ":collectives_api",
+        ":collectives_ffi",
+        ":ffi",
+        "//xla/ffi:call_frame",
+        "//xla/ffi:ffi_api",  # buildcleaner: keep
+        "//xla/ffi:invoke",
+        "//xla/tsl/platform:test_main",
+        "@com_google_googletest//:gtest",
     ],
 )

@@ -18,13 +18,13 @@ limitations under the License.
 
 #include <cstdint>
 
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/service/hlo_value.h"
 #include "xla/shape_tree.h"
 #include "xla/shape_util.h"
-#include "xla/statusor.h"
 
 namespace xla {
 class TupleUtil {
@@ -53,7 +53,8 @@ class TupleUtil {
   // get-tuple-elements and a new tuple instruction. Returns the root of the
   // graph of instructions generated.
   static HloInstruction* Duplicate(HloInstruction* input_tuple) {
-    return ExtractPrefix(input_tuple, input_tuple->shape().tuple_shapes_size());
+    return ExtractPrefix(input_tuple,
+                         input_tuple->shape().tuple_shapes().size());
   }
 
   // Descend to the shape_index element of the tuple and replace that with
@@ -85,6 +86,12 @@ class TupleUtil {
   static HloInstruction* AssembleTupleInstruction(
       HloComputation* computation, ShapeTree<HloInstruction*> elements,
       absl::string_view name = "");
+
+  // Returns the tuple instruction at the given ShapeIndex `target_index`.
+  // Returns nullptr if there does not exist a tuple instruction at the given
+  // index, or if the index is invalid.
+  static HloInstruction* GetTupleInstructionAtIndex(
+      HloInstruction& tuple, const ShapeIndex& target_index);
 };
 }  // namespace xla
 

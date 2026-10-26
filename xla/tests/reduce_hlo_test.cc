@@ -13,14 +13,30 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <array>
+#include <gtest/gtest.h>
 
+#include <array>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+
+#include "absl/log/log.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
-#include "xla/tests/hlo_test_base.h"
-#include "xla/tests/test_macros.h"
-#include "xla/tests/test_utils.h"
-#include "tsl/platform/test.h"
+#include "xla/error_spec.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/layout_util.h"
+#include "xla/literal.h"
+#include "xla/literal_util.h"
+#include "xla/shape.h"
+#include "xla/shape_layout.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/tsl/platform/statusor.h"
 
 // Tests the Reduce HLO in ways that can't be done using the ComputationBuilder
 // API.
@@ -43,12 +59,8 @@ std::string PrintReduceLayout(
   return reduce_layout_param.param.ToString();
 }
 
-void PrintTo(const ReduceLayout& reduce_layout, ::std::ostream* os) {
-  *os << reduce_layout.ToString();
-}
-
 class ReduceWithLayoutTest
-    : public HloTestBase,
+    : public HloInterpreterReferenceMixin<HloTestBase>,
       public ::testing::WithParamInterface<ReduceLayout> {
  public:
   absl::StatusOr<std::unique_ptr<HloModule>> GetParsedModule() {
@@ -64,8 +76,9 @@ Sum {
 ENTRY reduce.1 {
   parameter = f32[2,2,2,3]{3,2,1,0} parameter(0)
   init_value = f32[] constant(0)
-  reduce = f32[2,2,3]{2,1,0} reduce(parameter, init_value), dimensions={1}, to_apply=Sum
-  ROOT copy = f32[2,2,3]{2,1,0} copy(reduce)
+  reduce = f32[2,2,3]{2,1,0} reduce(parameter, init_value), dimensions={1},
+  to_apply=Sum transpose = f32[2,2,3]{2,1,0} transpose(reduce),
+  dimensions={0,1,2} ROOT bitcast = f32[2,2,3]{2,1,0} bitcast(transpose)
 }
 )";
 
@@ -73,14 +86,12 @@ ENTRY reduce.1 {
   }
 };
 
-XLA_TEST_P(ReduceWithLayoutTest, DISABLED_ON_TPU(Reduce)) {
-  if (IsMlirLoweringEnabled()) {
-    GTEST_SKIP() << "Explicit layouts not supported by MLIR";
-  }
-
+TEST_P(ReduceWithLayoutTest, Reduce) {
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module, GetParsedModule());
-  HloInstruction* reduce_instruction =
-      module->entry_computation()->root_instruction()->mutable_operand(0);
+  HloInstruction* reduce_instruction = module->entry_computation()
+                                           ->root_instruction()
+                                           ->mutable_operand(0)
+                                           ->mutable_operand(0);
   ASSERT_EQ(reduce_instruction->opcode(), HloOpcode::kReduce);
 
   const ReduceLayout& reduce_layout = GetParam();
@@ -110,8 +121,13 @@ XLA_TEST_P(ReduceWithLayoutTest, DISABLED_ON_TPU(Reduce)) {
          {-0.241772294, -0.245131493, -0.160247207},
          {-0.179881215, -0.23383224, -0.121976733}}}});
 
-  auto reduce_input_relaid =
+  Literal reduce_input_relaid =
       reduce_input.Relayout(reduce_input_shape->layout());
+
+  // Strict layout check in PjRt requires entry computation layout to match.
+  *module->mutable_entry_computation_layout()->mutable_parameter_layout(0) =
+      ShapeLayout(*reduce_input_shape);
+
   EXPECT_TRUE(RunAndCompareNoHloPasses(
       std::move(module), {&reduce_input_relaid}, ErrorSpec(1e-5)));
 }

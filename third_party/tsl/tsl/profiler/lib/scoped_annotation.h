@@ -22,28 +22,56 @@ limitations under the License.
 #include <string_view>
 #include <utility>
 
-#include "tsl/platform/macros.h"
+#include "absl/strings/string_view.h"
+#include "tsl/platform/platform.h"  // IWYU pragma: keep
 #include "tsl/profiler/lib/nvtx_utils.h"
+#include "xla/tsl/platform/macros.h"
 
 #if !defined(IS_MOBILE_PLATFORM)
-#include "tsl/profiler/backends/cpu/annotation_stack.h"
+#include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
 #endif
 
 namespace tsl::profiler {
 
 // Adds an annotation to all activities through the currently registered
 // TraceCollector until PopAnnotation() is called.
-template <typename T>
-void PushAnnotation(const T& generator) {
+template <typename Generator>
+void PushAnnotation(const Generator& generator) {
+  auto domain = DefaultProfilerDomain();
+  const bool push_nvtx = TF_PREDICT_FALSE(domain != nullptr);
+#if !defined(IS_MOBILE_PLATFORM)
+  const bool push_stack = TF_PREDICT_FALSE(AnnotationStack::IsEnabled());
+#else
+  constexpr bool push_stack = false;
+#endif
+  if (TF_PREDICT_FALSE(push_nvtx || push_stack)) {
+    // Now CUPTI supports multiple subscribers we may need both sets of
+    // annotations at the same time.
+    decltype(auto) annotation = generator();
+    if (push_nvtx) {
+      RangePush(domain, annotation);
+    }
+#if !defined(IS_MOBILE_PLATFORM)
+    if (push_stack) {
+      AnnotationStack::PushAnnotation(
+          static_cast<absl::string_view>(annotation));
+    }
+#endif
+  }
+}
+
+template <typename AnnotationGenerator, typename RangeGenerator>
+void PushAnnotation(const AnnotationGenerator& annotation_generator,
+                    const RangeGenerator& range_generator) {
   if (auto domain = DefaultProfilerDomain();
       TF_PREDICT_FALSE(domain != nullptr)) {
-    RangePush(domain, generator());
-    return;
+    RangePush(domain, range_generator());
   }
 
 #if !defined(IS_MOBILE_PLATFORM)
   if (TF_PREDICT_FALSE(AnnotationStack::IsEnabled())) {
-    AnnotationStack::PushAnnotation(static_cast<std::string_view>(generator()));
+    AnnotationStack::PushAnnotation(
+        static_cast<absl::string_view>(annotation_generator()));
   }
 #endif
 }
@@ -60,17 +88,16 @@ inline void PopAnnotation() {
   // fail probably due to compiler in that presubmit config.
   std::atomic_thread_fence(std::memory_order_acquire);
 
-  if (auto domain = DefaultProfilerDomain();
-      TF_PREDICT_FALSE(domain != nullptr)) {
-    RangePop(domain);
-    return;
-  }
-
 #if !defined(IS_MOBILE_PLATFORM)
   if (TF_PREDICT_FALSE(AnnotationStack::IsEnabled())) {
     AnnotationStack::PopAnnotation();
   }
 #endif
+
+  if (auto domain = DefaultProfilerDomain();
+      TF_PREDICT_FALSE(domain != nullptr)) {
+    RangePop(domain);
+  }
 }
 
 // Adds an annotation to all activities for the duration of the instance
@@ -84,12 +111,23 @@ inline void PopAnnotation() {
 // This will add 'my kernels' to both kernels in the profiler UI
 class ScopedAnnotation {
  public:
-  template <typename T>
-  explicit ScopedAnnotation(T&& annotation) {
-    PushAnnotation(std::forward<T>(annotation));
+  template <typename Generator>
+  explicit ScopedAnnotation(Generator&& generator) {
+    PushAnnotation(std::forward<Generator>(generator));
   }
 
-  // Pops the name passed in the constructor from the current annotation.
+  // The annotation generator provides the string pushed to the annotation
+  // stack. The range generator provides the object pushed to the profiler
+  // domain's range stack, which can carry a compact registered name and a
+  // structured payload.
+  template <typename AnnotationGenerator, typename RangeGenerator>
+  explicit ScopedAnnotation(AnnotationGenerator&& annotation_generator,
+                            RangeGenerator&& range_generator) {
+    PushAnnotation(std::forward<AnnotationGenerator>(annotation_generator),
+                   std::forward<RangeGenerator>(range_generator));
+  }
+
+  // Pops the annotation and/or range pushed by the constructor.
   ~ScopedAnnotation() { PopAnnotation(); }
 
   static bool IsEnabled() {

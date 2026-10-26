@@ -20,49 +20,60 @@ limitations under the License.
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+
+#include <cstring>
+
+#include "absl/base/attributes.h"
+#include "absl/base/const_init.h"
+#include "absl/status/status.h"
 #if defined(PLATFORM_WINDOWS)
 #include <windows.h>
 #else
 #include <unistd.h>
 #endif
 
+#include <initializer_list>
 #include <string>
 #include <vector>
 
 #include "absl/algorithm/container.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/mutex.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/types/span.h"
 #include "tsl/platform/scanner.h"
-#include "tsl/platform/str_util.h"
-#include "tsl/platform/strcat.h"
-#include "tsl/platform/stringpiece.h"
-#include "tsl/platform/types.h"
+#include "xla/tsl/platform/logging.h"
 
 namespace tsl {
 namespace io {
 namespace internal {
 namespace {
 
-const char kPathSep[] = "/";
+static constexpr char kPathSep[2] = "/";
+static_assert(
+    sizeof(kPathSep) == 2 && kPathSep[1] == '\0',
+    "`kPathSep` must consist of a single character followed by a null "
+    "terminator. (If this ever changes, update dependent code accordingly.)");
+
 }  // namespace
 
-string JoinPathImpl(std::initializer_list<StringPiece> paths) {
-  string result;
+std::string JoinPathImpl(std::initializer_list<absl::string_view> paths) {
+  std::string result;
 
-  for (StringPiece path : paths) {
+  for (absl::string_view path : paths) {
     if (path.empty()) continue;
 
     if (result.empty()) {
-      result = string(path);
+      result = std::string(path);
       continue;
     }
 
     if (IsAbsolutePath(path)) path = path.substr(1);
 
     if (result[result.size() - 1] == kPathSep[0]) {
-      strings::StrAppend(&result, path);
+      absl::StrAppend(&result, path);
     } else {
-      strings::StrAppend(&result, kPathSep, path);
+      absl::StrAppend(&result, kPathSep, path);
     }
   }
 
@@ -73,8 +84,9 @@ string JoinPathImpl(std::initializer_list<StringPiece> paths) {
 // no "/" in the path, the first part of the output is the scheme and host, and
 // the second is the path. If the only "/" in the path is the first character,
 // it is included in the first part of the output.
-std::pair<StringPiece, StringPiece> SplitPath(StringPiece uri) {
-  StringPiece scheme, host, path;
+std::pair<absl::string_view, absl::string_view> SplitPath(
+    absl::string_view uri) {
+  absl::string_view scheme, host, path;
   ParseURI(uri, &scheme, &host, &path);
 
   auto pos = path.rfind('/');
@@ -82,61 +94,63 @@ std::pair<StringPiece, StringPiece> SplitPath(StringPiece uri) {
   if (pos == StringPiece::npos) pos = path.rfind('\\');
 #endif
   // Handle the case with no '/' in 'path'.
-  if (pos == StringPiece::npos)
-    return std::make_pair(StringPiece(uri.data(), host.end() - uri.begin()),
-                          path);
+  if (pos == absl::string_view::npos)
+    return std::make_pair(
+        absl::string_view(uri.data(), host.end() - uri.begin()), path);
 
   // Handle the case with a single leading '/' in 'path'.
   if (pos == 0)
     return std::make_pair(
-        StringPiece(uri.data(), path.begin() + 1 - uri.begin()),
-        StringPiece(path.data() + 1, path.size() - 1));
+        absl::string_view(uri.data(), path.begin() + 1 - uri.begin()),
+        absl::string_view(path.data() + 1, path.size() - 1));
 
   return std::make_pair(
-      StringPiece(uri.data(), path.begin() + pos - uri.begin()),
-      StringPiece(path.data() + pos + 1, path.size() - (pos + 1)));
+      absl::string_view(uri.data(), path.begin() + pos - uri.begin()),
+      absl::string_view(path.data() + pos + 1, path.size() - (pos + 1)));
 }
 
 // Return the parts of the basename of path, split on the final ".".
 // If there is no "." in the basename or "." is the final character in the
 // basename, the second value will be empty.
-std::pair<StringPiece, StringPiece> SplitBasename(StringPiece path) {
+std::pair<absl::string_view, absl::string_view> SplitBasename(
+    absl::string_view path) {
   path = Basename(path);
 
   auto pos = path.rfind('.');
-  if (pos == StringPiece::npos)
-    return std::make_pair(path, StringPiece(path.data() + path.size(), 0));
+  if (pos == absl::string_view::npos)
+    return std::make_pair(path,
+                          absl::string_view(path.data() + path.size(), 0));
   return std::make_pair(
-      StringPiece(path.data(), pos),
-      StringPiece(path.data() + pos + 1, path.size() - (pos + 1)));
+      absl::string_view(path.data(), pos),
+      absl::string_view(path.data() + pos + 1, path.size() - (pos + 1)));
 }
 
 }  // namespace internal
 
-bool IsAbsolutePath(StringPiece path) {
+bool IsAbsolutePath(absl::string_view path) {
   return !path.empty() && path[0] == '/';
 }
 
-StringPiece Dirname(StringPiece path) {
+absl::string_view Dirname(absl::string_view path) {
   return internal::SplitPath(path).first;
 }
 
-StringPiece Basename(StringPiece path) {
+absl::string_view Basename(absl::string_view path) {
   return internal::SplitPath(path).second;
 }
 
-StringPiece Extension(StringPiece path) {
+absl::string_view Extension(absl::string_view path) {
   return internal::SplitBasename(path).second;
 }
 
-StringPiece BasenamePrefix(StringPiece path) {
+absl::string_view BasenamePrefix(absl::string_view path) {
   return internal::SplitBasename(path).first;
 }
 
-string CleanPath(StringPiece unclean_path) {
-  string path(unclean_path);
+std::string CleanPath(absl::string_view unclean_path) {
+  std::string path(unclean_path);
   const char* src = path.c_str();
-  string::iterator dst = path.begin();
+  std::string::iterator dst = path.begin();
 
   // Check for absolute path and determine initial backtrack limit.
   const bool is_absolute_path = *src == '/';
@@ -144,7 +158,7 @@ string CleanPath(StringPiece unclean_path) {
     *dst++ = *src++;
     while (*src == '/') ++src;
   }
-  string::const_iterator backtrack_limit = dst;
+  std::string::const_iterator backtrack_limit = dst;
 
   // Process all parts
   while (*src) {
@@ -200,7 +214,7 @@ string CleanPath(StringPiece unclean_path) {
   }
 
   // Calculate and check the length of the cleaned path.
-  string::difference_type path_length = dst - path.begin();
+  std::string::difference_type path_length = dst - path.begin();
   if (path_length != 0) {
     // Remove trailing '/' except if it is root path ("/" ==> path_length := 1)
     if (path_length > 1 && path[path_length - 1] == '/') {
@@ -214,8 +228,15 @@ string CleanPath(StringPiece unclean_path) {
   return path;
 }
 
-void ParseURI(StringPiece uri, StringPiece* scheme, StringPiece* host,
-              StringPiece* path) {
+std::string EnsureTrailingSlash(absl::string_view path) {
+  if (!path.empty() && path.back() != internal::kPathSep[0]) {
+    return absl::StrCat(path, internal::kPathSep);
+  }
+  return std::string(path);
+}
+
+void ParseURI(absl::string_view uri, absl::string_view* scheme,
+              absl::string_view* host, absl::string_view* path) {
   // 0. Parse scheme
   // Make sure scheme matches [a-zA-Z][0-9a-zA-Z.]*
   // TODO(keveman): Allow "+" and "-" in the scheme.
@@ -228,8 +249,8 @@ void ParseURI(StringPiece uri, StringPiece* scheme, StringPiece* host,
            .OneLiteral("://")
            .GetResult(&uri, scheme)) {
     // If there's no scheme, assume the entire string is a path.
-    *scheme = StringPiece(uri.data(), 0);
-    *host = StringPiece(uri.data(), 0);
+    *scheme = absl::string_view(uri.data(), 0);
+    *host = absl::string_view(uri.data(), 0);
     *path = uri;
     return;
   }
@@ -238,7 +259,7 @@ void ParseURI(StringPiece uri, StringPiece* scheme, StringPiece* host,
   if (!strings::Scanner(uri).ScanUntil('/').GetResult(&uri, host)) {
     // No path, so the rest of the URI is the host.
     *host = uri;
-    *path = StringPiece();  // empty path
+    *path = absl::string_view();  // empty path
     return;
   }
 
@@ -246,25 +267,27 @@ void ParseURI(StringPiece uri, StringPiece* scheme, StringPiece* host,
   *path = uri;
 }
 
-string CreateURI(StringPiece scheme, StringPiece host, StringPiece path) {
+std::string CreateURI(absl::string_view scheme, absl::string_view host,
+                      absl::string_view path) {
   if (scheme.empty()) {
-    return string(path);
+    return std::string(path);
   }
-  return strings::StrCat(scheme, "://", host, path);
+  return absl::StrCat(scheme, "://", host, path);
 }
 
 // Returns a unique number every time it is called.
 int64_t UniqueId() {
-  static mutex mu(LINKER_INITIALIZED);
+  ABSL_CONST_INIT static absl::Mutex mu(absl::kConstInit);
   static int64_t id = 0;
-  mutex_lock l(mu);
+  absl::MutexLock l(mu);
   return ++id;
 }
 
-string CommonPathPrefix(absl::Span<const string> paths) {
+std::string CommonPathPrefix(absl::Span<const std::string> paths) {
   if (paths.empty()) return "";
   size_t min_filename_size =
-      absl::c_min_element(paths, [](const string& a, const string& b) {
+      absl::c_min_element(paths, [](const std::string& a,
+                                    const std::string& b) {
         return a.size() < b.size();
       })->size();
   if (min_filename_size == 0) return "";
@@ -290,7 +313,7 @@ string CommonPathPrefix(absl::Span<const string> paths) {
              : std::string(absl::string_view(paths[0]).substr(0, rpos + 1));
 }
 
-string GetTempFilename(const string& extension) {
+std::string GetTempFilename(const std::string& extension) {
 #if defined(__ANDROID__)
   LOG(FATAL) << "GetTempFilename is not implemented in this platform.";
 #elif defined(PLATFORM_WINDOWS)
@@ -300,48 +323,23 @@ string GetTempFilename(const string& extension) {
   if (retval > _MAX_PATH || retval == 0) {
     LOG(FATAL) << "Cannot get the directory for temporary files.";
   }
-
-  char temp_file_name[_MAX_PATH];
-  retval = GetTempFileName(temp_dir, "", UniqueId(), temp_file_name);
-  if (retval > _MAX_PATH || retval == 0) {
-    LOG(FATAL) << "Cannot get a temporary file in: " << temp_dir;
+  absl::StatusOr<std::string> tmp_filepath =
+      GetTempFilename(std::string(temp_dir), extension);
+  if (tmp_filepath.ok()) {
+    return *tmp_filepath;
   }
-
-  string full_tmp_file_name(temp_file_name);
-  full_tmp_file_name.append(extension);
-  return full_tmp_file_name;
+  LOG(FATAL) << "No temp directory found.";
+  std::abort();
 #else
   for (const char* dir : std::vector<const char*>(
            {getenv("TEST_TMPDIR"), getenv("TMPDIR"), getenv("TMP"), "/tmp"})) {
     if (!dir || !dir[0]) {
       continue;
     }
-    struct stat statbuf;
-    if (!stat(dir, &statbuf) && S_ISDIR(statbuf.st_mode)) {
-      // UniqueId is added here because mkstemps is not as thread safe as it
-      // looks. https://github.com/tensorflow/tensorflow/issues/5804 shows
-      // the problem.
-      string tmp_filepath;
-      int fd;
-      if (extension.length()) {
-        tmp_filepath = io::JoinPath(
-            dir, strings::StrCat("tmp_file_tensorflow_", UniqueId(), "_XXXXXX.",
-                                 extension));
-        fd = mkstemps(&tmp_filepath[0], extension.length() + 1);
-      } else {
-        tmp_filepath = io::JoinPath(
-            dir,
-            strings::StrCat("tmp_file_tensorflow_", UniqueId(), "_XXXXXX"));
-        fd = mkstemp(&tmp_filepath[0]);
-      }
-      if (fd < 0) {
-        LOG(FATAL) << "Failed to create temp file.";
-      } else {
-        if (close(fd) < 0) {
-          LOG(ERROR) << "close() failed: " << strerror(errno);
-        }
-        return tmp_filepath;
-      }
+    absl::StatusOr<std::string> tmp_filepath =
+        GetTempFilename(std::string(dir), extension);
+    if (tmp_filepath.ok()) {
+      return *tmp_filepath;
     }
   }
   LOG(FATAL) << "No temp directory found.";
@@ -349,17 +347,69 @@ string GetTempFilename(const string& extension) {
 #endif
 }
 
+absl::StatusOr<std::string> GetTempFilename(const std::string& directory,
+                                            const std::string& extension) {
+#if defined(__ANDROID__)
+  return absl::UnimplementedError(
+      "GetTempFilename is not implemented in this platform.");
+#elif defined(PLATFORM_WINDOWS)
+  DWORD retval;
+  char temp_file_name[_MAX_PATH];
+  retval = GetTempFileName(directory.c_str(), "", UniqueId(), temp_file_name);
+  if (retval > _MAX_PATH || retval == 0) {
+    LOG(FATAL) << "Cannot get a temporary file in: " << directory;
+  }
+  std::string full_tmp_file_name(temp_file_name);
+  full_tmp_file_name.append(extension);
+  return std::string(full_tmp_file_name);
+#else
+  const char* dir = directory.c_str();
+  if (!dir || !dir[0]) {
+    return absl::InvalidArgumentError("Directory is empty.");
+  }
+  struct stat statbuf;
+  if (!stat(dir, &statbuf) && S_ISDIR(statbuf.st_mode)) {
+    // UniqueId is added here because mkstemps is not as thread safe as it
+    // looks. https://github.com/tensorflow/tensorflow/issues/5804 shows
+    // the problem.
+    std::string tmp_filepath;
+    int fd;
+    if (extension.length()) {
+      tmp_filepath =
+          io::JoinPath(dir, absl::StrCat("tmp_file_tensorflow_", UniqueId(),
+                                         "_XXXXXX.", extension));
+      fd = mkstemps(&tmp_filepath[0], extension.length() + 1);
+    } else {
+      tmp_filepath = io::JoinPath(
+          dir, absl::StrCat("tmp_file_tensorflow_", UniqueId(), "_XXXXXX"));
+      fd = mkstemp(&tmp_filepath[0]);
+    }
+    if (fd < 0) {
+      LOG(FATAL) << "Failed to create temp file " << tmp_filepath  // Crash OK
+                 << ", error: " << strerror(errno);
+    } else {
+      if (close(fd) < 0) {
+        LOG(ERROR) << "close() failed: " << strerror(errno);
+      }
+      return tmp_filepath;
+    }
+  }
+  return absl::InvalidArgumentError(
+      "Could not create temp file in directory: ");
+#endif
+}
+
 namespace {
 // This is private to the file, because it's possibly too limited to be useful
 // externally.
-bool StartsWithSegment(tsl::StringPiece path, tsl::StringPiece segment) {
-  return tsl::str_util::StartsWith(path, segment) &&
+bool StartsWithSegment(absl::string_view path, absl::string_view segment) {
+  return absl::StartsWith(path, segment) &&
          (path.size() == segment.size() ||
           path.at(segment.size()) == internal::kPathSep[0]);
 }
 }  // namespace
 
-bool GetTestWorkspaceDir(string* dir) {
+bool GetTestWorkspaceDir(std::string* dir) {
   const char* srcdir = getenv("TEST_SRCDIR");
   if (srcdir == nullptr) {
     return false;
@@ -374,7 +424,7 @@ bool GetTestWorkspaceDir(string* dir) {
   return true;
 }
 
-bool GetTestUndeclaredOutputsDir(string* dir) {
+bool GetTestUndeclaredOutputsDir(std::string* dir) {
   const char* outputs_dir = getenv("TEST_UNDECLARED_OUTPUTS_DIR");
   if (outputs_dir == nullptr) {
     return false;
@@ -385,9 +435,9 @@ bool GetTestUndeclaredOutputsDir(string* dir) {
   return true;
 }
 
-bool ResolveTestPrefixes(tsl::StringPiece path, string& resolved_path) {
-  constexpr tsl::StringPiece kTestWorkspaceSegment = "TEST_WORKSPACE";
-  constexpr tsl::StringPiece kOutputDirSegment = "TEST_UNDECLARED_OUTPUTS_DIR";
+bool ResolveTestPrefixes(absl::string_view path, std::string& resolved_path) {
+  constexpr absl::string_view kTestWorkspaceSegment = "TEST_WORKSPACE";
+  constexpr absl::string_view kOutputDirSegment = "TEST_UNDECLARED_OUTPUTS_DIR";
 
   if (StartsWithSegment(path, kTestWorkspaceSegment)) {
     if (!GetTestWorkspaceDir(&resolved_path)) {

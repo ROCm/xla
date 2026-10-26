@@ -21,11 +21,15 @@ limitations under the License.
 #include <optional>
 #include <utility>
 
+#include "absl/container/flat_hash_set.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "xla/comparison_util.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_module.h"
-#include "xla/service/hlo_pass_interface.h"
+#include "xla/hlo/pass/hlo_pass_interface.h"
 
 namespace xla {
 
@@ -40,14 +44,14 @@ class TopkRewriter : public HloModulePass {
 
   absl::string_view name() const override { return "topk-rewriter"; }
 
-  using HloPassInterface::Run;
-  absl::StatusOr<bool> Run(
+ protected:
+  absl::StatusOr<bool> RunImpl(
       HloModule* module,
       const absl::flat_hash_set<absl::string_view>& execution_threads) override;
 
- protected:
   // Check if the sort instruction is in TopK.
-  std::optional<int64_t> SortIsInTopK(HloInstruction* inst);
+  std::optional<int64_t> SortIsInTopK(HloInstruction* inst,
+                                      ComparisonOrder* order = nullptr);
 
   // Transform to CustomCall.
   absl::StatusOr<bool> TransformToCustomCall(
@@ -73,8 +77,8 @@ class TopkDecomposer : public HloModulePass {
   explicit TopkDecomposer(HloPredicate should_decompose = {})
       : should_decompose_(should_decompose) {}
 
-  using HloPassInterface::Run;
-  absl::StatusOr<bool> Run(
+ protected:
+  absl::StatusOr<bool> RunImpl(
       HloModule* module,
       const absl::flat_hash_set<absl::string_view>& execution_threads) override;
 

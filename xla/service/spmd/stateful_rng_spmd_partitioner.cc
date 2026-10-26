@@ -15,18 +15,27 @@ limitations under the License.
 
 #include "xla/service/spmd/stateful_rng_spmd_partitioner.h"
 
+#include <cstdint>
 #include <memory>
 #include <utility>
 
+#include "absl/container/flat_hash_set.h"
+#include "absl/status/status.h"
+#include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/ir/hlo_sharding.h"
+#include "xla/service/call_graph.h"
+#include "xla/service/spmd/spmd_partitioner.h"
+#include "xla/status_macros.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace spmd {
 
 absl::Status StatefulRngSpmdPartitioningVisitor::HandleRngGetAndUpdateState(
     HloInstruction* hlo) {
-  if (hlo->sharding().HasUniqueDevice()) {
+  if (hlo->sharding().IsSingleDevice()) {
     return HandleSingleDevice(hlo);
   }
 

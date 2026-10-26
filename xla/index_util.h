@@ -18,12 +18,18 @@ limitations under the License.
 #ifndef XLA_INDEX_UTIL_H_
 #define XLA_INDEX_UTIL_H_
 
-#include <vector>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 
+#include "absl/base/attributes.h"
+#include "absl/log/check.h"
+#include "absl/strings/str_join.h"
 #include "absl/types/span.h"
+#include "xla/layout_util.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/types.h"
+#include "xla/util.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -35,11 +41,8 @@ class IndexUtil {
   // Converts a multidimensional index (eg {x, y, z}) into a linear index based
   // on the shape and its layout. The first index in the multi_index is
   // dimension 0.
-  static inline int64_t MultidimensionalIndexToLinearIndex(
-      const Shape& shape, absl::Span<const int64_t> multi_index) {
-    return MultidimensionalIndexToLinearIndex(
-        shape, LayoutUtil::MinorToMajor(shape), multi_index);
-  }
+  static int64_t MultidimensionalIndexToLinearIndex(
+      const Shape& shape, absl::Span<const int64_t> multi_index);
 
   // Converts a multidimensional index (eg {x, y, z}) into a linear index based
   // on the shape and its layout. The first index in the multi_index is
@@ -50,7 +53,7 @@ class IndexUtil {
   //
   // REQUIRES: minor_to_major provided is equal to
   // shape.layout().minor_to_major()
-  static inline int64_t MultidimensionalIndexToLinearIndex(
+  static int64_t MultidimensionalIndexToLinearIndex(
       const Shape& shape, absl::Span<const int64_t> minor_to_major,
       absl::Span<const int64_t> multi_index) {
     // Let the array be sized like so for dimensions i from 0 to n-1:
@@ -88,9 +91,10 @@ class IndexUtil {
     // D{L(1)} * ...
 
     // Scale factor holding the growing product of D{L(i)} terms.
+    absl::Span<const int64_t> dims = shape.dimensions();
     for (size_t i = 0; i < multi_index.size(); ++i) {
       DCHECK_GE(multi_index[i], 0);
-      DCHECK_LT(multi_index[i], shape.dimensions(i))
+      DCHECK_LT(multi_index[i], dims[i])
           << "indexing beyond extent in dimension " << i << ":"
           << "\n\tindex: " << absl::StrJoin(multi_index, ",")
           << "\n\tshape: " << ShapeUtil::HumanString(shape);
@@ -101,7 +105,7 @@ class IndexUtil {
     int64_t linear_index = multi_index[minor_to_major[0]];
     int64_t scale = 1;
     for (int i = 1; i < minor_to_major.size(); ++i) {
-      scale *= shape.dimensions(minor_to_major[i - 1]);
+      scale *= dims[minor_to_major[i - 1]];
       linear_index += scale * multi_index[minor_to_major[i]];
     }
     return linear_index;
@@ -153,6 +157,22 @@ class IndexUtil {
   IndexUtil(const IndexUtil&) = delete;
   IndexUtil& operator=(const IndexUtil&) = delete;
 };
+
+inline bool ABSL_ATTRIBUTE_ALWAYS_INLINE
+IndexUtil::BumpIndices(const Shape& shape, absl::Span<int64_t> indices) {
+  for (int64_t dimno = static_cast<int64_t>(indices.size()) - 1; dimno >= 0;
+       --dimno) {
+    int64_t limit = shape.dimensions(dimno);
+    if (indices[dimno] + 1 < limit) {
+      indices[dimno]++;
+      // Whenever an index of a dimension is increased, it means that all
+      // following dimensions have maxed out, so they must go to 0.
+      std::fill(indices.begin() + dimno + 1, indices.end(), 0);
+      return true;
+    }
+  }
+  return false;
+}
 
 }  // namespace xla
 

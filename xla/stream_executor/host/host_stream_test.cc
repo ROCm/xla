@@ -13,63 +13,111 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "absl/status/status.h"
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+#include "absl/status/status_matchers.h"
 #include "absl/synchronization/mutex.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/event.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform_manager.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/test.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace se = stream_executor;
 
 TEST(HostStream, EnforcesFIFOOrder) {
-  se::Platform* platform =
-      se::PlatformManager::PlatformWithName("Host").value();
-  se::StreamExecutor* executor = platform->ExecutorForDevice(0).value();
-  TF_ASSERT_OK_AND_ASSIGN(auto stream, executor->CreateStream());
+  ASSERT_OK_AND_ASSIGN(se::Platform * platform,
+                       se::PlatformManager::PlatformWithName("Host"));
+  ASSERT_OK_AND_ASSIGN(se::StreamExecutor * executor,
+                       platform->ExecutorForDevice(0));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<se::Stream> stream,
+                       executor->CreateStream());
   absl::Mutex mu;
   int expected = 0;
   bool ok = true;
   for (int i = 0; i < 2000; ++i) {
-    TF_ASSERT_OK(stream->DoHostCallback([i, &mu, &expected, &ok]() {
-      absl::MutexLock lock(&mu);
+    ASSERT_OK(stream->DoHostCallback([i, &mu, &expected, &ok]() {
+      absl::MutexLock lock(mu);
       if (expected != i) {
         ok = false;
       }
       ++expected;
     }));
   }
-  TF_ASSERT_OK(stream->BlockHostUntilDone());
-  absl::MutexLock lock(&mu);
+  ASSERT_OK(stream->BlockHostUntilDone());
+  absl::MutexLock lock(mu);
   EXPECT_TRUE(ok);
 }
 
-TEST(HostStream, ReportsHostCallbackError) {
-  se::Platform* platform =
-      se::PlatformManager::PlatformWithName("Host").value();
-  se::StreamExecutor* executor = platform->ExecutorForDevice(0).value();
-  TF_ASSERT_OK_AND_ASSIGN(auto stream, executor->CreateStream());
-  TF_ASSERT_OK(stream->DoHostCallbackWithStatus(
-      []() { return absl::InternalError("error!"); }));
+TEST(HostStream, Memset32) {
+  ASSERT_OK_AND_ASSIGN(se::Platform * platform,
+                       se::PlatformManager::PlatformWithName("Host"));
+  ASSERT_OK_AND_ASSIGN(se::StreamExecutor * executor,
+                       platform->ExecutorForDevice(0));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<se::Stream> stream,
+                       executor->CreateStream());
 
-  auto status = stream->BlockHostUntilDone();
-  ASSERT_EQ(status.code(), tsl::error::INTERNAL);
-  ASSERT_EQ(status.message(), "error!");
+  uint32_t pattern = 0x12345678;
+  std::vector<uint32_t> buffer(4, 0);
+  se::DeviceAddressBase location(buffer.data(),
+                                 buffer.size() * sizeof(uint32_t));
+
+  ASSERT_OK(
+      stream->Memset32(&location, pattern, buffer.size() * sizeof(uint32_t)));
+  ASSERT_OK(stream->BlockHostUntilDone());
+
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_EQ(buffer[i], pattern);
+  }
 }
 
-TEST(HostStream, ReportsFirstHostCallbackError) {
-  se::Platform* platform =
-      se::PlatformManager::PlatformWithName("Host").value();
-  se::StreamExecutor* executor = platform->ExecutorForDevice(0).value();
-  TF_ASSERT_OK_AND_ASSIGN(auto stream, executor->CreateStream());
-  TF_ASSERT_OK(stream->DoHostCallbackWithStatus(
-      []() { return absl::InternalError("error 1"); }));
-  TF_ASSERT_OK(stream->DoHostCallbackWithStatus(
-      []() { return absl::InternalError("error 2"); }));
+TEST(HostStream, ReusedEvent) {
+  ASSERT_OK_AND_ASSIGN(se::Platform * platform,
+                       se::PlatformManager::PlatformWithName("Host"));
+  ASSERT_OK_AND_ASSIGN(se::StreamExecutor * executor,
+                       platform->ExecutorForDevice(0));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<se::Stream> stream,
+                       executor->CreateStream());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<se::Event> event,
+                       executor->CreateEvent());
 
-  // "error 2" is just lost.
-  ASSERT_EQ(stream->BlockHostUntilDone().message(), "error 1");
+  ASSERT_OK(stream->RecordEvent(event.get()));
+  ASSERT_OK(stream->WaitFor(event.get()));
+
+  ASSERT_OK(stream->RecordEvent(event.get()));
+  ASSERT_OK(stream->WaitFor(event.get()));
+  EXPECT_EQ(event->PollForStatus(), se::Event::Status::kComplete);
+  ASSERT_OK(stream->BlockHostUntilDone());
+}
+
+TEST(HostStream, WaitFor) {
+  ASSERT_OK_AND_ASSIGN(se::Platform * platform,
+                       se::PlatformManager::PlatformWithName("Host"));
+  ASSERT_OK_AND_ASSIGN(se::StreamExecutor * executor,
+                       platform->ExecutorForDevice(0));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<se::Stream> stream1,
+                       executor->CreateStream());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<se::Stream> stream2,
+                       executor->CreateStream());
+
+  absl::Mutex mu;
+  bool stream1_done = false;
+  ASSERT_OK(stream1->DoHostCallback([&mu, &stream1_done]() {
+    absl::MutexLock lock(mu);
+    stream1_done = true;
+  }));
+
+  ASSERT_OK(stream2->WaitFor(stream1.get()));
+  ASSERT_OK(stream2->BlockHostUntilDone());
+
+  absl::MutexLock lock(mu);
+  EXPECT_TRUE(stream1_done);
 }

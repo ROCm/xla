@@ -29,11 +29,11 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "llvm/Support/ExtensibleRTTI.h"
 #include "xla/pjrt/host_callback.h"
 #include "xla/python/ifrt/client.h"
-#include "xla/python/ifrt/future.h"
+#include "xla/python/ifrt/rtti.h"
 #include "xla/python/pjrt_ifrt/pjrt_host_callback.h"
+#include "xla/tsl/concurrency/future.h"
 #include "xla/tsl/concurrency/ref_count.h"
 
 namespace xla {
@@ -55,7 +55,7 @@ class RemoteLoadedHostCallbackQueue {
   struct ExecutionRequest {
     std::vector<Buffer> operands;
     std::vector<Buffer> results;
-    Future<>::Promise status;
+    tsl::Promise<> status;
   };
 
   ~RemoteLoadedHostCallbackQueue();
@@ -92,8 +92,8 @@ class RemoteLoadedHostCallbackQueue {
 // in IFRT has no associated execution semantics. For now, the IFRT proxy
 // focuses on supporting host callbacks on PjRt-like IFRT implementations.
 class RemoteLoadedHostCallback
-    : public llvm::RTTIExtends<RemoteLoadedHostCallback,
-                               PjRtHostSendAndRecvLoadedHostCallback> {
+    : public RTTIExtends<RemoteLoadedHostCallback,
+                         PjRtHostSendAndRecvLoadedHostCallback> {
  public:
   // Creates from a serialized string returned by `Serialize()`.
   static absl::StatusOr<tsl::RCReference<RemoteLoadedHostCallback>>
@@ -111,6 +111,8 @@ class RemoteLoadedHostCallback
   // Serializes the remote host callback instance. The returned string can be
   // deserialized into `RmeoteLoadedHostCallback` using `CreateFromSerialized`.
   absl::StatusOr<std::string> Serialize() const override;
+
+  static char ID;  // NOLINT
 
  private:
   // Implements the interface required by `xla::HostCallback`.

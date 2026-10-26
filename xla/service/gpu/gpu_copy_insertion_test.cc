@@ -15,20 +15,22 @@ limitations under the License.
 
 #include <cstdint>
 #include <memory>
-#include <optional>
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/testlib/test_helpers.h"
 #include "xla/service/copy_insertion.h"
-#include "xla/service/gpu/buffer_sharing.h"
-#include "xla/test.h"
-#include "xla/test_helpers.h"
-#include "xla/tests/hlo_test_base.h"
-#include "tsl/platform/statusor.h"
+#include "xla/service/gpu/alias_info.h"
+#include "xla/service/gpu/gpu_device_info_for_tests.h"
+#include "xla/stream_executor/device_description.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace gpu {
@@ -52,23 +54,42 @@ int64_t CountCopies(const HloModule& module) {
   return count;
 }
 
-void ExpectOptionalTrue(std::optional<bool> value) {
-  EXPECT_TRUE(value.has_value());
-  CHECK(value.has_value());
-  EXPECT_TRUE(*value);
+void ExpectFusionOperandIsCopyOf(const HloModule& module,
+                                 absl::string_view fusion_name,
+                                 absl::string_view copied_instruction_name) {
+  const HloInstruction* fusion =
+      HloHardwareIndependentTestBase::FindInstruction(&module, fusion_name);
+  ASSERT_NE(fusion, nullptr);
+  ASSERT_GT(fusion->operand_count(), 0);
+  const HloInstruction* copy = fusion->operand(0);
+  ASSERT_EQ(copy->opcode(), HloOpcode::kCopy);
+  const HloInstruction* copy_source = copy->operand(0);
+  while (copy_source->opcode() == HloOpcode::kCopy) {
+    copy_source = copy_source->operand(0);
+  }
+  const HloInstruction* copied_instruction =
+      HloHardwareIndependentTestBase::FindInstruction(&module,
+                                                      copied_instruction_name);
+  ASSERT_NE(copied_instruction, nullptr);
+  EXPECT_EQ(copy_source, copied_instruction) << module.ToString();
 }
 
-void ExpectOptionalFalse(std::optional<bool> value) {
-  EXPECT_TRUE(value.has_value());
-  CHECK(value.has_value());
-  EXPECT_FALSE(*value);
-}
+class GpuCopyInsertionTest : public HloHardwareIndependentTestBase {
+ public:
+  CopyInsertion CreateCopyInsertion() const {
+    return CopyInsertion(&alias_info_,
+                         /*use_region_based_live_range_analysis=*/0);
+  }
 
-using GpuCopyInsertionTest = HloTestBase;
+ private:
+  const se::DeviceDescription device_description_{
+      xla::gpu::TestGpuDeviceInfo::CudaOrRocmDeviceInfo()};
+  GpuAliasInfo alias_info_{device_description_};
+};
 
 // This is some kind of end-to-end test for FusionCanShareBufferHint.
 TEST_F(GpuCopyInsertionTest, DUSBitcastNoCopy) {
-  const char* const kModuleString = R"(
+  constexpr absl::string_view kModuleString = R"(
 HloModule bitcast_fusion
 
 fused_computation.549 {
@@ -113,11 +134,10 @@ ENTRY main {
 }
 )";
 
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
+                       ParseAndReturnVerifiedModule(kModuleString));
 
-  CopyInsertion copy_insertion(FusionCanShareBufferHint,
-                               /*use_region_based_live_range_analysis=*/0);
+  CopyInsertion copy_insertion = CreateCopyInsertion();
   ASSERT_IS_OK(copy_insertion.Run(module.get(), {"foobar"}).status());
   VLOG(2) << module->ToString();
   // Copy insertion adds two copies inside the entry computation.
@@ -127,815 +147,105 @@ ENTRY main {
   EXPECT_EQ(CountCopies(*module), 2);
 }
 
-using FusionCanShareBufferHintTest = HloTestBase;
-
-TEST_F(FusionCanShareBufferHintTest, BufferCanBeSharedSameShape) {
-  const char* const kModuleString = R"(
-HloModule fusion
+TEST_F(GpuCopyInsertionTest, BitcastedFusedDynamicUpdateSliceCopy) {
+  constexpr absl::string_view kModuleString = R"(
+HloModule Module
 
 fused_computation {
-  param_0.1 = f32[2,3]{1,0} parameter(0)
-  neg = f32[2,3]{1,0} negate(param_0.1)
-  ROOT mul = f32[2,3]{1,0} multiply(param_0.1, neg)
+  param0 = f32[4,4] parameter(0)
+  update = f32[1,4] constant({{1, 2, 3, 4}})
+  constant.0 = s32[] constant(0)
+  dus = f32[4,4] dynamic-update-slice(param0, update, constant.0, constant.0)
+  ROOT bitcast = f32[16] bitcast(dus)
 }
 
 ENTRY main {
-  param_0 = f32[2,3]{1,0} parameter(0)
-  ROOT fusion = f32[2,3]{1,0} fusion(param_0), kind=kLoop, calls=fused_computation
+  param = f32[4,4] parameter(0)
+  negate = f32[4,4] negate(param)
+  add = f32[4,4] add(negate, negate)
+  fusion = f32[16] fusion(negate), kind=kLoop, calls=fused_computation
+  bitcast = f32[4,4] bitcast(fusion)
+  ROOT tuple = (f32[4,4], f32[4,4]) tuple(add, bitcast)
 }
 )";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
+                       ParseAndReturnVerifiedModule(kModuleString));
 
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalTrue(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
+  CopyInsertion copy_insertion = CreateCopyInsertion();
+  ASSERT_IS_OK(copy_insertion.Run(module.get()).status());
+  EXPECT_EQ(CountCopies(*module), 1);
+  ExpectFusionOperandIsCopyOf(*module, "fusion", "negate");
 }
 
-TEST_F(FusionCanShareBufferHintTest, BufferCanBeSharedBitcastedShape) {
-  const char* const kModuleString = R"(
-HloModule fusion
+TEST_F(GpuCopyInsertionTest, ReshapedFusedDynamicUpdateSliceCopy) {
+  constexpr absl::string_view kModuleString = R"(
+HloModule Module
 
 fused_computation {
-  param_0.1 = f32[2,3]{1,0} parameter(0)
-  neg = f32[2,3]{1,0} negate(param_0.1)
-  mul = f32[2,3]{1,0} multiply(param_0.1, neg)
-  ROOT bitcast = f32[6]{0} bitcast(mul)
+  param0 = f32[4,4] parameter(0)
+  update = f32[1,4] constant({{1, 2, 3, 4}})
+  constant.0 = s32[] constant(0)
+  dus = f32[4,4] dynamic-update-slice(param0, update, constant.0, constant.0)
+  ROOT reshape = f32[16] reshape(dus)
 }
 
 ENTRY main {
-  param_0 = f32[2,3]{1,0} parameter(0)
-  ROOT fusion = f32[6]{0} fusion(param_0), kind=kLoop, calls=fused_computation
+  param = f32[4,4] parameter(0)
+  negate = f32[4,4] negate(param)
+  add = f32[4,4] add(negate, negate)
+  fusion = f32[16] fusion(negate), kind=kLoop, calls=fused_computation
+  reshape = f32[4,4] reshape(fusion)
+  ROOT tuple = (f32[4,4], f32[4,4]) tuple(add, reshape)
 }
 )";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
+                       ParseAndReturnVerifiedModule(kModuleString));
 
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalTrue(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
+  CopyInsertion copy_insertion = CreateCopyInsertion();
+  ASSERT_IS_OK(copy_insertion.Run(module.get()).status());
+  ExpectFusionOperandIsCopyOf(*module, "fusion", "negate");
 }
 
-TEST_F(FusionCanShareBufferHintTest,
-       BufferCanBeSharedConvertedShapeSameByteWidth) {
-  const char* const kModuleString = R"(
-HloModule fusion
+TEST_F(GpuCopyInsertionTest, F8DotCopyReproducer) {
+  constexpr absl::string_view kModuleString = R"(
+HloModule Module
 
-fused_computation {
-  param_0.1 = f32[2,3]{1,0} parameter(0)
-  neg = f32[2,3]{1,0} negate(param_0.1)
-  mul = f32[2,3]{1,0} multiply(param_0.1, neg)
-  ROOT convert = s32[2,3]{1,0} convert(mul)
+%bitcast_fusion (bitcast_input: bf16[256,256]) -> bf16[256,256] {
+  %bitcast_input = bf16[256,256]{1,0} parameter(0)
+  ROOT %bitcast = bf16[256,256]{1,0} bitcast(%bitcast_input)
 }
 
-ENTRY main {
-  param_0 = f32[2,3]{1,0} parameter(0)
-  ROOT fusion = s32[2,3]{1,0} fusion(param_0), kind=kLoop, calls=fused_computation
-}
-)";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalTrue(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
+%copy_fusion (input: f8e4m3fn[256,256]) -> f8e4m3fn[256,256] {
+  %input = f8e4m3fn[256,256]{1,0} parameter(0)
+  ROOT %copy = f8e4m3fn[256,256]{1,0} copy(%input)
 }
 
-TEST_F(FusionCanShareBufferHintTest, BufferCanBeSharedMultiOutputFusion) {
-  const char* const kModuleString = R"(
-HloModule fusion
-
-fused_computation {
-  param_0.1 = f32[2,3]{1,0} parameter(0)
-  param_1.1 = f32[2,3]{1,0} parameter(1)
-  neg = f32[2,3]{1,0} negate(param_1.1)
-  mul = f32[2,3]{1,0} multiply(param_0.1, neg)
-  transpose = f32[3,2]{1,0} transpose(neg), dimensions={1,0}
-  ROOT tuple = (f32[2,3]{1,0}, f32[2,3]{1,0}, f32[3,2]{1,0}) tuple(mul, neg, transpose)
+%bitcast_fusion.1 (bitcast_input.1: f8e4m3fn[256,256]) -> f8e4m3fn[256,256] {
+  %bitcast_input.1 = f8e4m3fn[256,256]{1,0} parameter(0)
+  %fusion.3 = f8e4m3fn[256,256]{1,0} fusion(%bitcast_input.1), kind=kLoop, output_to_operand_aliasing={{}: (0, {})}, calls=%copy_fusion
+  ROOT %bitcast.1 = f8e4m3fn[256,256]{1,0} bitcast(%fusion.3)
 }
 
-ENTRY main {
-  param_0 = f32[2,3]{1,0} parameter(0)
-  param_1 = f32[2,3]{1,0} parameter(1)
-  ROOT fusion = (f32[2,3]{1,0}, f32[2,3]{1,0}, f32[3,2]{1,0}) fusion(param_0, param_1), kind=kLoop, calls=fused_computation
+ENTRY %main (param_0: bf16[256,256], param_1: f8e4m3fn[256,256]) -> f32[256,256] {
+  %param_0 = bf16[256,256]{1,0} parameter(0)
+  %fusion.1 = bf16[256,256]{1,0} fusion(%param_0), kind=kLoop, calls=%bitcast_fusion
+  %param_1 = f8e4m3fn[256,256]{1,0} parameter(1)
+  %fusion.2 = f8e4m3fn[256,256]{1,0} fusion(%param_1), kind=kLoop, calls=%bitcast_fusion.1
+  ROOT %convolution.1 = f32[256,256]{1,0} convolution(%fusion.1, %fusion.2), dim_labels=bf_io->bf
 }
 )";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalTrue(FusionCanShareBufferHint(fusion, fusion->operand(0), {0}));
-  // The second operand cannot share the buffer with the second fusion output,
-  // because the 'neg' op is also used by a non-elementwise op.
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(1), {1}));
-  // The first operand cannot share the buffer with the second fusion output,
-  // because there is no path between them.
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(0), {1}));
-}
-
-TEST_F(FusionCanShareBufferHintTest,
-       BufferCanBeSharedMultiOutputFusionTwoReachableOutputs) {
-  const char* const kModuleString = R"(
-HloModule fusion
-
-fused_computation {
-  param_0.1 = f32[2,3]{1,0} parameter(0)
-  param_1.1 = f32[2,3]{1,0} parameter(1)
-  neg = f32[2,3]{1,0} negate(param_1.1)
-  mul = f32[2,3]{1,0} multiply(param_0.1, neg)
-  ROOT tuple = (f32[2,3]{1,0}, f32[2,3]{1,0}) tuple(mul, neg)
-}
-
-ENTRY main {
-  param_0 = f32[2,3]{1,0} parameter(0)
-  param_1 = f32[2,3]{1,0} parameter(1)
-  ROOT fusion = (f32[2,3]{1,0}, f32[2,3]{1,0}) fusion(param_0, param_1), kind=kLoop, calls=fused_computation
-}
-)";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalTrue(FusionCanShareBufferHint(fusion, fusion->operand(0), {0}));
-  // The first operand cannot share the buffer with the second fusion output,
-  // because there is no path between them.
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(0), {1}));
-  // The second operand can share the buffer with the second fusion output and
-  // the first fusion output.
-  ExpectOptionalTrue(FusionCanShareBufferHint(fusion, fusion->operand(1), {0}));
-  ExpectOptionalTrue(FusionCanShareBufferHint(fusion, fusion->operand(1), {1}));
-}
-
-TEST_F(FusionCanShareBufferHintTest, BufferCanBeSharedReductionEmitter) {
-  constexpr char kModuleString[] = R"(
-HloModule TestModule
-
-%maximum {
-  %lhs = f32[] parameter(0)
-  %rhs = f32[] parameter(1)
-  ROOT %res = f32[] maximum(%lhs, %rhs)
-}
-
-%fused_computation {
-  %lhs = f32[3,40] parameter(0)
-  %rhs = f32[3,40] parameter(1)
-  %add = f32[3,40] add(%lhs, %rhs)
-  %bc = f32[120] bitcast(%add)
-  %init = f32[] constant(-inf)
-  %max = f32[] reduce(%bc, %init), dimensions={0}, to_apply=%maximum
-  ROOT %result = (f32[], f32[3,40]) tuple(%max, %add)
-}
-
-ENTRY %main {
-  %lhs = f32[3,40] parameter(0)
-  %rhs = f32[3,40] parameter(1)
-  ROOT %fusion = (f32[], f32[3,40]) fusion(%lhs, %rhs),
-      kind=kLoop, calls=%fused_computation
-})";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalTrue(FusionCanShareBufferHint(fusion, fusion->operand(0), {1}));
-}
-
-TEST_F(FusionCanShareBufferHintTest,
-       BufferCannotBeSharedScatterMultiOutputFusion) {
-  // This is a fusion that we would normally not create because it cannot be
-  // emitted in-place. Still check whether buffer sharing logic would handle it
-  // correctly.
-  const char* const kModuleString = R"(
-    HloModule fusion
-
-    add {
-      lhs = s32[] parameter(0)
-      rhs = s32[] parameter(1)
-      ROOT add = s32[] add(lhs, rhs)
-    }
-
-    fused_computation {
-      p0 = s32[3,3] parameter(0)
-      p1 = s32[3] parameter(1)
-      indices = s32[3] add(p1, p1)
-      p2 = s32[3,3] parameter(2)
-      updates = s32[3,3] add(p2, p2)
-      add = s32[3,3] add(p0, p0)
-      scatter = s32[3,3] scatter(p0, indices, updates),
-          to_apply=add,
-          update_window_dims={1},
-          inserted_window_dims={0},
-          scatter_dims_to_operand_dims={0},
-          index_vector_dim=1
-      ROOT output = (s32[3,3], s32[3,3]) tuple(scatter, add)
-    }
-
-    ENTRY main {
-      parameter0 = s32[3,3] parameter(0)
-      parameter1 = s32[3] parameter(1)
-      parameter2 = s32[3,3] parameter(2)
-      ROOT fusion = (s32[3,3], s32[3,3]) fusion(parameter0, parameter1, parameter2), kind=kInput, calls=fused_computation
-    }
-    )";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  // We expect that no buffer can be shared, because when Scatter is involved,
-  // the only buffer we can potentially share is the first operand of scatter,
-  // but if that is also used for a different fusion output, it will not work
-  // due to potentially different access patterns.
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(0), {0}));
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(0), {1}));
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(1), {0}));
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(1), {1}));
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(2), {0}));
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(2), {1}));
-}
-
-TEST_F(FusionCanShareBufferHintTest, BufferCanBeSharedScatterFusion) {
-  const char* const kModuleString = R"(
-    HloModule fusion
-
-    add {
-      lhs = s32[] parameter(0)
-      rhs = s32[] parameter(1)
-      ROOT add = s32[] add(lhs, rhs)
-    }
-
-    fused_computation {
-      p0 = s32[3,3] parameter(0)
-      p1 = s32[3] parameter(1)
-      indices = s32[3] add(p1, p1)
-      p2 = s32[3,3] parameter(2)
-      updates = s32[3,3] add(p2, p2)
-      ROOT scatter = s32[3,3] scatter(p0, indices, updates),
-          to_apply=add,
-          update_window_dims={1},
-          inserted_window_dims={0},
-          scatter_dims_to_operand_dims={0},
-          index_vector_dim=1
-    }
-
-    ENTRY main {
-      parameter0 = s32[3,3] parameter(0)
-      parameter1 = s32[3] parameter(1)
-      parameter2 = s32[3,3] parameter(2)
-      ROOT fusion = s32[3,3] fusion(parameter0, parameter1, parameter2), kind=kInput, calls=fused_computation
-    }
-    )";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalTrue(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
-  ExpectOptionalFalse(FusionCanShareBufferHint(fusion, fusion->operand(1), {}));
-  ExpectOptionalFalse(FusionCanShareBufferHint(fusion, fusion->operand(2), {}));
-}
-
-TEST_F(FusionCanShareBufferHintTest, BufferCannotBeSharedScatterFusion) {
-  // This is a fusion that we would normally not create because it cannot be
-  // emitted in-place. Still check whether buffer sharing logic would handle it
-  // correctly.
-  const char* const kModuleString = R"(
-    HloModule fusion
-
-    add {
-      lhs = s32[] parameter(0)
-      rhs = s32[] parameter(1)
-      ROOT add = s32[] add(lhs, rhs)
-    }
-
-    fused_computation {
-      p0 = s32[3,3] parameter(0)
-      p1 = s32[3] parameter(1)
-      indices = s32[3] add(p1, p1)
-      updates = s32[3,3] add(p0, p0)
-      ROOT scatter = s32[3,3] scatter(p0, indices, updates),
-          to_apply=add,
-          update_window_dims={1},
-          inserted_window_dims={0},
-          scatter_dims_to_operand_dims={0},
-          index_vector_dim=1
-    }
-
-    ENTRY main {
-      parameter0 = s32[3,3] parameter(0)
-      parameter1 = s32[3] parameter(1)
-      ROOT fusion = s32[3,3] fusion(parameter0, parameter1), kind=kInput, calls=fused_computation
-    }
-    )";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalFalse(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
-  ExpectOptionalFalse(FusionCanShareBufferHint(fusion, fusion->operand(1), {}));
-}
-
-TEST_F(FusionCanShareBufferHintTest, BufferCanBeSharedVariadicScatterFusion) {
-  // We currently don't have variadic scatter fusions on GPU, but just in case
-  // we verify here that buffer sharing logic could handle it.
-  const char* const kModuleString = R"(
-    HloModule fusion
-
-    add_mul {
-      lhs_0 = s32[] parameter(0)
-      rhs_0 = s32[] parameter(2)
-      add = s32[] add(lhs_0, rhs_0)
-      lhs_1 = s32[] parameter(1)
-      rhs_1 = s32[] parameter(3)
-      mul = s32[] multiply(lhs_1, rhs_1)
-      ROOT tuple = (s32[], s32[]) tuple(add, mul)
-    }
-
-    fused_computation {
-      p0 = s32[3,3] parameter(0)
-      p1 = s32[3,3] parameter(1)
-      p2 = s32[3] parameter(2)
-      p3 = s32[3,2] parameter(3)
-      p4 = s32[3,2] parameter(4)
-      indices = s32[3] add(p2, p2)
-      ROOT scatter = (s32[3,3], s32[3,3]) scatter(p0, p1, indices, p3, p4),
-          to_apply=add_mul,
-          update_window_dims={1},
-          inserted_window_dims={0},
-          scatter_dims_to_operand_dims={0},
-          index_vector_dim=1
-    }
-
-    ENTRY main {
-      parameter0 = s32[3,3] parameter(0)
-      parameter1 = s32[3,3] parameter(1)
-      parameter2 = s32[3] parameter(2)
-      parameter3 = s32[3,2] parameter(3)
-      parameter4 = s32[3,2] parameter(4)
-      ROOT fusion = (s32[3,3], s32[3,3]) fusion(parameter0, parameter1, parameter2, parameter3, parameter4), kind=kInput, calls=fused_computation
-    }
-    )";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalTrue(FusionCanShareBufferHint(fusion, fusion->operand(0), {0}));
-  ExpectOptionalTrue(FusionCanShareBufferHint(fusion, fusion->operand(1), {1}));
-}
-
-TEST_F(FusionCanShareBufferHintTest,
-       BufferCannotBeSharedScatterFusionDuplicateScatterOperand) {
-  // This is a fusion that we would normally not create because it cannot be
-  // emitted in-place. Still check whether buffer sharing logic would handle it
-  // correctly.
-  const char* const kModuleString = R"(
-    HloModule fusion
-
-    add {
-      lhs = s32[] parameter(0)
-      rhs = s32[] parameter(1)
-      ROOT add = s32[] add(lhs, rhs)
-    }
-
-    fused_computation {
-      p0 = s32[3,3] parameter(0)
-      p1 = s32[3] parameter(1)
-      indices = s32[3] add(p1, p1)
-      ROOT scatter = s32[3,3] scatter(p0, indices, p0),
-          to_apply=add,
-          update_window_dims={1},
-          inserted_window_dims={0},
-          scatter_dims_to_operand_dims={0},
-          index_vector_dim=1
-    }
-
-    ENTRY main {
-      parameter0 = s32[3,3] parameter(0)
-      parameter1 = s32[3] parameter(1)
-      ROOT fusion = s32[3,3] fusion(parameter0, parameter1), kind=kInput, calls=fused_computation
-    }
-    )";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalFalse(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
-  ExpectOptionalFalse(FusionCanShareBufferHint(fusion, fusion->operand(1), {}));
-}
-
-TEST_F(FusionCanShareBufferHintTest,
-       BufferCannotBeSharedVariadicScatterFusion) {
-  // This is a fusion that we would normally not create because it cannot be
-  // emitted in-place. Still check whether buffer sharing logic would handle it
-  // correctly.
-  const char* const kModuleString = R"(
-    HloModule fusion
-
-    add_mul {
-      lhs_0 = s32[] parameter(0)
-      rhs_0 = s32[] parameter(2)
-      add = s32[] add(lhs_0, rhs_0)
-      lhs_1 = s32[] parameter(1)
-      rhs_1 = s32[] parameter(3)
-      mul = s32[] multiply(lhs_1, rhs_1)
-      ROOT tuple = (s32[], s32[]) tuple(add, mul)
-    }
-
-    fused_computation {
-      p0 = s32[3,3] parameter(0)
-      p1 = s32[3,3] parameter(1)
-      p2 = s32[3] parameter(2)
-      indices = s32[3] add(p2, p2)
-      ROOT scatter = (s32[3,3], s32[3,3]) scatter(p0, p1, indices, p0, p1),
-          to_apply=add_mul,
-          update_window_dims={1},
-          inserted_window_dims={0},
-          scatter_dims_to_operand_dims={0},
-          index_vector_dim=1
-    }
-
-    ENTRY main {
-      parameter0 = s32[3,3] parameter(0)
-      parameter1 = s32[3,3] parameter(1)
-      parameter2 = s32[3] parameter(2)
-      ROOT fusion = (s32[3,3], s32[3,3]) fusion(parameter0, parameter1, parameter2), kind=kInput, calls=fused_computation
-    }
-    )";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(0), {0}));
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(1), {1}));
-}
-
-TEST_F(FusionCanShareBufferHintTest,
-       BufferCannotBeSharedConvertedShapeDifferentByteWidth) {
-  const char* const kModuleString = R"(
-HloModule fusion
-
-fused_computation {
-  param_0.1 = f32[2,3]{1,0} parameter(0)
-  neg = f32[2,3]{1,0} negate(param_0.1)
-  mul = f32[2,3]{1,0} multiply(param_0.1, neg)
-  ROOT convert = f16[2,3]{1,0} convert(mul)
-}
-
-ENTRY main {
-  param_0 = f32[2,3]{1,0} parameter(0)
-  ROOT fusion = f16[2,3]{1,0} fusion(param_0), kind=kLoop, calls=fused_computation
-}
-)";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalFalse(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
-}
-
-TEST_F(FusionCanShareBufferHintTest, BufferCannotBeSharedShapeBitcastConvert) {
-  const char* const kModuleString = R"(
-HloModule fusion
-
-fused_computation {
-  param_0.1 = s32[3]{0} parameter(0)
-  neg = s32[3]{0} negate(param_0.1)
-  mul = s32[3]{0} multiply(param_0.1, neg)
-  ROOT bitcast-convert = s16[3,2]{1,0} bitcast-convert(mul)
-}
-
-ENTRY main {
-  param_0 = s32[3]{0} parameter(0)
-  ROOT fusion = s16[3,2]{1,0} fusion(param_0), kind=kLoop, calls=fused_computation
-}
-)";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalFalse(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
-}
-
-TEST_F(FusionCanShareBufferHintTest, BufferCannotBeSharedDueToCopy) {
-  const char* const kModuleString = R"(
-HloModule fusion
-
-fused_computation {
-  param_0.1 = s32[2,3]{0,1} parameter(0)
-  copy = s32[2,3]{1,0} copy(param_0.1)
-  ROOT neg = s32[2,3]{1,0} negate(copy)
-}
-
-ENTRY main {
-  param_0 = s32[2,3]{0,1} parameter(0)
-  ROOT fusion = s32[2,3]{1,0} fusion(param_0), kind=kLoop, calls=fused_computation
-}
-)";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalFalse(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
-}
-
-TEST_F(FusionCanShareBufferHintTest, BufferCannotBeSharedDueToTranspose) {
-  const char* const kModuleString = R"(
-HloModule fusion
-
-fused_computation {
-  param_0.1 = s32[2,3]{1,0} parameter(0)
-  transpose = s32[3,2]{1,0} transpose(param_0.1), dimensions={1,0}
-  ROOT neg = s32[3,2]{1,0} negate(transpose)
-}
-
-ENTRY main {
-  param_0 = s32[2,3]{1,0} parameter(0)
-  ROOT fusion = s32[3,2]{1,0} fusion(param_0), kind=kLoop, calls=fused_computation
-}
-)";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalFalse(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
-}
-
-TEST_F(FusionCanShareBufferHintTest,
-       BufferCannotBeSharedDueToReduceAndBroadcast) {
-  const char* const kModuleString = R"(
-HloModule fusion
-
-add {
-  lhs = s32[] parameter(0)
-  rhs = s32[] parameter(1)
-  ROOT add = s32[] add(lhs, rhs)
-}
-
-fused_computation {
-  param_0.1 = s32[3]{0} parameter(0)
-  broadcast = s32[3,2]{1,0} broadcast(param_0.1), dimensions={0}
-  zero = s32[] constant(0)
-  ROOT reduce = s32[3]{0} reduce(broadcast, zero), to_apply=add, dimensions={1}
-}
-
-ENTRY main {
-  param_0 = s32[3]{0} parameter(0)
-  ROOT fusion = s32[3]{0} fusion(param_0), kind=kInput, calls=fused_computation
-}
-)";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalFalse(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
-}
-
-TEST_F(FusionCanShareBufferHintTest,
-       BufferCanBeSharedBecauseDUSAndDSAccessSameSlice) {
-  const char* const kModuleString = R"(
-HloModule fusion
-
-fused_computation {
-  param_0.1 = s32[6]{0} parameter(0)
-  bitcast = s32[2,3]{1,0} bitcast(param_0.1)
-  zero = s32[] constant(0)
-  param_1.1 = s32[] parameter(1)
-  dynamic-slice = s32[1,2]{1,0} dynamic-slice(bitcast, param_1.1, zero), dynamic_slice_sizes={1,2}
-  one = s32[] constant(1)
-  broadcast = s32[1,2]{1,0} broadcast(one), dimensions={}
-  add = s32[1,2] add(dynamic-slice, broadcast)
-  dynamic-update-slice = s32[2,3]{1,0} dynamic-update-slice(bitcast, add, param_1.1, zero)
-  ROOT bitcast.1 = s32[6]{0} bitcast(dynamic-update-slice)
-}
-
-ENTRY main {
-  param_0 = s32[6]{0} parameter(0)
-  param_1 = s32[] parameter(1)
-  ROOT fusion = s32[6]{0} fusion(param_0, param_1), kind=kInput, calls=fused_computation
-}
-)";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalTrue(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
-}
-
-TEST_F(FusionCanShareBufferHintTest,
-       BufferCannotBeSharedWhenOtherUserIsTransposeUser) {
-  const char* const kModuleString = R"(
-HloModule fusion
-
-fused_computation {
-  p0 = f32[100,110,120]{2,1,0} parameter(0)
-  p1 = f32[120,110,100]{2,1,0} parameter(1)
-  zero = f32[] constant(0.0)
-  broadcast = f32[120,110,100]{2,1,0} broadcast(zero), dimensions={}
-  maximum = f32[120,110,100]{2,1,0} maximum(broadcast, p1)
-  t = f32[120,110,100]{2,1,0} transpose(p0), dimensions={2,1,0}
-  add = f32[120,110,100]{2,1,0} add(t, maximum)
-  ROOT res = (f32[120,110,100]{2,1,0}, f32[120,110,100]{2,1,0}) tuple(add, maximum)
-}
-
-ENTRY main {
-  param_0 = f32[100,110,120]{2,1,0} parameter(0)
-  param_1 = f32[120,110,100]{2,1,0} parameter(1)
-  ROOT fusion = (f32[120,110,100]{2,1,0}, f32[120,110,100]{2,1,0}) fusion(param_0, param_1), kind=kInput, calls=fused_computation
-}
-)";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(0), {0}));
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(0), {1}));
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(1), {0}));
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(1), {1}));
-}
-
-TEST_F(FusionCanShareBufferHintTest,
-       BufferCannotBeSharedDynamicUpdateSliceAndOtherUser) {
-  // This is a fusion that we would normally not create because it cannot be
-  // emitted in-place. Still check whether buffer sharing logic would handle it
-  // correctly.
-  const char* const kModuleString = R"(
-HloModule fusion
-
-fused_computation {
-  param_0.1 = s32[6]{0} parameter(0)
-  bitcast = s32[2,3]{1,0} bitcast(param_0.1)
-  zero = s32[] constant(0)
-  param_1.1 = s32[] parameter(1)
-  dynamic-slice = s32[1,2]{1,0} dynamic-slice(bitcast, param_1.1, zero), dynamic_slice_sizes={1,2}
-  one = s32[] constant(1)
-  broadcast = s32[1,2]{1,0} broadcast(one), dimensions={}
-  add = s32[1,2] add(dynamic-slice, broadcast)
-  dynamic-update-slice = s32[2,3]{1,0} dynamic-update-slice(bitcast, add, param_1.1, zero)
-  bitcast.1 = s32[6]{0} bitcast(dynamic-update-slice)
-  neg = s32[2,3]{1,0} negate(bitcast)
-  ROOT output = (s32[6]{0}, s32[2,3]{1,0}) tuple(bitcast.1, neg)
-}
-
-ENTRY main {
-  param_0 = s32[6]{0} parameter(0)
-  param_1 = s32[] parameter(1)
-  ROOT fusion = (s32[6]{0},s32[2,3]{1,0}) fusion(param_0, param_1), kind=kInput, calls=fused_computation
-}
-)";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(0), {0}));
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(0), {1}));
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(1), {0}));
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(1), {1}));
-}
-
-TEST_F(FusionCanShareBufferHintTest,
-       BufferCannotBeSharedBecauseDUSAndDSAccessDifferentSliceSizes) {
-  const char* const kModuleString = R"(
-HloModule fusion
-
-fused_computation {
-  param_0.1 = s32[6]{0} parameter(0)
-  bitcast = s32[2,3]{1,0} bitcast(param_0.1)
-  zero = s32[] constant(0)
-  param_1.1 = s32[] parameter(1)
-  dynamic-slice = s32[1,2]{1,0} dynamic-slice(bitcast, param_1.1, zero), dynamic_slice_sizes={1,2}
-  param_2.1 = s32[1,1]{1,0} parameter(2)
-  dynamic-update-slice = s32[2,3]{1,0} dynamic-update-slice(bitcast, param_2.1, param_1.1, zero)
-  param_3.1 = s32[2,3]{1,0} parameter(3)
-  dynamic-update-slice.1 = s32[2,3]{1,0} dynamic-update-slice(param_3.1, dynamic-slice, param_1.1, zero)
-  ROOT tuple = (s32[2,3]{1,0}, s32[2,3]{1,0}) tuple(dynamic-update-slice, dynamic-update-slice.1)
-}
-
-ENTRY main {
-  param_0 = s32[6]{0} parameter(0)
-  param_1 = s32[] parameter(1)
-  param_2 = s32[1,1]{1,0} parameter(2)
-  param_3 = s32[2,3]{1,0} parameter(3)
-  ROOT fusion = (s32[2,3]{1,0}, s32[2,3]{1,0}) fusion(param_0, param_1, param_2, param_3), kind=kInput, calls=fused_computation
-}
-)";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalFalse(
-      FusionCanShareBufferHint(fusion, fusion->operand(0), {0}));
-}
-
-TEST_F(FusionCanShareBufferHintTest,
-       BufferCanBeSharedBecauseDUSAndDSAccessSlicesOfSizeOne) {
-  const char* const kModuleString = R"(
-HloModule fusion
-
-fused_computation {
-  param_0.1 = s32[6]{0} parameter(0)
-  bitcast = s32[2,3]{1,0} bitcast(param_0.1)
-  zero = s32[] constant(0)
-  param_1.1 = s32[] parameter(1)
-  dynamic-slice = s32[1,1]{1,0} dynamic-slice(bitcast, zero, param_1.1), dynamic_slice_sizes={1,1}
-  one = s32[] constant(1)
-  bitcasted_one = s32[1,1]{1,0} bitcast(one)
-  add = s32[1,1] add(dynamic-slice, bitcasted_one)
-  dynamic-update-slice = s32[2,3]{1,0} dynamic-update-slice(bitcast, add, param_1.1, zero)
-  ROOT bitcast.1 = s32[6]{0} bitcast(dynamic-update-slice)
-}
-
-ENTRY main {
-  param_0 = s32[6]{0} parameter(0)
-  param_1 = s32[] parameter(1)
-  ROOT fusion = s32[6]{0} fusion(param_0, param_1), kind=kInput, calls=fused_computation
-}
-)";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalTrue(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
-}
-
-TEST_F(FusionCanShareBufferHintTest,
-       BufferCannotBeSharedBecauseDUSAndDSAccessDifferentOperands) {
-  const char* const kModuleString = R"(
-HloModule fusion
-
-fused_computation {
-  param_0.1 = s32[6]{0} parameter(0)
-  bitcast = s32[2,3]{1,0} bitcast(param_0.1)
-  zero = s32[] constant(0)
-  param_1.1 = s32[] parameter(1)
-  dynamic-slice = s32[1]{0} dynamic-slice(param_0.1, param_1.1), dynamic_slice_sizes={1}
-  one = s32[1]{0} constant({1})
-  add = s32[1] add(dynamic-slice, one)
-  bitcasted_add = s32[1,1]{1,0} bitcast(add)
-  dynamic-update-slice = s32[2,3]{1,0} dynamic-update-slice(bitcast, bitcasted_add, param_1.1, zero)
-  ROOT bitcast.1 = s32[6]{0} bitcast(dynamic-update-slice)
-}
-
-ENTRY main {
-  param_0 = s32[6]{0} parameter(0)
-  param_1 = s32[] parameter(1)
-  ROOT fusion = s32[6]{0} fusion(param_0, param_1), kind=kInput, calls=fused_computation
-}
-)";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalFalse(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
-}
-
-TEST_F(FusionCanShareBufferHintTest,
-       BufferCannotBeSharedBecauseDUSAndDSAccessDifferentOverlappingOffsets) {
-  const char* const kModuleString = R"(
-HloModule fusion
-
-fused_computation {
-  param_0.1 = s32[6]{0} parameter(0)
-  bitcast = s32[2,3]{1,0} bitcast(param_0.1)
-  zero = s32[] constant(0)
-  param_1.1 = s32[] parameter(1)
-  dynamic-slice = s32[1,2]{1,0} dynamic-slice(bitcast, param_1.1, zero), dynamic_slice_sizes={1,2}
-  one = s32[] constant(1)
-  broadcast = s32[1,2]{1,0} broadcast(one), dimensions={}
-  add = s32[1,2] add(dynamic-slice, broadcast)
-  dynamic-update-slice = s32[2,3]{1,0} dynamic-update-slice(bitcast, add, param_1.1, one)
-  ROOT bitcast.1 = s32[6]{0} bitcast(dynamic-update-slice)
-}
-
-ENTRY main {
-  param_0 = s32[6]{0} parameter(0)
-  param_1 = s32[] parameter(1)
-  ROOT fusion = s32[6]{0} fusion(param_0, param_1), kind=kInput, calls=fused_computation
-}
-)";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-  ExpectOptionalFalse(FusionCanShareBufferHint(fusion, fusion->operand(0), {}));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
+                       ParseAndReturnVerifiedModule(kModuleString));
+
+  CopyInsertion copy_insertion = CreateCopyInsertion();
+  ASSERT_IS_OK(copy_insertion.Run(module.get()).status());
+  EXPECT_EQ(CountCopies(*module), 1);
 }
 
 // For loops unrolled with double buffering,
 // copyInsertion should not insert any copy.
 TEST_F(GpuCopyInsertionTest, UnrolledLoopShouldNotHaveCopy) {
-  const char* const kModuleString = R"(
+  constexpr absl::string_view kModuleString = R"(
 HloModule all_gather_overlapping, entry_computation_layout={(f32[1,128]{1,0}, f32[2,128]{1,0})->(f32[1,128]{1,0}, f32[1,128]{1,0}, f32[2,128]{1,0}, s32[])}
 
 body {
@@ -987,11 +297,10 @@ ENTRY main {
 }
 )";
 
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnVerifiedModule(kModuleString));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
+                       ParseAndReturnVerifiedModule(kModuleString));
 
-  CopyInsertion copy_insertion(FusionCanShareBufferHint,
-                               /*use_region_based_live_range_analysis=*/0);
+  CopyInsertion copy_insertion = CreateCopyInsertion();
   ASSERT_IS_OK(copy_insertion.Run(module.get(), {"foobar"}).status());
   VLOG(2) << module->ToString();
   EXPECT_EQ(CountCopies(*module), 0);

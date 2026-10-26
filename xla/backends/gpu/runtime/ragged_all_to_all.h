@@ -1,0 +1,118 @@
+/* Copyright 2025 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#ifndef XLA_BACKENDS_GPU_RUNTIME_RAGGED_ALL_TO_ALL_H_
+#define XLA_BACKENDS_GPU_RUNTIME_RAGGED_ALL_TO_ALL_H_
+
+#include <cstddef>
+#include <cstdint>
+
+#include "absl/base/nullability.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/types/span.h"
+#include "xla/backends/gpu/collectives/gpu_communicator.h"
+#include "xla/core/collectives/symmetric_memory.h"
+#include "xla/stream_executor/command_buffer.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/gpu/ragged_all_to_all_kernel.h"
+#include "xla/stream_executor/stream.h"
+#include "xla/stream_executor/stream_executor.h"
+#include "xla/types.h"  // IWYU pragma: keep
+#include "xla/xla_data.pb.h"
+
+namespace xla::gpu {
+
+// Returns true if the kernel is supported for the given number of outputs and
+// element type.
+bool IsRaggedAllToAllKernelSupported(int64_t num_outputs,
+                                     PrimitiveType element_type);
+
+// Returns true if the kernel is supported for the given element type.
+bool IsRaggedAllToAllWithSymmetricMemoryKernelSupported(
+    PrimitiveType element_type);
+
+using RaggedAllToAllWithSymmetricMemoryKernelType =
+    se::gpu::RaggedAllToAllWithSymmetricMemoryKernel<1>::KernelType;
+
+// Loads the vectorized RaggedAllToAllWithSymmetricMemoryKernel matching
+// (element_type, num_row_elements) on `executor`.
+absl::StatusOr<RaggedAllToAllWithSymmetricMemoryKernelType>
+LoadRaggedAllToAllWithSymmetricMemoryKernel(se::StreamExecutor* executor,
+                                            PrimitiveType element_type,
+                                            int64_t num_row_elements);
+
+// Input:
+//  - input_buffer: dtype[num_input_rows, num_row_elements]
+//  - input_offsets_buffer: s64[num_ranks * num_updates_per_rank]
+//  - send_sizes_buffer: s64[num_ranks * num_updates_per_rank]
+//  - output_offsets_buffer: s64[num_ranks * num_updates_per_rank]
+//  - num_outputs: number of output buffers
+//  - num_updates_per_output: number of updates to write to each output buffer
+//  - num_input_rows: number of input rows
+//  - num_row_elements: number of elements in each row
+// Output:
+//  - output_buffers[num_outputs, num_output_rows, num_row_elements]
+// Outputs are filled with the updates from the input data. Number of output
+// rows is not explicitly specified in the API, but should be enough to fit all
+// the inputs. It is the responsibility of the caller to make sure that it is
+// the case.
+absl::Status RunRaggedAllToAllKernel(
+    se::Stream* stream, PrimitiveType element_type,
+    se::DeviceAddressBase input_buffer,
+    stream_executor::gpu::RaggedAllToAllOutputPtrs output_ptrs,
+    se::DeviceAddressBase input_offsets_buffer,
+    se::DeviceAddressBase send_sizes_buffer,
+    se::DeviceAddressBase output_offsets_buffer, int64_t num_outputs,
+    int64_t num_updates_per_output, int64_t num_input_rows,
+    int64_t num_row_elements);
+
+absl::Status RunRaggedAllToAllWithSymmetricMemoryKernel(
+    se::Stream* stream, RaggedAllToAllWithSymmetricMemoryKernelType& kernel,
+    PrimitiveType element_type, se::DeviceAddressBase input_buffer,
+    xla::SymmetricMemory* output_ptrs_symmetric_memory,
+    size_t output_sym_offset, se::DeviceAddressBase input_offsets_buffer,
+    se::DeviceAddressBase send_sizes_buffer,
+    se::DeviceAddressBase output_offsets_buffer, int64_t num_outputs,
+    int64_t num_updates_per_output, int64_t num_input_rows,
+    int64_t num_row_elements);
+
+absl::StatusOr<const se::CommandBuffer::Command*>
+RecordRaggedAllToAllWithSymmetricMemoryKernel(
+    se::CommandBuffer* command_buffer,
+    const RaggedAllToAllWithSymmetricMemoryKernelType& kernel,
+    PrimitiveType element_type, se::DeviceAddressBase input_buffer,
+    xla::SymmetricMemory* output_ptrs_symmetric_memory,
+    size_t output_sym_offset, se::DeviceAddressBase input_offsets_buffer,
+    se::DeviceAddressBase send_sizes_buffer,
+    se::DeviceAddressBase output_offsets_buffer, int64_t num_outputs,
+    int64_t num_updates_per_output, int64_t num_input_rows,
+    int64_t num_row_elements,
+    const se::CommandBuffer::Command* absl_nullable cmd,
+    absl::Span<const se::CommandBuffer::Command* const> dependencies);
+
+absl::Status RunDeviceRaggedAllToAllKernel(
+    se::Stream* stream, PrimitiveType element_type,
+    xla::gpu::GpuDeviceCommunicator* dev_comm, xla::SymmetricMemory* send_win,
+    xla::SymmetricMemory* recv_win, se::DeviceAddressBase input_offsets_buffer,
+    se::DeviceAddressBase send_sizes_buffer,
+    se::DeviceAddressBase output_offsets_buffer, int64_t num_ranks,
+    int64_t num_updates_per_replica, int64_t num_row_elements,
+    int64_t cta_count, int64_t input_buffer_offset_bytes,
+    int64_t output_buffer_offset_bytes);
+
+}  // namespace xla::gpu
+
+#endif  // XLA_BACKENDS_GPU_RUNTIME_RAGGED_ALL_TO_ALL_H_

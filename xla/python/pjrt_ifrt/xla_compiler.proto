@@ -17,8 +17,11 @@ syntax = "proto3";
 
 package xla.ifrt;
 
-import "xla/pjrt/compile_options.proto";
+import "xla/pjrt/proto/compile_options.proto";
 
 message XlaCompileOptionsProto {
+  int32 version_number = 3;
+
   xla.CompileOptionsProto compile_options = 1;
+  repeated int32 outputs_bundle_slice_sizes = 2;
 }

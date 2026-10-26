@@ -16,6 +16,9 @@ limitations under the License.
 #ifndef XLA_PJRT_SEMAPHORE_H_
 #define XLA_PJRT_SEMAPHORE_H_
 
+#include <cstdint>
+
+#include "absl/base/thread_annotations.h"
 #include "absl/synchronization/mutex.h"
 #include "xla/types.h"
 
@@ -28,8 +31,21 @@ class Semaphore {
   // Acquires `amount` units. Blocks until `amount` units are available.
   void Acquire(int64_t amount);
 
+  // Tries to acquire `amount` units. Returns true if successful. Returns false
+  // immediately if not enough units are available.
+  bool TryAcquire(int64_t amount);
+
   // Returns `amount` units to the semaphore.
   void Release(int64_t amount);
+
+  // Returns the capacity of the semaphore.
+  int64_t capacity() const { return max_capacity_; }
+
+  // Returns the current value of the semaphore.
+  int64_t value() const {
+    absl::MutexLock lock(mu_);
+    return value_;
+  }
 
   class ScopedReservation {
    public:
@@ -59,8 +75,9 @@ class Semaphore {
   static bool CanAcquire(CanAcquireArgs* args)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(args->semaphore->mu_);
 
-  absl::Mutex mu_;
+  mutable absl::Mutex mu_;
   int64_t value_ ABSL_GUARDED_BY(mu_);
+  const int64_t max_capacity_;
 };
 
 }  // namespace xla

@@ -17,6 +17,7 @@
 #ifndef XLA_PYTHON_IFRT_PROXY_CLIENT_GRPC_CLIENT_SESSION_H_
 #define XLA_PYTHON_IFRT_PROXY_CLIENT_GRPC_CLIENT_SESSION_H_
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 
@@ -30,12 +31,13 @@
 #include "grpcpp/client_context.h"
 #include "grpcpp/support/client_callback.h"
 #include "grpcpp/support/sync_stream.h"
-#include "xla/python/ifrt/future.h"
-#include "xla/python/ifrt_proxy/client/client_session.h"
-#include "xla/python/ifrt_proxy/common/grpc_ifrt_service.grpc.pb.h"
-#include "xla/python/ifrt_proxy/common/ifrt_service.pb.h"
 #include "tsl/platform/threadpool.h"
 #include "tsl/platform/unbounded_work_queue.h"
+#include "xla/python/ifrt_proxy/client/client_session.h"
+#include "xla/python/ifrt_proxy/common/grpc_ifrt_service.grpc.pb.h"
+#include "xla/python/ifrt_proxy/common/grpc_ifrt_service.pb.h"
+#include "xla/python/ifrt_proxy/common/ifrt_service.pb.h"
+#include "xla/tsl/concurrency/future.h"
 
 namespace xla {
 namespace ifrt {
@@ -62,7 +64,7 @@ class GrpcClientSession : public ClientSession {
       GrpcIfrtSessionMetadata metadata,
       StreamTerminatedCallback stream_terminated_cb);
 
-  Future<std::shared_ptr<IfrtResponse>> Enqueue(
+  tsl::Future<std::shared_ptr<IfrtResponse>> Enqueue(
       std::unique_ptr<IfrtRequest> request) override;
 
   // `ResponseCallback` represents a function that can be invoked when
@@ -116,6 +118,9 @@ class GrpcClientSession : public ClientSession {
   // only one thread is allowed to write to the gRPC stream at a time.
   absl::Mutex writer_mu_;
 
+  using OpId = uint64_t;
+  OpId writer_next_op_id_ ABSL_GUARDED_BY(writer_mu_) = 1;
+
   // Ensures logic inside `Finish()` is internally called only once.
   absl::once_flag finish_once_;
 
@@ -128,10 +133,10 @@ class GrpcClientSession : public ClientSession {
 
   const StreamTerminatedCallback stream_terminated_cb_;
 
-  // Threadpool used to perform `Future<>::Promise::Set()` for Futures returned
-  // to callers of `Enqueue(std::unique_ptr<IfrtRequest> request)`. We do this
-  // because `Set()` may block on arbitrary `OnReady` callbacks set by those
-  // callers.
+  // Threadpool used to perform `tsl::Promise<>::Set()` for Futures
+  // returned to callers of `Enqueue(std::unique_ptr<IfrtRequest> request)`. We
+  // do this because `Set()` may block on arbitrary `OnReady` callbacks set by
+  // those callers.
   std::unique_ptr<tsl::UnboundedWorkQueue> user_futures_work_queue_;
 };
 

@@ -13,28 +13,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <memory>
-
 #include "llvm/ADT/Hashing.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
-#include "mlir/IR/Attributes.h"  // from @llvm-project
-#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
-#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
-#include "mlir/IR/OpDefinition.h"  // from @llvm-project
-#include "mlir/IR/OperationSupport.h"  // from @llvm-project
-#include "mlir/IR/SymbolTable.h"  // from @llvm-project
-#include "mlir/Pass/Pass.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/OperationSupport.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Support/LLVM.h"
 #include "xla/python/ifrt/ir/ifrt_ops.h"
 #include "xla/python/ifrt/ir/transforms/passes.h"
 
 namespace xla {
 namespace ifrt {
 
-namespace {
-
 #define GEN_PASS_DEF_IFRTDUPLICATEDCALLEEELIMINATIONPASS
 #include "xla/python/ifrt/ir/transforms/passes.h.inc"
+
+namespace {
 
 // Compares FuncOps except symbol name.
 struct FuncInfo : llvm::DenseMapInfo<mlir::func::FuncOp> {
@@ -62,10 +59,6 @@ struct FuncInfo : llvm::DenseMapInfo<mlir::func::FuncOp> {
     if (lhs == rhs) {
       return true;
     }
-    if (lhs == getEmptyKey() || lhs == getTombstoneKey() ||
-        rhs == getEmptyKey() || rhs == getTombstoneKey()) {
-      return false;
-    }
     if (lhs.getFunctionType() != rhs.getFunctionType()) {
       return false;
     }
@@ -92,7 +85,7 @@ void IfrtDuplicatedCalleeEliminationPass::runOnOperation() {
   mlir::SymbolTableCollection symbol_table;
   mlir::DenseMap<mlir::func::FuncOp, mlir::SymbolRefAttr, FuncInfo>
       unique_funcs;
-  getOperation().walk([&](xla::ifrt::CallOp call_op) {
+  getOperation().walk([&](CallOp call_op) {
     mlir::func::FuncOp callee = call_op.getCalleeOp(symbol_table);
     auto [it, inserted] =
         unique_funcs.insert({callee, call_op.getCalleeAttr()});
@@ -103,11 +96,5 @@ void IfrtDuplicatedCalleeEliminationPass::runOnOperation() {
 }
 
 }  // namespace
-
-std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
-CreateIfrtDuplicatedCalleeEliminationPass() {
-  return std::make_unique<IfrtDuplicatedCalleeEliminationPass>();
-}
-
 }  // namespace ifrt
 }  // namespace xla

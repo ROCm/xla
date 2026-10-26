@@ -19,25 +19,18 @@ limitations under the License.
 #include <Python.h>
 
 #include "absl/strings/str_format.h"
-#include "nanobind/nanobind.h"  // from @nanobind
+#include "nanobind/nanobind.h"
 
 namespace xla {
-
-// Calls Python hash() on an object.
-// TODO(phawkins): consider upstreaming this to nanobind.
-Py_hash_t nb_hash(nanobind::handle o);
-
-// Calls Python isinstance(inst, cls).
-// TODO(phawkins): consider upstreaming this to nanobind.
-bool nb_isinstance(nanobind::handle inst, nanobind::handle cls);
 
 // Issues a Python deprecation warning. Throws a C++ exception if issuing the
 // Python warning causes a Python exception to be raised.
 template <typename... Args>
-void PythonDeprecationWarning(const absl::FormatSpec<Args...>& format,
+void PythonDeprecationWarning(int stacklevel,
+                              const absl::FormatSpec<Args...>& format,
                               const Args&... args) {
   if (PyErr_WarnEx(PyExc_DeprecationWarning,
-                   absl::StrFormat(format, args...).c_str(), 1) < 0) {
+                   absl::StrFormat(format, args...).c_str(), stacklevel) < 0) {
     throw nanobind::python_error();
   }
 }
@@ -48,24 +41,32 @@ void PythonDeprecationWarning(const absl::FormatSpec<Args...>& format,
   static constexpr auto Name = descr;                    \
   template <typename T_>                                 \
   using Cast = movable_cast_t<T_>;                       \
+  template <typename T_>                                 \
+  static constexpr bool can_cast() {                     \
+    return true;                                         \
+  }                                                      \
   explicit operator Value*() { return &value; }          \
   explicit operator Value&() { return (Value&)value; }   \
   explicit operator Value&&() { return (Value&&)value; } \
   Value value;
 
-template <typename Func>
-nanobind::object nb_property_readonly(Func&& get) {
+template <typename Func, typename... Extra>
+nanobind::object nb_property_readonly(Func&& get, const Extra&... extra) {
   nanobind::handle property(reinterpret_cast<PyObject*>(&PyProperty_Type));
-  return property(nanobind::cpp_function(std::forward<Func>(get)),
-                  nanobind::none(), nanobind::none(), "");
+  return property(
+      nanobind::cpp_function(std::forward<Func>(get), nanobind::is_method(),
+                             nanobind::is_getter(), extra...),
+      nanobind::none(), nanobind::none(), "");
 }
 
 template <typename GetFunc, typename SetFunc>
 nanobind::object nb_property(GetFunc&& get, SetFunc&& set) {
   nanobind::handle property(reinterpret_cast<PyObject*>(&PyProperty_Type));
-  return property(nanobind::cpp_function(std::forward<GetFunc>(get)),
-                  nanobind::cpp_function(std::forward<SetFunc>(set)),
-                  nanobind::none(), "");
+  return property(
+      nanobind::cpp_function(std::forward<GetFunc>(get), nanobind::is_method(),
+                             nanobind::is_getter()),
+      nanobind::cpp_function(std::forward<SetFunc>(set), nanobind::is_method()),
+      nanobind::none(), "");
 }
 
 }  // namespace xla

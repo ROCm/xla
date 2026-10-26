@@ -15,19 +15,20 @@ limitations under the License.
 
 #include "xla/service/gpu/fusion_process_dump.h"
 
+#include <gtest/gtest.h>
+
 #include <string>
 
-#include <gtest/gtest.h>
 #include "absl/strings/string_view.h"
+#include "tsl/platform/statusor.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/parser/hlo_parser.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/testlib/pattern_matcher_gmock.h"
+#include "xla/hlo/testlib/test.h"
 #include "xla/service/gpu/fusion_process_dump.pb.h"
 #include "xla/service/gpu/gpu_device_info_for_tests.h"
-#include "xla/service/hlo_parser.h"
 #include "xla/service/pattern_matcher.h"
-#include "xla/service/pattern_matcher_gmock.h"
-#include "xla/test.h"
-#include "xla/tests/hlo_test_base.h"
-#include "tsl/platform/statusor.h"
 
 namespace m = ::xla::match;
 
@@ -35,7 +36,7 @@ namespace xla {
 namespace gpu {
 namespace {
 
-using FusionProcessDumpTest = HloTestBase;
+using FusionProcessDumpTest = HloHardwareIndependentTestBase;
 
 void AddFusion(FusionProcessDumpProto& dump_proto,
                const std::string& fusion_name, const std::string& producer_name,
@@ -48,7 +49,7 @@ void AddFusion(FusionProcessDumpProto& dump_proto,
 }
 
 TEST_F(FusionProcessDumpTest, MultipleFusionSteps) {
-  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
     HloModule test_module
 
     ENTRY main {
@@ -62,7 +63,7 @@ TEST_F(FusionProcessDumpTest, MultipleFusionSteps) {
 
   FusionProcessDumpProto dump_proto;
   *dump_proto.mutable_gpu_device_info() =
-      TestGpuDeviceInfo::RTXA6000DeviceInfo().ToGpuProto();
+      TestGpuDeviceInfo::RTXA6000DeviceInfo().ToProto();
   dump_proto.set_hlo_module_before_fusion(
       module->ToString(HloPrintOptions::ShortParsable()));
 
@@ -70,8 +71,8 @@ TEST_F(FusionProcessDumpTest, MultipleFusionSteps) {
   AddFusion(dump_proto, "fusion.2", "fusion.1", "multiply");
   AddFusion(dump_proto, "fusion.2", "add", "fusion.2");
 
-  TF_ASSERT_OK_AND_ASSIGN(auto fusion_process_dump,
-                          FusionProcessDump::LoadFromProto(dump_proto));
+  ASSERT_OK_AND_ASSIGN(auto fusion_process_dump,
+                       FusionProcessDump::LoadFromProto(dump_proto));
 
   fusion_process_dump.Advance();
   fusion_process_dump.Advance();

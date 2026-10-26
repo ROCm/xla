@@ -18,21 +18,21 @@ limitations under the License.
 
 #include <memory>
 
-#include "grpcpp/alarm.h"
-#include "grpcpp/completion_queue.h"
-#include "grpcpp/server_builder.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
+#include "grpcpp/alarm.h"
+#include "grpcpp/completion_queue.h"
+#include "grpcpp/server_builder.h"
 #include "xla/tsl/distributed_runtime/coordination/coordination_service.h"
 #include "xla/tsl/distributed_runtime/coordination/coordination_service_agent.h"
 #include "xla/tsl/distributed_runtime/coordination/coordination_service_rpc_handler.h"
 #include "xla/tsl/distributed_runtime/rpc/async_service_interface.h"
 #include "xla/tsl/distributed_runtime/rpc/grpc_call.h"
 #include "xla/tsl/distributed_runtime/rpc/grpc_util.h"
-#include "tsl/platform/threadpool.h"
-#include "tsl/protobuf/coordination_service.grpc.pb.h"
-#include "tsl/protobuf/coordination_service.pb.h"
+#include "xla/tsl/platform/threadpool.h"
+#include "xla/tsl/protobuf/coordination_service.grpc.pb.h"
+#include "xla/tsl/protobuf/coordination_service.pb.h"
 
 namespace tsl {
 
@@ -52,7 +52,7 @@ class GrpcCoordinationServiceImpl : public AsyncServiceInterface {
   void SetCoordinationServiceAgentInstance(CoordinationServiceAgent* agent) {
     rpc_handler_.SetAgentInstance(agent);
   }
-  void SetCoordinationServiceInstance(CoordinationServiceInterface* service) {
+  void SetCoordinationServiceInstance(CoordinationService* service) {
     rpc_handler_.SetServiceInstance(service);
   }
   CoordinationServiceRpcHandler* GetRpcHandler() { return &rpc_handler_; }
@@ -91,13 +91,17 @@ class GrpcCoordinationServiceImpl : public AsyncServiceInterface {
   HANDLER(ReportErrorToTask);
   HANDLER(ReportErrorToService);
   HANDLER(GetTaskState);
+  HANDLER(WatchJobState);
   HANDLER(InsertKeyValue);
   HANDLER(GetKeyValue);
   HANDLER(TryGetKeyValue);
+  HANDLER(IncrementKeyValue);
   HANDLER(GetKeyValueDir);
   HANDLER(DeleteKeyValue);
   HANDLER(Barrier);
   HANDLER(CancelBarrier);
+  HANDLER(GetAliveTasks);
+  HANDLER(PollForError);
 #undef HANDLER
 
   thread::ThreadPool& compute_pool_;

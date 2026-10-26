@@ -1,14 +1,34 @@
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 # Description:
 #   Stubs for dynamically loading CUDA.
 
 load(
-    "@tsl//tsl/platform:rules_cc.bzl",
+    "@xla//xla/tsl/platform:rules_cc.bzl",
     "cc_library",
 )
 load(
-    "@tsl//tsl/platform/default:cuda_build_defs.bzl",
+    "@xla//xla/tsl/platform/default:cuda_build_defs.bzl",
     "cuda_rpath_flags",
     "if_cuda_is_configured",
+    "if_cuda_newer_than",
+)
+load(
+    "//xla/tsl:tsl.default.bzl",
+    "if_cuda_libs",
 )
 load("//xla/tsl/cuda:stub.bzl", "cuda_stub")
 
@@ -22,13 +42,15 @@ cuda_stub(
 )
 
 cc_library(
-    name = "cublas",  # buildifier: disable=duplicated-name
+    name = "cublas_stub",
     srcs = if_cuda_is_configured([
         "cublas_stub.cc",
         "cublas.tramp.S",
     ]),
-    linkopts = if_cuda_is_configured(cuda_rpath_flags(
-        "nvidia/cublas/lib",
+    linkopts = if_cuda_is_configured(if_cuda_newer_than(
+        "13_0",
+        if_false = cuda_rpath_flags("nvidia/cublas/lib"),
+        if_true = cuda_rpath_flags("nvidia/cu13/lib"),
     )),
     local_defines = [
         "IMPLIB_EXPORT_SHIMS=1",
@@ -36,12 +58,19 @@ cc_library(
     textual_hdrs = ["cublas.inc"],
     visibility = ["//visibility:public"],
     deps = if_cuda_is_configured([
+        # keep sorted
+        "//xla/tsl/platform:logging",
         "@com_google_absl//absl/container:flat_hash_set",
         "@local_config_cuda//cuda:cuda_headers",
         "@tsl//tsl/platform:dso_loader",
-        "@tsl//tsl/platform:logging",
         "@tsl//tsl/platform:load_library",
     ]),
+)
+
+alias(
+    name = "cublas",  # buildifier: disable=duplicated-name
+    actual = if_cuda_libs("@cuda_cublas//:cublas", ":cublas_stub"),
+    visibility = ["//visibility:public"],
 )
 
 cuda_stub(
@@ -50,7 +79,7 @@ cuda_stub(
 )
 
 cc_library(
-    name = "cublas_lt",
+    name = "cublas_lt_stub",
     srcs = if_cuda_is_configured([
         "cublasLt_stub.cc",
         "cublasLt.tramp.S",
@@ -61,11 +90,18 @@ cc_library(
     textual_hdrs = ["cublasLt.inc"],
     visibility = ["//visibility:public"],
     deps = if_cuda_is_configured([
+        # keep sorted
+        "//xla/tsl/platform:logging",
         "@local_config_cuda//cuda:cuda_headers",
         "@tsl//tsl/platform:dso_loader",
-        "@tsl//tsl/platform:logging",
         "@tsl//tsl/platform:load_library",
     ]),
+)
+
+alias(
+    name = "cublas_lt",
+    actual = if_cuda_libs("@cuda_cublas//:cublasLt", ":cublas_lt_stub"),
+    visibility = ["//visibility:public"],
 )
 
 cuda_stub(
@@ -85,9 +121,10 @@ cc_library(
     textual_hdrs = ["cuda.inc"],
     visibility = ["//visibility:public"],
     deps = if_cuda_is_configured([
+        # keep sorted
+        "//xla/tsl/platform:logging",
         "@local_config_cuda//cuda:cuda_headers",
         "@tsl//tsl/platform:dso_loader",
-        "@tsl//tsl/platform:logging",
         "@tsl//tsl/platform:load_library",
     ]),
 )
@@ -98,7 +135,7 @@ cuda_stub(
 )
 
 cc_library(
-    name = "cudart",  # buildifier: disable=duplicated-name
+    name = "cudart_stub",
     srcs = select({
         # include dynamic loading implementation only when if_cuda_is_configured and build dynamically
         "@xla//xla/tsl:is_cuda_enabled_and_oss": [
@@ -107,10 +144,11 @@ cc_library(
         ],
         "//conditions:default": [],
     }),
-    linkopts = select({
-        "@xla//xla/tsl:is_cuda_enabled_and_oss": cuda_rpath_flags("nvidia/cuda_runtime/lib"),
-        "//conditions:default": [],
-    }),
+    linkopts = if_cuda_is_configured(if_cuda_newer_than(
+        "13_0",
+        if_false = cuda_rpath_flags("nvidia/cuda_runtime/lib"),
+        if_true = cuda_rpath_flags("nvidia/cu13/lib"),
+    )),
     local_defines = [
         "IMPLIB_EXPORT_SHIMS=1",
     ],
@@ -118,15 +156,22 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = select({
         "@xla//xla/tsl:is_cuda_enabled_and_oss": [
+            # keep sorted
             ":cuda",
+            "//xla/tsl/platform:logging",
             "@com_google_absl//absl/container:flat_hash_set",
             "@local_config_cuda//cuda:cuda_headers",
             "@tsl//tsl/platform:dso_loader",
             "@tsl//tsl/platform:load_library",
-            "@tsl//tsl/platform:logging",
         ],
         "//conditions:default": [],
     }),
+)
+
+alias(
+    name = "cudart",  # buildifier: disable=duplicated-name
+    actual = if_cuda_libs("@cuda_cudart//:cudart", ":cudart_stub"),
+    visibility = ["//visibility:public"],
 )
 
 cuda_stub(
@@ -135,7 +180,7 @@ cuda_stub(
 )
 
 cc_library(
-    name = "cudnn",  # buildifier: disable=duplicated-name
+    name = "cudnn_stub",
     srcs = if_cuda_is_configured([
         "cudnn_stub.cc",
         "cudnn.tramp.S",
@@ -147,17 +192,30 @@ cc_library(
     textual_hdrs = ["cudnn.inc"],
     visibility = ["//visibility:public"],
     deps = if_cuda_is_configured([
+        # keep sorted
+        "//xla/tsl/platform:logging",
         "@com_google_absl//absl/container:flat_hash_map",
         "@local_config_cuda//cuda:cudnn_header",
         "@tsl//tsl/platform:dso_loader",
-        "@tsl//tsl/platform:logging",
         "@tsl//tsl/platform:load_library",
     ]),
 )
 
+alias(
+    name = "cudnn",  # buildifier: disable=duplicated-name
+    actual = if_cuda_libs("@cuda_cudnn//:cudnn", ":cudnn_stub"),
+    visibility = ["//visibility:public"],
+)
+
 cc_library(
-    name = "nccl_rpath",
+    name = "nccl_rpath_flags",
     linkopts = if_cuda_is_configured(cuda_rpath_flags("nvidia/nccl/lib")),
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "nccl_rpath",
+    actual = if_cuda_libs("@cuda_nccl//:nccl", ":nccl_rpath_flags"),
     visibility = ["//visibility:public"],
 )
 
@@ -173,23 +231,34 @@ cuda_stub(
 )
 
 cc_library(
-    name = "cufft",  # buildifier: disable=duplicated-name
+    name = "cufft_stub",
     srcs = if_cuda_is_configured([
         "cufft_stub.cc",
         "cufft.tramp.S",
     ]),
-    linkopts = if_cuda_is_configured(cuda_rpath_flags("nvidia/cufft/lib")),
+    linkopts = if_cuda_is_configured(if_cuda_newer_than(
+        "13_0",
+        if_false = cuda_rpath_flags("nvidia/cufft/lib"),
+        if_true = cuda_rpath_flags("nvidia/cu13/lib"),
+    )),
     local_defines = [
         "IMPLIB_EXPORT_SHIMS=1",
     ],
     textual_hdrs = ["cufft.inc"],
     visibility = ["//visibility:public"],
     deps = if_cuda_is_configured([
+        # keep sorted
+        "//xla/tsl/platform:logging",
         "@local_config_cuda//cuda:cuda_headers",
         "@tsl//tsl/platform:dso_loader",
-        "@tsl//tsl/platform:logging",
         "@tsl//tsl/platform:load_library",
     ]),
+)
+
+alias(
+    name = "cufft",  # buildifier: disable=duplicated-name
+    actual = if_cuda_libs("@cuda_cufft//:cufft", ":cufft_stub"),
+    visibility = ["//visibility:public"],
 )
 
 cuda_stub(
@@ -198,25 +267,36 @@ cuda_stub(
 )
 
 cc_library(
-    name = "cupti",  # buildifier: disable=duplicated-name
+    name = "cupti_stub",
     srcs = if_cuda_is_configured([
         "cupti_stub.cc",
         "cupti.tramp.S",
     ]),
     data = if_cuda_is_configured(["@local_config_cuda//cuda:cupti_dsos"]),
-    linkopts = if_cuda_is_configured(cuda_rpath_flags("nvidia/cuda_cupti/lib")),
+    linkopts = if_cuda_is_configured(if_cuda_newer_than(
+        "13_0",
+        if_false = cuda_rpath_flags("nvidia/cuda_cupti/lib"),
+        if_true = cuda_rpath_flags("nvidia/cu13/lib"),
+    )),
     local_defines = [
         "IMPLIB_EXPORT_SHIMS=1",
     ],
     textual_hdrs = ["cupti.inc"],
     visibility = ["//visibility:public"],
     deps = if_cuda_is_configured([
+        # keep sorted
+        "//xla/tsl/platform:logging",
         "@local_config_cuda//cuda:cuda_headers",
         "@local_config_cuda//cuda:cupti_headers",
         "@tsl//tsl/platform:dso_loader",
-        "@tsl//tsl/platform:logging",
         "@tsl//tsl/platform:load_library",
     ]),
+)
+
+alias(
+    name = "cupti",  # buildifier: disable=duplicated-name
+    actual = if_cuda_libs("@cuda_cupti//:cupti", ":cupti_stub"),
+    visibility = ["//visibility:public"],
 )
 
 cuda_stub(
@@ -225,23 +305,34 @@ cuda_stub(
 )
 
 cc_library(
-    name = "cusolver",  # buildifier: disable=duplicated-name
+    name = "cusolver_stub",
     srcs = if_cuda_is_configured([
         "cusolver_stub.cc",
         "cusolver.tramp.S",
     ]),
-    linkopts = if_cuda_is_configured(cuda_rpath_flags("nvidia/cusolver/lib")),
+    linkopts = if_cuda_is_configured(if_cuda_newer_than(
+        "13_0",
+        if_false = cuda_rpath_flags("nvidia/cusolver/lib"),
+        if_true = cuda_rpath_flags("nvidia/cu13/lib"),
+    )),
     local_defines = [
         "IMPLIB_EXPORT_SHIMS=1",
     ],
     textual_hdrs = ["cusolver.inc"],
     visibility = ["//visibility:public"],
     deps = if_cuda_is_configured([
+        # keep sorted
+        "//xla/tsl/platform:logging",
         "@local_config_cuda//cuda:cuda_headers",
         "@tsl//tsl/platform:dso_loader",
-        "@tsl//tsl/platform:logging",
         "@tsl//tsl/platform:load_library",
     ]),
+)
+
+alias(
+    name = "cusolver",  # buildifier: disable=duplicated-name
+    actual = if_cuda_libs("@cuda_cusolver//:cusolver", ":cusolver_stub"),
+    visibility = ["//visibility:public"],
 )
 
 cuda_stub(
@@ -250,24 +341,35 @@ cuda_stub(
 )
 
 cc_library(
-    name = "cusparse",  # buildifier: disable=duplicated-name
+    name = "cusparse_stub",
     srcs = if_cuda_is_configured([
         "cusparse_stub.cc",
         "cusparse.tramp.S",
     ]),
-    linkopts = if_cuda_is_configured(cuda_rpath_flags("nvidia/cusparse/lib")),
+    linkopts = if_cuda_is_configured(if_cuda_newer_than(
+        "13_0",
+        if_false = cuda_rpath_flags("nvidia/cusparse/lib"),
+        if_true = cuda_rpath_flags("nvidia/cu13/lib"),
+    )),
     local_defines = [
         "IMPLIB_EXPORT_SHIMS=1",
     ],
     textual_hdrs = ["cusparse.inc"],
     visibility = ["//visibility:public"],
     deps = if_cuda_is_configured([
+        # keep sorted
+        "//xla/tsl/platform:logging",
         "@com_google_absl//absl/container:flat_hash_set",
         "@local_config_cuda//cuda:cuda_headers",
         "@tsl//tsl/platform:dso_loader",
-        "@tsl//tsl/platform:logging",
         "@tsl//tsl/platform:load_library",
     ]),
+)
+
+alias(
+    name = "cusparse",  # buildifier: disable=duplicated-name
+    actual = if_cuda_libs("@cuda_cusparse//:cusparse", ":cusparse_stub"),
+    visibility = ["//visibility:public"],
 )
 
 cuda_stub(
@@ -276,7 +378,7 @@ cuda_stub(
 )
 
 cc_library(
-    name = "nccl_stub",
+    name = "nccl_stub",  # buildifier: disable=duplicated-name
     srcs = if_cuda_is_configured([
         "nccl_stub.cc",
         "nccl.tramp.S",
@@ -288,11 +390,162 @@ cc_library(
     textual_hdrs = ["nccl.inc"],
     visibility = ["//visibility:public"],
     deps = if_cuda_is_configured([
+        # keep sorted
+        "//xla/tsl/platform:logging",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/strings:string_view",
         "@local_config_cuda//cuda:cuda_headers",
         "@local_config_nccl//:nccl_headers",
         "@tsl//tsl/platform:dso_loader",
-        "@tsl//tsl/platform:logging",
         "@tsl//tsl/platform:load_library",
     ]),
+)
+
+alias(
+    name = "nccl",  # buildifier: disable=duplicated-name
+    actual = if_cuda_libs("@cuda_nccl//:nccl", ":nccl_stub"),
+    visibility = ["//visibility:public"],
+)
+
+cuda_stub(
+    name = "nvshmem",
+    srcs = ["nvshmem.symbols"],
+)
+
+cc_library(
+    name = "nvshmem",  # buildifier: disable=duplicated-name
+    srcs = if_cuda_is_configured([
+        "nvshmem_stub.cc",
+        "nvshmem.tramp.S",
+    ]),
+    # TODO: standalone pip wheel rpath
+    linkopts = if_cuda_is_configured(cuda_rpath_flags("nvidia/nvshmem/lib")),
+    local_defines = [
+        "IMPLIB_EXPORT_SHIMS=1",
+    ],
+    textual_hdrs = ["nvshmem.inc"],
+    visibility = ["//visibility:public"],
+    deps = if_cuda_is_configured([
+        # keep sorted
+        "//xla/tsl/platform:logging",
+        "@tsl//tsl/platform:dso_loader",
+        "@tsl//tsl/platform:load_library",
+    ]),
+)
+
+alias(
+    name = "nvshmem_stub",
+    actual = if_cuda_libs("@nvidia_nvshmem//:nvshmem", ":nvshmem"),
+    visibility = ["//visibility:public"],
+)
+
+cuda_stub(
+    name = "nvjitlink",
+    srcs = ["nvjitlink.symbols"],
+)
+
+cc_library(
+    name = "nvjitlink_stub",  # buildifier: disable=duplicated-name
+    srcs = select({
+        "@xla//xla/tsl:is_cuda_enabled_and_oss": [
+            "nvjitlink.tramp.S",
+            "nvjitlink_stub.cc",
+        ],
+        "//conditions:default": [],
+    }),
+    defines = [
+        # By default, nvJitLink.h defines static inline wrappers that forward to
+        # versioned __nvJitLink*_<major>_<minor> symbols. Defining
+        # NVJITLINK_NO_INLINE makes consumers call the unversioned nvJitLink*
+        # symbols exported by nvjitlink.symbols instead.
+        "NVJITLINK_NO_INLINE",
+    ],
+    linkopts = if_cuda_is_configured(if_cuda_newer_than(
+        "13_0",
+        if_false = cuda_rpath_flags("nvidia/nvjitlink/lib"),
+        if_true = cuda_rpath_flags("nvidia/cu13/lib"),
+    )),
+    local_defines = [
+        "IMPLIB_EXPORT_SHIMS=1",
+    ],
+    textual_hdrs = ["nvjitlink.inc"],
+    visibility = ["//visibility:public"],
+    deps = select({
+        "@xla//xla/tsl:is_cuda_enabled_and_oss": [
+            # keep sorted
+            "//xla/tsl/platform:logging",
+            "@local_config_cuda//cuda:cuda_headers",
+            "@tsl//tsl/platform:dso_loader",
+            "@tsl//tsl/platform:load_library",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "nvjitlink",  # buildifier: disable=duplicated-name
+    actual = if_cuda_libs("@cuda_nvjitlink//:nvjitlink", ":nvjitlink_stub"),
+    visibility = ["//visibility:public"],
+)
+
+cuda_stub(
+    name = "nvml",
+    srcs = ["nvml.symbols"],
+)
+
+cc_library(
+    name = "nvml_stub",  # buildifier: disable=duplicated-name
+    srcs = if_cuda_is_configured([
+        "nvml_stub.cc",
+        "nvml.tramp.S",
+    ]),
+    local_defines = [
+        "IMPLIB_EXPORT_SHIMS=1",
+    ],
+    textual_hdrs = ["nvml.inc"],
+    visibility = ["//visibility:public"],
+    deps = if_cuda_is_configured([
+        # keep sorted
+        "//xla/tsl/platform:logging",
+        "@local_config_cuda//cuda:cuda_headers",
+        "@tsl//tsl/platform:dso_loader",
+        "@tsl//tsl/platform:load_library",
+    ]),
+)
+
+alias(
+    name = "nvml",  # buildifier: disable=duplicated-name
+    actual = ":nvml_stub",
+    visibility = ["//visibility:public"],
+)
+
+cuda_stub(
+    name = "nvrtc",
+    srcs = ["nvrtc.symbols"],
+)
+
+cc_library(
+    name = "nvrtc_stub",  # buildifier: disable=duplicated-name
+    srcs = if_cuda_is_configured([
+        "nvrtc_stub.cc",
+        "nvrtc.tramp.S",
+    ]),
+    local_defines = [
+        "IMPLIB_EXPORT_SHIMS=1",
+    ],
+    textual_hdrs = ["nvrtc.inc"],
+    visibility = ["//visibility:public"],
+    deps = if_cuda_is_configured([
+        # keep sorted
+        "//xla/tsl/platform:logging",
+        "@local_config_cuda//cuda:cuda_headers",
+        "@tsl//tsl/platform:dso_loader",
+        "@tsl//tsl/platform:load_library",
+    ]),
+)
+
+alias(
+    name = "nvrtc",  # buildifier: disable=duplicated-name
+    actual = ":nvrtc_stub",
+    visibility = ["//visibility:public"],
 )

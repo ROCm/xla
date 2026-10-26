@@ -15,26 +15,32 @@ limitations under the License.
 
 #include "xla/hlo/utils/hlo_matchers.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <cstdint>
+#include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <gmock/gmock.h>
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/literal_util.h"
 #include "xla/shape_util.h"
-#include "xla/tests/hlo_test_base.h"
 #include "xla/xla_data.pb.h"
 
 namespace op = xla::testing::opcode_matchers;
 using ::testing::_;
 using ::testing::Eq;
 using ::testing::HasSubstr;
+using ::xla::testing::HloInstructionHasName;
 
 namespace xla {
 namespace {
 
-using HloMatchersTest = HloTestBase;
+using HloMatchersTest = HloHardwareIndependentTestBase;
 
 std::string DescribeHloMatcher(
     const ::testing::Matcher<const HloInstruction*>& m) {
@@ -65,36 +71,30 @@ TEST_F(HloMatchersTest, Test) {
               op::Add(op::Parameter(), op::Multiply(_, op::Parameter())));
 
   // Negative matches: check the explanation string.
-  EXPECT_THAT(
-      Explain(add.get(), op::Parameter()),
-      Eq("(%add = f32[1]{0} add(f32[1]{0} %param, f32[1]{0} %multiply))"));
-  EXPECT_THAT(
-      Explain(add.get(), op::Add(op::Parameter())),
-      Eq("(%add = f32[1]{0} add(f32[1]{0} %param, f32[1]{0} %multiply)) "
-         "has too many operands (got 2, want 1)"));
-  EXPECT_THAT(
-      Explain(add.get(), op::Add(op::Parameter(), op::Parameter())),
-      Eq("(%add = f32[1]{0} add(f32[1]{0} %param, f32[1]{0} %multiply))"
-         "\noperand 1:\n\t"
-         "%multiply = f32[1]{0} multiply(f32[1]{0} %param, f32[1]{0} %param)\n"
-         "doesn't match expected:\n\t"
-         "parameter"
-         ", (%multiply = f32[1]{0} multiply(f32[1]{0} %param, f32[1]{0} "
-         "%param))"));
-  EXPECT_THAT(
-      Explain(add.get(),
-              op::Add(op::Parameter(), op::Multiply(op::Add(), op::Add()))),
-      Eq("(%add = f32[1]{0} add(f32[1]{0} %param, f32[1]{0} %multiply))"
-         "\noperand 1:\n\t"
-         "%multiply = f32[1]{0} multiply(f32[1]{0} %param, f32[1]{0} %param)\n"
-         "doesn't match expected:\n\t"
-         "multiply(add, add)"
-         ", (%multiply = f32[1]{0} multiply(f32[1]{0} %param, f32[1]{0} "
-         "%param))\n"
-         "operand 0:\n\t"
-         "%param = f32[1]{0} parameter(0)\n"
-         "doesn't match expected:\n\t"
-         "add, (%param = f32[1]{0} parameter(0))"));
+  EXPECT_THAT(Explain(add.get(), op::Parameter()),
+              Eq("(%add = f32[1]{0} add(%param, %multiply))"));
+  EXPECT_THAT(Explain(add.get(), op::Add(op::Parameter())),
+              Eq("(%add = f32[1]{0} add(%param, %multiply)) "
+                 "has too many operands (got 2, want 1)"));
+  EXPECT_THAT(Explain(add.get(), op::Add(op::Parameter(), op::Parameter())),
+              Eq("(%add = f32[1]{0} add(%param, %multiply))"
+                 "\noperand 1:\n\t"
+                 "%multiply = f32[1]{0} multiply(%param, %param)\n"
+                 "doesn't match expected:\n\t"
+                 "parameter"
+                 ", (%multiply = f32[1]{0} multiply(%param, %param))"));
+  EXPECT_THAT(Explain(add.get(), op::Add(op::Parameter(),
+                                         op::Multiply(op::Add(), op::Add()))),
+              Eq("(%add = f32[1]{0} add(%param, %multiply))"
+                 "\noperand 1:\n\t"
+                 "%multiply = f32[1]{0} multiply(%param, %param)\n"
+                 "doesn't match expected:\n\t"
+                 "multiply(add, add)"
+                 ", (%multiply = f32[1]{0} multiply(%param, %param))\n"
+                 "operand 0:\n\t"
+                 "%param = f32[1]{0} parameter(0)\n"
+                 "doesn't match expected:\n\t"
+                 "add, (%param = f32[1]{0} parameter(0))"));
 }
 
 TEST_F(HloMatchersTest, CustomCallMatcher) {
@@ -121,8 +121,8 @@ TEST_F(HloMatchersTest, CustomCallMatcher) {
               ::testing::Not(op::CustomCall(::testing::StartsWith("bar"))));
 
   EXPECT_THAT(Explain(call.get(), op::CustomCall("bar")),
-              "(%custom-call = f32[1]{0} custom-call(f32[3]{0} %constant, "
-              "s32[3]{0} %constant), custom_call_target=\"foo_target\") "
+              "(%custom-call = f32[1]{0} custom-call(%constant, %constant), "
+              "custom_call_target=\"foo_target\") "
               "custom-call with call target that isn't equal to \"bar\"");
   EXPECT_THAT(DescribeHloMatcher(op::CustomCall("foo_target")),
               R"(custom-call with call target that is equal to "foo_target")");
@@ -172,7 +172,7 @@ TEST_F(HloMatchersTest, ShardingMatcher) {
   p0->clear_sharding();
   auto p1 = HloInstruction::CreateParameter(1, ShapeUtil::MakeShape(F32, {7}),
                                             "param.1");
-  p1->set_sharding(HloSharding::AssignDevice(1));
+  p1->set_sharding(HloSharding::SingleDevice(1));
 
   auto tuple_shape = ShapeUtil::MakeTupleShape(
       {ShapeUtil::MakeShape(F32, {7}), ShapeUtil::MakeShape(S32, {9}),
@@ -181,29 +181,29 @@ TEST_F(HloMatchersTest, ShardingMatcher) {
   Array<int64_t> assignment({2});
   assignment.SetValues({0, 1});
   auto sharding = HloSharding::Tuple(
-      tuple_shape, {HloSharding::Tile(assignment), HloSharding::AssignDevice(1),
+      tuple_shape, {HloSharding::Tile(assignment), HloSharding::SingleDevice(1),
                     HloSharding::Replicate()});
   p2->set_sharding(sharding);
 
   EXPECT_THAT(p0.get(), op::NoSharding());
   EXPECT_THAT(p0.get(),
-              ::testing::Not(op::Sharding(HloSharding::AssignDevice(1))));
+              ::testing::Not(op::Sharding(HloSharding::SingleDevice(1))));
   EXPECT_THAT(p1.get(), ::testing::Not(op::NoSharding()));
   EXPECT_THAT(p1.get(),
-              ::testing::Not(op::Sharding(HloSharding::AssignDevice(0))));
-  EXPECT_THAT(p1.get(), op::Sharding(HloSharding::AssignDevice(1)));
+              ::testing::Not(op::Sharding(HloSharding::SingleDevice(0))));
+  EXPECT_THAT(p1.get(), op::Sharding(HloSharding::SingleDevice(1)));
 
   EXPECT_THAT(
       p2.get(),
       op::Sharding("{{devices=[2]0,1}, {maximal device=1}, {replicated}}"));
 
-  EXPECT_THAT(Explain(p0.get(), op::Sharding(HloSharding::AssignDevice(1))),
+  EXPECT_THAT(Explain(p0.get(), op::Sharding(HloSharding::SingleDevice(1))),
               "%param.0 = f32[5]{0} parameter(0) has no sharding (expected: "
               "{maximal device=1})");
   EXPECT_THAT(Explain(p1.get(), op::NoSharding()),
               "%param.1 = f32[7]{0} parameter(1), sharding={maximal device=1} "
               "expected to have no sharding.");
-  EXPECT_THAT(Explain(p1.get(), op::Sharding(HloSharding::AssignDevice(0))),
+  EXPECT_THAT(Explain(p1.get(), op::Sharding(HloSharding::SingleDevice(0))),
               "%param.1 = f32[7]{0} parameter(1), sharding={maximal device=1} "
               "has incorrect sharding (expected: {maximal device=0})");
 }
@@ -227,21 +227,19 @@ ENTRY DotOperationFusion_TransposeFusion {
                             /*lhs_contracting_dim=*/1,
                             /*rhs_contracting_dim=*/0));
 
-  EXPECT_THAT(
-      Explain(root, op::Dot(op::Parameter(0), op::Parameter(1),
-                            /*lhs_contracting_dim=*/0,
-                            /*rhs_contracting_dim=*/0)),
-      "(%dot = f32[1,1024]{1,0} dot(f32[1,256]{1,0} %arg0, f32[256,1024]{1,0} "
-      "%arg1), lhs_contracting_dims={1}, rhs_contracting_dims={0}) has wrong "
-      "lhs_contracting_dimensions (got {1} want {0})");
+  EXPECT_THAT(Explain(root, op::Dot(op::Parameter(0), op::Parameter(1),
+                                    /*lhs_contracting_dim=*/0,
+                                    /*rhs_contracting_dim=*/0)),
+              "(%dot = f32[1,1024]{1,0} dot(%arg0, %arg1), "
+              "lhs_contracting_dims={1}, rhs_contracting_dims={0}) has wrong "
+              "lhs_contracting_dimensions (got {1} want {0})");
 
-  EXPECT_THAT(
-      Explain(root, op::Dot(op::Parameter(0), op::Parameter(1),
-                            /*lhs_contracting_dim=*/1,
-                            /*rhs_contracting_dim=*/1)),
-      "(%dot = f32[1,1024]{1,0} dot(f32[1,256]{1,0} %arg0, f32[256,1024]{1,0} "
-      "%arg1), lhs_contracting_dims={1}, rhs_contracting_dims={0}) has wrong "
-      "rhs_contracting_dimensions (got {0} want {1})");
+  EXPECT_THAT(Explain(root, op::Dot(op::Parameter(0), op::Parameter(1),
+                                    /*lhs_contracting_dim=*/1,
+                                    /*rhs_contracting_dim=*/1)),
+              "(%dot = f32[1,1024]{1,0} dot(%arg0, %arg1), "
+              "lhs_contracting_dims={1}, rhs_contracting_dims={0}) has wrong "
+              "rhs_contracting_dimensions (got {0} want {1})");
 }
 
 TEST_F(HloMatchersTest, ComparisonMatcher) {
@@ -268,12 +266,12 @@ TEST_F(HloMatchersTest, ComparisonMatcher) {
                                op::Add(op::Parameter(0), op::Parameter(1))));
 
   EXPECT_THAT(Explain(eq.get(), op::Add()),
-              Eq("(%compare = f32[1]{0} compare(f32[1]{0} %param.0, "
-                 "f32[1]{0} %param.1), direction=EQ)"));
-  EXPECT_THAT(Explain(eq.get(), op::Ne()),
-              Eq("(%compare = f32[1]{0} compare(f32[1]{0} %param.0, "
-                 "f32[1]{0} %param.1), direction=EQ) "
-                 "has wrong comparison direction (got EQ, want NE)"));
+              Eq("(%compare = f32[1]{0} compare(%param.0, %param.1), "
+                 "direction=EQ)"));
+  EXPECT_THAT(
+      Explain(eq.get(), op::Ne()),
+      Eq("(%compare = f32[1]{0} compare(%param.0, %param.1), "
+         "direction=EQ) has wrong comparison direction (got EQ, want NE)"));
 }
 
 TEST_F(HloMatchersTest, AsyncCopyMatcher) {
@@ -300,16 +298,12 @@ TEST_F(HloMatchersTest, AsyncCopyMatcher) {
 
   EXPECT_THAT(Explain(copy_start.get(), op::AsyncCopy(2, 1, op::Parameter(0))),
               Eq("(%copy-start = (f32[16]{0:S(2)}, f32[16]{0:S(1)}, u32[]) "
-                 "copy-start(f32[16]{0:S(1)} %p0))"));
+                 "copy-start(%p0))"));
   EXPECT_THAT(Explain(copy_done.get(), op::AsyncCopy(3, 1, op::Parameter(0))),
-              "(%copy-done = f32[16]{0:S(2)} copy-done((f32[16]{0:S(2)}, "
-              "f32[16]{0:S(1)}, u32[]) "
-              "%copy-start)) "
+              "(%copy-done = f32[16]{0:S(2)} copy-done(%copy-start)) "
               "copies to memory space 2, expected 3");
   EXPECT_THAT(Explain(copy_done.get(), op::AsyncCopy(2, 3, op::Parameter(0))),
-              "(%copy-done = f32[16]{0:S(2)} copy-done((f32[16]{0:S(2)}, "
-              "f32[16]{0:S(1)}, u32[]) "
-              "%copy-start)) "
+              "(%copy-done = f32[16]{0:S(2)} copy-done(%copy-start)) "
               "is in the memory space 1, expected 3");
 }
 
@@ -347,14 +341,14 @@ TEST_F(HloMatchersTest, ReplicaGroupsMatcher) {
   replica_groups[1].add_replica_ids(1);
   replica_groups[1].add_replica_ids(3);
   std::unique_ptr<HloInstruction> all_to_all = HloInstruction::CreateAllToAll(
-      shape, {p0.get()}, CollectiveDeviceList(replica_groups),
+      shape, {p0.get()}, std::make_shared<CollectiveDeviceList>(replica_groups),
       /*constrain_layout=*/false,
       /*channel_id=*/std::nullopt);
 
   EXPECT_THAT(Explain(p0.get(), op::ReplicaGroups({})),
               "%param = f32[5,7]{1,0} parameter(0) not a collective op");
   EXPECT_THAT(Explain(all_to_all.get(), op::ReplicaGroups({{0, 1}, {2, 3}})),
-              "%all-to-all = f32[5,7]{1,0} all-to-all(f32[5,7]{1,0} %param), "
+              "%all-to-all = f32[5,7]{1,0} all-to-all(%param), "
               "replica_groups={{0,2},{1,3}} has incorrect replica_groups "
               "(expected: {{0,1},{2,3}})");
   EXPECT_THAT(all_to_all.get(), op::ReplicaGroups({{0, 2}, {1, 3}}));
@@ -402,6 +396,21 @@ TEST_F(HloMatchersTest, MetadataMatcher) {
   actual_source_line.set_op_name("op_name1");
   actual_source_line.set_source_line(1);
 
+  OpMetadata actual_source_end_line;
+  actual_source_end_line.set_op_type("op_type1");
+  actual_source_end_line.set_op_name("op_name1");
+  actual_source_end_line.set_source_end_line(1);
+
+  OpMetadata actual_source_column;
+  actual_source_column.set_op_type("op_type1");
+  actual_source_column.set_op_name("op_name1");
+  actual_source_column.set_source_column(1);
+
+  OpMetadata actual_source_end_column;
+  actual_source_end_column.set_op_type("op_type1");
+  actual_source_end_column.set_op_name("op_name1");
+  actual_source_end_column.set_source_end_column(1);
+
   EXPECT_THAT(Explain(p0.get(), op::Metadata(actual_opname)),
               HasSubstr("has wrong metadata (got op_name1, want op_name2)"));
   EXPECT_THAT(Explain(p0.get(), op::Metadata(actual_source_file)),
@@ -413,8 +422,23 @@ TEST_F(HloMatchersTest, MetadataMatcher) {
   EXPECT_THAT(Explain(p0.get(), op::Metadata(actual_source_line)),
               HasSubstr("has wrong metadata (got 0"
                         ", want 1)"));
+  EXPECT_THAT(Explain(p0.get(), op::Metadata(actual_source_end_line)),
+              HasSubstr("has wrong metadata (got 0"
+                        ", want 1)"));
+  EXPECT_THAT(Explain(p0.get(), op::Metadata(actual_source_column)),
+              HasSubstr("has wrong metadata (got 0"
+                        ", want 1)"));
+  EXPECT_THAT(Explain(p0.get(), op::Metadata(actual_source_end_column)),
+              HasSubstr("has wrong metadata (got 0"
+                        ", want 1)"));
   EXPECT_THAT(DescribeHloMatcher(op::Metadata(p0->metadata())),
-              R"( (metadata: op_type1 op_name1  0))");
+              R"( (metadata: op_type1 op_name1  0 0 0 0))");
+}
+
+TEST_F(HloMatchersTest, HloInstructionHasName) {
+  std::unique_ptr<HloInstruction> p0 =
+      HloInstruction::CreateParameter(0, ShapeUtil::MakeShape(F32, {1}), "p0");
+  EXPECT_THAT(p0, HloInstructionHasName("p0"));
 }
 }  // namespace
 }  // namespace xla

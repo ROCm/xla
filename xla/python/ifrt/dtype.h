@@ -22,6 +22,8 @@ limitations under the License.
 
 #include "absl/status/statusor.h"
 #include "xla/python/ifrt/dtype.pb.h"
+#include "xla/python/ifrt/serdes_default_version_accessor.h"
+#include "xla/python/ifrt/serdes_version.h"
 
 namespace xla {
 namespace ifrt {
@@ -45,6 +47,7 @@ class DType {
     kPred = 1,
 
     // Signed integral values of fixed width.
+    kS1 = 30,
     kS2 = 26,
     kS4 = 21,
     kS8 = 2,
@@ -53,6 +56,7 @@ class DType {
     kS64 = 5,
 
     // Unsigned integral values of fixed width.
+    kU1 = 31,
     kU2 = 27,
     kU4 = 22,
     kU8 = 6,
@@ -78,13 +82,24 @@ class DType {
     // dtype will have empty dimensions.
     kToken = 17,
 
+    // Opaque objects.
+    kOpaque = 14,
+
+    kF8E3M4 = 29,
+    kF8E4M3 = 28,
     kF8E4M3FN = 20,
     kF8E4M3B11FNUZ = 23,
     kF8E4M3FNUZ = 25,
     kF8E5M2 = 19,
     kF8E5M2FNUZ = 24,
+    kF8E8M0FNU = 33,
 
-    // Next = 26
+    // MX floating point types.
+    kF4E2M1FN = 32,
+    kF6E3M2FN = 35,
+    kF6E2M3FN = 36,
+
+    // Next = 37
 
     // Variable-length string represented as raw bytes, as in `bytes` in Python,
     // i.e., no encoding enforcement. String is not support in XLA. DType.Kind
@@ -122,12 +137,27 @@ class DType {
   // Constructs `DType` from `DTypeProto`.
   static absl::StatusOr<DType> FromProto(const DTypeProto& proto);
 
-  // Returns a `DTypeProto` representation.
-  DTypeProto ToProto() const;
+  // Converts the dtype to a protobuf.
+  void ToProto(
+      DTypeProto& dtype_proto,
+      SerDesVersion version = SerDesDefaultVersionAccessor::Get()) const;
 
-  std::string DebugString() const;
+  // Returns a `DTypeProto` representation.
+  DTypeProto ToProto(
+      SerDesVersion version = SerDesDefaultVersionAccessor::Get()) const {
+    DTypeProto proto;
+    ToProto(proto, version);
+    return proto;
+  }
+
+  template <typename Sink>
+  friend void AbslStringify(Sink& sink, const DType& dtype) {
+    sink.Append(dtype.DebugString());
+  }
 
  private:
+  std::string DebugString() const;
+
   Kind kind_;
 };
 

@@ -1,0 +1,227 @@
+/* Copyright 2018 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include "xla/backends/gpu/tests/gpu_pjrt_codegen_test.h"
+#include "xla/stream_executor/cuda/cuda_compute_capability.h"
+
+namespace xla {
+namespace gpu {
+namespace {
+
+using GpuAtomicTest = GpuPjRtCodegenTest;
+
+TEST_F(GpuAtomicTest, TestStore) {
+  const char* hlo_string = R"(
+    HloModule TensorFlowScatterV1
+
+    update_s32 (lhs: s32[], rhs: s32[]) -> s32[] {
+      lhs = s32[] parameter(0)
+      ROOT rhs = s32[] parameter(1)
+    }
+
+    ENTRY main {
+      operand = s32[3,3] parameter(0)
+      indices = s32[2] parameter(1)
+      updates = s32[2,3] parameter(2)
+      ROOT scatter = s32[3,3] scatter(operand, indices, updates),
+          to_apply=update_s32,
+          update_window_dims={1},
+          inserted_window_dims={0},
+          scatter_dims_to_operand_dims={0},
+          index_vector_dim=1
+    }
+)";
+
+  ASSERT_OK(CompileAndVerifyIr(hlo_string, R"(
+CHECK: store atomic{{.*}}unordered, align 4
+)"));
+}
+
+TEST_F(GpuAtomicTest, TestStoreNoAtomic) {
+  const char* hlo_string = R"(
+    HloModule TensorFlowScatterV1
+
+    update_s32 (lhs: s32[], rhs: s32[]) -> s32[] {
+      lhs = s32[] parameter(0)
+      ROOT rhs = s32[] parameter(1)
+    }
+
+    ENTRY main {
+      operand = s32[3,3] parameter(0)
+      indices = s32[2] parameter(1)
+      updates = s32[2,3] parameter(2)
+      ROOT scatter = s32[3,3] scatter(operand, indices, updates),
+          to_apply=update_s32,
+          update_window_dims={1},
+          inserted_window_dims={0},
+          scatter_dims_to_operand_dims={0},
+          index_vector_dim=1, unique_indices=true
+    }
+)";
+
+  ASSERT_OK(CompileAndVerifyIr(hlo_string, R"(
+CHECK-NOT: store atomic{{.*}}unordered, align 4
+)"));
+}
+
+TEST_F(GpuAtomicTest, TestAddAtomicF32) {
+  const char* hlo_string = R"(
+    HloModule TensorFlowScatterV1
+
+    update_f32 (lhs: f32[], rhs: f32[]) -> f32[] {
+      lhs = f32[] parameter(0)
+      rhs = f32[] parameter(1)
+      ROOT add = f32[] add(lhs, rhs)
+    }
+
+    ENTRY main {
+      operand = f32[3,3] parameter(0)
+      indices = s32[2] parameter(1)
+      updates = f32[2,3] parameter(2)
+      ROOT scatter = f32[3,3] scatter(operand, indices, updates),
+          to_apply=update_f32,
+          update_window_dims={1},
+          inserted_window_dims={0},
+          scatter_dims_to_operand_dims={0},
+          index_vector_dim=1, unique_indices=false
+    }
+)";
+
+  ASSERT_OK(CompileAndVerifyIr(hlo_string, IsBuiltWithRocm() ? R"(
+CHECK: atomicrmw fadd ptr %[[ADDR:.*]], float %[[VALUE:.*]] syncscope("agent-one-as") monotonic{{.*}}!atomic.ignore.denormal.mode
+)"
+                                                             : R"(
+CHECK: atomicrmw fadd ptr %[[ADDR:.*]], float %[[VALUE:.*]] monotonic{{.*}}!atomic.ignore.denormal.mode
+)"));
+}
+
+TEST_F(GpuAtomicTest, TestAddAtomicF16) {
+  if (!IsBuiltWithRocm() &&
+      !device_description().cuda_compute_capability().SupportsAllFeaturesOf(
+          stream_executor::CudaComputeCapability::Volta())) {
+    return;
+  }
+  const char* hlo_string = R"(
+    HloModule TensorFlowScatterV1
+
+    update_f16 (lhs: f16[], rhs: f16[]) -> f16[] {
+      lhs = f16[] parameter(0)
+      rhs = f16[] parameter(1)
+      ROOT add = f16[] add(lhs, rhs)
+    }
+
+    ENTRY main {
+      operand = f16[3,3] parameter(0)
+      indices = s32[2] parameter(1)
+      updates = f16[2,3] parameter(2)
+      ROOT scatter = f16[3,3] scatter(operand, indices, updates),
+          to_apply=update_f16,
+          update_window_dims={1},
+          inserted_window_dims={0},
+          scatter_dims_to_operand_dims={0},
+          index_vector_dim=1, unique_indices=false
+    }
+)";
+
+  // ROCm GPUs with packed fp16 atomics add a <2 x half> to a global pointer.
+  ASSERT_OK(CompileAndVerifyIr(hlo_string, IsBuiltWithRocm() ? R"(
+CHECK: atomicrmw fadd ptr {{.*}}, {{(<2 x half>|half)}} %[[VALUE:.*]] syncscope("agent-one-as") monotonic{{.*}}!atomic.ignore.denormal.mode
+)"
+                                                             : R"(
+CHECK: atomicrmw fadd ptr %[[ADDR:.*]], half %[[VALUE:.*]] monotonic{{.*}}!atomic.ignore.denormal.mode
+)"));
+}
+
+TEST_F(GpuAtomicTest, TestAddAtomicBF16) {
+  if (!IsBuiltWithRocm() &&
+      !device_description().cuda_compute_capability().SupportsAllFeaturesOf(
+          stream_executor::CudaComputeCapability::Hopper())) {
+    return;
+  }
+  const char* hlo_string = R"(
+    HloModule TensorFlowScatterV1
+
+    update_bf16 (lhs: bf16[], rhs: bf16[]) -> bf16[] {
+      lhs = bf16[] parameter(0)
+      rhs = bf16[] parameter(1)
+      ROOT add = bf16[] add(lhs, rhs)
+    }
+
+    ENTRY main {
+      operand = bf16[3,3] parameter(0)
+      indices = s32[2] parameter(1)
+      updates = bf16[2,3] parameter(2)
+      ROOT scatter = bf16[3,3] scatter(operand, indices, updates),
+          to_apply=update_bf16,
+          update_window_dims={1},
+          inserted_window_dims={0},
+          scatter_dims_to_operand_dims={0},
+          index_vector_dim=1, unique_indices=false
+    }
+)";
+
+  // ROCm GPUs with packed bf16 atomics add a <2 x bfloat> to a global pointer.
+  ASSERT_OK(CompileAndVerifyIr(hlo_string, IsBuiltWithRocm() ? R"(
+CHECK: atomicrmw fadd ptr {{.*}}, {{(<2 x bfloat>|bfloat)}} %[[VALUE:.*]] syncscope("agent-one-as") monotonic{{.*}}!atomic.ignore.denormal.mode
+)"
+                                                             : R"(
+CHECK: atomicrmw fadd ptr %[[ADDR:.*]], bfloat %[[VALUE:.*]] monotonic{{.*}}!atomic.ignore.denormal.mode
+)"));
+}
+
+TEST_F(GpuAtomicTest, TestAddAtomicF64) {
+  // Atomic add required sm_60 or above.
+  if (!IsBuiltWithRocm() &&
+      !device_description().cuda_compute_capability().SupportsAllFeaturesOf(
+          stream_executor::CudaComputeCapability::Pascal())) {
+    return;
+  }
+
+  const char* hlo_string = R"(
+    HloModule TensorFlowScatterV1
+
+    update_f64 (lhs: f64[], rhs: f64[]) -> f64[] {
+      lhs = f64[] parameter(0)
+      rhs = f64[] parameter(1)
+      ROOT add = f64[] add(lhs, rhs)
+    }
+
+    ENTRY main {
+      operand = f64[3,3] parameter(0)
+      indices = s32[2] parameter(1)
+      updates = f64[2,3] parameter(2)
+      ROOT scatter = f64[3,3] scatter(operand, indices, updates),
+          to_apply=update_f64,
+          update_window_dims={1},
+          inserted_window_dims={0},
+          scatter_dims_to_operand_dims={0},
+          index_vector_dim=1, unique_indices=false
+    }
+)";
+
+  ASSERT_OK(CompileAndVerifyIr(hlo_string, IsBuiltWithRocm() ? R"(
+CHECK: atomicrmw fadd ptr %[[ADDR:.*]], double %[[VALUE:.*]] syncscope("agent-one-as") monotonic{{.*}}!atomic.ignore.denormal.mode
+)"
+                                                             : R"(
+CHECK: atomicrmw fadd ptr %[[ADDR:.*]], double %[[VALUE:.*]] monotonic{{.*}}!atomic.ignore.denormal.mode
+)"));
+}
+
+}  // namespace
+}  // namespace gpu
+}  // namespace xla

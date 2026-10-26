@@ -15,12 +15,25 @@ limitations under the License.
 
 #include "xla/service/spmd/canonicalize_all_gather_for_cse.h"
 
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+#include "absl/container/flat_hash_set.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/utils/hlo_query.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/util.h"
 
 namespace xla {
 
@@ -34,7 +47,8 @@ absl::StatusOr<bool> CanonicalizeAllGatherForCSE::RunOnComputation(
     HloAllGatherInstruction* ag = DynCast<HloAllGatherInstruction>(hlo);
 
     // TODO(cjfj): Support all-gathers with more than one operand.
-    if (!ag || ag->operand_count() > 1) {
+    if (!ag || hlo_query::IsAsyncCollectiveStartOp(ag) ||
+        ag->operand_count() > 1) {
       continue;
     }
 
@@ -64,7 +78,7 @@ absl::StatusOr<bool> CanonicalizeAllGatherForCSE::RunOnComputation(
         major_elements /= real_data->shape().dimensions(new_ag_dim++);
       }
     }
-    if (new_ag_dim == real_data->shape().rank()) {
+    if (new_ag_dim == real_data->shape().dimensions().size()) {
       continue;
     }
 
@@ -86,19 +100,19 @@ absl::StatusOr<bool> CanonicalizeAllGatherForCSE::RunOnComputation(
     ag->SetupDerivedInstruction(new_ag);
     HloInstruction* new_formatting = comp->AddInstruction(
         HloInstruction::CreateReshape(ag->shape(), new_ag));
-    TF_RETURN_IF_ERROR(comp->ReplaceInstruction(ag, new_formatting));
+    ABSL_RETURN_IF_ERROR(comp->ReplaceInstruction(ag, new_formatting));
     changed = true;
   }
   return changed;
 }
 
-absl::StatusOr<bool> CanonicalizeAllGatherForCSE::Run(
+absl::StatusOr<bool> CanonicalizeAllGatherForCSE::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   bool changed = false;
   next_channel_id_ = hlo_query::NextChannelId(*module);
   for (HloComputation* comp : module->computations(execution_threads)) {
-    TF_ASSIGN_OR_RETURN(bool comp_changed, RunOnComputation(comp));
+    ABSL_ASSIGN_OR_RETURN(bool comp_changed, RunOnComputation(comp));
     changed |= comp_changed;
   }
   return changed;

@@ -14,19 +14,21 @@
 
 #include "xla/python/ifrt_proxy/common/array_util.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
+#include "absl/status/status_matchers.h"
+#include "absl/strings/cord.h"
 #include "absl/strings/string_view.h"
 #include "xla/python/ifrt/dtype.h"
 #include "xla/python/ifrt/shape.h"
-#include "tsl/platform/status_matchers.h"
-#include "tsl/platform/statusor.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace ifrt {
@@ -37,21 +39,21 @@ namespace {
 using ::testing::ElementsAre;
 using ::testing::Not;
 using ::testing::TestWithParam;
-using ::tsl::testing::IsOk;
-using ::tsl::testing::IsOkAndHolds;
 
 constexpr DType::Kind kF64 = DType::Kind::kF64;
 constexpr DType::Kind kS32 = DType::Kind::kS32;
+constexpr DType::Kind kU8 = DType::Kind::kU8;
 constexpr DType::Kind kString = DType::Kind::kString;
 using Strides = std::vector<int64_t>;
 
 TEST(DefaultByteStrides, ErrorsIfBadDtype) {
-  EXPECT_THAT(DefaultByteStrides(DType(kString), Shape({1})), Not(IsOk()));
+  EXPECT_THAT(DefaultByteStrides(DType(kString), Shape({1})),
+              Not(absl_testing::IsOk()));
 }
 
 TEST(DefaultByteStrides, HappyCase) {
   EXPECT_THAT(DefaultByteStrides(DType(kF64), Shape({4, 3, 5})),
-              IsOkAndHolds(ElementsAre(120, 40, 8)));
+              absl_testing::IsOkAndHolds(ElementsAre(120, 40, 8)));
 }
 
 // TC represents a testcase.
@@ -97,7 +99,10 @@ INSTANTIATE_TEST_SUITE_P(
         // Non-compact strides.
         TC{"NonCompactSingleDimension", kS32, {5}, Strides({16}), 68},
         TC{"NonCompactDim0", kS32, {4, 3, 5}, Strides({120, 20, 4}), 420},
-        TC{"PaddedElements", kS32, {4, 3, 5}, Strides({120, 40, 8}), 476}),
+        TC{"PaddedElements", kS32, {4, 3, 5}, Strides({120, 40, 8}), 476},
+        // Products individually fit in int64; the accumulated span also fits.
+        TC{"U8ThreeDimsDefault", kU8, {2, 2, 2}, std::nullopt},
+        TC{"U8ThreeDimsCompactStrides", kU8, {2, 2, 2}, Strides({4, 2, 1})}),
     testing::PrintToStringParamName());
 TEST_P(ArrayMemRegionSuccess, TestCase) {
   const TC tc = GetParam();
@@ -137,7 +142,31 @@ INSTANTIATE_TEST_SUITE_P(
         TC{"SmallerByteStrideThanDataType", kS32, {5, 5}, Strides({1, 1})},
         TC{"ByteStrideIndivisibleByDataType", kS32, {5, 5}, Strides({7, 7})},
         // Bad arguments
-        TC{"NegativeShapeDimension", kS32, {-5, -5}, Strides({20, 4})}),
+        TC{"NegativeShapeDimension", kS32, {-5, -5}, Strides({20, 4})},
+        // Stride * (dim - 1) overflows int64_t — must be rejected, not silently
+        // wrap to zero (which would bypass the size check in
+        // FromMinimalMemRegion).
+        TC{"ByteStrideOverflowSingleDim",
+           kS32,
+           {5},
+           Strides({INT64_C(4611686018427387904)})},  // 2^62 * 4 = 2^64 wraps
+        TC{"ByteStrideOverflowMultiDim",
+           kS32,
+           {5, 3},
+           Strides({INT64_C(4611686018427387904), 4})},
+        // Each product stride*(dim-1) fits in int64 (the #46604 mul check
+        // succeeds) but the uint64 accumulation wraps:
+        // (INT64_MAX) + (INT64_MAX) + 2 == 2^64 == 0.
+        TC{"ByteStrideAccumOverflowUint64",
+           kU8,
+           {2, 2, 2},
+           Strides({INT64_MAX, INT64_MAX, 2})},
+        // Accumulation itself fits (INT64_MAX + INT64_MAX + 1 == UINT64_MAX);
+        // the final last-element-offset + dtype-size add is what overflows.
+        TC{"ByteStrideFinalSizeOverflowUint64",
+           kU8,
+           {2, 2, 2},
+           Strides({INT64_MAX, INT64_MAX, 1})}),
     testing::PrintToStringParamName());
 TEST_P(ArrayMemRegionFailure, TestCase) {
   const TC tc = GetParam();
@@ -147,12 +176,12 @@ TEST_P(ArrayMemRegionFailure, TestCase) {
 
   auto mem_region1 = ArrayMemRegion::FromZerothElementPointer(
       /*zeroth_element=*/kSomeAddr, dtype, shape, tc.byte_strides);
-  EXPECT_THAT(mem_region1.status(), Not(IsOk()));
+  EXPECT_THAT(mem_region1.status(), Not(absl_testing::IsOk()));
 
   const size_t kSomeSize = 1024;
   auto mem_region2 = ArrayMemRegion::FromMinimalMemRegion(
       absl::string_view(kSomeAddr, kSomeSize), dtype, shape, tc.byte_strides);
-  EXPECT_THAT(mem_region2.status(), Not(IsOk()));
+  EXPECT_THAT(mem_region2.status(), Not(absl_testing::IsOk()));
 }
 
 TEST(ArrayMemRegion, FromBadMemRegionSizeFails) {
@@ -182,7 +211,7 @@ TEST(ArrayMemRegion, FromBadMemRegionSizeFails) {
   auto mem_region2 = ArrayMemRegion::FromMinimalMemRegion(
       data_with_extra_suffix, kDType, kShape,
       /*byte_strides=*/std::nullopt);
-  EXPECT_THAT(mem_region2.status(), Not(IsOk()));
+  EXPECT_THAT(mem_region2.status(), Not(absl_testing::IsOk()));
 
   // Similarly, if we provided `FromMinimalMemRegion` a `data` that was smaller
   // than what the constructed `ArrayMemoryRegion` should point to, that will
@@ -191,7 +220,30 @@ TEST(ArrayMemRegion, FromBadMemRegionSizeFails) {
   auto mem_region3 = ArrayMemRegion::FromMinimalMemRegion(
       data_without_some_bytes, kDType, kShape,
       /*byte_strides=*/std::nullopt);
-  EXPECT_THAT(mem_region3.status(), Not(IsOk()));
+  EXPECT_THAT(mem_region3.status(), Not(absl_testing::IsOk()));
+}
+
+TEST(StringHostBufferTest, SerializeDeserializeWithString) {
+  std::vector<absl::Cord> input = {absl::Cord("foo"), absl::Cord("bar")};
+  TF_ASSERT_OK_AND_ASSIGN(auto serialized, SerializeStringHostBuffer(input));
+  TF_ASSERT_OK_AND_ASSIGN(auto deserialized,
+                          DeserializeStringHostBufferFromString(*serialized));
+  EXPECT_EQ(deserialized, input);
+}
+
+TEST(StringHostBufferTest,
+     DeserializeFromCordIntoPreallocatedStringHostBuffer) {
+  std::vector<absl::Cord> input = {absl::Cord("foo"), absl::Cord("bar")};
+  TF_ASSERT_OK_AND_ASSIGN(auto serialized, SerializeStringHostBuffer(input));
+
+  std::vector<absl::Cord> deserialized(input.size());
+  ASSERT_THAT(
+      DeserializeFromCordIntoPreallocatedStringHostBuffer(
+          absl::Cord(*serialized), static_cast<int64_t>(deserialized.size()),
+          deserialized.data()),
+      absl_testing::IsOk());
+
+  EXPECT_EQ(deserialized, input);
 }
 
 }  // namespace

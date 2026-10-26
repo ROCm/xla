@@ -17,188 +17,73 @@ limitations under the License.
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
+#include <variant>
 
-#include "absl/container/flat_hash_map.h"
+#include "absl/base/config.h"  // IWYU pragma: keep
+#include "absl/base/optimization.h"
+
+#if defined(ABSL_HAVE_MEMORY_SANITIZER)
+#include <sanitizer/msan_interface.h>
+#endif
+
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/numeric/bits.h"
 #include "absl/status/status.h"
-#include "absl/strings/ascii.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#include "absl/strings/str_join.h"
-#include "xla/ffi/api/api.h"
+#include "absl/strings/string_view.h"
+#include "xla/custom_options.h"
 #include "xla/ffi/api/c_api.h"
 #include "xla/ffi/api/c_api_internal.h"  // IWYU pragma: keep
-#include "xla/ffi/call_frame.h"
+#include "xla/ffi/attributes_storage.h"
 #include "xla/ffi/execution_context.h"
-#include "xla/hlo/ir/hlo_computation.h"
-#include "xla/stream_executor/device_memory.h"
-#include "xla/stream_executor/device_memory_allocator.h"
+#include "xla/ffi/execution_state.h"
+#include "xla/ffi/ffi_internal_api.h"
+#include "xla/ffi/ffi_interop.h"
+#include "xla/ffi/ffi_registry.h"
+#include "xla/ffi/ffi_structs.h"
+#include "xla/ffi/invoke.h"
+#include "xla/ffi/type_registry.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/stream.h"
-#include "tsl/platform/logging.h"
+#include "xla/tsl/concurrency/async_value_ref.h"
+#include "xla/tsl/concurrency/chain.h"
+#include "xla/util.h"
 
-//===----------------------------------------------------------------------===//
-// XLA FFI C structs definition
-//===----------------------------------------------------------------------===//
-
-struct XLA_FFI_Error {
-  absl::Status status;
-};
-
-struct XLA_FFI_ExecutionContext {
-  int32_t device_ordinal = -1;
-
-  stream_executor::Stream* stream = nullptr;
-  stream_executor::DeviceMemoryAllocator* allocator = nullptr;
-
-  const xla::HloComputation* called_computation = nullptr;
-  const xla::ffi::ExecutionContext* execution_context = nullptr;
-};
-
-//===----------------------------------------------------------------------===//
+#define EIGEN_USE_THREADS
+#include "unsupported/Eigen/CXX11/Tensor"
 
 namespace xla::ffi {
 
-bool IsCommandBufferCompatible(XLA_FFI_Handler_Traits traits) {
-  return traits & XLA_FFI_HANDLER_TRAITS_COMMAND_BUFFER_COMPATIBLE;
-}
+// Forward declare XLA:FFI API access defined below. This API is available
+// publicly via the `xla/ffi/ffi.h` or `xla/ffi/api/ffi.h` header. In this
+// translation unit we implement it, and it is critical that this translation
+// unit linked exactly one time into the main binary. It must not be linked
+// into FFI handler implementations as it will lead to duplicate static
+// registries in multiple object files.
+const XLA_FFI_Api* GetXlaFfiApi();
 
-static XLA_FFI_ExecutionContext CreateExecutionContext(
-    const CallOptions& options) {
-  return XLA_FFI_ExecutionContext{
-      options.device_ordinal, options.stream, options.allocator,
-      options.called_computation,
-      internal::ScopedExecutionContext::GetCallExecutionContext(options)};
-}
-
-//===----------------------------------------------------------------------===//
-// Calling XLA FFI handlers
-//===----------------------------------------------------------------------===//
-
-absl::Status TakeStatus(XLA_FFI_Error* error) {
-  if (error == nullptr) return absl::OkStatus();
-  absl::Status status = std::move(error->status);
-  delete error;
-  return status;
-}
-
-absl::Status Call(Ffi& handler, CallFrame& call_frame,
-                  const CallOptions& options, XLA_FFI_ExecutionStage stage) {
-  XLA_FFI_ExecutionContext ctx = CreateExecutionContext(options);
-  XLA_FFI_CallFrame ffi_call_frame =
-      call_frame.Build(GetXlaFfiApi(), &ctx, stage);
-  return TakeStatus(handler.Call(&ffi_call_frame));
-}
-
-absl::Status Call(XLA_FFI_Handler* handler, CallFrame& call_frame,
-                  const CallOptions& options, XLA_FFI_ExecutionStage stage) {
-  XLA_FFI_ExecutionContext ctx = CreateExecutionContext(options);
-  XLA_FFI_CallFrame ffi_call_frame =
-      call_frame.Build(GetXlaFfiApi(), &ctx, stage);
-  return TakeStatus((*handler)(&ffi_call_frame));
-}
-
-namespace internal {
-static thread_local const ExecutionContext* scoped_execution_context = nullptr;
-
-ScopedExecutionContext::ScopedExecutionContext(const ExecutionContext* context)
-    : recover_(scoped_execution_context) {
-  scoped_execution_context = context;
-}
-
-ScopedExecutionContext::~ScopedExecutionContext() {
-  scoped_execution_context = recover_;
-}
-
-const ExecutionContext* ScopedExecutionContext::GetCallExecutionContext(
-    const CallOptions& options) {
-  if (scoped_execution_context != nullptr) {
-    return scoped_execution_context;
-  }
-  return options.execution_context;
-}
-}  // namespace internal
-
-//===----------------------------------------------------------------------===//
-// XLA FFI registry
-//===----------------------------------------------------------------------===//
-
-using HandlerKey = std::pair<std::string, std::string>;
-using HandlerRegistry = absl::flat_hash_map<HandlerKey, HandlerRegistration>;
-
-static HandlerKey MakeHandlerKey(std::string_view name,
-                                 std::string_view platform) {
-  return std::make_pair(std::string(name), absl::AsciiStrToLower(platform));
-}
-
-static HandlerRegistry& GetHandlerRegistry() {
-  static auto* registry = new HandlerRegistry();
-  return *registry;
-}
-
-static std::vector<std::string> GetHandlerStages(
-    const XLA_FFI_Handler_Bundle& bundle) {
-  std::vector<std::string> stages;
-  if (bundle.prepare != nullptr) stages.push_back("prepare");
-  if (bundle.initialize != nullptr) stages.push_back("initialize");
-  if (bundle.execute != nullptr) stages.push_back("execute");
-  return stages;
-}
-
-static absl::Status RegisterHandler(std::string_view name,
-                                    std::string_view platform,
-                                    XLA_FFI_Handler_Bundle bundle,
-                                    XLA_FFI_Handler_Traits traits) {
-  VLOG(2) << absl::StreamFormat(
-      "Register XLA FFI handler for '%s'; platform=%s, stages=[%s], "
-      "command_buffer_compatible=%v",
-      name, platform, absl::StrJoin(GetHandlerStages(bundle), ", "),
-      IsCommandBufferCompatible(traits));
-
-  if (bundle.execute == nullptr) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("FFI handler for ", name, "on a platform ", platform,
-                     " must provide an execute implementation"));
-  }
-
-  auto emplaced = GetHandlerRegistry().try_emplace(
-      MakeHandlerKey(name, platform), HandlerRegistration{bundle, traits});
-  if (!emplaced.second)
-    return absl::InvalidArgumentError(
-        absl::StrCat("Duplicate FFI handler registration for ", name,
-                     " on a platform ", platform));
-  return absl::OkStatus();
-}
-
-absl::StatusOr<HandlerRegistration> FindHandler(std::string_view name,
-                                                std::string_view platform) {
-  auto it = GetHandlerRegistry().find(MakeHandlerKey(name, platform));
-  if (it == GetHandlerRegistry().end())
-    return absl::NotFoundError(absl::StrCat("No FFI handler registered for ",
-                                            name, " on a platform ", platform));
-  return it->second;
-}
-
-absl::flat_hash_map<std::string, HandlerRegistration> StaticRegisteredHandlers(
-    std::string_view platform) {
-  absl::flat_hash_map<std::string, HandlerRegistration> calls;
-  for (const auto& [metadata, handler] : GetHandlerRegistry()) {
-    if (absl::AsciiStrToLower(platform) == metadata.second) {
-      calls[metadata.first] = handler;
-    }
-  }
-
-  return calls;
-}
+// This is an implementation of XLA FFI API defined in `api/c_api.h` header. It
+// should be linked statically into the "main" XLA binary, and third party FFI
+// handlers can be linked and registered dynamically. When we build JAX PjRt
+// plugins we essentially have a full copy of XLA in each plugin and each
+// plugin has a separate FFI API implementation (and separate handler and type
+// registries).
+//
+// FFI handlers built from the same XLA commit with the same toolchain can also
+// use `api/c_api_internal.h` to get access to various internal data structures.
 
 //===----------------------------------------------------------------------===//
 // XLA FFI Api Implementation
 //===----------------------------------------------------------------------===//
 
-static std::string StructSizeErrorMsg(std::string_view struct_name,
+static std::string StructSizeErrorMsg(absl::string_view struct_name,
                                       size_t expected, size_t actual) {
   return absl::StrCat("Unexpected ", struct_name, " size: expected ", expected,
                       ", got ", actual, ". Check installed software versions. ",
@@ -207,10 +92,10 @@ static std::string StructSizeErrorMsg(std::string_view struct_name,
 }
 
 static absl::Status ActualStructSizeIsGreaterOrEqual(
-    std::string_view struct_name, size_t expected, size_t actual) {
+    absl::string_view struct_name, size_t expected, size_t actual) {
   if (actual < expected) {
-    return absl::InvalidArgumentError(
-        StructSizeErrorMsg(struct_name, expected, actual));
+    return InvalidArgument("%s",
+                           StructSizeErrorMsg(struct_name, expected, actual));
   }
   if (actual > expected) {
     VLOG(2) << StructSizeErrorMsg(struct_name, expected, actual);
@@ -267,24 +152,63 @@ static absl::StatusCode ToStatusCode(XLA_FFI_Error_Code errc) {
   } while (false)
 
 static XLA_FFI_Error* XLA_FFI_Error_Create(XLA_FFI_Error_Create_Args* args) {
+#if defined(ABSL_HAVE_MEMORY_SANITIZER)
+  __msan_unpoison(args, sizeof(args->struct_size));
+#endif
+
   XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
       "XLA_FFI_Error_Create", XLA_FFI_Error_Create_Args_STRUCT_SIZE,
       args->struct_size));
 
-  return new XLA_FFI_Error{
-      absl::Status(ToStatusCode(args->errc), args->message)};
+#if defined(ABSL_HAVE_MEMORY_SANITIZER)
+  __msan_unpoison(args, args->struct_size);
+  if (args->message != nullptr) {
+    __msan_unpoison_string(args->message);
+  }
+#endif
+
+  return new XLA_FFI_Error{absl::Status(
+      ToStatusCode(args->errc), absl::NullSafeStringView(args->message))};
 }
 
-static void XLA_FFI_Error_GetMessage(XLA_FFI_Error_GetMessage_Args* args) {
+namespace {
+
+// This is the argument layout for XLA_FFI_Error_GetDetails (called
+// XLA_FFI_Error_GetMessage at the time) in XLA:FFI version 0.3. We use it to
+// support older FFI modules. This can be removed 5 Aug 2027.
+struct XLA_FFI_Error_GetDetails_Args_V03 {
+  size_t struct_size;
+  XLA_FFI_InternalExtension* extension_start;
+  XLA_FFI_Error* error;
+  const char* message;
+};
+
+XLA_FFI_DEFINE_STRUCT_TRAITS(XLA_FFI_Error_GetDetails_Args_V03, message);
+
+}  // namespace
+
+static void XLA_FFI_Error_GetDetails(XLA_FFI_Error_GetDetails_Args* args) {
+  if (args->struct_size == XLA_FFI_Error_GetDetails_Args_V03_STRUCT_SIZE) {
+    // memcpy to safely avoid U.B.
+    XLA_FFI_Error_GetDetails_Args_V03 v03{};
+    std::memcpy(&v03, args, XLA_FFI_Error_GetDetails_Args_V03_STRUCT_SIZE);
+    v03.message = v03.error->status.message().data();
+    std::memcpy(args, &v03, XLA_FFI_Error_GetDetails_Args_V03_STRUCT_SIZE);
+    return;
+  }
+
   absl::Status struct_size_check = ActualStructSizeIsGreaterOrEqual(
-      "XLA_FFI_Error_GetMessage", XLA_FFI_Error_GetMessage_Args_STRUCT_SIZE,
+      "XLA_FFI_Error_GetDetails", XLA_FFI_Error_GetDetails_Args_STRUCT_SIZE,
       args->struct_size);
   if (!struct_size_check.ok()) {
     LOG(ERROR) << struct_size_check.message();
+    return;
   }
+
   // absl::Status owns error message in a std::string which guarantees that
   // we'll get a null terminated string.
   args->message = args->error->status.message().data();
+  args->errc = static_cast<XLA_FFI_Error_Code>(args->error->status.code());
 }
 
 static void XLA_FFI_Error_Destroy(XLA_FFI_Error_Destroy_Args* args) {
@@ -297,16 +221,95 @@ static void XLA_FFI_Error_Destroy(XLA_FFI_Error_Destroy_Args* args) {
   delete args->error;
 }
 
+static XLA_FFI_Error* XLA_FFI_Future_Create(XLA_FFI_Future_Create_Args* args) {
+  XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
+      "XLA_FFI_Future_Create", XLA_FFI_Future_Create_Args_STRUCT_SIZE,
+      args->struct_size));
+  args->future =
+      new XLA_FFI_Future{tsl::MakeConstructedAsyncValueRef<tsl::Chain>()};
+  return nullptr;
+}
+
+static XLA_FFI_Error* XLA_FFI_Future_SetAvailable(
+    XLA_FFI_Future_SetAvailable_Args* args) {
+  XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
+      "XLA_FFI_Future_SetAvailable",
+      XLA_FFI_Future_SetAvailable_Args_STRUCT_SIZE, args->struct_size));
+  args->future->async_value.SetStateConcrete();
+  return nullptr;
+}
+
+static XLA_FFI_Error* XLA_FFI_Future_SetError(
+    XLA_FFI_Future_SetError_Args* args) {
+  XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
+      "XLA_FFI_Future_SetError", XLA_FFI_Future_SetError_Args_STRUCT_SIZE,
+      args->struct_size));
+
+  if (args->error == nullptr || args->error->status.ok()) {
+    return new XLA_FFI_Error{InvalidArgument("Error must not be null or OK")};
+  }
+
+  absl::Status error = TakeError(args->error);
+  args->future->async_value.SetError(std::move(error));
+
+  return nullptr;
+}
+
+namespace {
+// This is a struct declaration for `XLA_FFI_Handler_Register_Args` in XLA:FFI
+// before the addition of `record` handler. We use this struct to detect older
+// XLA:FFI clients for backward compatibility reasons.
+// This can be removed in August 2027.
+struct XLA_FFI_Handler_Bundle_V0 {
+  XLA_FFI_Handler* instantiate;
+  XLA_FFI_Handler* prepare;
+  XLA_FFI_Handler* initialize;
+  XLA_FFI_Handler* execute;
+};
+
+struct XLA_FFI_Handler_Register_Args_V0 {
+  size_t struct_size;
+  XLA_FFI_InternalExtension* extension_start;
+  XLA_FFI_ByteSpan name;
+  XLA_FFI_ByteSpan platform;
+  XLA_FFI_Handler_Bundle_V0 bundle;
+  XLA_FFI_Handler_Traits traits;
+};
+
+XLA_FFI_DEFINE_STRUCT_TRAITS(XLA_FFI_Handler_Register_Args_V0, traits);
+}  // namespace
+
 static XLA_FFI_Error* XLA_FFI_Handler_Register(
     XLA_FFI_Handler_Register_Args* args) {
   XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
-      "XLA_FFI_Handler_Register", XLA_FFI_Handler_Register_Args_STRUCT_SIZE,
+      "XLA_FFI_Handler_Register", XLA_FFI_Handler_Register_Args_V0_STRUCT_SIZE,
       args->struct_size));
-
+  XLA_FFI_Handler_Bundle bundle = {nullptr, nullptr, nullptr, nullptr, nullptr};
+  XLA_FFI_Handler_Traits traits = 0;
+  if (args->struct_size == XLA_FFI_Handler_Register_Args_V0_STRUCT_SIZE) {
+    XLA_FFI_Handler_Register_Args_V0 v0{};
+    std::memcpy(&v0, args, XLA_FFI_Handler_Register_Args_V0_STRUCT_SIZE);
+    bundle.instantiate = v0.bundle.instantiate;
+    bundle.prepare = v0.bundle.prepare;
+    bundle.initialize = v0.bundle.initialize;
+    bundle.execute = v0.bundle.execute;
+    traits = v0.traits;
+    args->struct_size = XLA_FFI_Handler_Register_Args_STRUCT_SIZE;
+  } else {
+    XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
+        "XLA_FFI_Handler_Register", XLA_FFI_Handler_Register_Args_STRUCT_SIZE,
+        args->struct_size));
+    bundle.instantiate = args->bundle.instantiate;
+    bundle.prepare = args->bundle.prepare;
+    bundle.initialize = args->bundle.initialize;
+    bundle.execute = args->bundle.execute;
+    bundle.record = args->bundle.record;
+    traits = args->traits;
+  }
   if (auto status = RegisterHandler(
-          std::string_view(args->name.ptr, args->name.len),
-          std::string_view(args->platform.ptr, args->platform.len),
-          args->bundle, args->traits);
+          GetXlaFfiApi(), absl::string_view(args->name.ptr, args->name.len),
+          absl::string_view(args->platform.ptr, args->platform.len), bundle,
+          traits);
       !status.ok()) {
     return new XLA_FFI_Error{std::move(status)};
   }
@@ -318,46 +321,244 @@ static XLA_FFI_Error* XLA_FFI_Stream_Get(XLA_FFI_Stream_Get_Args* args) {
       "XLA_FFI_Stream_Get", XLA_FFI_Stream_Get_Args_STRUCT_SIZE,
       args->struct_size));
 
-  if (args->ctx->stream == nullptr) {
+  auto* gpu = std::get_if<XLA_FFI_InvokeContext::GpuContext>(
+      &args->ctx->backend_context);
+
+  if (ABSL_PREDICT_FALSE(gpu == nullptr)) {
     return new XLA_FFI_Error{
-        absl::InvalidArgumentError("XLA FFI stream is not available")};
+        Unimplemented("XLA FFI GPU context is not available")};
   }
 
-  auto handle = args->ctx->stream->platform_specific_handle();
+  if (ABSL_PREDICT_FALSE(gpu->stream == nullptr)) {
+    return new XLA_FFI_Error{
+        Unimplemented("XLA FFI GPU stream is not available")};
+  }
+
+  auto handle = gpu->stream->platform_specific_handle();
   args->stream = handle.stream;
 
   return nullptr;
 }
 
-static XLA_FFI_Error* XLA_FFI_TypeId_Register(
-    XLA_FFI_TypeId_Register_Args* args) {
+static XLA_FFI_Error* XLA_FFI_RunId_Get(XLA_FFI_RunId_Get_Args* args) {
   XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
-      "XLA_FFI_ExecutionContext_Get_Args",
-      XLA_FFI_ExecutionContext_Get_Args_STRUCT_SIZE, args->struct_size));
+      "XLA_FFI_RunId_Get", XLA_FFI_RunId_Get_Args_STRUCT_SIZE,
+      args->struct_size));
 
-  auto type_id = ExecutionContext::RegisterExternalTypeId(
-      std::string_view(args->name.ptr, args->name.len));
-  if (!type_id.ok()) {
-    return new XLA_FFI_Error{std::move(type_id).status()};
-  }
+  args->run_id = args->ctx->run_id.ToInt();
 
-  args->type_id->type_id = type_id->value();
   return nullptr;
 }
 
-static XLA_FFI_Error* XLA_FFI_ExecutionContext_Get(
-    XLA_FFI_ExecutionContext_Get_Args* args) {
+static XLA_FFI_Error* XLA_FFI_DeviceOrdinal_Get(
+    XLA_FFI_DeviceOrdinal_Get_Args* args) {
   XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
-      "XLA_FFI_ExecutionContext_Get_Args",
-      XLA_FFI_ExecutionContext_Get_Args_STRUCT_SIZE, args->struct_size));
+      "XLA_FFI_DeviceOrdinal_Get", XLA_FFI_DeviceOrdinal_Get_Args_STRUCT_SIZE,
+      args->struct_size));
+  args->device_ordinal = args->ctx->device_ordinal;
+  return nullptr;
+}
 
+static XLA_FFI_Error* XLA_FFI_Type_Register(XLA_FFI_Type_Register_Args* args) {
+  XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
+      "XLA_FFI_InvokeContext_Get_Args",
+      XLA_FFI_InvokeContext_Get_Args_STRUCT_SIZE, args->struct_size));
+
+  absl::string_view type_name(args->name.ptr, args->name.len);
+  TypeRegistry::TypeId type_id(args->type_id->type_id);
+  TypeRegistry::TypeInfo type_info = {args->type_info->deleter};
+
+  // If type_id is unknown, we are registering a new type and XLA will assign
+  // a unique type id to it.
+  if (type_id == TypeRegistry::kUnknownTypeId) {
+    auto assigned_type_id = TypeRegistry::AssignTypeId(type_name, type_info);
+    if (!assigned_type_id.ok()) {
+      return new XLA_FFI_Error{std::move(assigned_type_id).status()};
+    }
+
+    args->type_id->type_id = assigned_type_id->value();
+    return nullptr;
+  }
+
+  // If type_id is set, we are relying on the caller-provided unique type id.
+  auto registered_type_id =
+      TypeRegistry::RegisterTypeId(type_name, type_id, type_info);
+  if (!registered_type_id.ok()) {
+    return new XLA_FFI_Error{std::move(registered_type_id)};
+  }
+
+  return nullptr;
+}
+
+static XLA_FFI_Error* XLA_FFI_InvokeContext_FindExtension(
+    XLA_FFI_InvokeContext_FindExtension_Args* args) {
+  XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
+      "XLA_FFI_InvokeContext_FindExtension",
+      XLA_FFI_InvokeContext_FindExtension_Args_STRUCT_SIZE, args->struct_size));
+
+  args->extension = nullptr;
+  const XLA_FFI_Extension* ext = args->ctx->extension_start;
+  while (ext != nullptr) {
+    if (ext->id.extension_type == args->extension_type) {
+      args->extension = ext;
+      return nullptr;
+    }
+    ext = ext->next;
+  }
+  return nullptr;
+}
+
+static XLA_FFI_Error* XLA_FFI_InvokeContext_Get(
+    XLA_FFI_InvokeContext_Get_Args* args) {
+  XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
+      "XLA_FFI_InvokeContext_Get_Args",
+      XLA_FFI_InvokeContext_Get_Args_STRUCT_SIZE, args->struct_size));
+
+  DCHECK(args->ctx->execution_context) << "ExecutionContext must be set";
   auto user_data = args->ctx->execution_context->Lookup(
-      ExecutionContext::TypeId(args->type_id->type_id));
+      TypeRegistry::TypeId(args->type_id->type_id));
   if (!user_data.ok()) {
     return new XLA_FFI_Error{std::move(user_data).status()};
   }
 
   args->data = *user_data;
+  return nullptr;
+}
+
+static XLA_FFI_Error* XLA_FFI_CustomOptions_Get(
+    XLA_FFI_CustomOptions_Get_Args* args) {
+  XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
+      "XLA_FFI_CustomOptions_Get_Args",
+      XLA_FFI_CustomOptions_Get_Args_STRUCT_SIZE, args->struct_size));
+
+  static constexpr XLA_FFI_Attrs kEmptyAttrs = {
+      XLA_FFI_Attrs_STRUCT_SIZE, nullptr, 0, nullptr, nullptr, nullptr};
+
+  XLA_FFI_InvokeContext& ctx = *args->ctx;
+  if (ctx.custom_options == nullptr || ctx.custom_options->empty()) {
+    args->attrs = &kEmptyAttrs;
+    return nullptr;
+  }
+
+  if (!ctx.encoded_custom_options) {
+    ctx.encoded_custom_options = AttributesStorage::Create(*ctx.custom_options);
+  }
+
+  args->attrs = &ctx.encoded_custom_options->ffi_attrs();
+  return nullptr;
+}
+
+static ExecutionState* GetExecutionState(XLA_FFI_InvokeContext* ctx,
+                                         XLA_FFI_ExecutionStage stage) {
+  switch (stage) {
+    case XLA_FFI_ExecutionStage_INSTANTIATE:
+      return ctx->state_context.instantiate;
+    case XLA_FFI_ExecutionStage_PREPARE:
+      return ctx->state_context.prepare;
+    case XLA_FFI_ExecutionStage_INITIALIZE:
+      return ctx->state_context.initialize;
+    case XLA_FFI_ExecutionStage_RECORD:
+    case XLA_FFI_ExecutionStage_EXECUTE:
+      DCHECK(false) << "Execution stage doesn't have a state";
+      return nullptr;
+  }
+}
+
+namespace {
+// This is a struct declaration for `XLA_FFI_State_Set/Get_Args` in XLA:FFI
+// version 0.2. We use this struct to detect older XLA:FFI clients for backward
+// compatibility reasons. This can be removed 15 Feb 2027.
+struct XLA_FFI_State_Args_V02 {
+  size_t struct_size;
+  XLA_FFI_InternalExtension* extension_start;
+
+  XLA_FFI_InvokeContext* ctx;
+  XLA_FFI_TypeId* type_id;
+  void* state;
+};
+
+XLA_FFI_DEFINE_STRUCT_TRAITS(XLA_FFI_State_Args_V02, state);
+
+}  // namespace
+
+static XLA_FFI_Error* XLA_FFI_State_Set(XLA_FFI_State_Set_Args* args) {
+  // If struct size matches the legacy struct layout, always assume that we
+  // set the state for instantiation stage.
+  if (args->struct_size == XLA_FFI_State_Args_V02_STRUCT_SIZE) {
+    // memcpy to safely avoid U.B.
+    XLA_FFI_State_Args_V02 v02{};
+    std::memcpy(&v02, args, XLA_FFI_State_Args_V02_STRUCT_SIZE);
+
+    XLA_FFI_State_Set_Args compat = {XLA_FFI_State_Set_Args_STRUCT_SIZE};
+    compat.ctx = v02.ctx;
+    compat.stage = XLA_FFI_ExecutionStage_INSTANTIATE;
+    compat.type_id = v02.type_id;
+    compat.state = v02.state;
+
+    return XLA_FFI_State_Set(&compat);
+  }
+
+  XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
+      "XLA_FFI_State_Set_Args", XLA_FFI_State_Set_Args_STRUCT_SIZE,
+      args->struct_size));
+
+  ExecutionState* execution_state = GetExecutionState(args->ctx, args->stage);
+  DCHECK(execution_state) << "ExecutionState must be set";
+
+  TypeRegistry::TypeId type_id(args->type_id->type_id);
+
+  auto type_info = TypeRegistry::GetTypeInfo(type_id);
+  if (!type_info.ok()) {
+    return new XLA_FFI_Error{type_info.status()};
+  }
+
+  absl::Status status = execution_state->Set(type_id, *type_info, args->state);
+  if (!status.ok()) {
+    return new XLA_FFI_Error{std::move(status)};
+  }
+
+  return nullptr;
+}
+
+static XLA_FFI_Error* XLA_FFI_State_Get(XLA_FFI_State_Get_Args* args) {
+  // If struct size matches the legacy struct layout, always assume that we
+  // get the state for instantiation stage.
+  if (args->struct_size == XLA_FFI_State_Args_V02_STRUCT_SIZE) {
+    // memcpy to safely avoid U.B.
+    XLA_FFI_State_Args_V02 v02{};
+    std::memcpy(&v02, args, XLA_FFI_State_Args_V02_STRUCT_SIZE);
+
+    XLA_FFI_State_Get_Args compat = {XLA_FFI_State_Get_Args_STRUCT_SIZE};
+    compat.ctx = v02.ctx;
+    compat.stage = XLA_FFI_ExecutionStage_INSTANTIATE;
+    compat.type_id = v02.type_id;
+    compat.state = v02.state;
+
+    XLA_FFI_Error* err = XLA_FFI_State_Get(&compat);
+    if (ABSL_PREDICT_FALSE(err != nullptr)) {
+      return err;
+    }
+
+    v02.state = compat.state;
+    std::memcpy(args, &v02, XLA_FFI_State_Args_V02_STRUCT_SIZE);
+
+    return nullptr;
+  }
+
+  XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
+      "XLA_FFI_State_Get_Args", XLA_FFI_State_Get_Args_STRUCT_SIZE,
+      args->struct_size));
+
+  ExecutionState* execution_state = GetExecutionState(args->ctx, args->stage);
+  DCHECK(execution_state) << "ExecutionState must be set";
+
+  absl::StatusOr<void*> state =
+      execution_state->Get(TypeRegistry::TypeId(args->type_id->type_id));
+  if (!state.ok()) {
+    return new XLA_FFI_Error{std::move(state).status()};
+  }
+
+  args->state = *state;
   return nullptr;
 }
 
@@ -367,6 +568,22 @@ static XLA_FFI_Error* XLA_FFI_DeviceMemory_Allocate(
       "XLA_FFI_DeviceMemory_Allocate_Args",
       XLA_FFI_DeviceMemory_Allocate_Args_STRUCT_SIZE, args->struct_size));
 
+  auto* gpu = std::get_if<XLA_FFI_InvokeContext::GpuContext>(
+      &args->ctx->backend_context);
+
+  // TODO(ezhulenev): Device memory allocation should be supported for all
+  // backends, not just GPU, although for CPU it doesn't make much sense, as
+  // plain `new` is sufficient.
+  if (ABSL_PREDICT_FALSE(gpu == nullptr)) {
+    return new XLA_FFI_Error{
+        InvalidArgument("XLA FFI GPU context is not available")};
+  }
+
+  if (ABSL_PREDICT_FALSE(gpu->allocator == nullptr)) {
+    return new XLA_FFI_Error{
+        Unimplemented("No device memory allocator available on this platform")};
+  }
+
   // TODO(ezhulenev): We happen to have the same alignment requirement for
   // device memory on CPU and GPU backends, but instead of hardcoding it here
   // we should query it for the platform XLA FFI handler is registered with.
@@ -374,12 +591,12 @@ static XLA_FFI_Error* XLA_FFI_DeviceMemory_Allocate(
 
   if (!absl::has_single_bit(args->alignment) ||
       args->alignment > kMaxAlignment) {
-    return new XLA_FFI_Error{absl::InvalidArgumentError(
-        absl::StrCat("Unsupported alignment: ", args->alignment))};
+    return new XLA_FFI_Error{
+        InvalidArgument("Unsupported alignment: %d", args->alignment)};
   }
 
-  absl::StatusOr<stream_executor::OwningDeviceMemory> memory =
-      args->ctx->allocator->Allocate(args->ctx->device_ordinal, args->size);
+  absl::StatusOr<stream_executor::ScopedDeviceAddress<uint8_t>> memory =
+      gpu->allocator->Allocate(args->ctx->device_ordinal, args->size);
   if (!memory.ok()) {
     return new XLA_FFI_Error{std::move(memory).status()};
   }
@@ -394,9 +611,25 @@ static XLA_FFI_Error* XLA_FFI_DeviceMemory_Free(
       "XLA_FFI_DeviceMemory_Free_Args",
       XLA_FFI_DeviceMemory_Free_Args_STRUCT_SIZE, args->struct_size));
 
-  absl::Status status = args->ctx->allocator->Deallocate(
+  auto* gpu = std::get_if<XLA_FFI_InvokeContext::GpuContext>(
+      &args->ctx->backend_context);
+
+  // TODO(ezhulenev): Device memory allocation should be supported for all
+  // backends, not just GPU, although for CPU it doesn't make much sense, as
+  // plain `new` is sufficient.
+  if (ABSL_PREDICT_FALSE(gpu == nullptr)) {
+    return new XLA_FFI_Error{
+        Unimplemented("XLA FFI GPU context is not available")};
+  }
+
+  if (ABSL_PREDICT_FALSE(gpu->allocator == nullptr)) {
+    return new XLA_FFI_Error{
+        Unimplemented("No device memory allocator available on this platform")};
+  }
+
+  absl::Status status = gpu->allocator->Deallocate(
       args->ctx->device_ordinal,
-      stream_executor::DeviceMemoryBase(args->data, args->size));
+      stream_executor::DeviceAddressBase(args->data, args->size));
   if (!status.ok()) {
     return new XLA_FFI_Error{std::move(status)};
   }
@@ -404,70 +637,98 @@ static XLA_FFI_Error* XLA_FFI_DeviceMemory_Free(
   return nullptr;
 }
 
-//===----------------------------------------------------------------------===//
-// XLA FFI Internal Api Implementation
-//===----------------------------------------------------------------------===//
+static absl::StatusOr<const Eigen::ThreadPoolDevice*> GetIntraOpThreadPool(
+    const XLA_FFI_InvokeContext* ctx) {
+  auto* cpu =
+      std::get_if<XLA_FFI_InvokeContext::CpuContext>(&ctx->backend_context);
 
-static XLA_FFI_Error* XLA_FFI_INTERNAL_Error_Forward(void* status) {
-  return new XLA_FFI_Error{std::move(*reinterpret_cast<absl::Status*>(status))};
+  if (ABSL_PREDICT_FALSE(cpu == nullptr)) {
+    return Unimplemented("XLA FFI CPU context is not available");
+  }
+
+  if (ABSL_PREDICT_FALSE(cpu->intra_op_thread_pool == nullptr)) {
+    return Unimplemented("No intra-op thread pool available on this platform");
+  }
+
+  return cpu->intra_op_thread_pool;
 }
 
-static void* XLA_FFI_INTERNAL_Stream_Get(XLA_FFI_ExecutionContext* ctx) {
-  return ctx->stream;
+static XLA_FFI_Error* XLA_FFI_ThreadPool_Schedule(
+    XLA_FFI_ThreadPool_Schedule_Args* args) {
+  XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
+      "XLA_FFI_ThreadPool_Schedule_Args",
+      XLA_FFI_ThreadPool_Schedule_Args_STRUCT_SIZE, args->struct_size));
+
+  auto intra_op_thread_pool = GetIntraOpThreadPool(args->ctx);
+  if (!intra_op_thread_pool.ok()) {
+    return new XLA_FFI_Error{std::move(intra_op_thread_pool).status()};
+  }
+
+  (*intra_op_thread_pool)
+      ->enqueueNoNotification(
+          [task = args->task, data = args->data] { (*task)(data); });
+
+  return nullptr;
 }
 
-static int32_t XLA_FFI_INTERNAL_DeviceOrdinal_Get(
-    XLA_FFI_ExecutionContext* ctx) {
-  return ctx->device_ordinal;
-}
+static XLA_FFI_Error* XLA_FFI_ThreadPool_NumThreads(
+    XLA_FFI_ThreadPool_NumThreads_Args* args) {
+  XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
+      "XLA_FFI_ThreadPool_NumThreads_Args",
+      XLA_FFI_ThreadPool_NumThreads_Args_STRUCT_SIZE, args->struct_size));
 
-static void* XLA_FFI_INTERNAL_DeviceMemoryAllocator_Get(
-    XLA_FFI_ExecutionContext* ctx) {
-  return ctx->allocator;
-}
+  auto intra_op_thread_pool = GetIntraOpThreadPool(args->ctx);
+  if (!intra_op_thread_pool.ok()) {
+    return new XLA_FFI_Error{std::move(intra_op_thread_pool).status()};
+  }
 
-static void* XLA_FFI_INTERNAL_CalledComputation_Get(
-    XLA_FFI_ExecutionContext* ctx) {
-  return const_cast<HloComputation*>(ctx->called_computation);
-}
-
-static void* XLA_FFI_INTERNAL_ExecutionContext_Get(
-    XLA_FFI_ExecutionContext* ctx) {
-  return const_cast<ffi::ExecutionContext*>(ctx->execution_context);
+  *args->num_threads = (*intra_op_thread_pool)->numThreadsInPool();
+  return nullptr;
 }
 
 //===----------------------------------------------------------------------===//
 // XLA FFI Api access
 //===----------------------------------------------------------------------===//
 
+const XLA_FFI_Api* GetXlaFfiApi() {
+  static XLA_FFI_Api api = {
+      XLA_FFI_Api_STRUCT_SIZE,
+      /*extension_start=*/nullptr,
+
+      XLA_FFI_Api_Version{
+          XLA_FFI_Api_Version_STRUCT_SIZE,
+          /*extension_start=*/nullptr,
+          XLA_FFI_API_MAJOR,
+          XLA_FFI_API_MINOR,
+      },
+
+      internal::GetInternalApi(),
+
+      XLA_FFI_Error_Create,
+      XLA_FFI_Error_GetDetails,
+      XLA_FFI_Error_Destroy,
+      XLA_FFI_Handler_Register,
+      XLA_FFI_Stream_Get,
+      XLA_FFI_Type_Register,
+      XLA_FFI_InvokeContext_Get,
+      XLA_FFI_State_Set,
+      XLA_FFI_State_Get,
+      XLA_FFI_DeviceMemory_Allocate,
+      XLA_FFI_DeviceMemory_Free,
+      XLA_FFI_ThreadPool_Schedule,
+      XLA_FFI_ThreadPool_NumThreads,
+      XLA_FFI_Future_Create,
+      XLA_FFI_Future_SetAvailable,
+      XLA_FFI_Future_SetError,
+      XLA_FFI_RunId_Get,
+      XLA_FFI_DeviceOrdinal_Get,
+      XLA_FFI_InvokeContext_FindExtension,
+      XLA_FFI_CustomOptions_Get,
+  };
+
+  return &api;
+}
+
 extern "C" const XLA_FFI_Api* XLA_FFI_GetApi() { return GetXlaFfiApi(); }
-
-static XLA_FFI_InternalApi internal_api = {
-    XLA_FFI_INTERNAL_Error_Forward,
-    XLA_FFI_INTERNAL_Stream_Get,
-    XLA_FFI_INTERNAL_DeviceOrdinal_Get,
-    XLA_FFI_INTERNAL_DeviceMemoryAllocator_Get,
-    XLA_FFI_INTERNAL_CalledComputation_Get,
-    XLA_FFI_INTERNAL_ExecutionContext_Get,
-};
-
-static XLA_FFI_Api api = {
-    XLA_FFI_Api_STRUCT_SIZE,
-    /*priv=*/nullptr,
-
-    &internal_api,
-
-    XLA_FFI_Error_Create,
-    XLA_FFI_Error_GetMessage,
-    XLA_FFI_Error_Destroy,
-    XLA_FFI_Handler_Register,
-    XLA_FFI_Stream_Get,
-    XLA_FFI_TypeId_Register,
-    XLA_FFI_ExecutionContext_Get,
-    XLA_FFI_DeviceMemory_Allocate,
-    XLA_FFI_DeviceMemory_Free,
-};
-
-const XLA_FFI_Api* GetXlaFfiApi() { return &api; }
 
 }  // namespace xla::ffi

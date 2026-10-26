@@ -18,9 +18,12 @@ limitations under the License.
 
 #include <string>
 
-#include "tsl/platform/macros.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/string_view.h"
+#include "absl/strings/strip.h"
 #include "tsl/platform/str_util.h"
 #include "tsl/platform/stringpiece.h"
+#include "xla/tsl/platform/macros.h"
 
 namespace tsl {
 namespace strings {
@@ -63,7 +66,9 @@ class Scanner {
     RANGLE,
   };
 
-  explicit Scanner(StringPiece source) : cur_(source) { RestartCapture(); }
+  explicit Scanner(absl::string_view source) : cur_(source) {
+    RestartCapture();
+  }
 
   // Consume the next character of the given class from input. If the next
   // character is not in the class, then GetResult will ultimately return false.
@@ -77,15 +82,15 @@ class Scanner {
 
   // Consume the next s.size() characters of the input, if they match <s>. If
   // they don't match <s>, this is a no-op.
-  Scanner& ZeroOrOneLiteral(StringPiece s) {
-    str_util::ConsumePrefix(&cur_, s);
+  Scanner& ZeroOrOneLiteral(absl::string_view s) {
+    absl::ConsumePrefix(&cur_, s);
     return *this;
   }
 
   // Consume the next s.size() characters of the input, if they match <s>. If
   // they don't match <s>, then GetResult will ultimately return false.
-  Scanner& OneLiteral(StringPiece s) {
-    if (!str_util::ConsumePrefix(&cur_, s)) {
+  Scanner& OneLiteral(absl::string_view s) {
+    if (!absl::ConsumePrefix(&cur_, s)) {
       error_ = true;
     }
     return *this;
@@ -161,8 +166,8 @@ class Scanner {
   // Returns true if the input string successfully matched. When true is
   // returned, the remaining string is returned in <remaining> and the captured
   // string returned in <capture>, if non-NULL.
-  bool GetResult(StringPiece* remaining = nullptr,
-                 StringPiece* capture = nullptr);
+  bool GetResult(absl::string_view* remaining = nullptr,
+                 absl::string_view* capture = nullptr);
 
  private:
   void ScanUntilImpl(char end_ch, bool escaped);
@@ -172,65 +177,50 @@ class Scanner {
     return *this;
   }
 
-  static bool IsLetter(char ch) {
-    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
-  }
-
-  static bool IsLowerLetter(char ch) { return ch >= 'a' && ch <= 'z'; }
-
-  static bool IsDigit(char ch) { return ch >= '0' && ch <= '9'; }
-
-  static bool IsSpace(char ch) {
-    return (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\v' || ch == '\f' ||
-            ch == '\r');
-  }
-
   static bool Matches(CharClass clz, char ch) {
     switch (clz) {
       case ALL:
         return true;
       case DIGIT:
-        return IsDigit(ch);
+        return absl::ascii_isdigit(ch);
       case LETTER:
-        return IsLetter(ch);
+        return absl::ascii_isalpha(ch);
       case LETTER_DIGIT:
-        return IsLetter(ch) || IsDigit(ch);
+        return absl::ascii_isalnum(ch);
       case LETTER_DIGIT_DASH_UNDERSCORE:
-        return (IsLetter(ch) || IsDigit(ch) || ch == '-' || ch == '_');
+        return (absl::ascii_isalnum(ch) || ch == '-' || ch == '_');
       case LETTER_DIGIT_DASH_DOT_SLASH:
-        return IsLetter(ch) || IsDigit(ch) || ch == '-' || ch == '.' ||
-               ch == '/';
+        return absl::ascii_isalnum(ch) || ch == '-' || ch == '.' || ch == '/';
       case LETTER_DIGIT_DASH_DOT_SLASH_UNDERSCORE:
-        return (IsLetter(ch) || IsDigit(ch) || ch == '-' || ch == '.' ||
+        return (absl::ascii_isalnum(ch) || ch == '-' || ch == '.' ||
                 ch == '/' || ch == '_');
       case LETTER_DIGIT_DOT:
-        return IsLetter(ch) || IsDigit(ch) || ch == '.';
+        return absl::ascii_isalnum(ch) || ch == '.';
       case LETTER_DIGIT_DOT_PLUS_MINUS:
-        return IsLetter(ch) || IsDigit(ch) || ch == '+' || ch == '-' ||
-               ch == '.';
+        return absl::ascii_isalnum(ch) || ch == '+' || ch == '-' || ch == '.';
       case LETTER_DIGIT_DOT_UNDERSCORE:
-        return IsLetter(ch) || IsDigit(ch) || ch == '.' || ch == '_';
+        return absl::ascii_isalnum(ch) || ch == '.' || ch == '_';
       case LETTER_DIGIT_UNDERSCORE:
-        return IsLetter(ch) || IsDigit(ch) || ch == '_';
+        return absl::ascii_isalnum(ch) || ch == '_';
       case LOWERLETTER:
-        return ch >= 'a' && ch <= 'z';
+        return absl::ascii_islower(ch);
       case LOWERLETTER_DIGIT:
-        return IsLowerLetter(ch) || IsDigit(ch);
+        return absl::ascii_islower(ch) || absl::ascii_isdigit(ch);
       case LOWERLETTER_DIGIT_UNDERSCORE:
-        return IsLowerLetter(ch) || IsDigit(ch) || ch == '_';
+        return absl::ascii_islower(ch) || absl::ascii_isdigit(ch) || ch == '_';
       case NON_ZERO_DIGIT:
-        return IsDigit(ch) && ch != '0';
+        return absl::ascii_isdigit(ch) && ch != '0';
       case SPACE:
-        return IsSpace(ch);
+        return absl::ascii_isspace(ch);
       case UPPERLETTER:
-        return ch >= 'A' && ch <= 'Z';
+        return absl::ascii_isupper(ch);
       case RANGLE:
         return ch == '>';
     }
     return false;
   }
 
-  StringPiece cur_;
+  absl::string_view cur_;
   const char* capture_start_ = nullptr;
   const char* capture_end_ = nullptr;
   bool error_ = false;

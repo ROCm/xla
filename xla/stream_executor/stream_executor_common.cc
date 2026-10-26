@@ -15,38 +15,17 @@ limitations under the License.
 
 #include "xla/stream_executor/stream_executor_common.h"
 
-#include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
-#include <string>
-#include <tuple>
 #include <utility>
-#include <variant>
 
+#include "absl/base/call_once.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
-#include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/str_cat.h"
-#include "absl/strings/str_format.h"
-#include "absl/synchronization/mutex.h"
-#include "absl/types/span.h"
-#include "xla/stream_executor/blas.h"
-#include "xla/stream_executor/command_buffer.h"
 #include "xla/stream_executor/device_description.h"
-#include "xla/stream_executor/dnn.h"
-#include "xla/stream_executor/event.h"
-#include "xla/stream_executor/fft.h"
-#include "xla/stream_executor/kernel.h"
-#include "xla/stream_executor/module_spec.h"
 #include "xla/stream_executor/platform.h"
-#include "xla/stream_executor/stream.h"
 #include "xla/tsl/util/env_var.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/numbers.h"
-#include "tsl/platform/status.h"
-#include "tsl/platform/statusor.h"
 
 namespace stream_executor {
 
@@ -54,7 +33,7 @@ namespace stream_executor {
 // TF_PER_DEVICE_MEMORY_LIMIT_MB environment variable is not set.
 static int64_t GetMemoryLimitBytesFromEnvironmentVariable() {
   int64_t value;
-  TF_CHECK_OK(
+  CHECK_OK(
       tsl::ReadInt64FromEnvVar("TF_PER_DEVICE_MEMORY_LIMIT_MB", 0, &value));
   return value * (1ll << 20);
 }
@@ -64,12 +43,12 @@ StreamExecutorCommon::StreamExecutorCommon(const Platform* platform)
       memory_limit_bytes_(GetMemoryLimitBytesFromEnvironmentVariable()) {}
 
 const DeviceDescription& StreamExecutorCommon::GetDeviceDescription() const {
-  absl::MutexLock lock(&mu_);
-  if (device_description_ != nullptr) {
-    return *device_description_;
-  }
-
-  device_description_ = CreateDeviceDescription().value();
+  absl::call_once(device_description_once_, [this]() {
+    absl::StatusOr<std::unique_ptr<DeviceDescription>> desc =
+        CreateDeviceDescription();
+    CHECK_OK(desc);
+    device_description_ = *std::move(desc);
+  });
   return *device_description_;
 }
 

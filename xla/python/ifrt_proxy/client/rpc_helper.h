@@ -17,19 +17,21 @@
 #ifndef XLA_PYTHON_IFRT_PROXY_CLIENT_RPC_HELPER_H_
 #define XLA_PYTHON_IFRT_PROXY_CLIENT_RPC_HELPER_H_
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <utility>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/log/check.h"
-#include "absl/status/status.h"
-#include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
-#include "xla/python/ifrt/future.h"
+#include "xla/python/ifrt/serdes_any_version_accessor.h"
+#include "xla/python/ifrt/serdes_version.h"
 #include "xla/python/ifrt_proxy/client/client_session.h"
 #include "xla/python/ifrt_proxy/client/host_buffer.h"
 #include "xla/python/ifrt_proxy/common/ifrt_service.pb.h"
+#include "xla/python/ifrt_proxy/common/types.h"
+#include "xla/tsl/concurrency/future.h"
 
 namespace xla {
 namespace ifrt {
@@ -38,22 +40,29 @@ namespace proxy {
 // RpcHelper helps establish a connection with the IFRT server and perform
 // logical RPCs on the connection.
 //
-// TODO(b/266635130): RpcHelper currently makes each logical RPC order-dependent
-// on the previous RPC it was asked to make. Instead, allow users of RpcHelper
-// specify the necessary dependency.
+// RpcHelper makes each logical RPC order-dependent on the previous RPC it was
+// asked to make. This implies that with a sequence of logical RPCs such as
+// `CopyArrays(req1); CopyArrays(req2);`, if req1 does not reach the server
+// because of an error, req2 (and any subsequent requests) also do not reach the
+// server.
 class RpcHelper {
  public:
-  RpcHelper(IfrtProxyVersion version, std::shared_ptr<ClientSession> session)
-      : version_(std::move(version)), session_(std::move(session)) {}
+  RpcHelper(IfrtProxyVersion version, std::shared_ptr<ClientSession> session);
 
   void Disconnect();
 
   RpcHelper(const RpcHelper&) = delete;
   RpcHelper& operator=(const RpcHelper&) = delete;
-  ~RpcHelper() { Disconnect(); }
+  ~RpcHelper();
 
   // IFRT Proxy version negotiated between the client and the server.
-  const IfrtProxyVersion& version() const { return version_; }
+  int32_t protocol_version() const { return version_.protocol_version(); }
+
+  // IFRT SerDes version number negotiated between the client and the server.
+  SerDesVersion ifrt_serdes_version() const {
+    return SerDesAnyVersionAccessor::Get(
+        SerDesVersionNumber(version_.ifrt_serdes_version_number()));
+  }
 
   // Initializes the host buffer store for this RpcHelper instance. This must be
   // called exactly once during initialization before `host_buffer_store()` is
@@ -69,7 +78,16 @@ class RpcHelper {
   }
 
   template <typename T>
-  using ResponseFuture = Future<std::shared_ptr<T>>;
+  using ResponseFuture = tsl::Future<std::shared_ptr<T>>;
+
+  class Batcher;
+  enum BatchOperation { kDeleteArray, kDestructArray, kSentinelDoNotUse };
+
+  // Adds the given operation to an impending batch of operations and returns
+  // immediately. The batch of operation is sent later (as a single logical
+  // RPC).  The RPC is guaranteed to be sent before any unbatched RPCs resulting
+  // from the wrapper functions below.
+  void Batch(BatchOperation op, ArrayHandle handle);
 
   // Wrapper function for various logical RPCs defined in ifrt_service.proto.
   // Whenever the RPC finishes, `on_done` will be called with the result or the
@@ -92,19 +110,25 @@ class RpcHelper {
 
   ResponseFuture<MakeArrayFromHostBufferResponse> MakeArrayFromHostBuffer(
       std::unique_ptr<MakeArrayFromHostBufferRequest> req);
+  ResponseFuture<MakeArraysFromHostBufferShardsResponse>
+  MakeArraysFromHostBufferShards(
+      std::unique_ptr<MakeArraysFromHostBufferShardsRequest> req);
+  ResponseFuture<MakeErrorArraysResponse> MakeErrorArrays(
+      std::unique_ptr<MakeErrorArraysRequest> req);
   ResponseFuture<AssembleArrayFromSingleDeviceArraysResponse>
   AssembleArrayFromSingleDeviceArrays(
       std::unique_ptr<AssembleArrayFromSingleDeviceArraysRequest> req);
   ResponseFuture<RemapArraysResponse> RemapArrays(
       std::unique_ptr<RemapArraysRequest> req);
-  ResponseFuture<DisassembleIntoSingleDeviceArraysResponse>
-  DisassembleIntoSingleDeviceArrays(
+  ResponseFuture<BitcastArraysResponse> BitcastArrays(
+      std::unique_ptr<BitcastArraysRequest> req);
+  void ReshardArrays(std::unique_ptr<ReshardArraysRequest> req);
+  void DisassembleIntoSingleDeviceArrays(
       std::unique_ptr<DisassembleIntoSingleDeviceArraysRequest> req);
   ResponseFuture<CopyToHostBufferResponse> CopyToHostBuffer(
       std::unique_ptr<CopyToHostBufferRequest> req);
-  ResponseFuture<ReshardResponse> Reshard(std::unique_ptr<ReshardRequest> req);
-  ResponseFuture<FullyReplicatedShardResponse> FullyReplicatedShard(
-      std::unique_ptr<FullyReplicatedShardRequest> req);
+  void CopyArrays(std::unique_ptr<CopyArraysRequest> req);
+  void FullyReplicatedShard(std::unique_ptr<FullyReplicatedShardRequest> req);
   ResponseFuture<IsArrayDeletedResponse> IsArrayDeleted(
       std::unique_ptr<IsArrayDeletedRequest> req);
   ResponseFuture<DeleteArrayResponse> DeleteArray(
@@ -116,8 +140,23 @@ class RpcHelper {
 
   ResponseFuture<LoadedExecutableMetadataResponse> LoadedExecutableMetadata(
       std::unique_ptr<LoadedExecutableMetadataRequest> req);
+  ResponseFuture<LoadedExecutableMpmdMetadataResponse>
+  LoadedExecutableMpmdMetadata(
+      std::unique_ptr<LoadedExecutableMpmdMetadataRequest> req);
+  ResponseFuture<LoadedExecutableCostAnalysisResponse>
+  LoadedExecutableCostAnalysis(
+      std::unique_ptr<LoadedExecutableCostAnalysisRequest> req);
+  ResponseFuture<LoadedExecutableMpmdCostAnalysisResponse>
+  LoadedExecutableMpmdCostAnalysis(
+      std::unique_ptr<LoadedExecutableMpmdCostAnalysisRequest> req);
+  ResponseFuture<LoadedExecutableHumanReadableProgramTextResponse>
+  LoadedExecutableHumanReadableProgramText(
+      std::unique_ptr<LoadedExecutableHumanReadableProgramTextRequest> req);
   ResponseFuture<LoadedExecutableExecuteResponse> LoadedExecutableExecute(
       std::unique_ptr<LoadedExecutableExecuteRequest> req);
+  ResponseFuture<LoadedExecutableFetchExecuteResultResponse>
+  LoadedExecutableFetchExecuteResult(
+      std::unique_ptr<LoadedExecutableFetchExecuteResultRequest> req);
   ResponseFuture<LoadedExecutableDeleteResponse> LoadedExecutableDelete(
       std::unique_ptr<LoadedExecutableDeleteRequest> req);
   ResponseFuture<LoadedExecutableIsDeletedResponse> LoadedExecutableIsDeleted(
@@ -130,16 +169,25 @@ class RpcHelper {
   ResponseFuture<LoadedHostCallbackReturnResponse> LoadedHostCallbackReturn(
       std::unique_ptr<LoadedHostCallbackReturnRequest> req);
 
-  // Utility functions for common functions.
+  ResponseFuture<GetDefaultLayoutResponse> GetDefaultLayout(
+      std::unique_ptr<GetDefaultLayoutRequest> req);
 
-  Future<> CheckFuture(uint64_t handle);
+  // Utility functions.
+
+  // Generates a handle for new arrays, array data stored in HostBufferStore,
+  // etc. Guarantees that the generated handle will not conflict with those
+  // generated at the server side by IfrtBackend.
+  uint64_t NextHandle();
+
+  tsl::Future<> CheckFuture(uint64_t handle);
 
  private:
-  RequestMetadata ManufactureRequestMetadata() ABSL_LOCKS_EXCLUDED(mu_);
+  const std::unique_ptr<Batcher> batcher_;
 
   const IfrtProxyVersion version_;
-  const std::shared_ptr<ClientSession> session_;
   std::shared_ptr<ClientHostBufferStore> host_buffer_store_;
+
+  std::atomic<uint64_t> next_handle_ = 1;
 
   absl::Mutex mu_;
   uint64_t next_op_id_ ABSL_GUARDED_BY(mu_) = 1;

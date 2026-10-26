@@ -19,7 +19,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "mlir/IR/BuiltinOps.h"
 
 namespace xla {
 
@@ -37,9 +37,10 @@ absl::Status RefinePolymorphicShapes(mlir::ModuleOp module,
 // If `validate_static_shapes` is true, then checks that only static shapes
 // are left after refinement.
 absl::Status RefinePolymorphicShapes(llvm::StringRef module_str,
-                                     llvm::raw_ostream &os,
+                                     llvm::raw_ostream& os,
                                      bool enable_shape_assertions,
-                                     bool validate_static_shapes);
+                                     bool validate_static_shapes,
+                                     bool enable_shardy);
 
 // Validates that the module has only static shapes.
 absl::Status ValidateStaticShapes(mlir::ModuleOp module);

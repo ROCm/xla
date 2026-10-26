@@ -1,0 +1,38 @@
+# Copyright 2025 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+# .github/workflows/nightly_benchmarks.yml
+name: Nightly Benchmarks
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run_benchmarks:
+    name: Run XLA Nightly Benchmarks
+    uses: google-ml-infra/bap/.github/workflows/run-benchmarks.yaml@aabe067ccf0612e9fe5dfb280176df43b12babf9
+    with:
+      registry_file: "xla/tools/benchmarks/benchmark_registry.pbtxt"
+      tag_filter: "scheduled"
+      bap_ref: "aabe067ccf0612e9fe5dfb280176df43b12babf9"
+      runner: "linux-x86-n4-16"

@@ -17,81 +17,98 @@ limitations under the License.
 
 #include <stdlib.h>
 
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"
+#include <vector>
+
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_split.h"
 #include "tsl/platform/numbers.h"
 #include "tsl/platform/str_util.h"
 #include "tsl/platform/strcat.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/logging.h"
 
 namespace tsl {
 
-absl::Status ReadBoolFromEnvVar(StringPiece env_var_name, bool default_val,
-                                bool* value) {
+absl::Status ReadBoolFromEnvVar(absl::string_view env_var_name,
+                                bool default_val, bool* value) {
   *value = default_val;
-  const char* tf_env_var_val = getenv(string(env_var_name).c_str());
+  const char* tf_env_var_val = getenv(std::string(env_var_name).c_str());
   if (tf_env_var_val == nullptr) {
     return absl::OkStatus();
   }
-  string str_value = absl::AsciiStrToLower(tf_env_var_val);
+  std::string str_value = absl::AsciiStrToLower(tf_env_var_val);
   if (str_value == "0" || str_value == "false") {
     *value = false;
     return absl::OkStatus();
-  } else if (str_value == "1" || str_value == "true") {
+  }
+  if (str_value == "1" || str_value == "true") {
     *value = true;
     return absl::OkStatus();
   }
-  return errors::InvalidArgument(strings::StrCat(
+  return absl::InvalidArgumentError(absl::StrCat(
       "Failed to parse the env-var ${", env_var_name, "} into bool: ",
       tf_env_var_val, ". Use the default value: ", default_val));
 }
 
-absl::Status ReadInt64FromEnvVar(StringPiece env_var_name, int64_t default_val,
-                                 int64_t* value) {
+absl::Status ReadInt64FromEnvVar(absl::string_view env_var_name,
+                                 int64_t default_val, int64_t* value) {
   *value = default_val;
-  const char* tf_env_var_val = getenv(string(env_var_name).c_str());
+  const char* tf_env_var_val = getenv(std::string(env_var_name).c_str());
   if (tf_env_var_val == nullptr) {
     return absl::OkStatus();
   }
-  if (strings::safe_strto64(tf_env_var_val, value)) {
+  if (absl::SimpleAtoi(tf_env_var_val, value)) {
     return absl::OkStatus();
   }
-  return errors::InvalidArgument(strings::StrCat(
+  return absl::InvalidArgumentError(absl::StrCat(
       "Failed to parse the env-var ${", env_var_name, "} into int64: ",
       tf_env_var_val, ". Use the default value: ", default_val));
 }
 
-absl::Status ReadFloatFromEnvVar(StringPiece env_var_name, float default_val,
-                                 float* value) {
+absl::Status ReadFloatFromEnvVar(absl::string_view env_var_name,
+                                 float default_val, float* value) {
   *value = default_val;
-  const char* tf_env_var_val = getenv(string(env_var_name).c_str());
+  const char* tf_env_var_val = getenv(std::string(env_var_name).c_str());
   if (tf_env_var_val == nullptr) {
     return absl::OkStatus();
   }
-  if (strings::safe_strtof(tf_env_var_val, value)) {
+  if (absl::SimpleAtof(tf_env_var_val, value)) {
     return absl::OkStatus();
   }
-  return errors::InvalidArgument(strings::StrCat(
+  return absl::InvalidArgumentError(absl::StrCat(
       "Failed to parse the env-var ${", env_var_name, "} into float: ",
       tf_env_var_val, ". Use the default value: ", default_val));
 }
 
-absl::Status ReadStringFromEnvVar(StringPiece env_var_name,
-                                  StringPiece default_val, string* value) {
-  const char* tf_env_var_val = getenv(string(env_var_name).c_str());
+absl::Status ReadStringFromEnvVar(absl::string_view env_var_name,
+                                  absl::string_view default_val,
+                                  std::string* value) {
+  const char* tf_env_var_val = getenv(std::string(env_var_name).c_str());
   if (tf_env_var_val != nullptr) {
     *value = tf_env_var_val;
   } else {
-    *value = string(default_val);
+    *value = std::string(default_val);
   }
   return absl::OkStatus();
 }
 
-absl::Status ReadStringsFromEnvVar(StringPiece env_var_name,
-                                   StringPiece default_val,
-                                   std::vector<string>* value) {
-  string str_val;
-  TF_RETURN_IF_ERROR(ReadStringFromEnvVar(env_var_name, default_val, &str_val));
-  *value = str_util::Split(str_val, ',');
+absl::Status ReadStringsFromEnvVar(absl::string_view env_var_name,
+                                   absl::string_view default_val,
+                                   std::vector<std::string>* value,
+                                   absl::string_view delimiters) {
+  std::string str_val;
+  ABSL_RETURN_IF_ERROR(
+      ReadStringFromEnvVar(env_var_name, default_val, &str_val));
+  std::vector<absl::string_view> parts = absl::StrSplit(
+      str_val, absl::ByAnyChar(delimiters), absl::SkipWhitespace());
+  value->clear();
+  value->reserve(parts.size());
+  for (absl::string_view p : parts) {
+    value->emplace_back(std::string(absl::StripAsciiWhitespace(p)));
+  }
   return absl::OkStatus();
 }
 

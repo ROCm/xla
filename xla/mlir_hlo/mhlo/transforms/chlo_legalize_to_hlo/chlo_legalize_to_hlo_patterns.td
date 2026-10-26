@@ -27,14 +27,10 @@ include "stablehlo/dialect/ChloOps.td"
 // Direct CHLO->MHLO conversions
 //===----------------------------------------------------------------------===//
 
-def : Pat<(CHLO_TanOp $v),
-          (MHLO_TanOp $v),
-          [], [], (addBenefit 10)>;
-
 def : Pat<(CHLO_ErfOp $v),
           (MHLO_ErfOp $v),
           [], [], (addBenefit 10)>;
 
-def : Pat<(CHLO_TopKOp AnyRankedTensor:$v, $k),
-          (MHLO_TopKOp $v, $k, ConstBoolAttrTrue),
+def : Pat<(CHLO_TopKOp AnyRankedTensor:$v, $k, $is_stable),
+          (MHLO_TopKOp $v, $k, ConstBoolAttrTrue, $is_stable),
           [], [], (addBenefit 10)>;

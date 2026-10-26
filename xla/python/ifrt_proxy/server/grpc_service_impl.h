@@ -28,9 +28,11 @@
 #include "absl/log/die_if_null.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
 #include "grpcpp/server_context.h"
 #include "grpcpp/support/status.h"
 #include "grpcpp/support/sync_stream.h"
+#include "xla/python/ifrt/attribute_map.h"
 #include "xla/python/ifrt_proxy/common/grpc_ifrt_service.grpc.pb.h"
 #include "xla/python/ifrt_proxy/common/grpc_ifrt_service.pb.h"
 #include "xla/python/ifrt_proxy/common/ifrt_service.pb.h"
@@ -47,11 +49,20 @@ class GrpcServiceImpl : public grpc::GrpcIfrtService::Service {
   using BackendFactory =
       absl::AnyInvocable<absl::StatusOr<std::unique_ptr<BackendInterface>>(
           IfrtProxyVersion version, uint64_t session_id,
-          std::shared_ptr<xla::ifrt::proxy::HostBufferStore>
-              host_buffer_store)>;
+          std::shared_ptr<xla::ifrt::proxy::HostBufferStore> host_buffer_store,
+          AttributeMap initialization_data)>;
+
+  struct Options {
+    // After a client disconnects, maximum time to wait for session teardown.
+    // There will be a LOG(FATAL) if timeout is exceeded.
+    absl::Duration session_teardown_timeout = absl::InfiniteDuration();
+  };
 
   explicit GrpcServiceImpl(BackendFactory backend_factory)
-      : backend_factory_(ABSL_DIE_IF_NULL(std::move(backend_factory))) {}
+      : GrpcServiceImpl(std::move(backend_factory), Options()) {}
+  GrpcServiceImpl(BackendFactory backend_factory, Options options)
+      : backend_factory_(ABSL_DIE_IF_NULL(std::move(backend_factory))),
+        options_(std::move(options)) {}
 
   ::grpc::Status GetVersion(::grpc::ServerContext* context,
                             const GrpcGetVersionRequest* request,
@@ -76,6 +87,11 @@ class GrpcServiceImpl : public grpc::GrpcIfrtService::Service {
       const GrpcHostBufferDeleteRequest* request,
       GrpcHostBufferDeleteResponse* response) override;
 
+  ::grpc::Status HostBufferReadFromDisk(
+      ::grpc::ServerContext* context,
+      const GrpcHostBufferReadFromDiskRequest* request,
+      GrpcHostBufferReadFromDiskResponse* response) override;
+
   // Test-only method that adds a new session in the host buffer store map.
   // Returns false if the session id already exists.
   bool Test_InsertHostBufferStore(
@@ -92,6 +108,7 @@ class GrpcServiceImpl : public grpc::GrpcIfrtService::Service {
       ABSL_LOCKS_EXCLUDED(host_buffer_store_mu_);
 
   BackendFactory backend_factory_;
+  Options options_;
   std::atomic<uint64_t> next_session_id_ = 1;
 
   absl::Mutex host_buffer_store_mu_;

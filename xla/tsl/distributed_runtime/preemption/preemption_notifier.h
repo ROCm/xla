@@ -23,10 +23,11 @@ limitations under the License.
 #include <vector>
 
 #include "absl/strings/str_join.h"
+#include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/mutex.h"
-#include "tsl/platform/statusor.h"
+#include "tsl/platform/thread_annotations.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace tsl {
 
@@ -55,7 +56,7 @@ namespace tsl {
 //
 //    // Register callback that will be invoked once preempted
 //    notifier->WillBePreemptedAtAsync(
-//      [](StatusOr<absl::Time> status_or_time) {
+//      [](absl::StatusOr<absl::Time> status_or_time) {
 //        if (status_or_time.ok()) {
 //          LOG(INFO) << "Preempted at time: " << status_or_time.value();
 //        } else {
@@ -137,7 +138,7 @@ class PreemptionNotifier {
   }
 
   Env* env_;  // Not owned.
-  mutex mu_;
+  absl::Mutex mu_;
   absl::Time death_time_ TF_GUARDED_BY(mu_) = absl::InfinitePast();
   std::vector<PreemptTimeCallback> callbacks_ TF_GUARDED_BY(mu_);
 };

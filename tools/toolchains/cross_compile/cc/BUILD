@@ -1,3 +1,18 @@
+# Copyright 2026 The Bazel Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 """Toolchain configs for cross-compiling TensorFlow"""
 
 load(":cc_toolchain_config.bzl", "cc_toolchain_config")
@@ -9,9 +24,9 @@ licenses(["restricted"])
 cc_toolchain_suite(
     name = "cross_compile_toolchain_suite",
     toolchains = {
-        "aarch64": ":linux_aarch64_toolchain",
-        "k8": ":linux_x86_toolchain",
-        "darwin": ":macos_x86_toolchain",
+        "aarch64": ":linux_aarch64_cc_toolchain",
+        "k8": ":linux_x86_cc_toolchain",
+        "darwin": ":macos_x86_cc_toolchain",
     },
 )
 
@@ -27,7 +42,7 @@ filegroup(
 )
 
 cc_toolchain(
-    name = "linux_x86_toolchain",
+    name = "linux_x86_cc_toolchain",
     all_files = ":empty",
     compiler_files = ":empty",
     dwp_files = ":empty",
@@ -62,15 +77,15 @@ cc_toolchain_config(
     cpu = "k8",
     cxx_builtin_include_directories = [
         "/dt9/",
-        "/usr/lib/llvm-17/include/",
-        "/usr/lib/llvm-17/lib/clang/17/include",
+        "/usr/lib/llvm-18/include/",
+        "/usr/lib/llvm-18/lib/clang/18/include",
     ],
     dbg_compile_flags = ["-g"],
     host_system_name = "linux",
     link_flags = [
         "--target=x86_64-unknown-linux-gnu",
         "-fuse-ld=lld",
-        "--ld-path=/usr/lib/llvm-17/bin/ld.lld",
+        "--ld-path=/usr/lib/llvm-18/bin/ld.lld",
         "-Wl,--undefined-version",
     ],
     link_libs = [
@@ -90,14 +105,14 @@ cc_toolchain_config(
     target_libc = "",
     target_system_name = "x86_64-unknown-linux-gnu",
     tool_paths = {
-        "gcc": "/usr/lib/llvm-17/bin/clang",
-        "ld": "/usr/lib/llvm-17/bin/ld.lld",
-        "ar": "/usr/lib/llvm-17/bin/llvm-ar",
-        "cpp": "/usr/lib/llvm-17/bin/clang++",
-        "llvm-cov": "/usr/lib/llvm-17/bin/llvm-cov",
-        "nm": "/usr/lib/llvm-17/bin/llvm-nm",
-        "objdump": "/usr/lib/llvm-17/bin/llvm-objdump",
-        "strip": "/usr/lib/llvm-17/bin/llvm-strip",
+        "gcc": "/usr/lib/llvm-18/bin/clang",
+        "ld": "/usr/lib/llvm-18/bin/ld.lld",
+        "ar": "/usr/lib/llvm-18/bin/llvm-ar",
+        "cpp": "/usr/lib/llvm-18/bin/clang++",
+        "llvm-cov": "/usr/lib/llvm-18/bin/llvm-cov",
+        "nm": "/usr/lib/llvm-18/bin/llvm-nm",
+        "objdump": "/usr/lib/llvm-18/bin/llvm-objdump",
+        "strip": "/usr/lib/llvm-18/bin/llvm-strip",
     },
     toolchain_identifier = "linux_x86_toolchain",
     unfiltered_compile_flags = [
@@ -112,7 +127,7 @@ cc_toolchain_config(
 )
 
 cc_toolchain(
-    name = "linux_aarch64_toolchain",
+    name = "linux_aarch64_cc_toolchain",
     all_files = ":empty",
     compiler_files = ":empty",
     dwp_files = ":empty",
@@ -148,15 +163,15 @@ cc_toolchain_config(
     cpu = "aarch64",
     cxx_builtin_include_directories = [
         "/dt10/",
-        "/usr/lib/llvm-17/include/",
-        "/usr/lib/llvm-17/lib/clang/17/include",
+        "/usr/lib/llvm-18/include/",
+        "/usr/lib/llvm-18/lib/clang/18/include",
     ],
     dbg_compile_flags = ["-g"],
     host_system_name = "linux",
     link_flags = [
         "--target=aarch64-unknown-linux-gnu",
         "-fuse-ld=lld",
-        "--ld-path=/usr/lib/llvm-17/bin/ld.lld",
+        "--ld-path=/usr/lib/llvm-18/bin/ld.lld",
         "-Wl,--undefined-version",
     ],
     link_libs = [
@@ -176,14 +191,14 @@ cc_toolchain_config(
     target_libc = "",
     target_system_name = "aarch64-unknown-linux-gnu",
     tool_paths = {
-        "gcc": "/usr/lib/llvm-17/bin/clang",
-        "ld": "/usr/lib/llvm-17/bin/ld.lld",
-        "ar": "/usr/lib/llvm-17/bin/llvm-ar",
-        "cpp": "/usr/lib/llvm-17/bin/clang++",
-        "llvm-cov": "/usr/lib/llvm-17/bin/llvm-cov",
-        "nm": "/usr/lib/llvm-17/bin/llvm-nm",
-        "objdump": "/usr/lib/llvm-17/bin/llvm-objdump",
-        "strip": "/usr/lib/llvm-17/bin/llvm-strip",
+        "gcc": "/usr/lib/llvm-18/bin/clang",
+        "ld": "/usr/lib/llvm-18/bin/ld.lld",
+        "ar": "/usr/lib/llvm-18/bin/llvm-ar",
+        "cpp": "/usr/lib/llvm-18/bin/clang++",
+        "llvm-cov": "/usr/lib/llvm-18/bin/llvm-cov",
+        "nm": "/usr/lib/llvm-18/bin/llvm-nm",
+        "objdump": "/usr/lib/llvm-18/bin/llvm-objdump",
+        "strip": "/usr/lib/llvm-18/bin/llvm-strip",
     },
     toolchain_identifier = "linux_aarch64_toolchain",
     unfiltered_compile_flags = [
@@ -198,7 +213,7 @@ cc_toolchain_config(
 )
 
 cc_toolchain(
-    name = "macos_x86_toolchain",
+    name = "macos_x86_cc_toolchain",
     all_files = ":cc_wrapper_and_macos_sysroot",
     compiler_files = ":cc_wrapper_and_macos_sysroot",
     dwp_files = ":empty",
@@ -238,8 +253,8 @@ cc_toolchain_config(
     cpu = "darwin",
     cxx_builtin_include_directories = [
         "%sysroot%/usr/include",
-        "/usr/lib/llvm-17/include/",
-        "/usr/lib/llvm-17/lib/clang/17/include",
+        "/usr/lib/llvm-18/include/",
+        "/usr/lib/llvm-18/lib/clang/18/include",
         "%sysroot%/System/Library/Frameworks/Security.framework/Headers",
         "%sysroot%/System/Library/Frameworks/CoreFoundation.framework/Headers",
         "%sysroot%/System/Library/Frameworks/SystemConfiguration.framework/Headers",
@@ -250,7 +265,7 @@ cc_toolchain_config(
         "--target=x86_64-apple-darwin",
         "-lSystem",
         "-fuse-ld=lld",
-        "--ld-path=/usr/lib/llvm-17/bin/ld64.lld",
+        "--ld-path=/usr/lib/llvm-18/bin/ld64.lld",
         "-headerpad_max_install_names",
         "-Wl,-undefined,dynamic_lookup",
         # Target Catalina as the minimum supported OS
@@ -274,13 +289,13 @@ cc_toolchain_config(
     target_system_name = "x86_64-apple-macosx10.15",
     tool_paths = {
         "gcc": "cc_wrapper.sh",
-        "ld": "/usr/lib/llvm-17/bin/ld64.lld",
-        "ar": "/usr/lib/llvm-17/bin/llvm-libtool-darwin",
-        "cpp": "/usr/lib/llvm-17/bin/clang++",
-        "llvm-cov": "/usr/lib/llvm-17/bin/llvm-cov",
-        "nm": "/usr/lib/llvm-17/bin/llvm-nm",
-        "objdump": "/usr/lib/llvm-17/bin/llvm-objdump",
-        "strip": "/usr/lib/llvm-17/bin/llvm-strip",
+        "ld": "/usr/lib/llvm-18/bin/ld64.lld",
+        "ar": "/usr/lib/llvm-18/bin/llvm-libtool-darwin",
+        "cpp": "/usr/lib/llvm-18/bin/clang++",
+        "llvm-cov": "/usr/lib/llvm-18/bin/llvm-cov",
+        "nm": "/usr/lib/llvm-18/bin/llvm-nm",
+        "objdump": "/usr/lib/llvm-18/bin/llvm-objdump",
+        "strip": "/usr/lib/llvm-18/bin/llvm-strip",
     },
     toolchain_identifier = "macos_x86_toolchain",
     unfiltered_compile_flags = [
@@ -292,4 +307,32 @@ cc_toolchain_config(
         "-Wno-unused-command-line-argument",
         "-Wno-gnu-offsetof-extensions",
     ],
+)
+
+toolchain(
+    name = "linux_x86_toolchain",
+    exec_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    toolchain = ":linux_x86_cc_toolchain",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+)
+
+toolchain(
+    name = "linux_aarch64_toolchain",
+    exec_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+    toolchain = ":linux_aarch64_cc_toolchain",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
 )

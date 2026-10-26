@@ -19,11 +19,12 @@ limitations under the License.
 #include <string>
 #include <utility>
 
+#include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "xla/hlo/parser/hlo_parser.h"
 #include "xla/layout.h"
-#include "xla/service/hlo_parser.h"
-#include "xla/statusor.h"
 
 namespace xla {
 

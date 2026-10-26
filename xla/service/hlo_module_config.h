@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_SERVICE_HLO_MODULE_CONFIG_H_
 #define XLA_SERVICE_HLO_MODULE_CONFIG_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -24,14 +25,21 @@ limitations under the License.
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "tsl/platform/protobuf.h"
 #include "xla/debug_options_flags.h"
 #include "xla/service/computation_layout.h"
 #include "xla/service/computation_placer.h"
 #include "xla/service/hlo.pb.h"
+#include "xla/service/schedule_config.h"
+#include "xla/service/sharding_config.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/protobuf.h"
 
 namespace xla {
 
@@ -85,7 +93,7 @@ class HloModuleConfig {
   explicit HloModuleConfig(ComputationLayout entry_computation_layout);
 
   // Convert an HloModuleConfig to or from a proto.
-  absl::StatusOr<HloModuleConfigProto> ToProto() const;
+  HloModuleConfigProto ToProto() const;
   static absl::StatusOr<std::unique_ptr<HloModuleConfig>> CreateFromProto(
       const HloModuleConfigProto& proto);
 
@@ -208,6 +216,22 @@ class HloModuleConfig {
     return auto_spmd_partitioning_mesh_ids_;
   }
 
+  void set_optimization_level(
+      ExecutionOptions::EffortLevel optimization_level) {
+    optimization_level_ = optimization_level;
+  }
+  ExecutionOptions::EffortLevel optimization_level() const {
+    return optimization_level_;
+  }
+
+  void set_memory_fitting_level(
+      ExecutionOptions::EffortLevel memory_fitting_level) {
+    memory_fitting_level_ = memory_fitting_level;
+  }
+  ExecutionOptions::EffortLevel memory_fitting_level() const {
+    return memory_fitting_level_;
+  }
+
   // If enabled, deduplicate equivalent hlos into function calls to reduce code
   // size.
   void set_deduplicate_hlo(bool deduplicate_hlo) {
@@ -226,6 +250,7 @@ class HloModuleConfig {
   std::string compilation_cache_key() const;
 
   const DebugOptions& debug_options() const { return debug_options_; }
+  DebugOptions& mutable_debug_options() { return debug_options_; }
   void set_debug_options(const DebugOptions& debug_options) {
     debug_options_ = debug_options;
   }
@@ -250,6 +275,25 @@ class HloModuleConfig {
   }
   void set_static_device_assignment(const DeviceAssignment& device_assignment) {
     static_device_assignment_ = device_assignment;
+  }
+  void reset_static_device_assignment() {
+    static_device_assignment_ = std::nullopt;
+  }
+
+  // Checks if this config has a simulated device assignment.
+  bool has_pre_simulation_device_assignment() const {
+    return pre_simulation_device_assignment_.has_value();
+  }
+
+  // Getter and setter of the compile-time known device assignment.
+  const DeviceAssignment& pre_simulation_device_assignment() const {
+    CHECK(pre_simulation_device_assignment_.has_value());
+    return *pre_simulation_device_assignment_;
+  }
+
+  void set_pre_simulation_device_assignment(
+      const DeviceAssignment& device_assignment) {
+    pre_simulation_device_assignment_ = device_assignment;
   }
 
   bool allow_separate_sharding_programs() const {
@@ -295,8 +339,11 @@ class HloModuleConfig {
   const std::vector<std::vector<bool>>& fusion_config() const {
     return fusion_config_;
   }
-  std::vector<std::vector<bool>>* mutable_fusion_config() {
-    return &fusion_config_;
+  void set_fusion_config(std::vector<std::vector<bool>> fusion_config) {
+    fusion_config_ = std::move(fusion_config);
+  }
+  std::vector<std::vector<bool>>& mutable_fusion_config() {
+    return fusion_config_;
   }
 
   const absl::flat_hash_map<std::string, std::vector<int64_t>>& dot_config()
@@ -317,9 +364,19 @@ class HloModuleConfig {
   const std::vector<std::vector<bool>>& phase_ordering_config() const {
     return phase_ordering_config_;
   }
-  std::vector<std::vector<bool>>* mutable_phase_ordering_config() {
-    return &phase_ordering_config_;
+  void set_phase_ordering_config(
+      std::vector<std::vector<bool>> phase_ordering_config) {
+    phase_ordering_config_ = std::move(phase_ordering_config);
   }
+  std::vector<std::vector<bool>>& mutable_phase_ordering_config() {
+    return phase_ordering_config_;
+  }
+
+  const ShardingConfig& sharding_config() const { return sharding_config_; }
+  ShardingConfig* mutable_sharding_config() { return &sharding_config_; }
+
+  const ScheduleConfig& schedule_config() const { return schedule_config_; }
+  ScheduleConfig* mutable_schedule_config() { return &schedule_config_; }
 
   int phase_index() const { return phase_index_; }
   void set_phase_index(const int phase_index) { phase_index_ = phase_index; }
@@ -358,6 +415,7 @@ class HloModuleConfig {
   void SetAnalysisAllowance(absl::string_view pass_name, int64_t allowance) {
     analysis_allowance_map_[pass_name] = allowance;
   }
+  void clear_analysis_allowance_map() { analysis_allowance_map_ = {}; }
 
   PrecisionConfig::Precision matrix_unit_operand_precision() const {
     return matrix_unit_operand_precision_;
@@ -368,11 +426,43 @@ class HloModuleConfig {
   }
 
   absl::string_view fdo_profile() const { return fdo_profile_; }
-  std::string* mutable_fdo_profile() { return &fdo_profile_; }
+  void set_fdo_profile(absl::string_view fdo_profile) {
+    fdo_profile_ = fdo_profile;
+  }
+  void clear_fdo_profile() { fdo_profile_ = std::string(); }
 
   int64_t device_memory_size() const { return device_memory_size_; }
   void set_device_memory_size(int64_t device_memory_size) {
     device_memory_size_ = device_memory_size;
+  }
+
+  bool use_shardy_partitioner() const { return use_shardy_partitioner_; }
+  void set_use_shardy_partitioner(bool use_shardy_partitioner) {
+    use_shardy_partitioner_ = use_shardy_partitioner;
+  }
+
+  // Number of devices in a fast-interconnect domain.
+  int64_t partition_size() const { return partition_size_; }
+  void set_partition_size(int64_t partition_size) {
+    partition_size_ = partition_size;
+  }
+
+  // Do channel IDs in this module carry semantic information.
+  bool ChannelIdSensitive() const {
+    // TODO(b/430952564): Base this on num_partitions / num_replicas instead
+    // of use_spmd_partitioning.
+    return !use_spmd_partitioning_;
+  }
+
+  // Page size in kibibytes for usage in multi-page buffer assignment and/or
+  // lowering.
+  int64_t page_size_kib() const { return page_size_kib_; }
+
+  // Sets the page size in kibibytes for usage in multi-page buffer
+  // assignment and/or lowering. A value of 0 means no multi-page buffer
+  // assignment and/or lowering will take place.
+  void set_page_size_kib(int64_t page_size_kib) {
+    page_size_kib_ = page_size_kib;
   }
 
  private:
@@ -408,6 +498,23 @@ class HloModuleConfig {
 
   std::vector<int64_t> auto_spmd_partitioning_mesh_ids_;
 
+  // The amount of effort to spend on optimizing for minimizing program
+  // execution time. As a general guideline, O2 strongly prioritizes execution
+  // time, and is typically suitable for production workloads. O3 may enable
+  // costly or experimental optimizations that may greatly increase compile
+  // time.
+  ExecutionOptions::EffortLevel optimization_level_ =
+      ExecutionOptions::EFFORT_UNKNOWN;
+
+  // The amount of effort to spend on making the program fit in memory (where
+  // "fit in memory" here has a backend-dependent meaning). As a general
+  // guideline, O2 will expend significant effort on attempting to make the
+  // program fit. O0 will spend minimal effort and fail as quickly as possible
+  // instead. O3 might enable costly algorithms to reduce memory usage that may
+  // greatly increase compile time.
+  ExecutionOptions::EffortLevel memory_fitting_level_ =
+      ExecutionOptions::EFFORT_O2;
+
   // If enabled, deduplicate equivalent hlos into function calls to reduce code
   // size.
   bool deduplicate_hlo_ = false;
@@ -422,6 +529,9 @@ class HloModuleConfig {
 
   // Compile-time known device assignment.
   std::optional<DeviceAssignment> static_device_assignment_;
+
+  // Compile-time known device assignment.
+  std::optional<DeviceAssignment> pre_simulation_device_assignment_;
 
   bool allow_separate_sharding_programs_ = false;
 
@@ -501,6 +611,26 @@ class HloModuleConfig {
   std::string fdo_profile_;
 
   int64_t device_memory_size_ = 0;
+
+  bool use_shardy_partitioner_ = false;
+
+  // Number of devices in a fast-interconnect domain.
+  int64_t partition_size_ = 0;
+
+  // Sharding configuration, where sharding_config_.nodes[v] controls the
+  // sharding of operation v.
+  ShardingConfig sharding_config_;
+
+  // Schedule configuration, where schedule_config_.sequence is the sequence of
+  // instructions to be scheduled.
+  ScheduleConfig schedule_config_;
+
+  // Page size in kibibytes for usage in multi-page buffer assignment. A value
+  // of 0 means no multi-page buffer assignment and/or lowering will take place.
+  // Pages are subdivisions of the shared memory space, with the constraint that
+  // a buffer will never cross a page boundary.
+  int64_t page_size_kib_ = 0;
+
   // LINT.ThenChange(//tensorflow/compiler/xla/xla.proto)
 };
 

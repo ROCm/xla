@@ -16,14 +16,18 @@ limitations under the License.
 #ifndef XLA_SERVICE_GPU_MODEL_HLO_OP_PROFILER_H_
 #define XLA_SERVICE_GPU_MODEL_HLO_OP_PROFILER_H_
 
+#include <cstdint>
 #include <memory>
 
+#include "absl/base/nullability.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/statusor.h"
 #include "absl/time/time.h"
+#include "absl/types/span.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/gpu/model/hlo_op_profile.pb.h"
-#include "xla/service/hlo_runner.h"
+#include "xla/service/hlo_runner_interface.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/xla_data.pb.h"
 
@@ -31,6 +35,32 @@ namespace xla {
 namespace gpu {
 
 class HloOpProfiler {
+ public:
+  class KernelTracer {
+   public:
+    virtual ~KernelTracer() = default;
+    virtual uint64_t getMedianKernelTimeNs() && = 0;
+    virtual uint64_t getSumKernelTimeNs() && = 0;
+  };
+
+  HloOpProfiler(HloRunnerInterface* absl_nonnull runner,
+                const stream_executor::DeviceDescription* absl_nonnull
+                    device_description);
+
+  static std::unique_ptr<KernelTracer> GetKernelTracer();
+
+  static absl::Span<const HloOpcode> AllSupportedOps();
+
+  static const absl::flat_hash_set<HloOpcode>& Unsupported();
+
+  static const absl::flat_hash_set<HloOpcode>& TooFastToMeasure();
+
+  static absl::Span<const PrimitiveType> AllSupportedDtypes();
+
+  absl::StatusOr<HloInstructionProfile> MeasureClockCyclesPerOp(
+      HloOpcode op, PrimitiveType data_type);
+
+ private:
   static std::unique_ptr<HloModule> MakeModuleForMeasurements(
       HloOpcode op, PrimitiveType data_type, int chain_length);
 
@@ -38,13 +68,7 @@ class HloOpProfiler {
                                                         PrimitiveType data_type,
                                                         int chain_length);
 
- public:
-  explicit HloOpProfiler(HloRunner& runner);
-  absl::StatusOr<HloInstructionProfile> MeasureClockCyclesPerOp(
-      HloOpcode op, PrimitiveType data_type);
-
- private:
-  HloRunner& runner_;
+  HloRunnerInterface& runner_;
   const se::DeviceDescription& dev_info_;
   absl::Duration min_duration_;
 };

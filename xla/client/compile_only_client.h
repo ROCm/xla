@@ -16,15 +16,21 @@ limitations under the License.
 #ifndef XLA_CLIENT_COMPILE_ONLY_CLIENT_H_
 #define XLA_CLIENT_COMPILE_ONLY_CLIENT_H_
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "xla/client/client.h"
-#include "xla/client/xla_computation.h"
+#include "xla/hlo/builder/xla_computation.h"
 #include "xla/service/compile_only_service.h"
 #include "xla/service/compiler.h"
-#include "xla/statusor.h"
+#include "xla/service/hlo_module_config.h"
+#include "xla/shape.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -53,9 +59,9 @@ class CompileOnlyClient : public Client {
   // This is intended for use in static compilation. The |options|
   // parameter describes the target for which the compiler should emit
   // code. |metadata|, if provided, is populated during compilation.
-  absl::StatusOr<std::vector<std::unique_ptr<AotCompilationResult>>>
+  absl::StatusOr<std::vector<std::unique_ptr<CompiledModule>>>
   CompileAheadOfTime(
-      absl::Span<const AotXlaComputationInstance> computations,
+      const AotXlaComputationInstance& computation,
       const AotCompilationOptions& options,
       std::unique_ptr<AotCompilationMetadata>* metadata = nullptr);
 

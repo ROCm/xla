@@ -16,35 +16,52 @@ limitations under the License.
 #include <math.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
-#include <new>
+#include <optional>
 #include <random>
+#include <type_traits>
 #include <utility>
+#include <vector>
 
 #define EIGEN_USE_THREADS
 
+#include "absl/log/log.h"
 #include "absl/types/span.h"
-#include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
+#include "benchmark/benchmark.h"
+#include "tsl/platform/protobuf.h"
+#include "unsupported/Eigen/CXX11/Tensor"
 #include "xla/array2d.h"
 #include "xla/client/client_library.h"
-#include "xla/client/xla_builder.h"
+#include "xla/client/executable_build_options.h"
+#include "xla/comparison_util.h"
+#include "xla/error_spec.h"
+#include "xla/executable_run_options.h"
+#include "xla/hlo/builder/xla_builder.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/layout_util.h"
 #include "xla/literal.h"
+#include "xla/literal_util.h"
 #include "xla/primitive_util.h"
 #include "xla/service/platform_util.h"
+#include "xla/service/shaped_buffer.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
+#include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/stream_executor_memory_allocator.h"
-#include "xla/tests/client_library_test_base.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/tests/client_library_test_runner_mixin.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
 #include "xla/tests/literal_test_util.h"
-#include "xla/tests/test_macros.h"
+#include "xla/tests/xla_test_backend_predicates.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/tsl/platform/test_benchmark.h"
+#include "xla/tsl/platform/threadpool.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/protobuf.h"
-#include "tsl/platform/test_benchmark.h"
 
 namespace xla {
 namespace {
@@ -58,7 +75,7 @@ const float test_float_vals[3][test_width][test_height] = {
 
 // Test whether fusion operations are emitted with no errors and compute
 // accurate outputs.
-class CpuGpuFusionTest : public HloTestBase {
+class CpuGpuFusionTest : public HloInterpreterReferenceMixin<HloTestBase> {
  protected:
   template <typename T, int Arity>
   void TestElementwise2D(
@@ -125,7 +142,7 @@ class CpuGpuFusionTest : public HloTestBase {
             HloInstruction::FusionKind::kLoop);
 
     auto expected = LiteralUtil::CreateR2FromArray2D(answer_data);
-    auto actual = ExecuteAndTransfer(std::move(hlo_module), {});
+    TF_ASSERT_OK_AND_ASSIGN(Literal actual, Execute(std::move(hlo_module), {}));
     if (primitive_util::IsFloatingPointType(prim_type)) {
       EXPECT_TRUE(LiteralTestUtil::Near(expected, actual, ErrorSpec(1e-4)));
     } else {
@@ -138,7 +155,7 @@ class CpuGpuFusionTest : public HloTestBase {
                                       absl::Span<const float> xs);
   bool ComputeElementwiseAnswerCompare(ComparisonDirection direction,
                                        absl::Span<const float> xs);
-  DebugOptions GetDebugOptionsForTest() override {
+  DebugOptions GetDebugOptionsForTest() const override {
     DebugOptions debug_options = HloTestBase::GetDebugOptionsForTest();
     debug_options.add_xla_disable_hlo_passes("layout-assignment");
     return debug_options;
@@ -187,7 +204,7 @@ bool CpuGpuFusionTest::ComputeElementwiseAnswerCompare(
   }
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Test) {
+TEST_F(CpuGpuFusionTest, Test) {
   // test expression:
   // slice(select({{T, F, T}, {F, T, F}},
   //              concat(transpose({{1.0}, {2.0}, {3.0}} +
@@ -234,13 +251,14 @@ XLA_TEST_F(CpuGpuFusionTest, Test) {
            const4, reshape3, add2, const1, const0},
           HloInstruction::FusionKind::kLoop);
 
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(LiteralTestUtil::Near(
-      LiteralUtil::CreateR2<float>({{0.5}, {2.72}}),
-      ExecuteAndTransfer(std::move(hlo_module), {}), ErrorSpec(1e-4)));
+      LiteralUtil::CreateR2<float>({{0.5}, {2.72}}), result, ErrorSpec(1e-4)));
 }
 
 // Test whether we emit appropriate code for parameters of fusion instructions.
-XLA_TEST_F(CpuGpuFusionTest, Parameter) {
+TEST_F(CpuGpuFusionTest, Parameter) {
   // Build a computation and fuse part of it so the fusion instruction has an
   // operand parameter.
   auto builder = HloComputation::Builder(TestName());
@@ -260,12 +278,14 @@ XLA_TEST_F(CpuGpuFusionTest, Parameter) {
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{add3, const2},
                                 HloInstruction::FusionKind::kLoop);
 
-  EXPECT_TRUE(LiteralTestUtil::Near(
-      LiteralUtil::CreateR2<float>({{-1.0, 0.0, 1.0}}),
-      ExecuteAndTransfer(std::move(hlo_module), {}), ErrorSpec(1e-4)));
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
+  EXPECT_TRUE(
+      LiteralTestUtil::Near(LiteralUtil::CreateR2<float>({{-1.0, 0.0, 1.0}}),
+                            result, ErrorSpec(1e-4)));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, RandomizedParallelPartition) {
+TEST_F(CpuGpuFusionTest, RandomizedParallelPartition) {
   // Tests parallel partitioning of a fusion instruction.
   // Create shape with random outer dimension size to generate random parallel
   // partition counts for each test run.
@@ -292,7 +312,8 @@ XLA_TEST_F(CpuGpuFusionTest, RandomizedParallelPartition) {
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{y, x, two},
                                 HloInstruction::FusionKind::kLoop);
   // Compute result.
-  auto result = ExecuteAndTransfer(std::move(hlo_module), {});
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   // Every element of result should be y = x^2 = 4.0.
   for (int i = 0; i < rand_dim0_size; ++i) {
     for (int j = 0; j < dim1_size; ++j) {
@@ -301,7 +322,7 @@ XLA_TEST_F(CpuGpuFusionTest, RandomizedParallelPartition) {
   }
 }
 
-XLA_TEST_F(CpuGpuFusionTest, BroadcastIntoBinaryOp) {
+TEST_F(CpuGpuFusionTest, BroadcastIntoBinaryOp) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const_vector = builder.AddInstruction(HloInstruction::CreateConstant(
@@ -320,12 +341,14 @@ XLA_TEST_F(CpuGpuFusionTest, BroadcastIntoBinaryOp) {
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{add2, broadcast},
                                 HloInstruction::FusionKind::kLoop);
 
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(LiteralTestUtil::Near(
       LiteralUtil::CreateR2<float>({{0.0, 0.0, -1.0}, {11.0, 22.0, 33.0}}),
-      ExecuteAndTransfer(std::move(hlo_module), {}), ErrorSpec(1e-4)));
+      result, ErrorSpec(1e-4)));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, ReshapeToScalar) {
+TEST_F(CpuGpuFusionTest, ReshapeToScalar) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto single_element_array = builder.AddInstruction(
@@ -335,12 +358,13 @@ XLA_TEST_F(CpuGpuFusionTest, ReshapeToScalar) {
   hlo_module->AddEntryComputation(builder.Build())
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{reshape},
                                 HloInstruction::FusionKind::kLoop);
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(
-      LiteralTestUtil::Equal(LiteralUtil::CreateR0<int32_t>(5),
-                             ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralTestUtil::Equal(LiteralUtil::CreateR0<int32_t>(5), result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Reshape_3by2_1by2by3) {
+TEST_F(CpuGpuFusionTest, Reshape_3by2_1by2by3) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(HloInstruction::CreateConstant(
@@ -350,12 +374,13 @@ XLA_TEST_F(CpuGpuFusionTest, Reshape_3by2_1by2by3) {
   hlo_module->AddEntryComputation(builder.Build())
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{reshape1},
                                 HloInstruction::FusionKind::kLoop);
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(LiteralTestUtil::Equal(
-      LiteralUtil::CreateR3<int32_t>({{{1, 2, 3}, {4, 5, 6}}}),
-      ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralUtil::CreateR3<int32_t>({{{1, 2, 3}, {4, 5, 6}}}), result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Reshape_1by2by3_3by2) {
+TEST_F(CpuGpuFusionTest, Reshape_1by2by3_3by2) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(HloInstruction::CreateConstant(
@@ -365,12 +390,13 @@ XLA_TEST_F(CpuGpuFusionTest, Reshape_1by2by3_3by2) {
   hlo_module->AddEntryComputation(builder.Build())
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{reshape1},
                                 HloInstruction::FusionKind::kLoop);
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(LiteralTestUtil::Equal(
-      LiteralUtil::CreateR2<int32_t>({{1, 2}, {3, 4}, {5, 6}}),
-      ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralUtil::CreateR2<int32_t>({{1, 2}, {3, 4}, {5, 6}}), result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Reshape_1by1by1_) {
+TEST_F(CpuGpuFusionTest, Reshape_1by1by1_) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(
@@ -380,12 +406,13 @@ XLA_TEST_F(CpuGpuFusionTest, Reshape_1by1by1_) {
   hlo_module->AddEntryComputation(builder.Build())
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{reshape1},
                                 HloInstruction::FusionKind::kLoop);
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(
-      LiteralTestUtil::Equal(LiteralUtil::CreateR0<int32_t>(7),
-                             ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralTestUtil::Equal(LiteralUtil::CreateR0<int32_t>(7), result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Reshape__1by1by1) {
+TEST_F(CpuGpuFusionTest, Reshape__1by1by1) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(
@@ -395,12 +422,13 @@ XLA_TEST_F(CpuGpuFusionTest, Reshape__1by1by1) {
   hlo_module->AddEntryComputation(builder.Build())
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{reshape1},
                                 HloInstruction::FusionKind::kLoop);
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(
-      LiteralTestUtil::Equal(LiteralUtil::CreateR3<int32_t>({{{7}}}),
-                             ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralTestUtil::Equal(LiteralUtil::CreateR3<int32_t>({{{7}}}), result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Reshape__) {
+TEST_F(CpuGpuFusionTest, Reshape__) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(
@@ -410,12 +438,13 @@ XLA_TEST_F(CpuGpuFusionTest, Reshape__) {
   hlo_module->AddEntryComputation(builder.Build())
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{reshape1},
                                 HloInstruction::FusionKind::kLoop);
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(
-      LiteralTestUtil::Equal(LiteralUtil::CreateR0<int32_t>(7),
-                             ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralTestUtil::Equal(LiteralUtil::CreateR0<int32_t>(7), result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Reshape_3by3_3by3) {
+TEST_F(CpuGpuFusionTest, Reshape_3by3_3by3) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(HloInstruction::CreateConstant(
@@ -425,12 +454,14 @@ XLA_TEST_F(CpuGpuFusionTest, Reshape_3by3_3by3) {
   hlo_module->AddEntryComputation(builder.Build())
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{reshape1},
                                 HloInstruction::FusionKind::kLoop);
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(LiteralTestUtil::Equal(
       LiteralUtil::CreateR2<int32_t>({{1, 2, 3}, {4, 5, 6}, {7, 8, 9}}),
-      ExecuteAndTransfer(std::move(hlo_module), {})));
+      result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Transpose_2by3) {
+TEST_F(CpuGpuFusionTest, Transpose_2by3) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(HloInstruction::CreateConstant(
@@ -440,12 +471,13 @@ XLA_TEST_F(CpuGpuFusionTest, Transpose_2by3) {
   hlo_module->AddEntryComputation(builder.Build())
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{reshape1},
                                 HloInstruction::FusionKind::kLoop);
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(LiteralTestUtil::Equal(
-      LiteralUtil::CreateR2<int32_t>({{1, 4}, {2, 5}, {3, 6}}),
-      ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralUtil::CreateR2<int32_t>({{1, 4}, {2, 5}, {3, 6}}), result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Transpose_3by3) {
+TEST_F(CpuGpuFusionTest, Transpose_3by3) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(HloInstruction::CreateConstant(
@@ -455,12 +487,14 @@ XLA_TEST_F(CpuGpuFusionTest, Transpose_3by3) {
   hlo_module->AddEntryComputation(builder.Build())
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{reshape1},
                                 HloInstruction::FusionKind::kLoop);
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(LiteralTestUtil::Equal(
       LiteralUtil::CreateR2<int32_t>({{1, 4, 7}, {2, 5, 8}, {3, 6, 9}}),
-      ExecuteAndTransfer(std::move(hlo_module), {})));
+      result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Reverse) {
+TEST_F(CpuGpuFusionTest, Reverse) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(HloInstruction::CreateConstant(
@@ -471,12 +505,13 @@ XLA_TEST_F(CpuGpuFusionTest, Reverse) {
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{reverse1},
                                 HloInstruction::FusionKind::kLoop);
 
-  EXPECT_TRUE(
-      LiteralTestUtil::Equal(LiteralUtil::CreateR1<int32_t>({3, 2, 1}),
-                             ExecuteAndTransfer(std::move(hlo_module), {})));
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
+  EXPECT_TRUE(LiteralTestUtil::Equal(LiteralUtil::CreateR1<int32_t>({3, 2, 1}),
+                                     result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, ReverseNegate) {
+TEST_F(CpuGpuFusionTest, ReverseNegate) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(HloInstruction::CreateConstant(
@@ -489,12 +524,13 @@ XLA_TEST_F(CpuGpuFusionTest, ReverseNegate) {
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{negate2, reverse1},
                                 HloInstruction::FusionKind::kLoop);
 
-  EXPECT_TRUE(
-      LiteralTestUtil::Equal(LiteralUtil::CreateR1<int32_t>({-3, -2, -1}),
-                             ExecuteAndTransfer(std::move(hlo_module), {})));
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
+  EXPECT_TRUE(LiteralTestUtil::Equal(
+      LiteralUtil::CreateR1<int32_t>({-3, -2, -1}), result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, BroadcastNegate) {
+TEST_F(CpuGpuFusionTest, BroadcastNegate) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(
@@ -507,12 +543,13 @@ XLA_TEST_F(CpuGpuFusionTest, BroadcastNegate) {
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{negate2, broadcast1},
                                 HloInstruction::FusionKind::kLoop);
 
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(
-      LiteralTestUtil::Equal(LiteralUtil::CreateR1<int32_t>({-1, -1}),
-                             ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralTestUtil::Equal(LiteralUtil::CreateR1<int32_t>({-1, -1}), result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, SliceNegate) {
+TEST_F(CpuGpuFusionTest, SliceNegate) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(HloInstruction::CreateConstant(
@@ -525,12 +562,13 @@ XLA_TEST_F(CpuGpuFusionTest, SliceNegate) {
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{negate2, slice1},
                                 HloInstruction::FusionKind::kLoop);
 
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(
-      LiteralTestUtil::Equal(LiteralUtil::CreateR1<int32_t>({-1, -3}),
-                             ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralTestUtil::Equal(LiteralUtil::CreateR1<int32_t>({-1, -3}), result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, DynamicSliceNegate) {
+TEST_F(CpuGpuFusionTest, DynamicSliceNegate) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(HloInstruction::CreateConstant(
@@ -547,12 +585,13 @@ XLA_TEST_F(CpuGpuFusionTest, DynamicSliceNegate) {
           /*instructions_to_fuse=*/{negate3, dynamic_slice2},
           HloInstruction::FusionKind::kLoop);
 
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(
-      LiteralTestUtil::Equal(LiteralUtil::CreateR1<int32_t>({-2, -3}),
-                             ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralTestUtil::Equal(LiteralUtil::CreateR1<int32_t>({-2, -3}), result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, ReshapeNegate) {
+TEST_F(CpuGpuFusionTest, ReshapeNegate) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(HloInstruction::CreateConstant(
@@ -565,12 +604,13 @@ XLA_TEST_F(CpuGpuFusionTest, ReshapeNegate) {
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{negate2, reshape1},
                                 HloInstruction::FusionKind::kLoop);
 
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(LiteralTestUtil::Equal(
-      LiteralUtil::CreateR2<int32_t>({{-1, -2}, {-3, -4}}),
-      ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralUtil::CreateR2<int32_t>({{-1, -2}, {-3, -4}}), result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, TransposeNegate) {
+TEST_F(CpuGpuFusionTest, TransposeNegate) {
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(HloInstruction::CreateConstant(
@@ -583,9 +623,10 @@ XLA_TEST_F(CpuGpuFusionTest, TransposeNegate) {
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{negate2, transpose1},
                                 HloInstruction::FusionKind::kLoop);
 
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(LiteralTestUtil::Equal(
-      LiteralUtil::CreateR2<int32_t>({{-1, -3}, {-2, -4}}),
-      ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralUtil::CreateR2<int32_t>({{-1, -3}, {-2, -4}}), result));
 }
 
 std::unique_ptr<HloComputation> MakeReduceTestComputation() {
@@ -599,7 +640,10 @@ std::unique_ptr<HloComputation> MakeReduceTestComputation() {
   return builder.Build();
 }
 
-XLA_TEST_F(CpuGpuFusionTest, DISABLED_ON_CPU(Reduce)) {
+TEST_F(CpuGpuFusionTest, Reduce) {
+  if (test::DeviceIs(test::kCpu)) {
+    GTEST_SKIP();
+  }
   auto hlo_module = CreateNewVerifiedModule();
   auto builder = HloComputation::Builder(TestName());
   auto const0 = builder.AddInstruction(
@@ -613,12 +657,13 @@ XLA_TEST_F(CpuGpuFusionTest, DISABLED_ON_CPU(Reduce)) {
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{reduce2},
                                 HloInstruction::FusionKind::kInput);
 
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(
-      LiteralTestUtil::Equal(LiteralUtil::CreateR0<int32_t>(496),
-                             ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralTestUtil::Equal(LiteralUtil::CreateR0<int32_t>(496), result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, ReduceImplicitBroadcast) {
+TEST_F(CpuGpuFusionTest, ReduceImplicitBroadcast) {
   auto hlo_module = CreateNewVerifiedModule();
 
   auto builder = HloComputation::Builder(TestName());
@@ -635,12 +680,16 @@ XLA_TEST_F(CpuGpuFusionTest, ReduceImplicitBroadcast) {
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{negate3, reduce2},
                                 HloInstruction::FusionKind::kLoop);
 
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(
-      LiteralTestUtil::Equal(LiteralUtil::CreateR0<int32_t>(-15),
-                             ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralTestUtil::Equal(LiteralUtil::CreateR0<int32_t>(-15), result));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, DISABLED_ON_CPU(ReduceWindow)) {
+TEST_F(CpuGpuFusionTest, ReduceWindow) {
+  if (test::DeviceIs(test::kCpu)) {
+    GTEST_SKIP();
+  }
   auto builder = HloComputation::Builder(TestName());
   auto hlo_module = CreateNewVerifiedModule();
   auto const0 = builder.AddInstruction(HloInstruction::CreateConstant(
@@ -685,15 +734,16 @@ XLA_TEST_F(CpuGpuFusionTest, DISABLED_ON_CPU(ReduceWindow)) {
       ->CreateFusionInstruction(/*instructions_to_fuse=*/{reduce_window2},
                                 HloInstruction::FusionKind::kLoop);
 
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(LiteralTestUtil::Equal(
-      LiteralUtil::CreateR2<int32_t>({{462, 2145}, {24871, 62491}}),
-      ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralUtil::CreateR2<int32_t>({{462, 2145}, {24871, 62491}}), result));
 }
 
 // When a constant (or other op) which has multiple users is imported
 // into a fusion, it should remain shared, rather than being duplicated
 // within the fusion.
-XLA_TEST_F(CpuGpuFusionTest, SharedConstant) {
+TEST_F(CpuGpuFusionTest, SharedConstant) {
   auto hlo_module = CreateNewVerifiedModule();
 
   auto builder = HloComputation::Builder(TestName());
@@ -721,14 +771,15 @@ XLA_TEST_F(CpuGpuFusionTest, SharedConstant) {
   // fused instruction contains the constant(2), the parameter, and 4 adds
   EXPECT_EQ(entry_comp->root_instruction()->fused_instruction_count(), 6);
 
+  TF_ASSERT_OK_AND_ASSIGN(const Literal result,
+                          Execute(std::move(hlo_module), {}));
   EXPECT_TRUE(
-      LiteralTestUtil::Equal(LiteralUtil::CreateR1<int32_t>({8}),
-                             ExecuteAndTransfer(std::move(hlo_module), {})));
+      LiteralTestUtil::Equal(LiteralUtil::CreateR1<int32_t>({8}), result));
 }
 
 // Test that fusion can handle elementwise ops with more than one user. This
 // test case needs deduplication to avoid exponential compile time.
-XLA_TEST_F(CpuGpuFusionTest, Fibonacci) {
+TEST_F(CpuGpuFusionTest, Fibonacci) {
   const char* const kModuleStr = R"(
   HloModule fibonacci
 
@@ -777,65 +828,67 @@ XLA_TEST_F(CpuGpuFusionTest, Fibonacci) {
       RunAndCompare(std::move(module), {&literal0, &literal1}, std::nullopt));
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Add2D) {
+TEST_F(CpuGpuFusionTest, Add2D) {
   TestElementwise2D<float, 2>(HloOpcode::kAdd);
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Subtract2D) {
+TEST_F(CpuGpuFusionTest, Subtract2D) {
   TestElementwise2D<float, 2>(HloOpcode::kSubtract);
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Multiply2D) {
+TEST_F(CpuGpuFusionTest, Multiply2D) {
   TestElementwise2D<float, 2>(HloOpcode::kMultiply);
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Divide2D) {
+TEST_F(CpuGpuFusionTest, Divide2D) {
   TestElementwise2D<float, 2>(HloOpcode::kDivide);
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Power2D) {
+TEST_F(CpuGpuFusionTest, Power2D) {
   TestElementwise2D<float, 2>(HloOpcode::kPower);
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Minimum2D) {
+TEST_F(CpuGpuFusionTest, Minimum2D) {
   TestElementwise2D<float, 2>(HloOpcode::kMinimum);
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Maximum2D) {
+TEST_F(CpuGpuFusionTest, Maximum2D) {
   TestElementwise2D<float, 2>(HloOpcode::kMaximum);
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Equal2D) {
+TEST_F(CpuGpuFusionTest, Equal2D) {
   TestElementwise2D<bool, 2>(HloOpcode::kCompare, ComparisonDirection::kEq);
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Inequal2D) {
+TEST_F(CpuGpuFusionTest, Inequal2D) {
   TestElementwise2D<bool, 2>(HloOpcode::kCompare, ComparisonDirection::kNe);
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Greater2D) {
+TEST_F(CpuGpuFusionTest, Greater2D) {
   TestElementwise2D<bool, 2>(HloOpcode::kCompare, ComparisonDirection::kGt);
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Lesser2D) {
+TEST_F(CpuGpuFusionTest, Lesser2D) {
   TestElementwise2D<bool, 2>(HloOpcode::kCompare, ComparisonDirection::kLt);
 }
 
-XLA_TEST_F(CpuGpuFusionTest, GreaterOrEqual2D) {
+TEST_F(CpuGpuFusionTest, GreaterOrEqual2D) {
   TestElementwise2D<bool, 2>(HloOpcode::kCompare, ComparisonDirection::kGe);
 }
 
-XLA_TEST_F(CpuGpuFusionTest, LesserOrEqual2D) {
+TEST_F(CpuGpuFusionTest, LesserOrEqual2D) {
   TestElementwise2D<bool, 2>(HloOpcode::kCompare, ComparisonDirection::kLe);
 }
 
-XLA_TEST_F(CpuGpuFusionTest, Clamp2D) {
+TEST_F(CpuGpuFusionTest, Clamp2D) {
   TestElementwise2D<float, 3>(HloOpcode::kClamp);
 }
 
-class FusionClientLibraryTest : public ClientLibraryTestBase {};
+class FusionClientLibraryTest : public ClientLibraryTestRunnerMixin<
+                                    HloInterpreterReferenceMixin<HloTestBase>> {
+};
 
-XLA_TEST_F(FusionClientLibraryTest, ManyLayoutTransformations) {
+TEST_F(FusionClientLibraryTest, ManyLayoutTransformations) {
   // On the GPU backend, it's possible to have too many transposes within one
   // fusion, causing the kernel to run out shared memory and thus not compile.
   // We want to check that doesn't happen.
@@ -863,17 +916,21 @@ XLA_TEST_F(FusionClientLibraryTest, ManyLayoutTransformations) {
   Literal l2 = LiteralUtil::CreateR2FromArray2D(arr).Relayout(
       LayoutUtil::MakeLayout({1, 0}));
 
-  XlaOp p0 = AddParam(l1, &b);
+  std::vector<const Literal*> params;
+  XlaOp p0 = Parameter(&b, 0, l1.shape(), "");
+  params.push_back(&l1);
   XlaOp sum = p0;
   for (int i = 1; i < kNumParams; ++i) {
-    auto pN = AddParam((i % 2 == 0 ? l1 : l2), &b);
+    const Literal& l = i % 2 == 0 ? l1 : l2;
+    XlaOp pN = Parameter(&b, i, l.shape(), "");
+    params.push_back(&l);
     sum = sum + p0 * pN * pN;
   }
 
-  ComputeAndCompare(&b, {});
+  ComputeAndCompare(&b, params);
 }
 
-XLA_TEST_F(CpuGpuFusionTest, TransposeDiamondWithNonTrivialBranch) {
+TEST_F(CpuGpuFusionTest, TransposeDiamondWithNonTrivialBranch) {
   const char* hlo = R"(
 HloModule module
 
@@ -893,7 +950,8 @@ void BM_ParallelFusion(::testing::benchmark::State& state) {
 
   se::Platform* platform = PlatformUtil::GetDefaultPlatform().value();
   auto executors = PlatformUtil::GetStreamExecutors(platform).value();
-  se::StreamExecutorMemoryAllocator allocator(platform, executors);
+  stream_executor::StreamExecutorAddressAllocator allocator(platform,
+                                                            executors);
 
   const int64_t intra_op_parallelism_threads = 24;
   xla::LocalClientOptions client_options;

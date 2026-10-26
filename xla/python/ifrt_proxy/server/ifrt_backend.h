@@ -20,22 +20,29 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <vector>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
 #include "absl/types/span.h"
+#include "xla/pjrt/profiling/device_time_measurement.h"
 #include "xla/python/ifrt/array.h"
+#include "xla/python/ifrt/array_spec.h"
 #include "xla/python/ifrt/client.h"
 #include "xla/python/ifrt/executable.h"
-#include "xla/python/ifrt/future.h"
 #include "xla/python/ifrt/host_callback.h"
+#include "xla/python/ifrt/serdes_any_version_accessor.h"
+#include "xla/python/ifrt/serdes_version.h"
+#include "xla/python/ifrt/user_context.h"
 #include "xla/python/ifrt_proxy/common/ifrt_service.pb.h"
 #include "xla/python/ifrt_proxy/server/host_buffer.h"
 #include "xla/python/ifrt_proxy/server/host_callback.h"
-#include "xla/tsl/concurrency/ref_count.h"
-#include "tsl/platform/threadpool.h"
+#include "xla/tsl/concurrency/future.h"
+#include "xla/tsl/platform/threadpool.h"
 
 namespace xla {
 namespace ifrt {
@@ -55,7 +62,8 @@ class BackendInterface {
   using Response = std::shared_ptr<IfrtResponse>;
 
   // Processes a given IFRT Request and returns a Future of an IfrtResponse.
-  virtual Future<Response> Process(std::unique_ptr<IfrtRequest> request) = 0;
+  virtual tsl::Future<Response> Process(
+      std::unique_ptr<IfrtRequest> request) = 0;
 };
 
 // IfrtBackend implements a backend that already has a linkable C++ client that
@@ -73,24 +81,87 @@ class IfrtBackend final : public BackendInterface {
   ~IfrtBackend() override;
 
   // IFRT Proxy version negotiated between the client and the server.
-  const IfrtProxyVersion& version() const { return version_; }
+  int32_t protocol_version() const { return version_.protocol_version(); }
 
-  Future<Response> Process(std::unique_ptr<IfrtRequest> request) override;
+  // IFRT SerDes version negotiated between the client and the server.
+  SerDesVersion ifrt_serdes_version() const {
+    return SerDesAnyVersionAccessor::Get(
+        SerDesVersionNumber(version_.ifrt_serdes_version_number()));
+  }
+
+  tsl::Future<Response> Process(std::unique_ptr<IfrtRequest> request) override;
 
  private:
-  // Generates unique handles for returning to the client. All object types
-  // currently use this single "handle space".
+  // Generates unique handles for returning to the client. Guaranteed to return
+  // handles that do not conflict with client-generated handles (via client-side
+  // RpcHelper). All object types currently use this single "handle space".
   class HandleGenerator {
    public:
-    uint64_t New();
+    explicit HandleGenerator(IfrtBackend* parent);
 
-    // Bulk allocates a given number of handles and saves them into the provided
-    // Span.
-    void BulkNew(absl::Span<uint64_t> handles);
+    uint64_t GenerateAtServer();
+
+    void GenerateAtServerBulk(absl::Span<uint64_t> result_handles);
 
    private:
+    IfrtBackend* const parent_;
     absl::Mutex mu_;
-    uint64_t current_ ABSL_GUARDED_BY(mu_) = 1;
+    uint64_t current_ ABSL_GUARDED_BY(mu_);
+  };
+
+  // Maps array handles to absl::StatusOr<RCReference<Array>>>.
+  // If an array handle is mapped to a non-OK status:
+  //   - The proxy-server typically returns the error for any operation (except
+  //     destroying the handle) when the proxy-client refers to that handle.
+  //   - Since the proxy-client's `Array` implementation is a wrapper around the
+  //     handle, the user gets an `Array` on which any blocking operation would
+  //     return the error. Any references to the `Array` in future operations
+  //     would propagate the error downstream.
+  class ArrayStore {
+   public:
+    // Allows adding more array handles to the mapping. More comments can be
+    // found where this class is defined.
+    class Reservation;
+
+    explicit ArrayStore(HandleGenerator* handle_generator);
+
+    // Returns the `absl::StatusOr<RCReference<Array>>>` that maps to `handle`.
+    // Returns a NOT_FOUND error if the handle is not found.
+    absl::StatusOr<xla::ifrt::ArrayRef> Find(uint64_t handle);
+
+    // Same as above but takes a list of handles. If any of the handles maps to
+    // an error (or are not found) returns the error corresponding to the first
+    // such handle.
+    absl::StatusOr<std::vector<xla::ifrt::ArrayRef>> Find(
+        absl::Span<const uint64_t> handles);
+
+    // Removes the given list of handles from the maintained mapping. Returns
+    // any handles that were already missing before the removal.
+    std::vector<uint64_t> EraseAndReturnMissing(
+        absl::Span<const uint64_t> handles);
+
+   private:
+    HandleGenerator* const handle_generator_;
+
+    // Adds handles[i] ==> arrays[i] to the map. CHECK-fails if the handles
+    // already exist in the map.
+    void Insert(absl::Span<const uint64_t> handles,
+                absl::Span<const xla::ifrt::ArrayRef> arrays)
+        ABSL_LOCKS_EXCLUDED(mu_);
+
+    // Adds handles[i] ==> status, for all handles[i] to the map. CHECK-fails if
+    // the handles already exist.
+    void Insert(absl::Span<const uint64_t> handles, const absl::Status& status)
+        ABSL_LOCKS_EXCLUDED(mu_);
+
+    absl::Mutex mu_;
+    absl::flat_hash_map<uint64_t, absl::StatusOr<xla::ifrt::ArrayRef>> arrays_
+        ABSL_GUARDED_BY(mu_);
+  };
+
+  struct ExecuteResult {
+    absl::flat_hash_map<xla::DeviceTimeMeasurement::DeviceType, absl::Duration>
+        device_time;
   };
 
   IfrtBackend(IfrtProxyVersion version, uint64_t session_id,
@@ -101,9 +172,11 @@ class IfrtBackend final : public BackendInterface {
   // that becomes ready when the function returns. If the thread pool is not
   // given, uses a default thread pool implementation that does not limit the
   // maximum number of threads.
-  Future<Response> AsyncExecute(
+  tsl::Future<Response> AsyncExecute(
       std::function<absl::StatusOr<Response>()> handle_fn,
       tsl::thread::ThreadPool* thread_pool = nullptr);
+
+  tsl::Future<Response> ProcessInternal(std::unique_ptr<IfrtRequest> request);
 
   //////////////////////////////////////////////////////////////////////
   // Handlers for individual requests
@@ -111,26 +184,34 @@ class IfrtBackend final : public BackendInterface {
 
   absl::StatusOr<Response> HandleInit(std::unique_ptr<IfrtRequest> request);
 
-  Future<Response> HandleCheckFutureRequest(
+  tsl::Future<Response> HandleCheckFutureRequest(
       std::unique_ptr<IfrtRequest> request);
 
-  Future<Response> HandleCheckValueReadyRequest(
+  tsl::Future<Response> HandleCheckValueReadyRequest(
       std::unique_ptr<IfrtRequest> request);
 
   absl::StatusOr<Response> HandleMakeArrayFromHostBufferRequest(
-      std::unique_ptr<IfrtRequest> request);
+      ArrayStore::Reservation& asr, std::unique_ptr<IfrtRequest> request);
+  absl::StatusOr<Response> HandleMakeArraysFromHostBufferShardsRequest(
+      ArrayStore::Reservation& asr, std::unique_ptr<IfrtRequest> request);
+  absl::StatusOr<Response> HandleMakeErrorArraysRequest(
+      ArrayStore::Reservation& asr, std::unique_ptr<IfrtRequest> request);
   absl::StatusOr<Response> HandleAssembleArrayFromSingleDeviceArraysRequest(
-      std::unique_ptr<IfrtRequest> request);
+      ArrayStore::Reservation& asr, std::unique_ptr<IfrtRequest> request);
   absl::StatusOr<Response> HandleRemapArraysRequest(
-      std::unique_ptr<IfrtRequest> request);
-  Future<Response> HandleCopyToHostBufferRequest(
+      ArrayStore::Reservation& asr, std::unique_ptr<IfrtRequest> request);
+  absl::StatusOr<Response> HandleBitcastArraysRequest(
+      ArrayStore::Reservation& asr, std::unique_ptr<IfrtRequest> request);
+  absl::StatusOr<Response> HandleReshardArraysRequest(
+      ArrayStore::Reservation& asr, std::unique_ptr<IfrtRequest> request);
+  tsl::Future<Response> HandleCopyToHostBufferRequest(
       std::unique_ptr<IfrtRequest> request);
   absl::StatusOr<Response> HandleDisassembleIntoSingleDeviceArraysRequest(
-      std::unique_ptr<IfrtRequest> request);
-  absl::StatusOr<Response> HandleReshardRequest(
-      std::unique_ptr<IfrtRequest> request);
+      ArrayStore::Reservation& asr, std::unique_ptr<IfrtRequest> request);
+  absl::StatusOr<Response> HandleCopyArraysRequest(
+      ArrayStore::Reservation& asr, std::unique_ptr<IfrtRequest> request);
   absl::StatusOr<Response> HandleFullyReplicatedShardRequest(
-      std::unique_ptr<IfrtRequest> request);
+      ArrayStore::Reservation& asr, std::unique_ptr<IfrtRequest> request);
   absl::StatusOr<Response> HandleDeleteArrayRequest(
       std::unique_ptr<IfrtRequest> request);
   absl::StatusOr<Response> HandleIsArrayDeletedRequest(
@@ -138,11 +219,22 @@ class IfrtBackend final : public BackendInterface {
   absl::StatusOr<Response> HandleDestructArrayRequest(
       std::unique_ptr<IfrtRequest> request);
 
-  Future<Response> HandleCompileRequest(std::unique_ptr<IfrtRequest> request);
+  tsl::Future<Response> HandleCompileRequest(
+      std::unique_ptr<IfrtRequest> request);
 
-  Future<Response> HandleLoadedExecutableMetadataRequest(
+  tsl::Future<Response> HandleLoadedExecutableMetadataRequest(
+      std::unique_ptr<IfrtRequest> request);
+  tsl::Future<Response> HandleLoadedExecutableMpmdMetadataRequest(
+      std::unique_ptr<IfrtRequest> request);
+  tsl::Future<Response> HandleLoadedExecutableCostAnalysisRequest(
+      std::unique_ptr<IfrtRequest> request);
+  tsl::Future<Response> HandleLoadedExecutableMpmdCostAnalysisRequest(
+      std::unique_ptr<IfrtRequest> request);
+  tsl::Future<Response> HandleLoadedExecutableHumanReadableProgramTextRequest(
       std::unique_ptr<IfrtRequest> request);
   absl::StatusOr<Response> HandleLoadedExecutableExecuteRequest(
+      ArrayStore::Reservation& asr, std::unique_ptr<IfrtRequest> request);
+  tsl::Future<Response> HandleLoadedExecutableFetchExecuteResultRequest(
       std::unique_ptr<IfrtRequest> request);
   absl::StatusOr<Response> HandleLoadedExecutableDeleteRequest(
       std::unique_ptr<IfrtRequest> request);
@@ -151,24 +243,49 @@ class IfrtBackend final : public BackendInterface {
   absl::StatusOr<Response> HandleLoadedExecutableDestructRequest(
       std::unique_ptr<IfrtRequest> request);
 
-  Future<Response> HandleLoadedHostCallbackPollRequest(
+  tsl::Future<Response> HandleLoadedHostCallbackPollRequest(
       std::unique_ptr<IfrtRequest> request);
   absl::StatusOr<Response> HandleLoadedHostCallbackReturnRequest(
       std::unique_ptr<IfrtRequest> request);
 
   absl::StatusOr<Response> HandleGetDefaultDeviceAssignmentRequest(
       std::unique_ptr<IfrtRequest> request);
+  absl::StatusOr<Response> HandleGetDefaultLayoutRequest(
+      std::unique_ptr<IfrtRequest> request);
+
+  //////////////////////////////////////////////////////////////////////
+  // Auxiliary/Helper methods for the handler methods above
+  //
+
+  tsl::Future<BackendInterface::Response> HandleCopyToStringHostBufferRequest(
+      std::unique_ptr<IfrtRequest> request);
 
   //////////////////////////////////////////////////////////////////////
   // Convenient methods for object lookups
   //
 
-  absl::StatusOr<std::shared_ptr<xla::ifrt::LoadedExecutable>>
-  GetLoadedExecutable(uint64_t handle);
+  struct LoadedExecutableWithInfo;
+  absl::StatusOr<std::shared_ptr<LoadedExecutableWithInfo>> GetLoadedExecutable(
+      uint64_t handle);
 
-  absl::StatusOr<tsl::RCReference<xla::ifrt::Array>> GetArray(uint64_t handle);
-  absl::StatusOr<tsl::RCReference<xla::ifrt::Array>> GetArrayLocked(
-      uint64_t handle) ABSL_SHARED_LOCKS_REQUIRED(arrays_mutex_);
+  //////////////////////////////////////////////////////////////////////////
+  // Methods for tracking destroyed user context IDs.
+  //
+
+  // Updates `response` with a sequence number and the destroyed user context
+  // IDs in `destroyed_user_context_ids_->ids`.
+  //
+  // The sequence number is strictly increasing and indicates the order of
+  // responses. It is sent as part of every valid response so that the client
+  // can determine when it has received all in-flight responses that potentially
+  // reference a deleted user context ID and it can apply the received
+  // `destroyed_user_context_ids_` to drop its own references to those user
+  // contexts.
+  //
+  // `destroyed_user_context_ids_->ids` will be cleared to avoid sending the
+  // same IDs again in the next response.
+  void UpdateResponseWithDestroyedUserContextIds(
+      IfrtBackend::Response& response);
 
   HandleGenerator handle_generator_;
 
@@ -179,16 +296,18 @@ class IfrtBackend final : public BackendInterface {
   const std::shared_ptr<HostBufferStore> host_buffer_store_;
 
   absl::Mutex futures_mutex_;
-  absl::flat_hash_map<uint64_t, Future<>> futures_
+  absl::flat_hash_map<uint64_t, tsl::Future<>> futures_
       ABSL_GUARDED_BY(futures_mutex_);
 
-  absl::Mutex arrays_mutex_;
-  absl::flat_hash_map<uint64_t, tsl::RCReference<xla::ifrt::Array>> arrays_
-      ABSL_GUARDED_BY(arrays_mutex_);
+  ArrayStore array_store_;
 
   absl::Mutex executables_mutex_;
-  absl::flat_hash_map<uint64_t, std::shared_ptr<xla::ifrt::LoadedExecutable>>
+  absl::flat_hash_map<uint64_t, std::shared_ptr<LoadedExecutableWithInfo>>
       executables_ ABSL_GUARDED_BY(executables_mutex_);
+
+  absl::Mutex execute_results_mutex_;
+  absl::flat_hash_map<uint64_t, tsl::Future<ExecuteResult>> execute_results_
+      ABSL_GUARDED_BY(execute_results_mutex_);
 
   absl::Mutex host_callback_queues_mutex_;
   absl::flat_hash_map<uint64_t, std::shared_ptr<RemoteLoadedHostCallbackQueue>>
@@ -205,6 +324,21 @@ class IfrtBackend final : public BackendInterface {
   // Use a separate thread pool for compilation as XLA compilation often
   // requires a bigger stack.
   tsl::thread::ThreadPool compile_thread_pool_;
+
+  class InOrderRequestsProcessor;
+  std::unique_ptr<InOrderRequestsProcessor> in_order_requests_processor_;
+
+  // Tracks destroyed user context IDs. `ids` contains the ID of `UserContext`s
+  // destroyed since the last response identified by `next_seq_num` - 1.
+  //
+  // Uses a shared pointer because `IfrtBackendUserContext` may outlive the
+  // `IfrtBackend`.
+  struct DestroyedUserContextIds {
+    absl::Mutex mutex;
+    int64_t next_seq_num ABSL_GUARDED_BY(mutex) = 0;
+    std::vector<UserContextId> ids ABSL_GUARDED_BY(mutex);
+  };
+  std::shared_ptr<DestroyedUserContextIds> destroyed_user_context_ids_;
 };
 
 }  // namespace proxy

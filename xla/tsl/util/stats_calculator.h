@@ -20,6 +20,7 @@ limitations under the License.
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <map>
 #include <sstream>
@@ -93,7 +94,9 @@ class Stat {
       *stream << "count=0";
     } else if (all_same()) {
       *stream << "count=" << count_ << " curr=" << newest_;
-      if (count_ > 1) *stream << "(all same)";
+      if (count_ > 1) {
+        *stream << "(all same)";
+      }
     } else {
       *stream << "count=" << count_ << " first=" << first_
               << " curr=" << newest_ << " min=" << min_ << " max=" << max_
@@ -115,6 +118,41 @@ class Stat {
   int64_t count_ = 0;
   ValueType sum_ = 0;
   HighPrecisionValueType squared_sum_ = 0;
+};
+
+// A `StatWithPercentiles` inherited from `Stat`, also keeps track of the
+// values added and can be used to compute the percentile values.
+template <typename ValueType, typename HighPrecisionValueType = double>
+class StatWithPercentiles : public Stat<ValueType, HighPrecisionValueType> {
+ public:
+  void UpdateStat(ValueType v) {
+    Stat<ValueType, HighPrecisionValueType>::UpdateStat(v);
+    values_.push_back(v);
+  }
+
+  // Returns the percentile value.
+  ValueType percentile(int percentile) const {
+    if (percentile < 0 || percentile > 100 || values_.empty()) {
+      return std::numeric_limits<ValueType>::quiet_NaN();
+    }
+    std::vector<ValueType> values = values_;
+    if (percentile == 100) {
+      return values[values.size() - 1];
+    }
+    std::nth_element(values.begin(),
+                     values.begin() + values.size() * percentile / 100,
+                     values.end());
+    return values[values.size() * percentile / 100];
+  }
+
+  void OutputToStream(std::ostream* stream) const {
+    Stat<ValueType, HighPrecisionValueType>::OutputToStream(stream);
+    *stream << " p5=" << percentile(5) << " median=" << percentile(50)
+            << " p95=" << percentile(95);
+  }
+
+ private:
+  std::vector<ValueType> values_;
 };
 
 // A StatsCalculator assists in performance analysis of Graph executions.
@@ -181,12 +219,15 @@ class StatsCalculator {
                     int64_t run_order, int64_t rel_end_us, int64_t mem_used);
 
  private:
+  // Orders the nodes in the details_ map by the given sorting metric. The
+  // details vector is populated with pointers to the Detail objects in the
+  // details_ map.
   void OrderNodesByMetric(SortingMetric sorting_metric,
                           std::vector<const Detail*>* details) const;
 
   std::string HeaderString(const std::string& title) const;
   std::string ColumnString(const Detail& detail,
-                           const int64_t cumulative_stat_on_node,
+                           int64_t cumulative_stat_on_node,
                            const Stat<int64_t>& stat) const;
 
   Stat<int64_t> run_total_us_;

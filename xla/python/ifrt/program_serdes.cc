@@ -15,10 +15,7 @@ limitations under the License.
 
 #include "xla/python/ifrt/program_serdes.h"
 
-#include <memory>
-
-#include "absl/status/statusor.h"
-#include "llvm/Support/Casting.h"
+#include "xla/python/ifrt/rtti.h"
 #include "xla/python/ifrt/serdes.h"
 #include "xla/util.h"
 

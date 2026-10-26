@@ -15,56 +15,56 @@ limitations under the License.
 #include "xla/service/gpu/amdgpu_compiler.h"
 
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "llvm/IR/Module.h"
+#include "mlir/IR/MLIRContext.h"
+#include "xla/backends/gpu/transforms/algebraic_simplifier.h"
+#include "xla/backends/gpu/transforms/conv_padding_legalization.h"
+#include "xla/backends/gpu/transforms/conv_rewriter.h"
+#include "xla/backends/gpu/transforms/cudnn_fused_conv_rewriter.h"
+#include "xla/backends/gpu/transforms/triangular_solve_rewriter.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/service/algebraic_simplifier.h"
+#include "xla/hlo/pass/hlo_pass_fix.h"
+#include "xla/hlo/pass/hlo_pass_pipeline.h"
+#include "xla/hlo/transforms/simplifiers/algebraic_simplifier.h"
+#include "xla/hlo/transforms/simplifiers/convert_mover.h"
+#include "xla/hlo/transforms/simplifiers/dot_dimension_merger.h"
+#include "xla/hlo/transforms/simplifiers/float_normalization.h"
+#include "xla/hlo/transforms/simplifiers/hlo_constant_folding.h"
+#include "xla/hlo/transforms/simplifiers/reshape_mover.h"
+#include "xla/hlo/transforms/simplifiers/tuple_simplifier.h"
 #include "xla/service/call_inliner.h"
-#include "xla/service/convert_mover.h"
-#include "xla/service/dot_dimension_merger.h"
-#include "xla/service/float_normalization.h"
+#include "xla/service/compilation_stats.h"
+#include "xla/service/compiler.h"
 #include "xla/service/float_support.h"
-#include "xla/service/gpu/autotuner_util.h"
-#include "xla/service/gpu/conv_algorithm_picker.h"
-#include "xla/service/gpu/cublas_pad_for_gemms.h"
-#include "xla/service/gpu/cublas_padding_requirements.h"
-#include "xla/service/gpu/cudnn_fused_conv_rewriter.h"
-#include "xla/service/gpu/cusolver_rewriter.h"
-#include "xla/service/gpu/gemm_algorithm_picker.h"
+#include "xla/service/gpu/alias_info.h"
 #include "xla/service/gpu/gpu_compiler.h"
-#include "xla/service/gpu/gpu_conv_padding_legalization.h"
-#include "xla/service/gpu/gpu_conv_rewriter.h"
-#include "xla/service/gpu/gpu_sort_rewriter.h"
-#include "xla/service/gpu/llvm_gpu_backend/gpu_backend_lib.h"
+#include "xla/service/gpu/llvm_gpu_backend/amdgpu_backend.h"
 #include "xla/service/gpu/target_constants.h"
-#include "xla/service/gpu/triangular_solve_rewriter.h"
-#include "xla/service/hlo_constant_folding.h"
+#include "xla/service/gpu_topology.h"
 #include "xla/service/hlo_module_config.h"
-#include "xla/service/hlo_pass_fix.h"
-#include "xla/service/hlo_pass_pipeline.h"
 #include "xla/service/hlo_verifier.h"
-#include "xla/service/reshape_mover.h"
-#include "xla/service/tuple_simplifier.h"
 #include "xla/stream_executor/device_description.h"
-#include "xla/stream_executor/device_memory_allocator.h"
 #include "xla/stream_executor/dnn.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "xla/stream_executor/rocm/rocm_platform_id.h"
+#include "xla/stream_executor/semantic_version.h"
+#include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/platform/threadpool.h"
 #include "xla/util.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/statusor.h"
-#include "tsl/platform/threadpool.h"
-
-#if TENSORFLOW_USE_ROCM
-#include "rocm/rocm_config.h"
-#endif
+#include "xla/xla.pb.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace gpu {
@@ -98,35 +98,31 @@ class ConvBfloat16Support : public FloatSupport {
 
 }  // namespace
 
-int32_t AMDGPUCompiler::GetToolkitVersion() const {
-#if TENSORFLOW_USE_ROCM
-  return TF_ROCM_VERSION;
-#endif
-  LOG(FATAL) << "Failed to get ROCm version.";
-}
-
 absl::Status AMDGPUCompiler::OptimizeHloConvolutionCanonicalization(
-    HloModule* hlo_module, se::GpuComputeCapability gpu_version,
+    HloModule* hlo_module, const se::GpuComputeCapability& gpu_version,
     se::dnn::VersionInfo dnn_version,
-    se::DeviceMemoryAllocator* device_allocator) {
+    const se::SemanticVersion& toolkit_version,
+    CompilationStats* compilation_stats) {
   // Convert convolutions into CustomCalls to MIOpen, then canonicalize them
   // (PadInsertion).
-  HloPassPipeline pipeline("conv_canonicalization");
+  HloPassPipeline pipeline("conv_canonicalization", compilation_stats);
   pipeline.AddInvariantCheckerDebug<HloVerifier>(
       /*layout_sensitive=*/false,
       /*allow_mixed_precision=*/false);
 
   // Convert unsupported bf16 convolutions to f32.
-  ConvBfloat16Support conv_bf16_support(
-      std::get<se::RocmComputeCapability>(gpu_version));
+  ConvBfloat16Support conv_bf16_support(*gpu_version.rocm_compute_capability());
   pipeline.AddPass<FloatNormalization>(&conv_bf16_support);
 
-  pipeline.AddPass<GpusolverRewriter>();
-  pipeline.AddPass<GpuConvRewriter>(gpu_version);
-  pipeline.AddPass<GpuConvPaddingLegalization>();
-  auto rcc = std::get<se::RocmComputeCapability>(gpu_version);
-  pipeline.AddPass<CudnnFusedConvRewriter>(rcc, dnn_version,
-                                           GetToolkitVersion());
+  if (!hlo_module->config()
+           .debug_options()
+           .xla_gpu_experimental_disable_binary_libraries()) {
+    pipeline.AddPass<ConvRewriter>(gpu_version);
+    pipeline.AddPass<ConvPaddingLegalization>();
+    auto rcc = gpu_version.rocm_compute_capability();
+    pipeline.AddPass<CudnnFusedConvRewriter>(*rcc, dnn_version,
+                                             toolkit_version);
+  }
 
   // The conv padding/vectorization passes which we need to get rid of.  They
   // also leave behind unnecessary tuple/get-tuple-element pairs that
@@ -134,16 +130,17 @@ absl::Status AMDGPUCompiler::OptimizeHloConvolutionCanonicalization(
   pipeline.AddPass<CallInliner>();
   pipeline.AddPass<TupleSimplifier>();
 
-  // tf2xla bridge, DepthwiseConvolutionConverter and GpuConvRewriter
+  // tf2xla bridge, DepthwiseConvolutionConverter and ConvRewriter
   // introduces reshapes and transposes that can be eliminated using
   // AlgebraicSimplifier  We run algsimp to a fixed point.
-  AlgebraicSimplifierOptions options =
-      GetAlgebraicSimplifierOptions(hlo_module->config());
-  options.set_enable_conv_operand_swap(false);
-  options.set_enable_unconditional_reduce_of_concat_replacement(false);
-  pipeline.AddPass<HloPassFix<AlgebraicSimplifier>>(options);
+  AlgebraicSimplifierOptions algsimp_options = GetAlgebraicSimplifierOptions(
+      AlgebraicSimplifierMode::kGpuConvoluationCanonicalization,
+      hlo_module->config().debug_options(),
+      /*is_rocm=*/true);
+  pipeline.AddPass<HloPassFix<GpuAlgebraicSimplifier>>(algsimp_options,
+                                                       gpu_version);
 
-  // tf2xla bridge, DepthwiseConvolutionConverter, GpuConvRewriter, and
+  // tf2xla bridge, DepthwiseConvolutionConverter, ConvRewriter, and
   // CudnnSimplifyPadding introduce reshapes and transposes.  Run ReshapeMover
   // to a fixed point.  Include algsimp because ReshapeMover relies on it.
   [&, &pipeline = pipeline.AddPass<HloPassFix<HloPassPipeline>>(
@@ -151,7 +148,7 @@ absl::Status AMDGPUCompiler::OptimizeHloConvolutionCanonicalization(
     ReshapeMoverOptions reshape_mover_options;
     reshape_mover_options.reshape_of_1d_broadcast_is_cheap = true;
     pipeline.AddPass<ReshapeMover>(reshape_mover_options);
-    pipeline.AddPass<AlgebraicSimplifier>(options);
+    pipeline.AddPass<GpuAlgebraicSimplifier>(algsimp_options, gpu_version);
   }();
 
   // The reshapes and transposes can possibly be eliminated using
@@ -162,85 +159,55 @@ absl::Status AMDGPUCompiler::OptimizeHloConvolutionCanonicalization(
   [&, &pipeline = pipeline.AddPass<HloPassFix<HloPassPipeline>>(
           "simplify_after_conv_canonicalization")] {
     pipeline.AddPass<ConvertMover>();
-    pipeline.AddPass<AlgebraicSimplifier>(options);
+    pipeline.AddPass<GpuAlgebraicSimplifier>(algsimp_options, gpu_version);
   }();
 
-  // GpuConvRewriter, GpuConvPaddingLegalization and
+  // ConvRewriter, ConvPaddingLegalization and
   // CudnnConvPadForTensorCores may add instructions which can be simplified
   // by constant folding.
   pipeline.AddPass<HloConstantFolding>();
-  TF_RETURN_IF_ERROR(pipeline.Run(hlo_module).status());
+  ABSL_RETURN_IF_ERROR(
+      pipeline
+          .Run(hlo_module,
+               /*execution_threads=*/{HloInstruction::kMainExecutionThread})
+          .status());
 
   return absl::OkStatus();
 }
 
 absl::Status AMDGPUCompiler::OptimizeHloPostLayoutAssignment(
     HloModule* hlo_module, se::StreamExecutor* stream_exec,
-    const CompileOptions& options, const TargetConfig& gpu_target_config,
-    tsl::thread::ThreadPool* thread_pool) {
-  HloPassPipeline pre_pipeline("AMDGPU post-layout_assignment part 1");
-
-  auto rocm_compute_capability = std::get<se::RocmComputeCapability>(
-      gpu_target_config.device_description.gpu_compute_capability());
+    const CompileOptions& options, const GpuTopology& gpu_topology,
+    const GpuAliasInfo* alias_info, tsl::thread::ThreadPool* thread_pool,
+    CompilationStats* compilation_stats, mlir::MLIRContext* mlir_context) {
+  HloPassPipeline pre_pipeline("AMDGPU post-layout_assignment part 1",
+                               compilation_stats);
 
   pre_pipeline.AddPass<DotDimensionMerger>();
 
-  for (const auto& req : HipblasPaddingRequirements) {
-    pre_pipeline.AddPass<CublasPadForGemms>(rocm_compute_capability,
-                                            req.data_type, req.multiple_of);
-  }
-  // Padding a gemm operand that's a constant results in pad(constant).  Run
-  // constant-folding to simplify this into a new constant.
-  pre_pipeline.AddPass<HloConstantFolding>();
-  TF_RETURN_IF_ERROR(pre_pipeline.Run(hlo_module).status());
+  ABSL_RETURN_IF_ERROR(
+      pre_pipeline
+          .Run(hlo_module,
+               /*execution_threads=*/{HloInstruction::kMainExecutionThread})
+          .status());
 
-  TF_RETURN_IF_ERROR(GpuCompiler::OptimizeHloPostLayoutAssignment(
-      hlo_module, stream_exec, options, gpu_target_config, thread_pool));
+  ABSL_RETURN_IF_ERROR(GpuCompiler::OptimizeHloPostLayoutAssignment(
+      hlo_module, stream_exec, options, gpu_topology, alias_info, thread_pool,
+      compilation_stats, mlir_context));
 
-  HloPassPipeline post_pipeline("AMDGPU post-layout_assignment part 2");
+  HloPassPipeline post_pipeline("AMDGPU post-layout_assignment part 2",
+                                compilation_stats);
 
   // Transform TriangularSolve ops into custom-calls, so we can add temp
   // memory.
   post_pipeline.AddPass<TriangularSolveRewriter>();
 
-  TF_RETURN_IF_ERROR(post_pipeline.Run(hlo_module).status());
+  ABSL_RETURN_IF_ERROR(
+      post_pipeline
+          .Run(hlo_module,
+               /*execution_threads=*/{HloInstruction::kMainExecutionThread})
+          .status());
 
-  return absl::OkStatus();
-}
-
-// Linearize collective schedule under if online autotuning of convolutions is
-// enabled.
-bool AMDGPUCompiler::RequiresCollectiveScheduleLinearizer(
-    const HloModule* module, se::StreamExecutor* stream_exec) {
-  if (stream_exec == nullptr || !GpuConvAlgorithmPicker::IsEnabled(module)) {
-    return false;
-  }
-  for (const HloComputation* comp : module->MakeNonfusionComputations()) {
-    for (const HloInstruction* inst : comp->instructions()) {
-      if (GpuConvAlgorithmPicker::IsCandidate(inst)) {
-        return true;
-      }
-    }
-  }
-  // No convolution auto-tuning candidates found in the module.
-  return false;
-}
-
-absl::Status AMDGPUCompiler::AddConvAndGemmAutotuningPasses(
-    HloPassPipeline* pipeline, HloModule* hlo_module,
-    AutotuneConfig& autotune_config, tsl::thread::ThreadPool* thread_pool) {
-  if (GpuConvAlgorithmPicker::IsEnabled(hlo_module)) {
-    pipeline->AddPass<GpuConvAlgorithmPicker>(autotune_config);
-  }
-  pipeline->AddPass<GemmAlgorithmPicker>(autotune_config);
-  return absl::OkStatus();
-}
-
-absl::Status AMDGPUCompiler::AddCustomKernelReplacementPasses(
-    HloPassPipeline* pipeline, const DebugOptions& debug_options) {
-  if (debug_options.xla_gpu_enable_cub_radix_sort()) {
-    pipeline->AddPass<GpuSortRewriter>();
-  }
   return absl::OkStatus();
 }
 
@@ -249,31 +216,39 @@ AMDGPUCompiler::AMDGPUCompiler()
                   amdgpu::TargetTriple(), amdgpu::DataLayout()) {}
 
 absl::StatusOr<GpuCompiler::BackendCompileResult>
-AMDGPUCompiler::CompileTargetBinary(const HloModuleConfig& module_config,
-                                    llvm::Module* llvm_module,
-                                    se::GpuComputeCapability gpu_version,
-                                    bool relocatable,
-                                    const HloModule* debug_module,
-                                    const CompileOptions& options) {
+AMDGPUCompiler::CompileTargetBinary(
+    const HloModuleConfig& module_config, llvm::Module* llvm_module,
+    const se::DeviceDescription& device_description, bool relocatable,
+    const HloModule* debug_module, std::optional<int> shard_number) {
   if (relocatable) {
     return Unimplemented("relocatable target binary is not implemented");
   }
 
-  std::vector<uint8_t> hsaco;
+  amdgpu::HsacoResult hsaco_result;
   {
     // This may print multiple lines per HLO compilation because of the
     // parallelized compilation of LLVM modules.
     XLA_SCOPED_LOGGING_TIMER_IF(
         "AMDGPUCompiler::CompileTargetBinary - CompileToHsaco",
-        !options.is_autotuning_compilation);
-    TF_ASSIGN_OR_RETURN(
-        hsaco, amdgpu::CompileToHsaco(llvm_module, gpu_version,
-                                      module_config.debug_options(),
-                                      module_config.compilation_cache_key()));
+        module_config.debug_options().xla_enable_scoped_logging_timers());
+    // NODE: module_config.compilation_cache_key() is not used in the current
+    // implementation of CompileToHsaco since it invalidates the persistent
+    // file cache.
+    ABSL_ASSIGN_OR_RETURN(
+        hsaco_result,
+        amdgpu::CompileToHsaco(llvm_module,
+                               device_description.gpu_compute_capability(),
+                               module_config.debug_options(),
+                               "" /*module_config.compilation_cache_key()*/));
   }
 
-  return BackendCompileResult{"", std::move(hsaco)};
+  return BackendCompileResult{"", std::move(hsaco_result.hsaco),
+                              std::move(hsaco_result.module_stats)};
 }
 
+std::vector<std::string> AMDGPUCompiler::GetLLVMCommandLineOptions(
+    const DebugOptions& debug_options) const {
+  return amdgpu::GetAMDGPUBackendOptions(debug_options);
+}
 }  // namespace gpu
 }  // namespace xla

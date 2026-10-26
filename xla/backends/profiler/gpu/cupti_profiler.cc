@@ -15,14 +15,19 @@ limitations under the License.
 
 #include "xla/backends/profiler/gpu/cupti_profiler.h"
 
-#include "absl/cleanup/cleanup.h"
-#include "absl/container/flat_hash_map.h"
-#include "absl/container/flat_hash_set.h"
+#include <cstdint>
+#include <string>
+
+#include "absl/log/log.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/host_info.h"
 #include "tsl/platform/logging.h"
 #include "tsl/platform/macros.h"
+#include "xla/backends/profiler/gpu/cupti_interface.h"
+#include "xla/backends/profiler/gpu/cupti_utils.h"
 
 namespace xla {
 namespace profiler {
@@ -35,11 +40,11 @@ namespace {
 
 }  // namespace
 
-CuptiProfiler::CuptiProfiler(CuptiInterface *cupti_interface)
+CuptiProfiler::CuptiProfiler(CuptiInterface* cupti_interface)
     : num_gpus_(NumGpus()) {}
 
-/* static */ CuptiProfiler *CuptiProfiler::GetCuptiProfilerSingleton() {
-  static auto *singleton = new CuptiProfiler(GetCuptiInterface());
+/* static */ CuptiProfiler* CuptiProfiler::GetCuptiProfilerSingleton() {
+  static auto* singleton = new CuptiProfiler(GetCuptiInterface());
   return singleton;
 }
 
@@ -60,13 +65,13 @@ int CuptiProfiler::NumGpus() {
   return num_gpus;
 }
 
-void CuptiProfiler::Enable(const CuptiProfilerOptions &option) {}
+void CuptiProfiler::Enable(const CuptiProfilerOptions& option) {}
 
 void CuptiProfiler::Disable() {}
 
 /*static*/ uint64_t CuptiProfiler::GetTimestamp() {
   uint64_t tsc;
-  CuptiInterface *cupti_interface = GetCuptiInterface();
+  CuptiInterface* cupti_interface = GetCuptiInterface();
   if (cupti_interface && cupti_interface->GetTimestamp(&tsc) == CUPTI_SUCCESS) {
     return tsc;
   }

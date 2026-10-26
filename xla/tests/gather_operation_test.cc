@@ -13,22 +13,39 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "absl/types/span.h"
 #include "xla/array.h"
-#include "xla/client/xla_builder.h"
+#include "xla/error_spec.h"
 #include "xla/execution_options_util.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/literal.h"
 #include "xla/literal_util.h"
-#include "xla/status_macros.h"
-#include "xla/test.h"
-#include "xla/tests/client_library_test_base.h"
-#include "xla/tests/hlo_test_base.h"
-#include "xla/tests/test_macros.h"
+#include "xla/service/hlo_module_config.h"
+#include "xla/service/hlo_runner_interface.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/tests/literal_test_util.h"
+#include "xla/tests/xla_test_backend_predicates.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
 
 namespace xla {
 namespace {
 
-using std::nullopt;
-
-class GatherOperationTest : public HloTestBase {
+class GatherOperationTest : public HloInterpreterReferenceMixin<HloTestBase> {
  protected:
   void RunTest(const std::string& hlo_text, Literal* operand,
                Literal* start_indices) {
@@ -40,11 +57,11 @@ class GatherOperationTest : public HloTestBase {
     config.set_debug_options(GetDebugOptionsForTest());
     TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                             ParseAndReturnVerifiedModule(hlo_text, config));
-    EXPECT_TRUE(RunAndCompare(std::move(module), args, nullopt));
+    EXPECT_TRUE(RunAndCompare(std::move(module), args, std::nullopt));
   }
 };
 
-XLA_TEST_F(GatherOperationTest, TensorFlowGatherV1) {
+TEST_F(GatherOperationTest, TensorFlowGatherV1) {
   const std::string hlo_text = R"(
 HloModule TensorFlowGatherV1
 
@@ -65,7 +82,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, BatchDimInMiddle) {
+TEST_F(GatherOperationTest, BatchDimInMiddle) {
   // Reverse the middle dimension (dim 1).
   const std::string hlo_text = R"(
 HloModule BatchDimInMiddle
@@ -89,7 +106,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, TensorFlowGatherV2) {
+TEST_F(GatherOperationTest, TensorFlowGatherV2) {
   const std::string hlo_text = R"(
 HloModule TensorFlowGatherV2
 
@@ -110,7 +127,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, TensorFlowGatherMultipleBatchDims) {
+TEST_F(GatherOperationTest, TensorFlowGatherMultipleBatchDims) {
   const std::string hlo_text = R"(
 HloModule TensorFlowGatherMultipleBatchDims
 
@@ -131,7 +148,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, TensorFlowGatherNdMultipleBatchDims_0) {
+TEST_F(GatherOperationTest, TensorFlowGatherNdMultipleBatchDims_0) {
   const std::string hlo_text = R"(
 HloModule TensorFlowGatherNdMultipleBatchDims
 
@@ -153,7 +170,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, TensorFlowGatherNdMultipleBatchDims_1) {
+TEST_F(GatherOperationTest, TensorFlowGatherNdMultipleBatchDims_1) {
   const std::string hlo_text = R"(
 HloModule TensorFlowGatherNdMultipleBatchDims
 
@@ -175,7 +192,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, TensorFlowGatherNd) {
+TEST_F(GatherOperationTest, TensorFlowGatherNd) {
   const std::string hlo_text = R"(
 HloModule TensorFlowGatherNd
 
@@ -198,7 +215,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, TensorFlowGatherNdNonDefaultIndexVectorDim) {
+TEST_F(GatherOperationTest, TensorFlowGatherNdNonDefaultIndexVectorDim) {
   const std::string hlo_text = R"(
 HloModule TensorFlowGatherNd
 
@@ -221,7 +238,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, DynamicSlice) {
+TEST_F(GatherOperationTest, DynamicSlice) {
   const char* hlo_text = R"(
 HloModule DynamicSlice
 
@@ -242,7 +259,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, BatchDynamicSlice) {
+TEST_F(GatherOperationTest, BatchDynamicSlice) {
   const std::string hlo_text = R"(
 HloModule BatchDynamicSlice
 
@@ -263,7 +280,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, ZeroDimBounds) {
+TEST_F(GatherOperationTest, ZeroDimBounds) {
   const char* hlo_text = R"(
 HloModule TensorFlowGatherV1
 
@@ -283,7 +300,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, OutOfBoundsIndex) {
+TEST_F(GatherOperationTest, OutOfBoundsIndex) {
   // Out of bounds indices must not crash, and the indices in range should
   // produce the same values across all backends.
 
@@ -311,10 +328,10 @@ ENTRY main {
 
 // The next 2 tests uses data types that require extra steps on some backends so
 // only run them on known good backends.
-#if defined(XLA_TEST_BACKEND_GPU) || defined(XLA_TEST_BACKEND_CPU) || \
-    defined(XLA_TEST_BACKEND_INTERPRETER)
-
-XLA_TEST_F(GatherOperationTest, OutOfBoundsIndex64Bit) {
+TEST_F(GatherOperationTest, OutOfBoundsIndex64Bit) {
+  if (!test::DeviceTypeIsOneOf({test::kCpu, test::kGpu, test::kInterpreter})) {
+    GTEST_SKIP();
+  }
   // Out of bounds indices must not crash, even when the value is of a type
   // larger than needed to access all values in the input, and the indices
   // produce the same values across all backends.
@@ -341,7 +358,10 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, TooSmallIndex8Bit) {
+TEST_F(GatherOperationTest, TooSmallIndex8Bit) {
+  if (!test::DeviceTypeIsOneOf({test::kCpu, test::kGpu, test::kInterpreter})) {
+    GTEST_SKIP();
+  }
   // Indices of a type too small to index all locations in gather should not
   // fail.
 
@@ -369,9 +389,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-#endif
-
-XLA_TEST_F(GatherOperationTest, OutOfBoundsUnsignedIndex) {
+TEST_F(GatherOperationTest, OutOfBoundsUnsignedIndex) {
   // Out of bounds indices must not crash, and the indices in range should
   // produce the same values across all backends.
 
@@ -397,7 +415,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, NegativeIndex) {
+TEST_F(GatherOperationTest, NegativeIndex) {
   // Negative indices must not crash, and the indices in range should produce
   // the same values across all backends.
 
@@ -428,7 +446,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, NegativeIndexIntoUnsignedOperand) {
+TEST_F(GatherOperationTest, NegativeIndexIntoUnsignedOperand) {
   // Negative indices must not crash, and the indices in range should produce
   // the same values across all backends.
 
@@ -459,7 +477,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, OneScalarIndex) {
+TEST_F(GatherOperationTest, OneScalarIndex) {
   const char* hlo_text = R"(
 HloModule OneScalarIndex
 
@@ -480,7 +498,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, ScalarResult) {
+TEST_F(GatherOperationTest, ScalarResult) {
   const char* hlo_text = R"(
 HloModule ScalarResult
 
@@ -500,7 +518,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, ZeroSizedResult) {
+TEST_F(GatherOperationTest, ZeroSizedResult) {
   const std::string hlo_text = R"(
 HloModule ZeroSizedResult
 
@@ -521,7 +539,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, FusedTensorFlowGatherV2) {
+TEST_F(GatherOperationTest, FusedTensorFlowGatherV2) {
   const std::string hlo_text = R"(
 HloModule FusedTensorFlowGatherV2
 
@@ -545,7 +563,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, FusedTensorFlowGatherMultipleBatchDims) {
+TEST_F(GatherOperationTest, FusedTensorFlowGatherMultipleBatchDims) {
   const std::string hlo_text = R"(
 HloModule FusedTensorFlowGatherMultipleBatchDims
 
@@ -569,7 +587,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, FusedTensorFlowGatherNdMultipleBatchDims) {
+TEST_F(GatherOperationTest, FusedTensorFlowGatherNdMultipleBatchDims) {
   const std::string hlo_text = R"(
 HloModule FusedTensorFlowGatherNdMultipleBatchDims
 
@@ -594,7 +612,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, FusedTensorFlowGatherNd) {
+TEST_F(GatherOperationTest, FusedTensorFlowGatherNd) {
   const std::string hlo_text = R"(
 HloModule FusedTensorFlowGatherNd
 
@@ -620,8 +638,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest,
-           FusedTensorFlowGatherNdNonDefaultIndexVectorDim) {
+TEST_F(GatherOperationTest, FusedTensorFlowGatherNdNonDefaultIndexVectorDim) {
   const std::string hlo_text = R"(
 HloModule FusedTensorFlowGatherNd
 
@@ -647,7 +664,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, FusedDynamicSlice) {
+TEST_F(GatherOperationTest, FusedDynamicSlice) {
   const char* hlo_text = R"(
 HloModule FusedDynamicSlice
 
@@ -671,7 +688,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, FusedBatchDynamicSlice) {
+TEST_F(GatherOperationTest, FusedBatchDynamicSlice) {
   const std::string hlo_text = R"(
 HloModule FusedBatchDynamicSlice
 
@@ -695,7 +712,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, GatherFromScalar) {
+TEST_F(GatherOperationTest, GatherFromScalar) {
   const std::string hlo_text = R"(
 HloModule GatherFromScalar
 
@@ -715,7 +732,7 @@ ENTRY main {
   RunTest(hlo_text, &operand, &start_indices);
 }
 
-XLA_TEST_F(GatherOperationTest, GatherFromScalarNonZeroIndices) {
+TEST_F(GatherOperationTest, GatherFromScalarNonZeroIndices) {
   const std::string hlo_text = R"(
 HloModule GatherFromScalar
 
@@ -733,11 +750,9 @@ ENTRY main {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{0, 0}));
 }
 
-class GatherClientLibraryTest : public ClientLibraryTestBase {};
+using GatherOperationWithoutReferenceTest = HloTestBase;
 
-// Disabled on interpreter since ExecuteAsyncOnStream is not supported.
-XLA_TEST_F(GatherClientLibraryTest,
-           DISABLED_ON_INTERPRETER(DISABLED_ON_GPU(Basic))) {
+TEST_F(GatherOperationWithoutReferenceTest, Basic) {
   // We create this HLO, but using the XlaBuilder API.
   //
   // ENTRY main {
@@ -765,34 +780,32 @@ XLA_TEST_F(GatherClientLibraryTest,
   dim_numbers.set_index_vector_dim(1);
   Gather(operand, indices, dim_numbers, {1, 3});
 
+  TF_ASSERT_OK_AND_ASSIGN(const XlaComputation computation, builder.Build());
+  const ExecutionOptions execution_options = CreateDefaultExecutionOptions();
+  TF_ASSERT_OK_AND_ASSIGN(
+      HloModuleConfig module_config,
+      HloModule::CreateModuleConfigFromProto(computation.proto(),
+                                             execution_options.debug_options(),
+                                             &execution_options));
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      HloModule::CreateFromProto(computation.proto(), module_config));
+  TF_ASSERT_OK(verifier().Run(module.get()).status());
+
+  Literal operand_arg =
+      LiteralUtil::CreateR2<int32_t>({{1, 2, 3}, {4, 5, 6}, {7, 8, 9}});
+  Literal indices_arg = LiteralUtil::CreateR1<int32_t>({0, 2});
+  TF_ASSERT_OK_AND_ASSIGN(
+      const Literal result_literal,
+      test_runner().Execute(std::move(module), {&operand_arg, &indices_arg},
+                            /*run_hlo_passes=*/true));
+
   std::vector<int32_t> expected = {};
-  TF_ASSERT_OK_AND_ASSIGN(
-      std::unique_ptr<GlobalData> operand_arg,
-      client_->TransferToServer(
-          LiteralUtil::CreateR2<int32_t>({{1, 2, 3}, {4, 5, 6}, {7, 8, 9}})));
-  TF_ASSERT_OK_AND_ASSIGN(
-      std::unique_ptr<GlobalData> indices_arg,
-      client_->TransferToServer(LiteralUtil::CreateR1<int32_t>({0, 2})));
-  TF_ASSERT_OK_AND_ASSIGN(std::vector<xla::DeviceHandle> devices,
-                          client_->GetDeviceHandles(1));
-  xla::ExecutionOptions execution_options = CreateDefaultExecutionOptions();
-  *execution_options.add_device_handles() = devices[0];
-  TF_ASSERT_OK_AND_ASSIGN(XlaComputation computation, builder.Build());
-  std::vector<xla::Client::XlaComputationInstance> computation_instances = {
-      {computation,
-       {operand_arg.get(), indices_arg.get()},
-       execution_options,
-       /*execution_profile=*/nullptr}};
-  TF_ASSERT_OK_AND_ASSIGN(
-      std::vector<std::unique_ptr<xla::GlobalData>> result_data,
-      client_->ExecuteParallel(computation_instances));
-  TF_ASSERT_OK_AND_ASSIGN(Literal result_literal,
-                          client_->Transfer(*(result_data[0])));
   LiteralTestUtil::ExpectR2Equal<int32_t>({{1, 2, 3}, {7, 8, 9}},
                                           result_literal);
 }
 
-XLA_TEST_F(GatherOperationTest, b_301618442_case1) {
+TEST_F(GatherOperationTest, b_301618442_case1) {
   const std::string hlo_text = R"(
 HloModule b_301618442
 
@@ -816,7 +829,7 @@ ENTRY main {
   RunTest(hlo_text, &operand_literal, &indices_literal);
 }
 
-XLA_TEST_F(GatherOperationTest, b_301618442_case2) {
+TEST_F(GatherOperationTest, b_301618442_case2) {
   const std::string hlo_text = R"(
 HloModule b_301618442
 

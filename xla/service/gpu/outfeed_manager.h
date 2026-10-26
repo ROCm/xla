@@ -21,11 +21,12 @@ limitations under the License.
 #include <utility>
 
 #include "absl/status/status.h"
+#include "absl/synchronization/notification.h"
+#include "tsl/platform/notification.h"
 #include "xla/literal.h"
 #include "xla/service/gpu/xfeed_queue.h"
 #include "xla/shape_tree.h"
 #include "xla/stream_executor/stream_executor.h"
-#include "tsl/platform/notification.h"
 
 namespace xla {
 namespace gpu {
@@ -55,7 +56,7 @@ class OutfeedBuffer {
  private:
   std::unique_ptr<MutableBorrowingLiteral> destination_;
   const int64_t length_;
-  tsl::Notification done_;
+  absl::Notification done_;
 };
 
 // Manages a thread-safe queue of buffers. The buffers are supposed to be
@@ -66,9 +67,6 @@ class OutfeedManager
   absl::Status TransferLiteralFromOutfeed(se::StreamExecutor* executor,
                                           MutableBorrowingLiteral literal);
 };
-
-// Returns the GPU outfeed manager for the given stream executor.
-OutfeedManager* GetOrCreateOutfeedManager(se::StreamExecutor* executor);
 
 }  // namespace gpu
 }  // namespace xla

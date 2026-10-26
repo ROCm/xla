@@ -1,3 +1,17 @@
+// Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// ==============================================================================
 // RUN: mlir-hlo-opt %s -verify-diagnostics -split-input-file | FileCheck %s
 
 // Valid: Generic convolution
@@ -278,7 +292,7 @@ func.func @invalid_conv_dimensions(%arg0 : tensor<100x26x26x32xf32>,
 
 func.func @invalid_conv_dimensions(%arg0: tensor<1x8x8x207xf32>,
     %arg1: tensor<3x3x207x16xf32>) -> tensor<1x8x8x16xf32> {
-  // expected-error@+1 {{expects batch_group_count to be a positive number, got 0.}}
+  // expected-error@+5 {{op attribute 'batch_group_count' failed to satisfy constraint: 64-bit signless integer attribute whose value is positive}}
   %0 = mhlo.convolution(%arg0, %arg1)
          dim_numbers = [b, 0, 1, f]x[0, 1, i, o]->[b, 0, 1, f],
          window = {stride = [1, 1], pad = [[1, 1], [1, 1]],
@@ -296,7 +310,7 @@ func.func @invalid_conv_dimensions(%arg0: tensor<1x8x8x207xf32>,
 
 func.func @invalid_conv_dimensions(%arg0: tensor<1x8x8x207xf32>,
     %arg1: tensor<3x3x207x16xf32>) -> tensor<1x8x8x16xf32> {
-  // expected-error@+1 {{expects feature_group_count to be a positive number, got 0.}}
+  // expected-error@+5 {{op attribute 'feature_group_count' failed to satisfy constraint: 64-bit signless integer attribute whose value is positive}}
   %0 = mhlo.convolution(%arg0, %arg1)
          dim_numbers = [b, 0, 1, f]x[0, 1, i, o]->[b, 0, 1, f],
          window = {stride = [1, 1], pad = [[1, 1], [1, 1]],

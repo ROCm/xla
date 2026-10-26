@@ -15,21 +15,29 @@ limitations under the License.
 
 #include "xla/service/llvm_ir/alias_analysis.h"
 
-#include <map>
+#include <set>
+#include <vector>
 
 #include "absl/container/flat_hash_set.h"
 #include "llvm/IR/MDBuilder.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/service/buffer_assignment.h"
+#include "xla/service/hlo_value.h"
+#include "xla/service/llvm_ir/ir_array.h"
 #include "xla/service/llvm_ir/llvm_type_conversion_util.h"
 #include "xla/service/logical_buffer.h"
-#include "xla/types.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
 
 namespace xla {
 namespace llvm_ir {
 
 // Sentry allocation used to represent parameters of the entry computation in
 // alias_scope_metadata_ and noalias_metadata_.
-static const BufferAllocation* kParameterAllocation = new BufferAllocation(
-    /*index=*/-1, /*size=*/0, LogicalBuffer::Color(0));
+static const BufferAllocation* const kParameterAllocation =
+    new BufferAllocation(
+        /*index=*/-1, /*size=*/0, LogicalBuffer::Color(0));
 
 void AliasAnalysis::AddAliasingInformationToIrArray(const HloInstruction& hlo,
                                                     llvm_ir::IrArray* array,
@@ -136,27 +144,26 @@ llvm::MDNode* AliasAnalysis::GetNoaliasMetadataForBuffer(
   // This set can be increased as we need.
   std::vector<const HloValue*> worklist;
   absl::flat_hash_set<const HloInstruction*> added_to_worklist;
-  auto add_buffers_to_worklist =
-      [&](const HloInstruction* instruction) {
-        // Buffers of parameters cannot be added to the noalias set.
-        if (instruction->opcode() == HloOpcode::kParameter) {
-          return;
-        }
-        if (added_to_worklist.contains(instruction)) {
-          return;
-        }
-        added_to_worklist.insert(instruction);
-        ShapeUtil::ForEachSubshape(
-            instruction->shape(),
-            [&](const Shape& /*shape*/, const ShapeIndex& index) {
-              for (const HloValue* buffer :
-                   assignment.GetSourceBuffers(instruction, index)) {
-                if (assignment.HasAllocation(*buffer)) {
-                  worklist.push_back(buffer);
-                }
-              }
-            });
-      };
+  auto add_buffers_to_worklist = [&](const HloInstruction* instruction) {
+    // Buffers of parameters cannot be added to the noalias set.
+    if (instruction->opcode() == HloOpcode::kParameter) {
+      return;
+    }
+    if (added_to_worklist.contains(instruction)) {
+      return;
+    }
+    added_to_worklist.insert(instruction);
+    ShapeUtil::ForEachSubshape(
+        instruction->shape(),
+        [&](const Shape& /*shape*/, const ShapeIndex& index) {
+          for (const HloValue* buffer :
+               assignment.GetSourceBuffers(instruction, index)) {
+            if (assignment.HasAllocation(*buffer)) {
+              worklist.push_back(buffer);
+            }
+          }
+        });
+  };
 
   for (HloInstruction* user : hlo.users()) {
     add_buffers_to_worklist(user);

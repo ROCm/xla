@@ -15,27 +15,34 @@ limitations under the License.
 
 // Dumps out the operations that are present in a serialized computation.
 
+#include <cstdio>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/types/span.h"
-#include "xla/client/client.h"
-#include "xla/client/client_library.h"
-#include "xla/client/local_client.h"
-#include "xla/client/xla_computation.h"
-#include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
-#include "xla/service/hlo.pb.h"
-#include "xla/service/service.h"
-#include "xla/statusor.h"
-#include "xla/types.h"
-#include "tsl/platform/env.h"
 #include "tsl/platform/init_main.h"
-#include "tsl/platform/logging.h"
+#include "xla/client/client_library.h"
+#include "xla/client/executable_build_options.h"
+#include "xla/client/local_client.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/service/hlo.pb.h"
+#include "xla/service/local_service.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/tsl/platform/env.h"
 
 namespace xla {
 namespace tools {
@@ -67,7 +74,7 @@ void RealMain(absl::Span<char* const> args) {
       ClientLibrary::GetXlaService(client->platform());
   for (char* arg : args) {
     HloSnapshot snapshot;
-    TF_CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(), arg, &snapshot));
+    CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(), arg, &snapshot));
     auto computation_status = client->LoadSnapshot(snapshot);
     if (!computation_status.ok()) {
       fprintf(stderr, "could not load snapshot for %s: %s\n", arg,
@@ -95,7 +102,7 @@ void RealMain(absl::Span<char* const> args) {
 
     OperationDumper dumper(arg);
     for (auto* computation : module.computations()) {
-      TF_CHECK_OK(computation->Accept(&dumper));
+      CHECK_OK(computation->Accept(&dumper));
     }
   }
 }

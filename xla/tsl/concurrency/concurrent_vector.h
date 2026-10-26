@@ -26,7 +26,7 @@ limitations under the License.
 
 #include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
-#include "tsl/platform/logging.h"
+#include "xla/tsl/platform/logging.h"
 
 namespace tsl {
 namespace internal {
@@ -95,7 +95,7 @@ class ConcurrentVector {
   // Returns the index of the newly inserted item.
   template <typename... Args>
   size_t emplace_back(Args&&... args) {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(mutex_);
 
     auto state = State::Decode(state_.load(std::memory_order_relaxed));
     auto& last = all_allocated_elements_[state.last_allocated];

@@ -18,6 +18,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/pjrt/pjrt_client.h"
+#include "xla/pjrt/pjrt_device_description.h"
 #include "xla/python/ifrt/device.h"
 #include "xla/python/ifrt/memory.h"
 #include "xla/python/pjrt_ifrt/pjrt_client.h"
@@ -37,31 +38,37 @@ PjRtMemory::PjRtMemory(PjRtClient* client, xla::PjRtMemorySpace* pjrt_memory)
   }
 }
 
-MemoryId PjRtMemory::Id() const { return MemoryId(pjrt_memory_->id()); }
+PjRtMemory::PjRtMemory(PjRtClient* client, const MemoryKind& kind,
+                       Device* device)
+    : client_(client), kind_(kind) {
+  pjrt_memory_ = nullptr;
+  devices_.push_back(device);
+}
+
+MemoryId PjRtMemory::Id() const {
+  if (pjrt_memory_ == nullptr) {
+    return MemoryId(-1);
+  }
+  return MemoryId(pjrt_memory_->id());
+}
 
 const MemoryKind& PjRtMemory::Kind() const { return kind_; }
 
 absl::string_view PjRtMemory::ToString() const {
+  if (pjrt_memory_ == nullptr) {
+    return "UNADDRESSABLE_MEMORY_SPACE";
+  }
   return pjrt_memory_->ToString();
 }
 
 absl::string_view PjRtMemory::DebugString() const {
+  if (pjrt_memory_ == nullptr) {
+    return "Unaddressable PjRtMemory";
+  }
   return pjrt_memory_->DebugString();
 }
 
 absl::Span<Device* const> PjRtMemory::Devices() const { return devices_; }
-
-MemoryKind CanonicalizeMemoryKindWithPjRtDevice(MemoryKind memory_kind,
-                                                xla::PjRtDevice* device) {
-  if (memory_kind.memory_kind().has_value()) {
-    return memory_kind;
-  }
-  auto default_memory_space = device->default_memory_space();
-  if (default_memory_space.ok()) {
-    return MemoryKind((*default_memory_space)->kind());
-  }
-  return MemoryKind();
-}
 
 }  // namespace ifrt
 }  // namespace xla

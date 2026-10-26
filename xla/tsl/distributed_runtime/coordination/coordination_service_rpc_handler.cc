@@ -17,7 +17,7 @@ limitations under the License.
 
 #include <cstdint>
 #include <iterator>
-#include <string_view>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -25,14 +25,15 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
+#include "tsl/platform/protobuf.h"
 #include "xla/tsl/distributed_runtime/coordination/coordination_service.h"
 #include "xla/tsl/distributed_runtime/coordination/coordination_service_agent.h"
 #include "xla/tsl/distributed_runtime/coordination/coordination_service_error_util.h"
-#include "tsl/platform/protobuf.h"
-#include "tsl/platform/status.h"
-#include "tsl/protobuf/coordination_service.pb.h"
+#include "xla/tsl/platform/status.h"
+#include "xla/tsl/protobuf/coordination_service.pb.h"
 
 namespace tsl {
 namespace {
@@ -43,57 +44,57 @@ using tensorflow::KeyValueEntry;
 
 void CoordinationServiceRpcHandler::SetAgentInstance(
     CoordinationServiceAgent* agent) {
-  absl::MutexLock l(&mu_);
+  absl::MutexLock l(mu_);
   agent_ = agent;
 }
 
 void CoordinationServiceRpcHandler::SetServiceInstance(
-    CoordinationServiceInterface* service) {
-  absl::MutexLock l(&mu_);
+    CoordinationService* service) {
+  absl::MutexLock l(mu_);
   service_ = service;
 }
 
 void CoordinationServiceRpcHandler::RegisterTaskAsync(
     const tensorflow::RegisterTaskRequest* request,
     tensorflow::RegisterTaskResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (service_ == nullptr) {
     done(MakeCoordinationError(
         absl::InternalError("Coordination service is not enabled.")));
     return;
   }
   const CoordinatedTask& task = request->source_task();
-  const uint64_t incarnation = request->incarnation();
-  const uint64_t leader_incarnation = service_->GetServiceIncarnation();
-  response->set_leader_incarnation(leader_incarnation);
-  done(service_->RegisterTask(task, incarnation));
+  const IncarnationId incarnation(request->incarnation());
+  const IncarnationId leader_incarnation = service_->GetServiceIncarnation();
+  response->set_leader_incarnation(leader_incarnation.value());
+  service_->RegisterTaskAsync(task, incarnation, done);
 }
 
 void CoordinationServiceRpcHandler::HeartbeatAsync(
     const tensorflow::HeartbeatRequest* request,
     tensorflow::HeartbeatResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (service_ == nullptr) {
     done(MakeCoordinationError(
         absl::InternalError("Coordination service is not enabled.")));
     return;
   }
   const CoordinatedTask& task = request->source_task();
-  const uint64_t incarnation = request->incarnation();
-  const uint64_t leader_incarnation = service_->GetServiceIncarnation();
+  const IncarnationId incarnation(request->incarnation());
+  const IncarnationId leader_incarnation = service_->GetServiceIncarnation();
   absl::Status s = service_->RecordHeartbeat(task, incarnation);
   if (!s.ok()) {
     done(s);
     return;
   }
-  response->set_leader_incarnation(leader_incarnation);
+  response->set_leader_incarnation(leader_incarnation.value());
   done(absl::OkStatus());
 }
 
 void CoordinationServiceRpcHandler::WaitForAllTasksAsync(
     const tensorflow::WaitForAllTasksRequest* request,
     tensorflow::WaitForAllTasksResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (service_ == nullptr) {
     done(MakeCoordinationError(
         absl::InternalError("Coordination service is not enabled.")));
@@ -103,6 +104,7 @@ void CoordinationServiceRpcHandler::WaitForAllTasksAsync(
       request->source_task(), request->device_info(),
       [response, service = service_, done = std::move(done)](absl::Status s) {
         if (s.ok()) {
+          service->state_mu_.AssertHeld();
           *response->mutable_device_info() = service->ListClusterDevices();
         }
         done(s);
@@ -112,7 +114,7 @@ void CoordinationServiceRpcHandler::WaitForAllTasksAsync(
 void CoordinationServiceRpcHandler::ShutdownTaskAsync(
     const tensorflow::ShutdownTaskRequest* request,
     tensorflow::ShutdownTaskResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (service_ == nullptr) {
     done(MakeCoordinationError(
         absl::InternalError("Coordination service is not enabled.")));
@@ -125,7 +127,7 @@ void CoordinationServiceRpcHandler::ShutdownTaskAsync(
 void CoordinationServiceRpcHandler::ResetTaskAsync(
     const tensorflow::ResetTaskRequest* request,
     tensorflow::ResetTaskResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (service_ == nullptr) {
     done(MakeCoordinationError(
         absl::InternalError("Coordination service is not enabled.")));
@@ -137,7 +139,7 @@ void CoordinationServiceRpcHandler::ResetTaskAsync(
 void CoordinationServiceRpcHandler::ReportErrorToTaskAsync(
     const tensorflow::ReportErrorToTaskRequest* request,
     tensorflow::ReportErrorToTaskResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (agent_ == nullptr) {
     done(MakeCoordinationError(absl::InternalError(
         "CoordinationServiceAgent is uninitialized or has already shutdown.")));
@@ -158,7 +160,7 @@ void CoordinationServiceRpcHandler::ReportErrorToTaskAsync(
 void CoordinationServiceRpcHandler::ReportErrorToServiceAsync(
     const tensorflow::ReportErrorToServiceRequest* request,
     tensorflow::ReportErrorToServiceResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (service_ == nullptr) {
     done(MakeCoordinationError(
         absl::InternalError("Coordination service is not enabled.")));
@@ -176,7 +178,7 @@ void CoordinationServiceRpcHandler::ReportErrorToServiceAsync(
 void CoordinationServiceRpcHandler::GetTaskStateAsync(
     const tensorflow::GetTaskStateRequest* request,
     tensorflow::GetTaskStateResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (service_ == nullptr) {
     done(MakeCoordinationError(
         absl::InternalError("Coordination service is not enabled.")));
@@ -189,10 +191,35 @@ void CoordinationServiceRpcHandler::GetTaskStateAsync(
   done(absl::OkStatus());
 }
 
+void CoordinationServiceRpcHandler::WatchJobStateAsync(
+    const tensorflow::WatchJobStateRequest* request,
+    tensorflow::WatchJobStateResponse* response, StatusCallback done) {
+  absl::ReaderMutexLock l(mu_);
+  if (service_ == nullptr) {
+    done(MakeCoordinationError(
+        absl::InternalError("Coordination service is not enabled.")));
+    return;
+  }
+
+  std::optional<int64_t> version_number;
+  if (request->version_number() >= 0) {
+    version_number.emplace(request->version_number());
+  }
+  service_->WatchJobState(
+      request->job_name(), version_number,
+      [response, done](std::vector<tensorflow::CoordinatedTaskStateInfo> info,
+                       int64_t version_number) {
+        absl::c_move(info, tsl::protobuf::RepeatedFieldBackInserter(
+                               response->mutable_task_state()));
+        response->set_version_number(version_number);
+        done(absl::OkStatus());
+      });
+}
+
 void CoordinationServiceRpcHandler::InsertKeyValueAsync(
     const tensorflow::InsertKeyValueRequest* request,
     tensorflow::InsertKeyValueResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (service_ == nullptr) {
     done(MakeCoordinationError(
         absl::InternalError("Coordination service is not enabled.")));
@@ -205,7 +232,7 @@ void CoordinationServiceRpcHandler::InsertKeyValueAsync(
 void CoordinationServiceRpcHandler::GetKeyValueAsync(
     const tensorflow::GetKeyValueRequest* request,
     tensorflow::GetKeyValueResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (service_ == nullptr) {
     done(MakeCoordinationError(
         absl::InternalError("Coordination service is not enabled.")));
@@ -215,7 +242,7 @@ void CoordinationServiceRpcHandler::GetKeyValueAsync(
   service_->GetKeyValueAsync(
       request->key(),
       [response, done = std::move(done)](
-          const absl::StatusOr<std::string_view>& status_or_value) {
+          const absl::StatusOr<absl::string_view>& status_or_value) {
         if (status_or_value.ok()) {
           auto value = status_or_value.value();
           response->mutable_kv()->set_value(value.data(), value.size());
@@ -227,7 +254,7 @@ void CoordinationServiceRpcHandler::GetKeyValueAsync(
 void CoordinationServiceRpcHandler::TryGetKeyValueAsync(
     const tensorflow::TryGetKeyValueRequest* request,
     tensorflow::TryGetKeyValueResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (service_ == nullptr) {
     done(MakeCoordinationError(
         absl::InternalError("Coordination service is not enabled.")));
@@ -243,10 +270,30 @@ void CoordinationServiceRpcHandler::TryGetKeyValueAsync(
   done(absl::OkStatus());
 }
 
+void CoordinationServiceRpcHandler::IncrementKeyValueAsync(
+    const tensorflow::IncrementKeyValueRequest* request,
+    tensorflow::IncrementKeyValueResponse* response, StatusCallback done) {
+  absl::ReaderMutexLock l(mu_);
+  if (service_ == nullptr) {
+    done(MakeCoordinationError(
+        absl::InternalError("Coordination service is not enabled.")));
+    return;
+  }
+  auto result =
+      service_->IncrementKeyValue(request->key(), request->increment());
+  if (!result.ok()) {
+    done(MakeCoordinationError(result.status()));
+    return;
+  }
+  response->mutable_kv()->set_key(request->key());
+  response->mutable_kv()->set_value(result.value());
+  done(absl::OkStatus());
+}
+
 void CoordinationServiceRpcHandler::GetKeyValueDirAsync(
     const tensorflow::GetKeyValueDirRequest* request,
     tensorflow::GetKeyValueDirResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (service_ == nullptr) {
     done(MakeCoordinationError(
         absl::InternalError("Coordination service is not enabled.")));
@@ -262,7 +309,7 @@ void CoordinationServiceRpcHandler::GetKeyValueDirAsync(
 void CoordinationServiceRpcHandler::DeleteKeyValueAsync(
     const tensorflow::DeleteKeyValueRequest* request,
     tensorflow::DeleteKeyValueResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (service_ == nullptr) {
     done(MakeCoordinationError(
         absl::InternalError("Coordination service is not enabled.")));
@@ -274,7 +321,7 @@ void CoordinationServiceRpcHandler::DeleteKeyValueAsync(
 void CoordinationServiceRpcHandler::BarrierAsync(
     const tensorflow::BarrierRequest* request,
     tensorflow::BarrierResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (service_ == nullptr) {
     done(MakeCoordinationError(
         absl::InternalError("Coordination service is not enabled.")));
@@ -282,23 +329,68 @@ void CoordinationServiceRpcHandler::BarrierAsync(
   }
   std::vector<CoordinatedTask> tasks = {request->tasks().begin(),
                                         request->tasks().end()};
-  service_->BarrierAsync(
-      request->barrier_id(),
-      absl::Milliseconds(request->barrier_timeout_in_ms()),
-      request->source_task(), tasks,
-      [done = std::move(done)](const absl::Status& status) { done(status); });
+  service_->BarrierAsync(request->barrier_id(), request->counter(),
+                         absl::Milliseconds(request->barrier_timeout_in_ms()),
+                         request->source_task(), tasks,
+                         [done = std::move(done), response](
+                             const absl::Status& status, int64_t counter) {
+                           response->set_counter(counter);
+                           done(status);
+                         });
 }
 
 void CoordinationServiceRpcHandler::CancelBarrierAsync(
     const tensorflow::CancelBarrierRequest* request,
     tensorflow::CancelBarrierResponse* response, StatusCallback done) {
-  absl::ReaderMutexLock l(&mu_);
+  absl::ReaderMutexLock l(mu_);
   if (service_ == nullptr) {
     done(MakeCoordinationError(
         absl::InternalError("Coordination service is not enabled.")));
     return;
   }
-  done(service_->CancelBarrier(request->barrier_id(), request->source_task()));
+  done(service_->CancelBarrier(request->barrier_id(), request->counter(),
+                               request->source_task()));
+}
+
+void CoordinationServiceRpcHandler::GetAliveTasksAsync(
+    const tensorflow::GetAliveTasksRequest* request,
+    tensorflow::GetAliveTasksResponse* response, StatusCallback done) {
+  absl::ReaderMutexLock l(mu_);
+  if (service_ == nullptr) {
+    done(MakeCoordinationError(
+        absl::InternalError("Coordination service is not enabled.")));
+    return;
+  }
+
+  std::vector<CoordinatedTask> tasks = {request->tasks().begin(),
+                                        request->tasks().end()};
+  service_->GetAliveTasksAsync(
+      request->requesting_task(), tasks,
+      [done = std::move(done), response](
+          const absl::Status& status,
+          const std::vector<tensorflow::CoordinatedTask>& alive_tasks,
+          const std::vector<IncarnationId>& incarnations) {
+        *response->mutable_alive_tasks() = {alive_tasks.begin(),
+                                            alive_tasks.end()};
+        for (IncarnationId id : incarnations) {
+          response->add_incarnations(id.value());
+        }
+        done(status);
+      });
+}
+
+void CoordinationServiceRpcHandler::PollForErrorAsync(
+    const tensorflow::PollForErrorRequest* request,
+    tensorflow::PollForErrorResponse* response, StatusCallback done) {
+  absl::ReaderMutexLock l(mu_);
+  if (service_ == nullptr) {
+    done(MakeCoordinationError(
+        absl::InternalError("Coordination service is not enabled.")));
+    return;
+  }
+  service_->PollForErrorAsync(
+      request->source_task(),
+      [done = std::move(done)](const absl::Status& status) { done(status); });
 }
 
 }  // namespace tsl

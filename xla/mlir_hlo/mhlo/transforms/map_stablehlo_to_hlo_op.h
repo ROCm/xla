@@ -66,6 +66,7 @@ MAP_STABLEHLO_TO_HLO(ClampOp)
 MAP_STABLEHLO_TO_HLO(ClzOp)
 MAP_STABLEHLO_TO_HLO(CollectiveBroadcastOp)
 MAP_STABLEHLO_TO_HLO(CollectivePermuteOp)
+MAP_STABLEHLO_TO_HLO(CollectiveReduceOp)
 MAP_STABLEHLO_TO_HLO(CompareOp)
 MAP_STABLEHLO_TO_HLO(ComplexOp)
 MAP_STABLEHLO_TO_HLO(CompositeOp)
@@ -91,6 +92,7 @@ MAP_STABLEHLO_TO_HLO(DynamicUpdateSliceOp)
 MAP_STABLEHLO_TO_HLO(EinsumOp)
 MAP_STABLEHLO_TO_HLO(Expm1Op)
 MAP_STABLEHLO_TO_HLO(ExpOp)
+MAP_STABLEHLO_TO_HLO(Exp2Op)
 MAP_STABLEHLO_TO_HLO(FftOp)
 MAP_STABLEHLO_TO_HLO(FloorOp)
 MAP_STABLEHLO_TO_HLO(GatherOp)
@@ -104,6 +106,7 @@ MAP_STABLEHLO_TO_HLO(IsFiniteOp)
 MAP_STABLEHLO_TO_HLO(Log1pOp)
 MAP_STABLEHLO_TO_HLO(LogisticOp)
 MAP_STABLEHLO_TO_HLO(LogOp)
+MAP_STABLEHLO_TO_HLO(Log2Op)
 MAP_STABLEHLO_TO_HLO(MapOp)
 MAP_STABLEHLO_TO_HLO(MaxOp)
 MAP_STABLEHLO_TO_HLO(MinOp)
@@ -149,17 +152,49 @@ MAP_STABLEHLO_TO_HLO(SortOp)
 MAP_STABLEHLO_TO_HLO(SqrtOp)
 MAP_STABLEHLO_TO_HLO(SubtractOp)
 MAP_STABLEHLO_TO_HLO(TanhOp)
+MAP_STABLEHLO_TO_HLO(TanOp)
 MAP_STABLEHLO_TO_HLO(TorchIndexSelectOp)
 MAP_STABLEHLO_TO_HLO(TransposeOp)
 MAP_STABLEHLO_TO_HLO(TriangularSolveOp)
 MAP_STABLEHLO_TO_HLO(TupleOp)
-MAP_STABLEHLO_TO_HLO(UnaryEinsumOp)
+// (deprecated) MAP_STABLEHLO_TO_HLO(UnaryEinsumOp)
 MAP_STABLEHLO_TO_HLO(UniformDequantizeOp)
 MAP_STABLEHLO_TO_HLO(UniformQuantizeOp)
 MAP_STABLEHLO_TO_HLO(WhileOp)
 MAP_STABLEHLO_TO_HLO(XorOp)
 
 #undef MAP_STABLEHLO_TO_HLO
+
+#define MAP_HLO_TO_HLO_TYPE_REWRITE(OpName)   \
+  template <>                                 \
+  struct HloToStablehloOpImpl<mhlo::OpName> { \
+    using Type = mhlo::OpName;                \
+  };                                          \
+  template <>                                 \
+  struct StablehloToHloOpImpl<mhlo::OpName> { \
+    using Type = mhlo::OpName;                \
+  };
+MAP_HLO_TO_HLO_TYPE_REWRITE(AddDependencyOp)
+MAP_HLO_TO_HLO_TYPE_REWRITE(AsyncStartOp)
+MAP_HLO_TO_HLO_TYPE_REWRITE(AsyncUpdateOp)
+MAP_HLO_TO_HLO_TYPE_REWRITE(AsyncDoneOp)
+
+#undef MAP_HLO_TO_HLO_TYPE_REWRITE
+
+// TODO(mwhittaker): Remove this when we translate async ops between StableHLO
+// and MHLO.
+#define MAP_STABLEHLO_TO_STABLEHLO_TYPE_REWRITE(OpName) \
+  template <>                                           \
+  struct HloToStablehloOpImpl<stablehlo::OpName> {      \
+    using Type = stablehlo::OpName;                     \
+  };                                                    \
+  template <>                                           \
+  struct StablehloToHloOpImpl<stablehlo::OpName> {      \
+    using Type = stablehlo::OpName;                     \
+  };
+MAP_STABLEHLO_TO_STABLEHLO_TYPE_REWRITE(AsyncStartOp)
+MAP_STABLEHLO_TO_STABLEHLO_TYPE_REWRITE(AsyncDoneOp)
+#undef MAP_STABLEHLO_TO_STABLEHLO_TYPE_REWRITE
 
 }  // namespace stablehlo
 }  // namespace mlir

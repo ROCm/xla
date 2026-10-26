@@ -15,8 +15,26 @@ limitations under the License.
 
 #include "xla/service/while_loop_constant_sinking.h"
 
+#include <cstdint>
+#include <iterator>
+#include <stack>
+#include <vector>
+
 #include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "tsl/platform/errors.h"
+#include "tsl/platform/logging.h"
+#include "tsl/platform/statusor.h"
+#include "xla/hlo/ir/hlo_clone_context.h"
+#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/while_util.h"
 #include "xla/shape_util.h"
 #include "xla/util.h"
@@ -41,7 +59,7 @@ absl::Status ReplaceUsesWhileKeepingLoopInvariance(
     for (int64_t i = 0, e = user->operand_count(); i < e; i++) {
       if (user->operand(i) == old_instr &&
           !(user == while_body_root && i == tuple_index)) {
-        TF_RETURN_IF_ERROR(user->ReplaceOperandWith(i, new_instr));
+        ABSL_RETURN_IF_ERROR(user->ReplaceOperandWith(i, new_instr));
       }
     }
   }
@@ -65,7 +83,7 @@ HloInstruction* CloneHelper(const HloInstruction* instruction,
 }  // namespace
 
 absl::StatusOr<bool> WhileLoopConstantSinking::TrySinkingConstantsIntoWhileLoop(
-    HloInstruction* while_instr) {
+    HloModule* module, HloInstruction* while_instr) {
   HloComputation* while_cond = while_instr->while_condition();
   HloComputation* while_body = while_instr->while_body();
 
@@ -74,14 +92,16 @@ absl::StatusOr<bool> WhileLoopConstantSinking::TrySinkingConstantsIntoWhileLoop(
     return false;
   }
 
-  bool changed = false;
-
   absl::flat_hash_map<int64_t, absl::InlinedVector<HloInstruction*, 1>>
       conditional_gte_index_to_insts =
           WhileUtil::GetGTEsMapForWhileConditional(*while_cond);
   std::vector<HloInstruction*> invariant_body_gtes =
       WhileUtil::GetInvariantGTEsForWhileBody(*while_body);
 
+  HloCloneContext body_clone_context(module);
+  HloCloneContext cond_clone_context(module);
+  HloComputation* body_clone = nullptr;
+  HloComputation* cond_clone = nullptr;
   for (HloInstruction* invariant_body_gte : invariant_body_gtes) {
     int64_t index = invariant_body_gte->tuple_index();
     const HloInstruction& invariant_value = *init_value.operand(index);
@@ -103,12 +123,18 @@ absl::StatusOr<bool> WhileLoopConstantSinking::TrySinkingConstantsIntoWhileLoop(
     // Sink into the while_body.
     // Should have at least one user that's not while_body_root.
     if (invariant_body_gte->user_count() > 1) {
+      if (!body_clone) {
+        body_clone = module->AddEmbeddedComputation(
+            while_body->Clone("sunk", &body_clone_context));
+        while_instr->set_while_body(body_clone);
+      }
       HloInstruction* constant_instr =
-          CloneHelper(&invariant_value, while_body);
-      TF_RETURN_IF_ERROR(ReplaceUsesWhileKeepingLoopInvariance(
-          invariant_body_gte, constant_instr, while_body->root_instruction(),
+          CloneHelper(&invariant_value, body_clone);
+      ABSL_RETURN_IF_ERROR(ReplaceUsesWhileKeepingLoopInvariance(
+          body_clone_context.FindInstruction(invariant_body_gte),
+          constant_instr,
+          body_clone_context.FindInstruction(while_body->root_instruction()),
           index));
-      changed = true;
     }
 
     // Check if there is a corresponding GTE in while_conditional.
@@ -120,19 +146,25 @@ absl::StatusOr<bool> WhileLoopConstantSinking::TrySinkingConstantsIntoWhileLoop(
     for (HloInstruction* invariant_cond_gte : it->second) {
       // Should have at least one user.
       if (invariant_cond_gte->user_count() > 0) {
+        if (!cond_clone) {
+          cond_clone = module->AddEmbeddedComputation(
+              while_cond->Clone("sunk", &cond_clone_context));
+          while_instr->set_while_condition(cond_clone);
+        }
         HloInstruction* constant_instr =
-            CloneHelper(&invariant_value, while_cond);
-        TF_RETURN_IF_ERROR(
-            invariant_cond_gte->ReplaceAllUsesWith(constant_instr));
-        changed = true;
+            CloneHelper(&invariant_value, cond_clone);
+        HloInstruction* cond_gte =
+            cond_clone_context.FindInstruction(invariant_cond_gte);
+        ABSL_RETURN_IF_ERROR(cond_gte->ReplaceAllUsesWith(constant_instr));
+        ABSL_RETURN_IF_ERROR(cond_clone->RemoveInstruction(cond_gte));
       }
     }
   }
 
-  return changed;
+  return body_clone || cond_clone;
 }
 
-absl::StatusOr<bool> WhileLoopConstantSinking::Run(
+absl::StatusOr<bool> WhileLoopConstantSinking::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   VLOG(2) << "HLO module before WhileLoopConstantSinking:";
@@ -140,39 +172,53 @@ absl::StatusOr<bool> WhileLoopConstantSinking::Run(
 
   bool changed = false;
   std::vector<HloInstruction*> while_instrs;
-  for (auto* comp : module->MakeNonfusionComputations(execution_threads)) {
-    // Right now we don't particularly care about optimizing while-of-while
-    // patterns.  If/When we do, we'll want to visit the outer while (while_0)
-    // before we visit the inner while (while_1):
-    //
-    // while_1_body(state) {
-    //   val = gte(state, 0) // Loop invariant
-    //   use(val)
-    // }
-    //
-    // while_0_body(state) {
-    //   val = gte(state, 0) // Loop invariant
-    //   while_1 = while(init=tuple(val, ...), body=while_1_body, ...)
-    //   ...
-    // }
-    //
-    // main {
-    //   while_0 = while(init=(constant, ...), body=while_0_body, ...)
-    // }
-    //
-    // This will let us sink the constant into the outer while first and then
-    // into the inner while in a single run of this pass.
-    absl::c_copy_if(comp->instructions(), std::back_inserter(while_instrs),
-                    HloPredicateIsOp<HloOpcode::kWhile>);
-  }
 
-  for (HloInstruction* while_instr : while_instrs) {
-    TF_ASSIGN_OR_RETURN(bool result,
-                        TrySinkingConstantsIntoWhileLoop(while_instr));
-    changed |= result;
+  // Visit computations in order, from outermost to innermost.
+  // We want to visit the outer while (while_0) before we visit the inner
+  // while (while_1):
+  //
+  // while_1_body(state) {
+  //   val = gte(state, 0) // Loop invariant
+  //   use(val)
+  // }
+  //
+  // while_0_body(state) {
+  //   val = gte(state, 0) // Loop invariant
+  //   while_1 = while(init=tuple(val, ...), body=while_1_body, ...)
+  //   ...
+  // }
+  //
+  // main {
+  //   while_0 = while(init=(constant, ...), body=while_0_body, ...)
+  // }
+  //
+  // This will let us sink the constant into the outer while first and then
+  // into the inner while in a single run of this pass.
+  std::stack<HloComputation*> agenda;
+  agenda.push(module->entry_computation());
+  absl::flat_hash_set<HloComputation*> visited;
+  while (!agenda.empty()) {
+    HloComputation* comp = agenda.top();
+    agenda.pop();
+    if (!visited.insert(comp).second) {
+      continue;
+    }
+    for (auto* instr : comp->instructions()) {
+      // Sinking constants may change the called computations, so do that first
+      // if this is a while instruction.
+      if (instr->opcode() == HloOpcode::kWhile) {
+        ABSL_ASSIGN_OR_RETURN(bool result,
+                              TrySinkingConstantsIntoWhileLoop(module, instr));
+        changed |= result;
+      }
+      for (HloComputation* child : instr->called_computations()) {
+        agenda.push(child);
+      }
+    }
   }
 
   if (changed) {
+    ABSL_RETURN_IF_ERROR(module->RemoveUnusedComputations());
     VLOG(2) << "HLO module after WhileLoopConstantSinking:";
     XLA_VLOG_LINES(2, module->ToString());
   } else {

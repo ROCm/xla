@@ -16,7 +16,7 @@ limitations under the License.
 #include "xla/tsl/distributed_runtime/rpc/coordination/grpc_coordination_service_impl.h"
 
 #include "absl/synchronization/mutex.h"
-#include "tsl/platform/threadpool.h"
+#include "xla/tsl/platform/threadpool.h"
 
 namespace tsl {
 
@@ -50,13 +50,17 @@ void GrpcCoordinationServiceImpl::HandleRPCsLoop() {
   ENQUEUE_REQUEST(ReportErrorToTask);
   ENQUEUE_REQUEST(ReportErrorToService);
   ENQUEUE_REQUEST(GetTaskState);
+  ENQUEUE_REQUEST(WatchJobState);
   ENQUEUE_REQUEST(InsertKeyValue);
   ENQUEUE_REQUEST(GetKeyValue);
   ENQUEUE_REQUEST(TryGetKeyValue);
+  ENQUEUE_REQUEST(IncrementKeyValue);
   ENQUEUE_REQUEST(GetKeyValueDir);
   ENQUEUE_REQUEST(DeleteKeyValue);
   ENQUEUE_REQUEST(Barrier);
   ENQUEUE_REQUEST(CancelBarrier);
+  ENQUEUE_REQUEST(GetAliveTasks);
+  ENQUEUE_REQUEST(PollForError);
 #undef ENQUEUE_REQUEST
 
   void* tag;  // Matches the operation started against this cq_.
@@ -80,7 +84,7 @@ void GrpcCoordinationServiceImpl::HandleRPCsLoop() {
 }
 
 void GrpcCoordinationServiceImpl::Shutdown() {
-  absl::MutexLock l(&shutdown_mu_);
+  absl::MutexLock l(shutdown_mu_);
   shutdown_ = true;
   // This enqueues a special event (with a null tag) that causes the completion
   // queue to be shut down on the polling thread.

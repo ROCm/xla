@@ -53,6 +53,32 @@ def MHLO_GatherDimensionNumbers : AttrDef<MHLO_Dialect, "GatherDimensionNumbers"
   let hasCustomAssemblyFormat = 1;
 }
 
+def MHLO_DotAlgorithmAttr : AttrDef<MHLO_Dialect, "DotAlgorithm"> {
+  let mnemonic = "dot_algorithm";
+  let summary = "Attribute that models the algorithm constraints to use for computing dot.";
+  let parameters = (ins
+      "Type":$lhsPrecisionType,
+      "Type":$rhsPrecisionType,
+      "Type":$accumulationType,
+      "int64_t":$lhsComponentCount,
+      "int64_t":$rhsComponentCount,
+      "int64_t":$numPrimitiveOperations,
+      "bool":$allowImpreciseAccumulation
+  );
+  let assemblyFormat = [{
+    `<`
+      `lhs_precision_type` `=` $lhsPrecisionType `,`
+      `rhs_precision_type` `=` $rhsPrecisionType `,`
+      `accumulation_type` `=` $accumulationType `,`
+      `lhs_component_count` `=` $lhsComponentCount `,`
+      `rhs_component_count` `=` $rhsComponentCount `,`
+      `num_primitive_operations` `=` $numPrimitiveOperations `,`
+      `allow_imprecise_accumulation` `=` $allowImpreciseAccumulation
+    `>`
+  }];
+  let genVerifyDecl = 1;
+}
+
 def MHLO_DotDimensionNumbers : AttrDef<MHLO_Dialect, "DotDimensionNumbers"> {
   let mnemonic = "dot";
   let summary = "Attribute that models the dimension information for dot.";
@@ -238,20 +264,37 @@ def MHLO_TypeExtensions : AttrDef<MHLO_Dialect, "TypeExtensions", [
   let assemblyFormat = "`<` `bounds` `=` ` ` custom<DimSizes>($bounds) `>`";
 }
 
-// A layout attribute (1D tensor of index type)
-def MHLO_LayoutAttr : Attr<
+// Base class for a 1D tensor of index type.
+class MHLO_1DIndexTensorAttrBase : Attr<
   And<[IndexElementsAttr.predicate,
        CPred<[{mlir::cast<::mlir::DenseIntElementsAttr>($_self).getType().getRank()
                == 1}]>]>,
-  "A 1D tensor of index type (layout)"> {
+  "A 1D tensor of index type"> {
   let storageType = IndexElementsAttr.storageType;
   let returnType = IndexElementsAttr.returnType;
   let convertFromStorage = IndexElementsAttr.convertFromStorage;
 }
 
+// A 1D tensor of index type.
+def MHLO_1DIndexTensorAttr : MHLO_1DIndexTensorAttrBase;
+
+// A layout attribute (1D tensor of index type)
+def MHLO_LayoutAttr : MHLO_1DIndexTensorAttrBase {
+  let summary = "A 1D tensor of index type (layout)";
+}
+
 // An array of layout (1D tensor) attributes.
 def MHLO_ArrayOfLayoutAttr : TypedArrayAttrBase<MHLO_LayoutAttr,
     "Array of layout (1D tensor of index type) attributes">;
+
+// A tiling attribute (array of rank 1 tensors).
+// Each tile is a 1D tensor of dimensions.
+def MHLO_TilingAttr : TypedArrayAttrBase<MHLO_1DIndexTensorAttr,
+    "Tiling (array of rank 1 tensors)">;
+
+// An array of tiling attributes.
+def MHLO_ArrayOfTilingAttr : TypedArrayAttrBase<MHLO_TilingAttr,
+    "Array of tiling attributes">;
 
 // An array of FlatSymbolRef attributes that can be used as a default valued
 // attribute.
@@ -260,24 +303,15 @@ def MHLO_FlatSymbolRefArrayAttr :
   let constBuilderCall = "::mlir::ArrayAttr::get($_builder.getContext(), $0)";
 }
 
-// Sparsity descriptor attribute
-def MHLO_SparsityDescriptor : AttrDef<MHLO_Dialect, "SparsityDescriptor"> {
-  let mnemonic = "sparsity";
-  let summary = "Describes structured (N:M) sparsity configuration";
-  let description = [{
-    This attribute is defined for a sparse dot operation with a structured
-    sparse input tensor. With (N=2,M=4), every 4 consecutive logical elements
-    have exactly 2 non-zero physical elements in the input tensor.
-
-    $dimension defines the index of the contracting dimension that is sparse
-    (it has to be the most minor dimension). The additional metadata operand
-    in the sparse dot operation defines which logical elements are zeroed out.
-  }];
+def MHLO_RaggedDotDimensionNumbers : AttrDef<MHLO_Dialect, "RaggedDotDimensionNumbers"> {
+  let mnemonic = "ragged_dot";
+  let summary = "Attribute that models the dimension information for ragged dot.";
   let parameters = (ins
-    "int64_t":$dimension,
-    "int64_t":$n,
-    "int64_t":$m);
-  let assemblyFormat = "`<` struct(params) `>`";
+      MHLO_DotDimensionNumbers:$dotDimensionNumbers,
+      MHLO_Dims:$lhsRaggedDimensions,
+      MHLO_Dims:$rhsGroupDimensions
+  );
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -295,23 +329,124 @@ def MHLO_BoolElementsAttr :
   let convertFromStorage = "$_self";
 }
 
-def MHLO_ConvolutionAttributes {
-  dag attributes = (ins
-    // Default value: one for each of the spatial dimension.
-    OptionalAttr<I64ElementsAttr>:$window_strides,
-    // Default value: two zeros for each of the spatial dimension.
-    OptionalAttr<I64ElementsAttr>:$padding,
-    // Default value: one for each of the spatial dimension.
-    OptionalAttr<I64ElementsAttr>:$lhs_dilation,
-    // Default value: one for each of the spatial dimension.
-    OptionalAttr<I64ElementsAttr>:$rhs_dilation,
-    // Default value: false for each of the spatial dimension.
-    OptionalAttr<MHLO_BoolElementsAttr>:$window_reversal,
-    MHLO_ConvDimensionNumbers:$dimension_numbers,
-    I64Attr:$feature_group_count,
-    I64Attr:$batch_group_count,
-    MHLO_PrecisionConfigAttr:$precision_config
+//==----------------------------------------------------------------------===//
+// Result Accuracy attributes
+//===----------------------------------------------------------------------===//
+
+def MHLO_APFloatV1 : APFloatParameter<""> {
+  let parser = [{
+    [&]() -> FailureOr<llvm::APFloat> {
+      double value;
+      if (failed($_parser.parseFloat(value))) {
+        return failure();
+      }
+      return APFloat(value);
+    }()
+  }];
+  let printer = "$_printer.printFloat($_self);";
+}
+
+def MHLO_ResultAccuracyAttr : AttrDef<MHLO_Dialect, "ResultAccuracy"> {
+  let mnemonic = "result_accuracy";
+  let summary = "The requested accuracy for unary ops.";
+  let parameters = (ins
+      "APFloat":$atol,
+      "APFloat":$rtol,
+      "int64_t":$ulps,
+      MHLO_ResultAccuracyModeAttr:$mode
+
   );
+  let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
+  let constBuilderCall = "mlir::mhlo::ResultAccuracyAttr::get($_builder.getContext(), llvm::APFloat(0.0), llvm::APFloat(0.0), 0, mlir::mhlo::ResultAccuracyModeAttr::get($_builder.getContext(), $0))";
+}
+
+def MHLO_SubAxisInfo : AttrDef<MHLO_Dialect, "SubAxisInfo"> {
+  let mnemonic = "sub_axis_info";
+  let summary = "Sub-axis info";
+  let parameters = (ins
+      "int64_t":$pre_size,
+      "int64_t":$size
+  );
+  let assemblyFormat = "`(` $pre_size `)` `` $size";
+}
+
+def MHLO_AxisRef : AttrDef<MHLO_Dialect, "AxisRef"> {
+  let mnemonic = "axis_ref";
+  let summary = "Reference to either a full axis or a split sub-axis";
+  let parameters = (ins
+      StringRefParameter<"name of this axis">:$name,
+      OptionalParameter<"SubAxisInfoAttr", "additional info if this is a sub axis">:$sub_axis_info
+  );
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
+def MHLO_ReplicaGroupMeshAxes : AttrDef<MHLO_Dialect, "ReplicaGroupMeshAxes"> {
+  let mnemonic = "replica_group_mesh_axes";
+  let summary = "mesh and axes based replica groups representation.";
+  let parameters = (ins
+    "Attribute":$mesh,
+    "ArrayAttr":$axes
+  );
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
+def MHLO_OriginalArrayAttr : AttrDef<MHLO_Dialect, "OriginalArray"> {
+  let mnemonic = "original_array";
+  let summary = "The information of a result computed in an unoptimized module";
+  let parameters = (ins
+      "StringAttr" :$instructionName,
+      MHLO_Dims:$shapeIndex
+  );
+  let hasCustomAssemblyFormat = 1;
+  let description = [{
+    The data structure stores the information of a result computed in an
+    unoptimized module. It consists of a pair of attributes as follows:
+      - "instructionName": A StringAttr specifying the name of the instruction
+        in the unoptimized module that produces an array or a tuple that
+        includes this array.
+      - "shapeIndex": A DenseI64ArrayAttr representing the shape index of the
+        array if the instruction produces a tuple.
+  }];
+}
+
+def MHLO_OriginalValueElementAttr : AttrDef<MHLO_Dialect, "OriginalValueElement"> {
+  let mnemonic = "original_value_element";
+  let summary = "A node in the original value tuple tree";
+  let parameters = (ins
+      MHLO_Dims:$shapeIndex,
+      OptionalParameter<"std::optional<::mlir::mhlo::OriginalArrayAttr>">:$originalArray
+  );
+  let hasCustomAssemblyFormat = 1;
+  let description = [{
+    The `original_value_element` attribute stores the information of a node in the tuple tree of the original value. It includes the following attributes:
+      - "shapeIndex": A DenseI64ArrayAttr representing the shape index of the node within the tuple tree.
+      - "originalArray": The original array saved in this node.
+  }];
+}
+
+def MHLO_OriginalValueAttr : AttrDef<MHLO_Dialect, "OriginalValue"> {
+  let mnemonic = "original_value";
+  let summary = "Represents the origin of an HLO value in the unoptimized graph";
+  let parameters = (ins
+    "bool":$is_synthetic_call,
+    ArrayRefParameter<"::mlir::mhlo::OriginalValueElementAttr", "Array of original value nodes">:$elements
+  );
+
+  let description = [{
+    Models xla::OriginalValue.
+    If 'is_synthetic_call' is true, this represents a synthetic call, and
+    'elements' should be empty.
+    If 'is_synthetic_call' is false, 'elements' contains the flattened
+    representation of the TupleTree<std::optional<OriginalArray>>. Each entry in
+    'elements' is an OriginalValueElementAttr, representing a pair of
+    ShapeIndex (the key) and an optional OriginalArray (the value).
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+
+  // Add a verifier to ensure 'elements' is empty when 'is_synthetic_call' is true.
+  let genVerifyDecl = 1;
 }
 
 #endif // MLIR_HLO_DIALECT_MHLO_IR_HLO_OPS_ATTRS

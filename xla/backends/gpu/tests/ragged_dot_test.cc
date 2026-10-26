@@ -1,0 +1,189 @@
+/* Copyright 2025 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <cstdint>
+#include <utility>
+
+#include "xla/error_spec.h"
+#include "xla/literal_util.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/tests/test_utils.h"
+
+namespace xla {
+namespace gpu {
+namespace {
+
+using RaggedDotTest = HloInterpreterReferenceMixin<HloTestBase>;
+
+TEST_F(RaggedDotTest, NonContracting) {
+  const char* hlo_text = R"(
+HloModule m
+
+ENTRY main {
+  p0 = f32[6,4]{1,0} parameter(0)
+  p1 = f32[3,4,5]{2,1,0} parameter(1)
+  p2 = s64[3]{0} parameter(2)
+  ROOT ragged-dot = f32[6,5]{1,0} ragged-dot(p0, p1, p2),
+                      lhs_contracting_dims={1}, rhs_contracting_dims={1},
+                      lhs_ragged_dims={0}, rhs_group_dims={0}
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_text));
+  FakeArgumentsOptions options;
+  options.max_bits_of_precision = 10;
+  ASSERT_OK_AND_ASSIGN(auto fake_arguments,
+                       MakeFakeArguments(module.get(), options));
+  // Set group sizes to reasonable numbers for ragged_dim_size=6.
+  fake_arguments[2] = LiteralUtil::CreateR1<int64_t>({1, 2, 3});
+  EXPECT_TRUE(RunAndCompare(std::move(module),
+                            LiteralUtil::MakePointers(fake_arguments),
+                            ErrorSpec{0, 0}));
+}
+
+TEST_F(RaggedDotTest, NonContractingWithBatchDims) {
+  const char* hlo_text = R"(
+  HloModule m
+
+  ENTRY main {
+    p0 = f32[3,9,4]{2,1,0} parameter(0)
+    p1 = f32[3,2,4,8]{3,2,1,0} parameter(1)
+    p2 = s64[3,2]{1,0} parameter(2)
+    ROOT ragged-dot = f32[3,9,8]{2,1,0} ragged-dot(p0, p1, p2),
+                      lhs_contracting_dims={2}, rhs_contracting_dims={2},
+                      lhs_batch_dims={0}, rhs_batch_dims={0},
+                      lhs_ragged_dims={1}, rhs_group_dims={1}
+  })";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_text));
+  FakeArgumentsOptions options;
+  options.max_bits_of_precision = 10;
+  ASSERT_OK_AND_ASSIGN(auto fake_arguments,
+                       MakeFakeArguments(module.get(), options));
+  // Set group sizes to reasonable numbers for ragged_dim_size=9.
+  fake_arguments[2] = LiteralUtil::CreateR2<int64_t>({{4, 5}, {7, 2}, {6, 3}});
+  EXPECT_TRUE(RunAndCompare(std::move(module),
+                            LiteralUtil::MakePointers(fake_arguments),
+                            ErrorSpec{0, 0}));
+}
+
+TEST_F(RaggedDotTest, NonContractingWithMultipleContractingDims) {
+  const char* hlo_text = R"(
+HloModule m
+
+ENTRY main {
+  p0 = f32[6,4,3]{2,1,0} parameter(0)
+  p1 = f32[2,4,3,5]{3,2,1,0} parameter(1)
+  p2 = s64[2]{0} parameter(2)
+  ROOT ragged-dot = f32[6,5]{1,0} ragged-dot(p0, p1, p2),
+                      lhs_contracting_dims={1,2}, rhs_contracting_dims={1,2},
+                      lhs_ragged_dims={0}, rhs_group_dims={0}
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_text));
+  FakeArgumentsOptions options;
+  options.max_bits_of_precision = 10;
+  ASSERT_OK_AND_ASSIGN(auto fake_arguments,
+                       MakeFakeArguments(module.get(), options));
+  // Set group sizes to reasonable numbers for ragged_dim_size=6.
+  fake_arguments[2] = LiteralUtil::CreateR1<int64_t>({4, 2});
+  EXPECT_TRUE(RunAndCompare(std::move(module),
+                            LiteralUtil::MakePointers(fake_arguments),
+                            ErrorSpec{0, 0}));
+}
+
+TEST_F(RaggedDotTest, NonContractingWithExtraLhsDim) {
+  const char* hlo_text = R"(
+HloModule m
+
+ENTRY main {
+  p0 = f32[2,6,4]{2,1,0} parameter(0)
+  p1 = f32[3,4,5]{2,1,0} parameter(1)
+  p2 = s64[2,3]{1,0} parameter(2)
+  ROOT ragged-dot = f32[2,6,5]{2,1,0} ragged-dot(p0, p1, p2),
+                      lhs_contracting_dims={2}, rhs_contracting_dims={1},
+                      lhs_ragged_dims={1}, rhs_group_dims={0}
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_text));
+  FakeArgumentsOptions options;
+  options.max_bits_of_precision = 10;
+  ASSERT_OK_AND_ASSIGN(auto fake_arguments,
+                       MakeFakeArguments(module.get(), options));
+  // Set group sizes to reasonable numbers for ragged_dim_size=6.
+  fake_arguments[2] = LiteralUtil::CreateR2<int64_t>({{1, 2, 3}, {3, 2, 1}});
+  EXPECT_TRUE(RunAndCompare(std::move(module),
+                            LiteralUtil::MakePointers(fake_arguments),
+                            ErrorSpec{0, 0}));
+}
+
+TEST_F(RaggedDotTest, ContractingWithMultipleBatchDims) {
+  const char* hlo_text = R"(
+HloModule m
+
+ENTRY main {
+  p0 = f32[2,3,5,11]{3,2,1,0} parameter(0)
+  p1 = f32[2,3,5,7]{3,2,1,0} parameter(1)
+  p2 = s64[2,3,2]{2,1,0} parameter(2)
+  ROOT ragged-dot = f32[2,2,3,11,7]{4,3,2,1,0} ragged-dot(p0, p1, p2),
+                    lhs_contracting_dims={2}, rhs_contracting_dims={2},
+                    lhs_batch_dims={0,1}, rhs_batch_dims={0,1},
+                    lhs_ragged_dims={2}
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_text));
+  FakeArgumentsOptions options;
+  options.max_bits_of_precision = 10;
+  ASSERT_OK_AND_ASSIGN(auto fake_arguments,
+                       MakeFakeArguments(module.get(), options));
+  // Set group sizes to reasonable numbers for ragged_dim_size=5.
+  fake_arguments[2] = LiteralUtil::CreateR3<int64_t>(
+      {{{2, 3}, {1, 4}, {3, 2}}, {{4, 1}, {2, 3}, {1, 4}}});
+  EXPECT_TRUE(RunAndCompare(std::move(module),
+                            LiteralUtil::MakePointers(fake_arguments),
+                            ErrorSpec{0, 0}));
+}
+
+TEST_F(RaggedDotTest, ContractingWithMultipleContractingDims) {
+  const char* hlo_text = R"(
+HloModule m
+
+ENTRY main {
+  p0 = f32[2,11,3,5]{3,2,1,0} parameter(0)
+  p1 = f32[2,7,3,5]{3,2,1,0} parameter(1)
+  p2 = s64[2]{0} parameter(2)
+  ROOT ragged-dot = f32[2,2,11,7]{3,2,1,0} ragged-dot(p0, p1, p2),
+                    lhs_contracting_dims={2,3}, rhs_contracting_dims={2,3},
+                    lhs_batch_dims={0}, rhs_batch_dims={0},
+                    lhs_ragged_dims={3}
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_text));
+  FakeArgumentsOptions options;
+  options.max_bits_of_precision = 10;
+  ASSERT_OK_AND_ASSIGN(auto fake_arguments,
+                       MakeFakeArguments(module.get(), options));
+  // Set group sizes to reasonable numbers for ragged_dim_size=5.
+  fake_arguments[2] = LiteralUtil::CreateR1<int64_t>({2, 3});
+  EXPECT_TRUE(RunAndCompare(std::move(module),
+                            LiteralUtil::MakePointers(fake_arguments),
+                            ErrorSpec{0, 0}));
+}
+
+}  // namespace
+}  // namespace gpu
+}  // namespace xla

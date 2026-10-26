@@ -13,14 +13,19 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <map>
+#include "tsl/platform/hash.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
-#include "tsl/platform/hash.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/test.h"
-#include "tsl/platform/test_benchmark.h"
+#include "absl/strings/string_view.h"
+#include "xla/tsl/platform/logging.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/tsl/platform/test_benchmark.h"
 
 namespace tsl {
 
@@ -37,11 +42,11 @@ TEST(Hash, SignedUnsignedIssue) {
   };
 
   struct Case {
-    uint32 hash32;
-    uint64 hash64;
+    uint32_t hash32;
+    uint64_t hash64;
     const unsigned char* data;
     size_t size;
-    uint32 seed;
+    uint32_t seed;
   };
 
   for (Case c : std::vector<Case>{
@@ -75,7 +80,7 @@ TEST(Hash, HashPtrIsNotIdentityFunction) {
 static void BM_Hash32(::testing::benchmark::State& state) {
   int len = state.range(0);
   std::string input(len, 'x');
-  uint32 h = 0;
+  uint32_t h = 0;
   for (auto s : state) {
     h = Hash32(input.data(), len, 1);
   }
@@ -87,10 +92,10 @@ BENCHMARK(BM_Hash32)->Range(1, 1024);
 TEST(StringPieceHasher, Equality) {
   StringPieceHasher hasher;
 
-  StringPiece s1("foo");
-  StringPiece s2("bar");
-  StringPiece s3("baz");
-  StringPiece s4("zot");
+  absl::string_view s1("foo");
+  absl::string_view s2("bar");
+  absl::string_view s3("baz");
+  absl::string_view s4("zot");
 
   EXPECT_TRUE(hasher(s1) != hasher(s2));
   EXPECT_TRUE(hasher(s1) != hasher(s3));
@@ -106,15 +111,15 @@ TEST(StringPieceHasher, Equality) {
 }
 
 TEST(StringPieceHasher, HashMap) {
-  string s1("foo");
-  string s2("bar");
-  string s3("baz");
+  std::string s1("foo");
+  std::string s2("bar");
+  std::string s3("baz");
 
-  StringPiece p1(s1);
-  StringPiece p2(s2);
-  StringPiece p3(s3);
+  absl::string_view p1(s1);
+  absl::string_view p2(s2);
+  absl::string_view p3(s3);
 
-  std::unordered_map<StringPiece, int, StringPieceHasher> map;
+  std::unordered_map<absl::string_view, int, StringPieceHasher> map;
 
   map.insert(std::make_pair(p1, 0));
   map.insert(std::make_pair(p2, 1));

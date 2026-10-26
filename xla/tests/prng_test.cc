@@ -13,9 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <array>
 #include <cmath>
-#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -23,25 +21,35 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "Eigen/Core"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
 #include "absl/types/span.h"
-#include "unsupported/Eigen/SpecialFunctions"  // from @eigen_archive
-#include "xla/client/local_client.h"
-#include "xla/client/xla_builder.h"
+#include "unsupported/Eigen/SpecialFunctions"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/testlib/test.h"
 #include "xla/literal.h"
+#include "xla/literal_util.h"
 #include "xla/primitive_util.h"
+#include "xla/service/hlo_runner_interface.h"
 #include "xla/shape_util.h"
-#include "xla/test.h"
-#include "xla/tests/client_library_test_base.h"
-#include "xla/tests/test_macros.h"
-#include "xla/util.h"
+#include "xla/tests/client_library_test_runner_mixin.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/tests/literal_test_util.h"
+#include "xla/tests/xla_test_backend_predicates.h"
+#include "xla/types.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/protobuf.h"
-#include "tsl/platform/test.h"
 
 namespace xla {
 namespace {
 
-class PrngTest : public ClientLibraryTestBase {
+class PrngTest : public ClientLibraryTestRunnerMixin<
+                     HloInterpreterReferenceMixin<HloTestBase>> {
  protected:
   template <typename T>
   Literal UniformTest(T a, T b, absl::Span<const int64_t> dims,
@@ -53,6 +61,9 @@ class PrngTest : public ClientLibraryTestBase {
   // `range_size * expected_count`.
   void UniformChiSquared(int32_t range_size, int32_t expected_count,
                          int64_t seed = 42);
+
+ private:
+  std::unique_ptr<OpaqueExecutable> executable_;
 };
 
 template <typename T>
@@ -63,8 +74,29 @@ Literal PrngTest::UniformTest(T a, T b, absl::Span<const int64_t> dims,
       ConstantR0<T>(&builder, a), ConstantR0<T>(&builder, b),
       ShapeUtil::MakeShape(primitive_util::NativeToPrimitiveType<T>(), dims));
 
-  SetSeed(seed);
-  auto actual = ExecuteAndTransfer(&builder, /*arguments=*/{}).value();
+  absl::StatusOr<std::unique_ptr<HloModule>> module =
+      HloModuleFromXlaBuilder(&builder, execution_options());
+  CHECK_OK(module);
+  if (executable_ == nullptr) {
+    absl::StatusOr<std::unique_ptr<OpaqueExecutable>> executable =
+        test_runner().CreateExecutable(*std::move(module),
+                                       /*run_hlo_passes=*/true);
+    CHECK_OK(executable);
+    executable_ = *std::move(executable);
+  }
+  CHECK_NE(executable_, nullptr);
+
+  HloRunnerInterface::ReplicatedExecuteOptions options;
+  options.seed = seed;
+  absl::StatusOr<std::vector<Literal>> result =
+      test_runner().ExecuteReplicatedWithExecutable(executable_.get(), options);
+  if (absl::IsUnimplemented(result.status())) {
+    return {};
+  }
+  CHECK_OK(result);
+  CHECK_EQ(result->size(), 1);
+
+  Literal actual = std::move((*result)[0]);
   EXPECT_THAT(dims, ::testing::ElementsAreArray(actual.shape().dimensions()));
   actual.EachCell<T>([=](absl::Span<const int64_t>, T value) {
     EXPECT_LE(a, value);
@@ -74,17 +106,17 @@ Literal PrngTest::UniformTest(T a, T b, absl::Span<const int64_t> dims,
 }
 
 // Uniform random number generation tests
-XLA_TEST_F(PrngTest, ScalarU01) { UniformTest<float>(0, 1, {}); }
-XLA_TEST_F(PrngTest, ScalarU01limits) {
+TEST_F(PrngTest, ScalarU01) { UniformTest<float>(0, 1, {}); }
+TEST_F(PrngTest, ScalarU01limits) {
   UniformTest<float>(std::numeric_limits<float>::min(),
                      std::numeric_limits<float>::max(), {});
 }
-XLA_TEST_F(PrngTest, ZeroValuesU01) { UniformTest<float>(0, 1, {0}); }
-XLA_TEST_F(PrngTest, TenValuesU01) { UniformTest<float>(0, 1, {10}); }
-XLA_TEST_F(PrngTest, TenValuesU37) { UniformTest<float>(3, 7, {10}); }
-XLA_TEST_F(PrngTest, ZeroValuesR2) { UniformTest<float>(0, 1, {0, 20}); }
-XLA_TEST_F(PrngTest, LargeU01) { UniformTest<float>(0, 1, {0x100, 0x100}); }
-XLA_TEST_F(PrngTest, TwelveValuesU524) { UniformTest<int32_t>(5, 24, {12}); }
+TEST_F(PrngTest, ZeroValuesU01) { UniformTest<float>(0, 1, {0}); }
+TEST_F(PrngTest, TenValuesU01) { UniformTest<float>(0, 1, {10}); }
+TEST_F(PrngTest, TenValuesU37) { UniformTest<float>(3, 7, {10}); }
+TEST_F(PrngTest, ZeroValuesR2) { UniformTest<float>(0, 1, {0, 20}); }
+TEST_F(PrngTest, LargeU01) { UniformTest<float>(0, 1, {0x100, 0x100}); }
+TEST_F(PrngTest, TwelveValuesU524) { UniformTest<int32_t>(5, 24, {12}); }
 
 // TODO(b/71543667): Fix Rng ops on LLVM backends.
 // TODO(b/122047800): Interpreter does not support BF16 for RNG ops.
@@ -94,13 +126,14 @@ class ScalarBF16Test
     : public PrngTest,
       public ::testing::WithParamInterface<ScalarBF16TestCase> {};
 
-XLA_TEST_P(ScalarBF16Test,
-           DISABLED_ON_INTERPRETER(DISABLED_ON_GPU(DISABLED_ON_CPU(DoIt)))) {
-  auto test_params = GetParam();
-  UniformTest<bfloat16>(static_cast<bfloat16>(std::get<1>(test_params).first),
-                        static_cast<bfloat16>(std::get<1>(test_params).second),
-                        {},
-                        /*seed=*/std::get<0>(test_params));
+TEST_P(ScalarBF16Test, DoIt) {
+  if (test::DeviceTypeIsOneOf({test::kCpu, test::kGpu, test::kInterpreter})) {
+    GTEST_SKIP();
+  }
+  const auto [seed, a_b] = GetParam();
+  const auto [a, b] = a_b;
+  UniformTest<bfloat16>(static_cast<bfloat16>(a), static_cast<bfloat16>(b), {},
+                        /*seed=*/seed);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -120,8 +153,10 @@ INSTANTIATE_TEST_SUITE_P(
 
 // TODO(b/71543667): Fix Rng ops on LLVM backends.
 // TODO(b/122047800): Interpreter does not support BF16 for RNG ops.
-XLA_TEST_F(PrngTest, DISABLED_ON_INTERPRETER(DISABLED_ON_GPU(
-                         DISABLED_ON_CPU(ScalarBF16CountTests)))) {
+TEST_F(PrngTest, ScalarBF16CountTests) {
+  if (test::DeviceTypeIsOneOf({test::kCpu, test::kGpu, test::kInterpreter})) {
+    GTEST_SKIP();
+  }
   // There are 3 BF16 values in the range of [32.25, 33): 32.25, 32.5, 32.75,
   // they should get similar counts.
   bfloat16 low = static_cast<bfloat16>(32.25);
@@ -131,7 +166,7 @@ XLA_TEST_F(PrngTest, DISABLED_ON_INTERPRETER(DISABLED_ON_GPU(
 
   constexpr int64_t count = 1000;
   for (int64_t seed = 0; seed < count; ++seed) {
-    auto result = UniformTest<bfloat16>(low, high, {}, /*seed=*/seed);
+    const Literal result = UniformTest<bfloat16>(low, high, {}, /*seed=*/seed);
     result.EachCell<bfloat16>([&](absl::Span<const int64_t>, bfloat16 value) {
       int64_t index = static_cast<int64_t>((value - low) / interval);
       counts[index]++;
@@ -173,6 +208,9 @@ double ChiSquarePValue(double chi_square, int dof) {
 
 void PrngTest::UniformChiSquared(int32_t range_size, int32_t expected_count,
                                  int64_t seed) {
+  CHECK_EQ(executable_, nullptr)
+      << "executable_ exists only for UniformTest to avoid recompilation and "
+         "it should be null for UniformChiSquared.";
   int32_t sample_size = range_size * expected_count;
 
   XlaBuilder builder(TestName());
@@ -181,7 +219,8 @@ void PrngTest::UniformChiSquared(int32_t range_size, int32_t expected_count,
              ShapeUtil::MakeShape(S32, {sample_size}));
 
   SetSeed(seed);
-  auto actual = ExecuteAndTransfer(&builder, /*arguments=*/{}).value();
+  ASSERT_OK_AND_ASSIGN(const Literal actual,
+                       ExecuteAndTransfer(&builder, /*arguments=*/{}));
   std::vector<int32_t> counts(range_size, 0);
   actual.EachCell<int32_t>(
       [&counts](absl::Span<const int64_t>, int32_t value) { ++counts[value]; });
@@ -222,19 +261,22 @@ void PrngTest::UniformChiSquared(int32_t range_size, int32_t expected_count,
 // These range sizes are arbitrary but include prime numbers, powers of 2, and
 // other composite numbers.
 // TODO(b/35723038): Use parametrized tests where possible.
-XLA_TEST_F(PrngTest, Uniformity7) { UniformChiSquared(7, 256); }
-XLA_TEST_F(PrngTest, Uniformity61) { UniformChiSquared(61, 256); }
-XLA_TEST_F(PrngTest, Uniformity64) { UniformChiSquared(64, 256); }
-XLA_TEST_F(PrngTest, Uniformity108) { UniformChiSquared(108, 256); }
-XLA_TEST_F(PrngTest, Uniformity256) { UniformChiSquared(256, 256); }
+TEST_F(PrngTest, Uniformity7) { UniformChiSquared(7, 256); }
+TEST_F(PrngTest, Uniformity61) { UniformChiSquared(61, 256); }
+TEST_F(PrngTest, Uniformity64) { UniformChiSquared(64, 256); }
+TEST_F(PrngTest, Uniformity108) { UniformChiSquared(108, 256); }
+TEST_F(PrngTest, Uniformity256) { UniformChiSquared(256, 256); }
 
 // TODO(b/134770669): May remove this test if we decide not to support map
 //                    computations with kRng instructions.
-XLA_TEST_F(PrngTest, DISABLED_ON_GPU(DISABLED_ON_CPU(MapUsingRng))) {
+TEST_F(PrngTest, MapUsingRng) {
+  if (test::DeviceTypeIsOneOf({test::kCpu, test::kGpu})) {
+    GTEST_SKIP();
+  }
   // Build a x -> (x + U[0,1)) computation.
   auto build_sum_rng = [](XlaBuilder& builder) {
-    auto b = builder.CreateSubBuilder("sum_with_rng");
-    auto x = Parameter(b.get(), 0, ShapeUtil::MakeShape(F32, {}), "input");
+    std::unique_ptr<XlaBuilder> b = builder.CreateSubBuilder("sum_with_rng");
+    XlaOp x = Parameter(b.get(), 0, ShapeUtil::MakeShape(F32, {}), "input");
     Add(x,
         RngUniform(ConstantR0<float>(b.get(), 0), ConstantR0<float>(b.get(), 1),
                    ShapeUtil::MakeShape(F32, {})));
@@ -244,21 +286,17 @@ XLA_TEST_F(PrngTest, DISABLED_ON_GPU(DISABLED_ON_CPU(MapUsingRng))) {
   XlaBuilder builder(TestName());
   Literal param0_literal =
       LiteralUtil::CreateR1<float>({2.2f, 5.3f, 4.4f, 5.5f});
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<GlobalData> param0_data,
-                          client_->TransferToServer(param0_literal));
 
-  auto param0 = Parameter(&builder, 0, param0_literal.shape(), "param0");
-  auto fn = build_sum_rng(builder);
+  XlaOp param0 = Parameter(&builder, 0, param0_literal.shape(), "param0");
+  XlaComputation fn = build_sum_rng(builder);
   Map(&builder, {param0}, fn, {0});
 
-  TF_ASSERT_OK_AND_ASSIGN(auto computation, builder.Build());
+  ASSERT_OK_AND_ASSIGN(XlaComputation computation, builder.Build());
 
-  ExecutionOptions execution_options = execution_options_;
-  execution_options.set_seed(125);
-  TF_ASSERT_OK_AND_ASSIGN(
-      auto actual, client_->ExecuteAndTransfer(
-                       computation,
-                       /*arguments=*/{param0_data.get()}, &execution_options));
+  SetSeed(125);
+  ASSERT_OK_AND_ASSIGN(Literal actual,
+                       ExecuteAndTransfer(computation,
+                                          /*arguments=*/{&param0_literal}));
 
   EXPECT_EQ(ShapeUtil::ElementsIn(actual.shape()),
             ShapeUtil::ElementsIn(param0_literal.shape()));
@@ -268,60 +306,71 @@ XLA_TEST_F(PrngTest, DISABLED_ON_GPU(DISABLED_ON_CPU(MapUsingRng))) {
   }
 }
 
+absl::StatusOr<Literal> FirstResult(
+    absl::StatusOr<std::vector<Literal>> results) {
+  ABSL_RETURN_IF_ERROR(results.status());
+  if (results->size() != 1) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Expected 1 result but got ", results->size()));
+  }
+  return std::move((*results)[0]);
+}
+
 // This tests demonstrates the global seeding behavior.
 // * If a seed is passed in via Execute (ExecuteAndTransfer) then the output
 // is
 //   fixed (i.e., there is a single output for a given seed);
 // * If no seed is passed in then the output of every call can be different;
-XLA_TEST_F(PrngTest, PassInGlobalRngSeed) {
+TEST_F(PrngTest, PassInGlobalRngSeed) {
   // Build a U[0,1) computation.
-  auto build_computation = [this]() {
-    XlaBuilder builder(TestName());
-    RngUniform(ConstantR0<float>(&builder, 0), ConstantR0<float>(&builder, 1),
-               ShapeUtil::MakeShape(F32, {10}));
-    return builder.Build();
-  };
+  XlaBuilder builder(TestName());
+  RngUniform(ConstantR0<float>(&builder, 0), ConstantR0<float>(&builder, 1),
+             ShapeUtil::MakeShape(F32, {10}));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       HloModuleFromXlaBuilder(&builder, execution_options()));
 
-  ExecutionOptions execution_options1 = execution_options_;
-  execution_options1.set_seed(42);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> executable1,
+                       test_runner().CreateExecutable(module->Clone("_1"),
+                                                      /*run_hlo_passes=*/true));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> executable2,
+                       test_runner().CreateExecutable(module->Clone("_2"),
+                                                      /*run_hlo_passes=*/true));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> executable3,
+                       test_runner().CreateExecutable(module->Clone("_3"),
+                                                      /*run_hlo_passes=*/true));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> executable4,
+                       test_runner().CreateExecutable(module->Clone("_4"),
+                                                      /*run_hlo_passes=*/true));
 
-  ExecutionOptions execution_options2 = execution_options_;
-  execution_options2.set_seed(65);
-
-  Literal result1;
-  {
-    TF_ASSERT_OK_AND_ASSIGN(auto computation, build_computation());
-    TF_ASSERT_OK_AND_ASSIGN(
-        result1, client_->ExecuteAndTransfer(computation, /*arguments=*/{},
-                                             &execution_options1));
-  }
-  Literal result2;
-  Literal result3;
-  {
-    TF_ASSERT_OK_AND_ASSIGN(auto computation, build_computation());
-    TF_ASSERT_OK_AND_ASSIGN(
-        result2, client_->ExecuteAndTransfer(computation, /*arguments=*/{},
-                                             &execution_options1));
-    TF_ASSERT_OK_AND_ASSIGN(
-        result3, client_->ExecuteAndTransfer(computation, /*arguments=*/{},
-                                             &execution_options1));
-  }
-
-  Literal result4;
-  Literal result5;
-  Literal result6;
-  {
-    TF_ASSERT_OK_AND_ASSIGN(auto computation, build_computation());
-    TF_ASSERT_OK_AND_ASSIGN(
-        result4, client_->ExecuteAndTransfer(computation, /*arguments=*/{},
-                                             &execution_options2));
-    TF_ASSERT_OK_AND_ASSIGN(
-        result5, client_->ExecuteAndTransfer(computation, /*arguments=*/{},
-                                             &execution_options_));
-    TF_ASSERT_OK_AND_ASSIGN(
-        result6, client_->ExecuteAndTransfer(computation, /*arguments=*/{},
-                                             &execution_options_));
-  }
+  HloRunnerInterface::ReplicatedExecuteOptions options;
+  options.run_hlo_passes = true;
+  options.seed = 42;
+  ASSERT_OK_AND_ASSIGN(
+      Literal result1,
+      FirstResult(test_runner().ExecuteReplicatedWithExecutable(
+          executable1.get(), options)));
+  ASSERT_OK_AND_ASSIGN(
+      Literal result2,
+      FirstResult(test_runner().ExecuteReplicatedWithExecutable(
+          executable2.get(), options)));
+  ASSERT_OK_AND_ASSIGN(
+      Literal result3,
+      FirstResult(test_runner().ExecuteReplicatedWithExecutable(
+          executable3.get(), options)));
+  options.seed = 65;
+  ASSERT_OK_AND_ASSIGN(
+      Literal result4,
+      FirstResult(test_runner().ExecuteReplicatedWithExecutable(
+          executable4.get(), options)));
+  options.seed = 0;
+  ASSERT_OK_AND_ASSIGN(
+      Literal result5,
+      FirstResult(test_runner().ExecuteReplicatedWithExecutable(
+          executable4.get(), options)));
+  ASSERT_OK_AND_ASSIGN(
+      Literal result6,
+      FirstResult(test_runner().ExecuteReplicatedWithExecutable(
+          executable4.get(), options)));
 
   EXPECT_TRUE(LiteralTestUtil::Equal(result1, result2));
   EXPECT_TRUE(LiteralTestUtil::Equal(result1, result3));
@@ -332,48 +381,45 @@ XLA_TEST_F(PrngTest, PassInGlobalRngSeed) {
 
 // This test verifies that the two RNG instructions with the same parameters
 // in the same HloComputation produces different values.
-XLA_TEST_F(PrngTest, DifferentValuesForIdenticalRngNodesInSameComputation) {
+TEST_F(PrngTest, DifferentValuesForIdenticalRngNodesInSameComputation) {
   // Build a U[0,1) computation.
-  auto build_computation = [this]() {
+  auto build_computation = []() {
     XlaBuilder builder(TestName());
-    auto a = RngUniform(ConstantR0<int32_t>(&builder, 0),
-                        ConstantR0<int32_t>(&builder, 100),
-                        ShapeUtil::MakeShape(S32, {10}));
-    auto b = RngUniform(ConstantR0<int32_t>(&builder, 0),
-                        ConstantR0<int32_t>(&builder, 100),
-                        ShapeUtil::MakeShape(S32, {10}));
+    XlaOp a = RngUniform(ConstantR0<int32_t>(&builder, 0),
+                         ConstantR0<int32_t>(&builder, 100),
+                         ShapeUtil::MakeShape(S32, {10}));
+    XlaOp b = RngUniform(ConstantR0<int32_t>(&builder, 0),
+                         ConstantR0<int32_t>(&builder, 100),
+                         ShapeUtil::MakeShape(S32, {10}));
     Tuple(&builder, {a, b});
     return builder.Build();
   };
 
-  ExecutionOptions execution_options = execution_options_;
-  execution_options.set_seed(42);
-
   Literal result_tuple;
   {
-    TF_ASSERT_OK_AND_ASSIGN(auto computation, build_computation());
-    TF_ASSERT_OK_AND_ASSIGN(
-        result_tuple, client_->ExecuteAndTransfer(computation, /*arguments=*/{},
-                                                  &execution_options));
+    ASSERT_OK_AND_ASSIGN(XlaComputation computation, build_computation());
+    SetSeed(42);
+    ASSERT_OK_AND_ASSIGN(result_tuple,
+                         ExecuteAndTransfer(computation, /*arguments=*/{}));
   }
 
-  auto results = result_tuple.DecomposeTuple();
+  std::vector<Literal> results = std::move(result_tuple).DecomposeTuple();
   ASSERT_EQ(results.size(), 2);
 
   EXPECT_FALSE(LiteralTestUtil::Equal(results[0], results[1]));
 }
 
-XLA_TEST_F(PrngTest, TenValuesN01) {
+TEST_F(PrngTest, TenValuesN01) {
   XlaBuilder builder(TestName());
   RngNormal(ConstantR0<float>(&builder, 0), ConstantR0<float>(&builder, 1),
             ShapeUtil::MakeShape(F32, {10}));
 
   SetSeed(42);
-  ExecuteAndTransfer(&builder, /*arguments=*/{}).value();
+  EXPECT_OK(ExecuteAndTransfer(&builder, /*arguments=*/{}));
   // TODO(b/25995601): Test that resultant values are reasonable
 }
 
-XLA_TEST_F(PrngTest, RngUniformCrash) {
+TEST_F(PrngTest, RngUniformCrash) {
   XlaBuilder builder(TestName());
 
   // This used to crash XLA during LLVM IR generation for CPUs.
@@ -381,7 +427,62 @@ XLA_TEST_F(PrngTest, RngUniformCrash) {
              ConstantR0<int32_t>(&builder, 1000 * 1000),
              ShapeUtil::MakeShape(S32, {}));
   SetSeed(0);
-  ExecuteAndTransfer(&builder, /*arguments=*/{}).value();
+  EXPECT_OK(ExecuteAndTransfer(&builder, /*arguments=*/{}));
+}
+
+TEST_F(PrngTest, MultiComputationConsistency) {
+  if (!test::DeviceTypeIsOneOf({test::kCpu, test::kGpu})) {
+    GTEST_SKIP();
+  }
+  // Tests that calling GetRngSeed from different computations in the same
+  // execution produces identical seed base values.
+  const char* const hlo_string = R"(
+    HloModule test
+    SubComp {
+      ROOT scall = u64[] custom-call(), custom_call_target="GetRngSeed"
+    }
+    ENTRY entry {
+      call1 = u64[] custom-call(), custom_call_target="GetRngSeed"
+      call2 = u64[] call(), to_apply=SubComp
+      ROOT tuple = (u64[], u64[]) tuple(call1, call2)
+    })";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
+  HloRunnerInterface::ReplicatedExecuteOptions options;
+  options.seed = 42;
+  options.run_hlo_passes = true;
+  ASSERT_OK_AND_ASSIGN(
+      Literal result,
+      FirstResult(test_runner().ExecuteReplicated(std::move(module), options)));
+  auto results = std::move(result).DecomposeTuple();
+  EXPECT_TRUE(LiteralTestUtil::Equal(results[0], results[1]));
+}
+
+TEST_F(PrngTest, MultiDeviceCollision) {
+  if (test::DeviceTypeIsOneOf({test::kInterpreter})) {
+    GTEST_SKIP() << "Multi-device not supported on Interpreter.";
+  }
+  if (test_runner().device_count() < 2) {
+    GTEST_SKIP() << "Test requires at least 2 devices.";
+  }
+
+  XlaBuilder builder(TestName());
+  RngUniform(ConstantR0<float>(&builder, 0), ConstantR0<float>(&builder, 1),
+             ShapeUtil::MakeShape(F32, {10}));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       HloModuleFromXlaBuilder(&builder, execution_options()));
+  module->mutable_config().set_replica_count(2);
+
+  HloRunnerInterface::ReplicatedExecuteOptions options;
+  options.num_devices = 2;
+  options.run_hlo_passes = true;
+  options.seed = 42;
+
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<Literal> results,
+      test_runner().ExecuteReplicated(std::move(module), options));
+  ASSERT_EQ(results.size(), 2);
+  // Replicas SHOULD be different despite having the same global seed!
+  EXPECT_FALSE(LiteralTestUtil::Equal(results[0], results[1]));
 }
 
 }  // namespace

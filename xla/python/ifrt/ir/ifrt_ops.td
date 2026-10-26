@@ -27,27 +27,61 @@ include "xla/python/ifrt/ir/ifrt_interfaces.td"
 class Ifrt_Op<string mnemonic, list<Trait> traits = []> :
     Op<Ifrt_Dialect, mnemonic, traits>;
 
-def Ifrt_ReshardOp : Ifrt_Op<"Reshard", [NestedInIfrtFunc]> {
-  let summary = "Reshards a host tensor or device array";
+def Ifrt_ReshardOp
+    : Ifrt_Op<"Reshard", [AttrSizedOperandSegments, NestedInIfrtFunc]> {
+  let summary = "Reshards a sequence of host tensors or device arrays";
   let description = [{
-    Copies the host tensor or device array to a new sharding.
+    Copies the host tensors or device arrays to a new sharding.
 
-    The input and output must have the same global shape.
+    The corresponding output of each input must have the same global shape
+    as the input.
 
-    The input and output are allowed to have the same sharding and devices. In
-    this case, this ReshardOp will have no transfer across devices.
+    An input and its corresponding output are allowed to have the same sharding
+    and devices. In this case, this ReshardOp will have no transfer across
+    devices.
   }];
 
   let arguments = (ins
-    Ifrt_ArrayType:$input,
+    Variadic<Ifrt_ArrayType>:$inputs,
     DefaultValuedOptionalAttr<BoolAttr, "false">:$donated,
     Variadic<Ifrt_ControlType>:$control_inputs);
   let results = (outs
-    Ifrt_ArrayType:$output);
+    Variadic<Ifrt_ArrayType>:$outputs,
+    Ifrt_ControlType:$control_output);
 
   let assemblyFormat = [{
-    `(` $input `)` oilist(`after` $control_inputs) attr-dict
-    `:` functional-type($input, $output)
+    `(` $inputs `)` oilist(`after` $control_inputs) prop-dict attr-dict
+    `:` functional-type($inputs, $outputs)
+  }];
+
+  let hasVerifier = 1;
+}
+
+def Ifrt_CopyArraysOp
+    : Ifrt_Op<"CopyArrays", [AttrSizedOperandSegments, NestedInIfrtFunc]> {
+  let summary = "Copies arrays to a new set of devices";
+  let description = [{
+    Copies the input arrays to the output arrays.
+
+    This op requires that all input arrays have use the same devices and memory
+    kind, and all the output arrays use the same devices and memory kind. Note
+    that the devices and memory kind used by the input and output arrays might
+    not be the same. Moreover, the corresponding output array of an input array
+    must have the same sharding as the op can not reshard.
+  }];
+
+  let arguments = (ins
+    Variadic<Ifrt_ArrayType>:$inputs,
+    DefaultValuedOptionalAttr<BoolAttr, "false">:$donated,
+    DefaultValuedOptionalAttr<BoolAttr, "false">:$reuse,
+    Variadic<Ifrt_ControlType>:$control_inputs);
+  let results = (outs
+    Variadic<Ifrt_ArrayType>:$outputs,
+    Ifrt_ControlType:$control_output);
+
+  let assemblyFormat = [{
+    `(` $inputs `)` oilist(`after` $control_inputs) prop-dict attr-dict
+    `:` functional-type($inputs, $outputs)
   }];
 
   let hasVerifier = 1;
@@ -70,7 +104,13 @@ def Ifrt_AssembleOp
     Variadic<Ifrt_ArrayType>:$inputs,
     Variadic<Ifrt_ControlType>:$control_inputs);
   let results = (outs
-    Ifrt_ArrayType:$output);
+    Ifrt_ArrayType:$output,
+    Ifrt_ControlType:$control_output);
+
+  let assemblyFormat = [{
+    `(` $inputs `)` oilist(`after` $control_inputs) attr-dict
+    `:` functional-type($inputs, $output)
+  }];
 
   let hasVerifier = 1;
 }
@@ -91,13 +131,19 @@ def Ifrt_DisassembleOp : Ifrt_Op<"Disassemble", [NestedInIfrtFunc]> {
     Ifrt_ArrayType:$input,
     Variadic<Ifrt_ControlType>:$control_inputs);
   let results = (
-    outs Variadic<Ifrt_ArrayType>:$outputs);
+    outs Variadic<Ifrt_ArrayType>:$outputs,
+    Ifrt_ControlType:$control_output);
+
+  let assemblyFormat = [{
+    `(` $input `)` oilist(`after` $control_inputs) attr-dict
+    `:` functional-type($input, $outputs)
+  }];
 
   let hasVerifier = 1;
 }
 
 def Ifrt_RemapArraysOp
-    : Ifrt_Op<"RemapArrays", [NestedInIfrtFunc]> {
+    : Ifrt_Op<"RemapArrays", [AttrSizedOperandSegments, NestedInIfrtFunc]> {
   let summary = "Remaps shards from input `Array`s to create new `Array`s.";
   let description = [{
     A metadata-only op that remaps shards across input `Array`s to create
@@ -112,20 +158,47 @@ def Ifrt_RemapArraysOp
   let arguments = (ins
     Variadic<Ifrt_ArrayType>:$inputs,
     Ifrt_ArrayMappingAttrArrayAttr:$mappings,
+    Variadic<Ifrt_ControlType>:$control_inputs,
     DefaultValuedOptionalAttr<BoolAttr, "false">:$donated);
-  let results = (outs Variadic<Ifrt_ArrayType>:$outputs);
+  let results = (outs
+    Variadic<Ifrt_ArrayType>:$outputs,
+    Ifrt_ControlType:$control_output);
 
   let assemblyFormat = [{
-    `(` $inputs `)` `mappings` `=` $mappings attr-dict
-    `:` functional-type($inputs, $outputs)
+    `(` $inputs `)` `mappings` `=` $mappings oilist(`after` $control_inputs)
+    prop-dict attr-dict `:` functional-type($inputs, $outputs)
   }];
 
   let hasVerifier = 1;
 }
 
-def IoAliasesAttr : TypedArrayAttrBase<
-    ConfinedAttr<DenseI32ArrayAttr, [DenseArrayCount<2>]>,
-    "Array of pairs of aliased input/output indices">;
+def Ifrt_BitcastArraysOp
+    : Ifrt_Op<"BitcastArrays", [AttrSizedOperandSegments, NestedInIfrtFunc]> {
+  let summary = "Bitcasts `Array`s to new `Array`s with a different type.";
+  let description = [{
+    A metadata-only op that can change the per-shard interpretation without
+    changing the per-sharding location. The new arrays must use the same
+    devices, have the same on-device size, and have the same memory kind.
+
+    The `dtype`, `shape`, `sharding`, and `layout` of the new arrays might be
+    different from the input arrays.
+  }];
+
+  let arguments = (ins
+    Variadic<Ifrt_ArrayType>:$inputs,
+    Variadic<Ifrt_ControlType>:$control_inputs,
+    DefaultValuedOptionalAttr<BoolAttr, "false">:$donated);
+  let results = (outs
+    Variadic<Ifrt_ArrayType>:$outputs,
+    Ifrt_ControlType:$control_output);
+
+  let assemblyFormat = [{
+    `(` $inputs `)` oilist(`after` $control_inputs) prop-dict attr-dict
+    `:` functional-type($inputs, $outputs)
+  }];
+
+  let hasVerifier = 1;
+}
 
 def Ifrt_CallOp : Ifrt_Op<"Call",
     [AttrSizedOperandSegments,
@@ -149,24 +222,29 @@ def Ifrt_CallOp : Ifrt_Op<"Call",
     a subset of these devices.
 
     `io_aliases` represents pairs of inputs and outputs, where the input buffer
-    may be donated and used as the output buffer. The aliased pair must have the
-    same Ifrt_ArrayType. It's up to IFRT implementations whether to respect this
-    hint or not.
+    may be aliased and used as the output buffer. The aliased pair must have the
+    same byte size. It's up to IFRT implementations whether to respect this
+    hint or not. Alternatively, if the index of an input is In
+    `donated_input_indices` then the input buffer might be donated to the
+    callee if an output with the same byte size is found.
   }];
 
   let arguments = (ins
     Variadic<Ifrt_ArrayType>:$inputs,
     Variadic<Ifrt_ControlType>:$control_inputs,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs,
     SymbolRefAttr:$callee,
     Ifrt_DevicesAttr:$devices,
-    DefaultValuedAttr<IoAliasesAttr, "{}">:$io_aliases);
+    DefaultValuedAttr<Ifrt_IoAliasesAttr, "{}">:$io_aliases,
+    DefaultValuedAttr<DenseI32ArrayAttr, "{}">:$donated_input_indices);
   let results = (outs
     Variadic<Ifrt_ArrayType>:$outputs,
     Ifrt_ControlType:$control_output);
 
   let assemblyFormat = [{
     $callee `(` $inputs `)` oilist(`after` $control_inputs)
-    `on` `devices` $devices attr-dict `:` functional-type($inputs, $outputs)
+    `on` `devices` $devices prop-dict attr-dict `:` functional-type($inputs, $outputs)
   }];
   let hasVerifier = 1;
 }
@@ -187,29 +265,34 @@ def Ifrt_CallLoadedExecutableOp : Ifrt_Op<"CallLoadedExecutable",
     be placed on a subset of these devices.
 
     `io_aliases` represents pairs of inputs and outputs, where the input buffer
-    may be donated and used as the output buffer. The aliased pair must have the
-    same Ifrt_ArrayType. It's up to IFRT implementations whether to respect this
-    hint or not.
+    may be aliased and used as the output buffer. The aliased pair must have the
+    same byte size. It's up to IFRT implementations whether to respect this
+    hint or not. Alternatively, if the index of an input is In
+    `donated_input_indices` then the input buffer might be donated to the
+    callee if an output with the same byte size is found.
   }];
 
   let arguments = (ins
     Variadic<Ifrt_ArrayType>:$inputs,
     Variadic<Ifrt_ControlType>:$control_inputs,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs,
     SymbolRefAttr:$callee,
-    DefaultValuedAttr<IoAliasesAttr, "{}">:$io_aliases);
+    DefaultValuedAttr<Ifrt_IoAliasesAttr, "{}">:$io_aliases,
+    DefaultValuedAttr<DenseI32ArrayAttr, "{}">:$donated_input_indices);
   let results = (outs
     Variadic<Ifrt_ArrayType>:$outputs,
     Ifrt_ControlType:$control_output);
 
   let assemblyFormat = [{
-    $callee `(` $inputs `)` oilist(`after` $control_inputs) attr-dict
+    $callee `(` $inputs `)` oilist(`after` $control_inputs) prop-dict attr-dict
     `:` functional-type($inputs, $outputs)
   }];
   let hasVerifier = 1;
 }
 
 def Ifrt_LoadedExecutableOp : Ifrt_Op<"LoadedExecutable",
-    [DeclareOpInterfaceMethods<Symbol>]> {
+    [SymbolName, SymbolVisibility, Symbol]> {
   let summary = "Declare a loaded executable";
   let description = [{
     The inputs/outputs of `function_type` should be IFRT arrays. They should be
@@ -217,13 +300,14 @@ def Ifrt_LoadedExecutableOp : Ifrt_Op<"LoadedExecutable",
   }];
 
   let arguments = (ins
-    SymbolNameAttr: $sym_name,
-    TypeAttrOf<FunctionType>: $function_type,
+    SymbolNameAttr:$sym_name,
+    OptionalAttr<StrAttr>:$sym_visibility,
+    TypeAttrOf<FunctionType>:$function_type,
     Ifrt_DevicesAttr:$devices
   );
 
   let assemblyFormat = [{
-    $sym_name `on` `devices` $devices attr-dict `:` $function_type
+    ($sym_visibility^)? $sym_name `on` `devices` $devices attr-dict `:` $function_type
   }];
   let hasVerifier = 1;
 }

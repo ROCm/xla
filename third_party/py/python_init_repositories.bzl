@@ -1,19 +1,26 @@
-"""Hermetic Python initialization. Consult the WORKSPACE on how to use it."""
+"""
+Legacy-compatible wrapper for Hermetic Python initialization.
+See the WORKSPACE file for instructions on using the updated
+Hermetic Python initialization.
+"""
 
-load("@rules_python//python:repositories.bzl", "py_repositories")
-load("//third_party/py:python_repo.bzl", "python_repository")
+load(
+    "@rules_ml_toolchain//py:python_init_repositories.bzl",
+    _python_init_repositories = "python_init_repositories",
+)
 
 def python_init_repositories(
         requirements = {},
         local_wheel_workspaces = [],
         local_wheel_dist_folder = None,
-        default_python_version = None):
-    python_repository(
-        name = "python_version_repo",
-        requirements_versions = requirements.keys(),
-        requirements_locks = requirements.values(),
+        default_python_version = None,
+        local_wheel_inclusion_list = ["*"],
+        local_wheel_exclusion_list = []):
+    _python_init_repositories(
+        requirements = requirements,
         local_wheel_workspaces = local_wheel_workspaces,
         local_wheel_dist_folder = local_wheel_dist_folder,
         default_python_version = default_python_version,
+        local_wheel_inclusion_list = local_wheel_inclusion_list,
+        local_wheel_exclusion_list = local_wheel_exclusion_list,
     )
-    py_repositories()

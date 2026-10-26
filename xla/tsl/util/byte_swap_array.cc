@@ -15,7 +15,12 @@ limitations under the License.
 
 #include "xla/tsl/util/byte_swap_array.h"
 
-#include "tsl/platform/errors.h"
+#include <cstddef>
+#include <cstdint>
+
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
+#include "xla/tsl/util/safe_reinterpret_cast.h"
 
 namespace tsl {
 
@@ -23,27 +28,28 @@ absl::Status ByteSwapArray(char* array, size_t bytes_per_elem, int array_len) {
   if (bytes_per_elem == 1) {
     // No-op
     return absl::OkStatus();
-  } else if (bytes_per_elem == 2) {
-    auto array_16 = reinterpret_cast<uint16_t*>(array);
+  }
+  if (bytes_per_elem == 2) {
+    auto array_16 = safe_reinterpret_cast<uint16_t*>(array);
     for (int i = 0; i < array_len; i++) {
       array_16[i] = BYTE_SWAP_16(array_16[i]);
     }
     return absl::OkStatus();
   } else if (bytes_per_elem == 4) {
-    auto array_32 = reinterpret_cast<uint32_t*>(array);
+    auto array_32 = safe_reinterpret_cast<uint32_t*>(array);
     for (int i = 0; i < array_len; i++) {
       array_32[i] = BYTE_SWAP_32(array_32[i]);
     }
     return absl::OkStatus();
   } else if (bytes_per_elem == 8) {
-    auto array_64 = reinterpret_cast<uint64_t*>(array);
+    auto array_64 = safe_reinterpret_cast<uint64_t*>(array);
     for (int i = 0; i < array_len; i++) {
       array_64[i] = BYTE_SWAP_64(array_64[i]);
     }
     return absl::OkStatus();
   } else {
-    return errors::Unimplemented("Byte-swapping of ", bytes_per_elem,
-                                 "-byte values not supported.");
+    return absl::UnimplementedError(absl::StrCat(
+        "Byte-swapping of ", bytes_per_elem, "-byte values not supported."));
   }
 }
 

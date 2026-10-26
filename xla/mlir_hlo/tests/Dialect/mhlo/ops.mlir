@@ -1,3 +1,17 @@
+// Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// ==============================================================================
 // RUN: mlir-hlo-opt %s -verify-diagnostics -split-input-file -allow-unregistered-dialect | FileCheck %s
 
 // Tests for types, ops with custom constraints, verifiers, printer or parser
@@ -82,6 +96,83 @@ func.func @all_reduce_with_promotable_quantized_types(%operand: tensor<!quant.un
   }) : (tensor<!quant.uniform<i8:f32, 2.000000e+00:15>>) -> tensor<!quant.uniform<i32:f32, 2.000000e+00:15>>
 
   func.return %result : tensor<!quant.uniform<i32:f32, 2.000000e+00:15>>
+}
+
+// -----
+
+// CHECK-LABEL: func @collective_reduce
+func.func @collective_reduce(%arg0: tensor<10xf32>) -> tensor<10xf32> {
+  %0 = "mhlo.collective_reduce"(%arg0) <{
+    replica_groups = dense<[[0, 1]]> : tensor<1x2xi64>,
+    channel_handle = #mhlo.channel_handle<handle = 5, type = 2>,
+    use_global_device_ids
+  }> ({
+  ^bb0(%lhs: tensor<f32>, %rhs: tensor<f32>):
+    %max = mhlo.maximum %lhs, %rhs : tensor<f32>
+    "mhlo.return"(%max) : (tensor<f32>) -> ()
+  }) : (tensor<10xf32>) -> tensor<10xf32>
+  func.return %0 : tensor<10xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func @collective_reduce_tuple
+func.func @collective_reduce_tuple(%arg0: tensor<10xf32>, %arg1: tensor<f32>) -> tensor<10xf32> {
+  %0:2 = "mhlo.collective_reduce"(%arg0, %arg1) <{
+    replica_groups = dense<[[0, 1]]> : tensor<1x2xi64>
+  }> ({
+  ^bb0(%lhs: tensor<f32>, %rhs: tensor<f32>):
+    %add = mhlo.add %lhs, %rhs : tensor<f32>
+    "mhlo.return"(%add) : (tensor<f32>) -> ()
+  }) : (tensor<10xf32>, tensor<f32>) -> (tensor<10xf32>, tensor<f32>)
+  func.return %0#0 : tensor<10xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func @collective_reduce_dynamic_root
+func.func @collective_reduce_dynamic_root(%arg0: tensor<10xf32>, %root: tensor<1xi32>) -> tensor<10xf32> {
+  %0 = "mhlo.collective_reduce"(%arg0, %root) <{
+    replica_groups = dense<[[0, 1]]> : tensor<1x2xi64>,
+    has_dynamic_root
+  }> ({
+  ^bb0(%lhs: tensor<f32>, %rhs: tensor<f32>):
+    %add = mhlo.add %lhs, %rhs : tensor<f32>
+    "mhlo.return"(%add) : (tensor<f32>) -> ()
+  }) : (tensor<10xf32>, tensor<1xi32>) -> tensor<10xf32>
+  func.return %0 : tensor<10xf32>
+}
+
+// -----
+
+func.func @collective_reduce_dynamic_root_bad_length(%arg0: tensor<10xf32>, %arg1: tensor<10xf32>, %root: tensor<1xi32>) -> tensor<10xf32> {
+  // expected-error@+2 {{'mhlo.collective_reduce' op failed to infer returned types}}
+  // expected-error@+1 {{CollectiveReduce dynamic-root operand must be a 1-D i32 tensor with one element per data operand}}
+  %0:2 = "mhlo.collective_reduce"(%arg0, %arg1, %root) <{
+    replica_groups = dense<[[0, 1]]> : tensor<1x2xi64>,
+    has_dynamic_root
+  }> ({
+  ^bb0(%lhs: tensor<f32>, %rhs: tensor<f32>):
+    %add = mhlo.add %lhs, %rhs : tensor<f32>
+    "mhlo.return"(%add) : (tensor<f32>) -> ()
+  }) : (tensor<10xf32>, tensor<10xf32>, tensor<1xi32>) -> (tensor<10xf32>, tensor<10xf32>)
+  func.return %0#0 : tensor<10xf32>
+}
+
+// -----
+
+func.func @collective_reduce_dynamic_root_bad_type(%arg0: tensor<10xf32>, %root: tensor<1xf32>) -> tensor<10xf32> {
+  // expected-error@+2 {{'mhlo.collective_reduce' op failed to infer returned types}}
+  // expected-error@+1 {{CollectiveReduce dynamic-root operand must be a 1-D i32 tensor with one element per data operand}}
+  %0 = "mhlo.collective_reduce"(%arg0, %root) <{
+    replica_groups = dense<[[0, 1]]> : tensor<1x2xi64>,
+    has_dynamic_root
+  }> ({
+  ^bb0(%lhs: tensor<f32>, %rhs: tensor<f32>):
+    %add = mhlo.add %lhs, %rhs : tensor<f32>
+    "mhlo.return"(%add) : (tensor<f32>) -> ()
+  }) : (tensor<10xf32>, tensor<1xf32>) -> tensor<10xf32>
+  func.return %0 : tensor<10xf32>
 }
 
 // -----
@@ -366,7 +457,7 @@ func.func @reduce_scatter_with_promotable_quantized_types(
 // -----
 
 func.func @reduce_scatter_c2(%data: tensor<4x16xf32>) -> tensor<4x4xf32> {
-  // expected-error@+1 {{expects scatter_dimension >= 0}}
+  // expected-error@+1 {{op attribute 'scatter_dimension' failed to satisfy constraint: 64-bit signless integer attribute whose value is non-negative}}
   %0 = "mhlo.reduce_scatter"(%data) <{replica_groups = dense<[[0, 1, 2, 3]]> : tensor<1x4xi64>,
       scatter_dimension = -1 : i64}> ({
     ^bb0(%arg2: tensor<f32>, %arg3: tensor<f32>):
@@ -628,6 +719,21 @@ func.func @all_to_all(%data: tensor<4x16xf32>) -> tensor<16x4xf32> {
   func.return %0 : tensor<16x4xf32>
 }
 
+
+// -----
+
+// CHECK-LABEL: func @all_to_all_same_split_concat_dim
+func.func @all_to_all_same_split_concat_dim(%data: tensor<4x16xf32>) -> tensor<4x16xf32> {
+  %0 = "mhlo.all_to_all"(%data) {
+    split_dimension = 0 : i64,
+    concat_dimension = 0 : i64,
+    split_count = 4 : i64,
+    replica_groups = dense<[[0, 1, 2, 3]]> : tensor<1x4xi64>,
+    channel_handle = #mhlo.channel_handle<handle = 1, type = 0>
+  } : (tensor<4x16xf32>) -> tensor<4x16xf32>
+  func.return %0 : tensor<4x16xf32>
+}
+
 // -----
 
 // CHECK-LABEL: func @all_to_all_dynamic_split_dim
@@ -657,8 +763,7 @@ func.func @all_to_all_dynamic_concat_dim(%data: tensor<?x16xf32>) -> tensor<?x4x
 // -----
 
 func.func @all_to_all_c1(%data: tensor<4x16xf32>) -> tensor<16x4xf32> {
-  // expected-error@+2 {{failed to infer returned types}}
-  // expected-error@+1 {{AllToAll split_dimension cannot be negative}}
+  // expected-error@+1 {{op attribute 'split_dimension' failed to satisfy constraint: 64-bit signless integer attribute whose value is non-negative}}
   %0 = "mhlo.all_to_all"(%data) {
     split_dimension = -1 : i64,
     concat_dimension = 0 : i64,
@@ -699,8 +804,7 @@ func.func @all_to_all_c2(%data: tensor<4x16xf32>) -> tensor<16x4xf32> {
 // -----
 
 func.func @all_to_all_c3(%data: tensor<4x16xf32>) -> tensor<16x4xf32> {
-  // expected-error@+2 {{failed to infer returned types}}
-  // expected-error@+1 {{AllToAll concat_dimension cannot be negative}}
+  // expected-error@+1 {{op attribute 'concat_dimension' failed to satisfy constraint: 64-bit signless integer attribute whose value is non-negative}}
   %0 = "mhlo.all_to_all"(%data) {
     split_dimension = 1 : i64,
     concat_dimension = -1 : i64,
@@ -727,8 +831,7 @@ func.func @all_to_all_c3(%data: tensor<4x16xf32>) -> tensor<16x4xf32> {
 // -----
 
 func.func @all_to_all_c4(%data: tensor<4x16xf32>) -> tensor<16x4xf32> {
-  // expected-error@+2 {{failed to infer returned types}}
-  // expected-error@+1 {{AllToAll split_count must be > 0}}
+  // expected-error@+1 {{op attribute 'split_count' failed to satisfy constraint: 64-bit signless integer attribute whose value is positive}}
   %0 = "mhlo.all_to_all"(%data) {
     split_dimension = 1 : i64,
     concat_dimension = 0 : i64,
@@ -820,7 +923,7 @@ func.func @allgather_gather_along_zero_dimension(%arg0: tensor<128x0xf32>) -> te
 // -----
 
 func.func @all_gather(%arg0: tensor<8x2xf32>) -> tensor<8x8xf32> {
-  // expected-error@+1 {{all_gather_dim cannot be negative}}
+  // expected-error@+1 {{op attribute 'all_gather_dim' failed to satisfy constraint: 64-bit signless integer attribute whose value is non-negative}}
   %0 = "mhlo.all_gather"(%arg0) <{
     all_gather_dim = -1 : i64,
     channel_handle = #mhlo.channel_handle<handle = 1, type = 0>,
@@ -966,7 +1069,7 @@ func.func @broadcast_bad_result_rank(%arg0: tensor<3xi32>) -> tensor<1x2x3xi32> 
 
 // -----
 
-func.func @broadcast_bad_first_part_result_shape(%arg0: tensor<3xi32>) -> tensor<1x2x3xi32> {
+func.func @broadcast_bad_first_part_result_shape(%arg0: tensor<3xi32>) -> tensor<1x3xi32> {
   // expected-error@+2 {{'mhlo.broadcast' op failed to infer returned types}}
   // expected-error@+1 {{'mhlo.broadcast' op inferred type(s) 'tensor<2x3xi32>' are incompatible with return type(s) of operation 'tensor<1x3xi32>'}}
   %0 = "mhlo.broadcast"(%arg0) <{broadcast_sizes = dense<[2]> : tensor<1xi64>}> : (tensor<3xi32>) -> tensor<1x3xi32>
@@ -975,7 +1078,7 @@ func.func @broadcast_bad_first_part_result_shape(%arg0: tensor<3xi32>) -> tensor
 
 // -----
 
-func.func @broadcast_bad_second_part_result_shape(%arg0: tensor<3xi32>) -> tensor<1x2x3xi32> {
+func.func @broadcast_bad_second_part_result_shape(%arg0: tensor<3xi32>) -> tensor<2x1xi32> {
   // expected-error@+2 {{'mhlo.broadcast' op failed to infer returned types}}
   // expected-error@+1 {{'mhlo.broadcast' op inferred type(s) 'tensor<2x3xi32>' are incompatible with return type(s) of operation 'tensor<2x1xi32>'}}
   %0 = "mhlo.broadcast"(%arg0) <{broadcast_sizes = dense<[2]> : tensor<1xi64>}> : (tensor<3xi32>) -> tensor<2x1xi32>
@@ -1337,7 +1440,7 @@ func.func @comp_compatible_operand_types(%arg0: tensor<3xi32>, %arg1: tensor<?xi
 // -----
 
 func.func @comp_mismatch_return_element_type(%arg0: tensor<3xi32>, %arg1: tensor<3xi32>) -> tensor<3xf16> {
-  // expected-error@+1 {{result #0 must be ranked tensor of pred (AKA boolean or 1-bit integer) values, but got 'tensor<3xf16>'}}
+  // expected-error-re@+1 {{result #0 must be ranked tensor of {{.*}}, but got 'tensor<3xf16>'}}
   %0 = "mhlo.compare"(%arg0, %arg1) {comparison_direction = #mhlo<comparison_direction EQ>} : (tensor<3xi32>, tensor<3xi32>) -> tensor<3xf16>
   func.return %0 : tensor<3xf16>
 }
@@ -1447,19 +1550,9 @@ func.func @concatenate_c3()  -> tensor<2xi32> {
 // -----
 
 func.func @concatenate_c4(%arg0: tensor<1xi32>, %arg1: tensor<2xi32>)  -> tensor<3xi32> {
-  // @expected-error@+2 {{'mhlo.concatenate' op failed to infer returned types}}
-  // expected-error@+1 {{dimension -1 is negative}}
+  // expected-error@+1 {{op attribute 'dimension' failed to satisfy constraint: 64-bit signless integer attribute whose value is non-negative}}
   %0 = "mhlo.concatenate"(%arg0, %arg1) <{ dimension = -1 : i64 }> : (tensor<1xi32>, tensor<2xi32>) -> tensor<3xi32>
   func.return %0 : tensor<3xi32>
-}
-
-// -----
-
-func.func @concatenate_c4(%arg0: tensor<?xi32>, %arg1: tensor<?xi32>)  -> tensor<?xi32> {
-  // @expected-error@+2 {{'mhlo.concatenate' op failed to infer returned types}}
-  // expected-error@+1 {{dimension -1 is negative}}
-  %0 = "mhlo.concatenate"(%arg0, %arg1) <{ dimension = -1 : i64 }> : (tensor<?xi32>, tensor<?xi32>) -> tensor<?xi32>
-  func.return %0 : tensor<?xi32>
 }
 
 // -----
@@ -1575,7 +1668,7 @@ func.func @cholesky_invalid_rank(%arg0: tensor<1xf32>) -> tensor<1xf32> {
 // -----
 
 func.func @cholesky_invalid_elt(%arg0: tensor<1x2x2xi32>) -> tensor<1x2x2xi32> {
-  // expected-error@+1 {{op operand #0 must be ranked tensor of f8E4M3B11FNUZ type or f8E4M3FN type or f8E4M3FNUZ type or f8E5M2 type or f8E5M2FNUZ type or 16-bit float or 32-bit float or 64-bit float or bfloat16 type or complex type with 32-bit float or 64-bit float elements values, but got 'tensor<1x2x2xi32>'}}
+  // expected-error-re@+1 {{op operand #0 must be ranked tensor of {{.*}}, but got 'tensor<1x2x2xi32>'}}
   %0 = "mhlo.cholesky"(%arg0) { lower = true } : (tensor<1x2x2xi32>) -> tensor<1x2x2xi32>
   func.return %0: tensor<1x2x2xi32>
 }
@@ -1586,7 +1679,7 @@ func.func @cholesky_wrong_infer_shape(%arg0: tensor<1x2x2xf32>) -> tensor<1x2x2x
   // @expected-error@+2 {{'mhlo.cholesky' op failed to infer returned types}}
   // expected-error@+1 {{'mhlo.cholesky' op inferred type(s) 'tensor<1x2x2xf32>' are incompatible with return type(s) of operation 'tensor<1x2x2x2xf32>'}}
   %0 = "mhlo.cholesky"(%arg0) { lower = true } : (tensor<1x2x2xf32>) -> tensor<1x2x2x2xf32>
-  func.return %0: tensor<1x2x2x2xf32>
+    func.return %0: tensor<1x2x2x2xf32>
 }
 
 // -----
@@ -1634,6 +1727,25 @@ func.func @dot_bad_precision_config(%arg0: tensor<2x2xi32>, %arg1: tensor<2x2xi3
   // expected-error@+1 {{'precision_config' failed to satisfy constraint}}
   %0 = "mhlo.dot"(%arg0, %arg1) {precision_config = ["FOO", #mhlo<precision HIGHEST>]} : (tensor<2x2xi32>, tensor<2x2xi32>) -> tensor<2x2xi32>
   func.return %0: tensor<2x2xi32>
+}
+
+// -----
+
+// CHECK-LABEL: func @test_unary_result_accuracy_tol
+func.func @test_unary_result_accuracy_tol(%arg0: tensor<2xf32>) -> (tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>) {
+  %cbrt = "mhlo.cbrt"(%arg0) {result_accuracy = #mhlo.result_accuracy<atol = 1.000000e+00, rtol = 1.000000e+00, ulps = 5, mode = #mhlo.result_accuracy_mode<TOLERANCE>>} : (tensor<2xf32>) -> tensor<2xf32>
+  %cosine = "mhlo.cosine"(%arg0) {result_accuracy = #mhlo.result_accuracy<atol = 1.000000e+00, rtol = 1.000000e+00, ulps = 5, mode = #mhlo.result_accuracy_mode<TOLERANCE>>} : (tensor<2xf32>) -> tensor<2xf32>
+  %exponential = "mhlo.exponential"(%arg0) {result_accuracy = #mhlo.result_accuracy<atol = 1.000000e+00, rtol = 1.000000e+00, ulps = 5, mode = #mhlo.result_accuracy_mode<TOLERANCE>>} : (tensor<2xf32>) -> tensor<2xf32>
+  %exponential_minus_one = "mhlo.exponential_minus_one"(%arg0) {result_accuracy = #mhlo.result_accuracy<atol = 1.000000e+00, rtol = 1.000000e+00, ulps = 5, mode = #mhlo.result_accuracy_mode<TOLERANCE>>} : (tensor<2xf32>) -> tensor<2xf32>
+  %log = "mhlo.log"(%arg0) {result_accuracy = #mhlo.result_accuracy<atol = 1.000000e+00, rtol = 1.000000e+00, ulps = 5, mode = #mhlo.result_accuracy_mode<TOLERANCE>>} : (tensor<2xf32>) -> tensor<2xf32>
+  %log_plus_one = "mhlo.log_plus_one"(%arg0) {result_accuracy = #mhlo.result_accuracy<atol = 1.000000e+00, rtol = 1.000000e+00, ulps = 5, mode = #mhlo.result_accuracy_mode<TOLERANCE>>} : (tensor<2xf32>) -> tensor<2xf32>
+  %logistic = "mhlo.logistic"(%arg0) {result_accuracy = #mhlo.result_accuracy<atol = 1.000000e+00, rtol = 1.000000e+00, ulps = 5, mode = #mhlo.result_accuracy_mode<TOLERANCE>>} : (tensor<2xf32>) -> tensor<2xf32>
+  %rsqrt = "mhlo.rsqrt"(%arg0) {result_accuracy = #mhlo.result_accuracy<atol = 1.000000e+00, rtol = 1.000000e+00, ulps = 5, mode = #mhlo.result_accuracy_mode<TOLERANCE>>} : (tensor<2xf32>) -> tensor<2xf32>
+  %sine = "mhlo.sine"(%arg0) {result_accuracy = #mhlo.result_accuracy<atol = 1.000000e+00, rtol = 1.000000e+00, ulps = 5, mode = #mhlo.result_accuracy_mode<TOLERANCE>>} : (tensor<2xf32>) -> tensor<2xf32>
+  %sqrt = "mhlo.sqrt"(%arg0) {result_accuracy = #mhlo.result_accuracy<atol = 1.000000e+00, rtol = 1.000000e+00, ulps = 5, mode = #mhlo.result_accuracy_mode<TOLERANCE>>} : (tensor<2xf32>) -> tensor<2xf32>
+  %tan = "mhlo.tan"(%arg0) {result_accuracy = #mhlo.result_accuracy<atol = 1.000000e+00, rtol = 1.000000e+00, ulps = 5, mode = #mhlo.result_accuracy_mode<TOLERANCE>>} : (tensor<2xf32>) -> tensor<2xf32>
+  %tanh = "mhlo.tanh"(%arg0) {result_accuracy = #mhlo.result_accuracy<atol = 1.000000e+00, rtol = 1.000000e+00, ulps = 5, mode = #mhlo.result_accuracy_mode<TOLERANCE>>} : (tensor<2xf32>) -> tensor<2xf32>
+  func.return %cbrt, %cosine, %exponential, %exponential_minus_one, %log, %log_plus_one, %logistic, %rsqrt, %sine, %sqrt, %tan, %tanh : tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>
 }
 
 // -----
@@ -1734,7 +1846,7 @@ func.func @iota_scalar() -> tensor<i32> {
 // -----
 
 func.func @iota_invalid_iota_dimension() -> tensor<4xi32> {
-  // expected-error@+1 {{iota dimension cannot go beyond the output rank or be negative}}
+  // expected-error@+1 {{iota dimension cannot go beyond the output rank}}
   %0 = "mhlo.iota"() <{iota_dimension = 1 : i64}> : () -> tensor<4xi32>
   func.return %0 : tensor<4xi32>
 }
@@ -1938,7 +2050,7 @@ func.func @rng_bit_generator(%arg0: tensor<2xui64>) -> (tensor<2xui64>, tensor<1
 
 // -----
 
-func.func @rng_bit_generator(%arg0: tensor<2xui64>) -> (tensor<2xui64>, tensor<10x12xui32>) {
+func.func @rng_bit_generator(%arg0: tensor<2xui64>) -> (tensor<3xui64>, tensor<10x12xui32>) {
   // expected-error@+1 {{output state shape must be compatible with initial state shape. Got: 'tensor<2xui64>' and 'tensor<3xui64>'}}
   %0, %1 = "mhlo.rng_bit_generator"(%arg0) <{rng_algorithm = #mhlo.rng_algorithm<DEFAULT>}> : (tensor<2xui64>) -> (tensor<3xui64>, tensor<10x12xui32>)
   func.return %0, %1 : tensor<3xui64>, tensor<10x12xui32>
@@ -1983,7 +2095,7 @@ func.func @rng_normal_invalid_shape(%arg0: tensor<f32>, %arg1: tensor<f32>) {
 
 func.func @rng_normal_invalid_mu_rank(%mu: tensor<1xf32>, %sigma: tensor<f32>) -> tensor<2x3x5xf32> {
   %shape = mhlo.constant dense<[2, 3, 5]> : tensor<3xi64>
-  // expected-error@+1 {{op operand #0 must be 0D tensor of pred (AKA boolean or 1-bit integer) or 4/8/16/32/64-bit signless integer or 4/8/16/32/64-bit unsigned integer or f8E4M3B11FNUZ type or f8E4M3FN type or f8E4M3FNUZ type or f8E5M2 type or f8E5M2FNUZ type or 16-bit float or 32-bit float or 64-bit float or bfloat16 type values, but got 'tensor<1xf32>'}}
+  // expected-error-re@+1 {{op operand #0 must be 0D tensor of {{.*}}, but got 'tensor<1xf32>'}}
   %0 = "mhlo.rng"(%mu, %sigma, %shape) <{rng_distribution = #mhlo.rng_distribution<NORMAL>}>: (tensor<1xf32>, tensor<f32>, tensor<3xi64>) -> tensor<2x3x5xf32>
   func.return %0 : tensor<2x3x5xf32>
 }
@@ -1992,7 +2104,7 @@ func.func @rng_normal_invalid_mu_rank(%mu: tensor<1xf32>, %sigma: tensor<f32>) -
 
 func.func @rng_normal_invalid_sigma_rank(%mu: tensor<f32>, %sigma: tensor<1xf32>) -> tensor<2x3x5xf32> {
   %shape = mhlo.constant dense<[2, 3, 5]> : tensor<3xi64>
-  // expected-error@+1 {{op operand #1 must be 0D tensor of pred (AKA boolean or 1-bit integer) or 4/8/16/32/64-bit signless integer or 4/8/16/32/64-bit unsigned integer or f8E4M3B11FNUZ type or f8E4M3FN type or f8E4M3FNUZ type or f8E5M2 type or f8E5M2FNUZ type or 16-bit float or 32-bit float or 64-bit float or bfloat16 type values, but got 'tensor<1xf32>'}}
+  // expected-error-re@+1 {{op operand #1 must be 0D tensor of {{.*}}, but got 'tensor<1xf32>'}}
   %0 = "mhlo.rng"(%mu, %sigma, %shape) <{rng_distribution = #mhlo.rng_distribution<NORMAL>}>: (tensor<f32>, tensor<1xf32>, tensor<3xi64>) -> tensor<2x3x5xf32>
   func.return %0 : tensor<2x3x5xf32>
 }
@@ -2001,7 +2113,7 @@ func.func @rng_normal_invalid_sigma_rank(%mu: tensor<f32>, %sigma: tensor<1xf32>
 
 func.func @rng_normal_invalid_shape_rank(%mu: tensor<f32>, %sigma: tensor<f32>) -> tensor<2x3x5xf32> {
   %shape = mhlo.constant dense<[[2, 3, 5]]> : tensor<1x3xi64>
-  // expected-error@+1 {{operand #2 must be 1D tensor of index or 4/8/16/32/64-bit signless integer or 4/8/16/32/64-bit unsigned integer values, but got 'tensor<1x3xi64>'}}
+  // expected-error-re@+1 {{operand #2 must be 1D tensor of {{.*}}, but got 'tensor<1x3xi64>'}}
   %0 = "mhlo.rng"(%mu, %sigma, %shape) <{rng_distribution = #mhlo.rng_distribution<NORMAL>}>: (tensor<f32>, tensor<f32>, tensor<1x3xi64>) -> tensor<2x3x5xf32>
   func.return %0 : tensor<2x3x5xf32>
 }
@@ -2010,7 +2122,7 @@ func.func @rng_normal_invalid_shape_rank(%mu: tensor<f32>, %sigma: tensor<f32>) 
 
 func.func @rng_normal_invalid_type(%arg0: tensor<complex<f32>>, %arg1: tensor<f32>) {
   %cst = "mhlo.constant"() {value = dense<7> : tensor<1xi64>} : () -> tensor<1xi64>
-  // expected-error @+1 {{op operand #0 must be 0D tensor of pred (AKA boolean or 1-bit integer) or 4/8/16/32/64-bit signless integer or 4/8/16/32/64-bit unsigned integer or f8E4M3B11FNUZ type or f8E4M3FN type or f8E4M3FNUZ type or f8E5M2 type or f8E5M2FNUZ type or 16-bit float or 32-bit float or 64-bit float or bfloat16 type values, but got 'tensor<complex<f32>>'}}
+  // expected-error-re@+1 {{op operand #0 must be 0D tensor of {{.*}}, but got 'tensor<complex<f32>>'}}
   %0 = "mhlo.rng"(%arg0, %arg1, %cst) <{rng_distribution = #mhlo.rng_distribution<NORMAL>}>: (tensor<complex<f32>>, tensor<f32>, tensor<1xi64>) -> tensor<7xf32>
   func.return
 }
@@ -2045,7 +2157,7 @@ func.func @rng_uniform_invalid_shape(%arg0: tensor<f32>, %arg1: tensor<f32>, %ar
 
 func.func @rng_uniform_invalid_a_rank(%a: tensor<1xf32>, %b: tensor<f32>) -> tensor<2x3x5xf32> {
   %shape = mhlo.constant dense<[2, 3, 5]> : tensor<3xi64>
-  // expected-error@+1 {{op operand #0 must be 0D tensor of pred (AKA boolean or 1-bit integer) or 4/8/16/32/64-bit signless integer or 4/8/16/32/64-bit unsigned integer or f8E4M3B11FNUZ type or f8E4M3FN type or f8E4M3FNUZ type or f8E5M2 type or f8E5M2FNUZ type or 16-bit float or 32-bit float or 64-bit float or bfloat16 type values, but got 'tensor<1xf32>'}}
+  // expected-error-re@+1 {{op operand #0 must be 0D tensor of {{.*}}, but got 'tensor<1xf32>'}}
   %0 = "mhlo.rng"(%a, %b, %shape) <{rng_distribution = #mhlo.rng_distribution<UNIFORM>}>: (tensor<1xf32>, tensor<f32>, tensor<3xi64>) -> tensor<2x3x5xf32>
   func.return %0 : tensor<2x3x5xf32>
 }
@@ -2055,7 +2167,7 @@ func.func @rng_uniform_invalid_a_rank(%a: tensor<1xf32>, %b: tensor<f32>) -> ten
 
 func.func @rng_uniform_invalid_b_rank(%a: tensor<f32>, %b: tensor<1xf32>) -> tensor<2x3x5xf32> {
   %shape = mhlo.constant dense<[2, 3, 5]> : tensor<3xi64>
-  // expected-error@+1 {{op operand #1 must be 0D tensor of pred (AKA boolean or 1-bit integer) or 4/8/16/32/64-bit signless integer or 4/8/16/32/64-bit unsigned integer or f8E4M3B11FNUZ type or f8E4M3FN type or f8E4M3FNUZ type or f8E5M2 type or f8E5M2FNUZ type or 16-bit float or 32-bit float or 64-bit float or bfloat16 type values, but got 'tensor<1xf32>'}}
+  // expected-error-re@+1 {{op operand #1 must be 0D tensor of {{.*}}, but got 'tensor<1xf32>'}}
   %0 = "mhlo.rng"(%a, %b, %shape) <{rng_distribution = #mhlo.rng_distribution<UNIFORM>}>: (tensor<f32>, tensor<1xf32>, tensor<3xi64>) -> tensor<2x3x5xf32>
   func.return %0 : tensor<2x3x5xf32>
 }
@@ -2064,7 +2176,7 @@ func.func @rng_uniform_invalid_b_rank(%a: tensor<f32>, %b: tensor<1xf32>) -> ten
 
 func.func @rng_uniform_invalid_shape_rank(%a: tensor<f32>, %b: tensor<f32>) -> tensor<2x3x5xf32> {
   %shape = mhlo.constant dense<[[2, 3, 5]]> : tensor<1x3xi64>
-  // expected-error@+1 {{operand #2 must be 1D tensor of index or 4/8/16/32/64-bit signless integer or 4/8/16/32/64-bit unsigned integer values, but got 'tensor<1x3xi64>'}}
+  // expected-error-re@+1 {{operand #2 must be 1D tensor of {{.*}}, but got 'tensor<1x3xi64>'}}
   %0 = "mhlo.rng"(%a, %b, %shape) <{rng_distribution = #mhlo.rng_distribution<UNIFORM>}>: (tensor<f32>, tensor<f32>, tensor<1x3xi64>) -> tensor<2x3x5xf32>
   func.return %0 : tensor<2x3x5xf32>
 }
@@ -2073,7 +2185,7 @@ func.func @rng_uniform_invalid_shape_rank(%a: tensor<f32>, %b: tensor<f32>) -> t
 
 func.func @rng_uniform_invalid_type(%a: tensor<complex<f32>>, %b: tensor<f32>) -> tensor<2x3x5xf32> {
   %shape = mhlo.constant dense<[2, 3, 5]> : tensor<3xi64>
-  // expected-error@+1 {{op operand #0 must be 0D tensor of pred (AKA boolean or 1-bit integer) or 4/8/16/32/64-bit signless integer or 4/8/16/32/64-bit unsigned integer or f8E4M3B11FNUZ type or f8E4M3FN type or f8E4M3FNUZ type or f8E5M2 type or f8E5M2FNUZ type or 16-bit float or 32-bit float or 64-bit float or bfloat16 type values, but got 'tensor<complex<f32>>'}}
+  // expected-error-re@+1 {{op operand #0 must be 0D tensor of {{.*}}, but got 'tensor<complex<f32>>'}}
   %0 = "mhlo.rng"(%a, %b, %shape) <{rng_distribution = #mhlo.rng_distribution<UNIFORM>}>: (tensor<complex<f32>>, tensor<f32>, tensor<3xi64>) -> tensor<2x3x5xf32>
   func.return %0 : tensor<2x3x5xf32>
 }
@@ -2137,7 +2249,7 @@ func.func @select_scalar_x_y(%arg0: tensor<i1>, %arg1: tensor<i32>, %arg2: tenso
 // -----
 
 func.func @select_bad_pred_type(%arg0: tensor<i32>, %arg1: tensor<2x3xi32>, %arg2: tensor<2x3xi32>) -> tensor<2x3xi32> {
-  // expected-error@+1 {{must be ranked tensor of pred (AKA boolean or 1-bit integer) values}}
+  // expected-error-re@+1 {{op operand #0 must be ranked tensor of {{.*}}, but got 'tensor<i32>'}}
   %0 = "mhlo.select"(%arg0, %arg1, %arg2) : (tensor<i32>, tensor<2x3xi32>, tensor<2x3xi32>) -> tensor<2x3xi32>
   func.return %0 : tensor<2x3xi32>
 }
@@ -2668,6 +2780,14 @@ func.func @get_tuple_element_bad_type(%arg0: tuple<tensor<f32>, tensor<i32>>) ->
 
 // -----
 
+func.func @get_tuple_element_c1(%arg0: tuple<tensor<f32>, tensor<i32>>) -> tensor<f32> {
+  // expected-error@+1 {{op attribute 'index' failed to satisfy constraint: 32-bit signless integer attribute whose value is non-negative}}
+  %0 = "stablehlo.get_tuple_element"(%arg0) {index = -1 : i32} : (tuple<tensor<f32>, tensor<i32>>) -> tensor<f32>
+  func.return %0 : tensor<f32>
+}
+
+// -----
+
 func.func @get_tuple_element_index_out_of_bounds(%arg0: tuple<tensor<f32>, tensor<i32>>) -> tensor<f32> {
   // @expected-error@+2 {{'mhlo.get_tuple_element' op failed to infer returned types}}
   // expected-error@+1 {{index 2 is out of bounds of operand with size 2}}
@@ -2701,7 +2821,7 @@ func.func @or_invalid_f32_type(%arg0: tensor<4xf32>, %arg1: tensor<4xf32>) -> te
 // -----
 
 func.func @floor_invalid_i32_type(%arg0: tensor<4xi32>) -> tensor<4xi32> {
-  // expected-error@+1 {{op operand #0 must be ranked tensor of f8E4M3B11FNUZ type or f8E4M3FN type or f8E4M3FNUZ type or f8E5M2 type or f8E5M2FNUZ type or 16-bit float or 32-bit float or 64-bit float or bfloat16 type values, but got 'tensor<4xi32>'}}
+  // expected-error-re@+1 {{op operand #0 must be ranked tensor of {{.*}}, but got 'tensor<4xi32>'}}
   %0 = "mhlo.floor"(%arg0) : (tensor<4xi32>) -> tensor<4xi32>
   func.return %0 : tensor<4xi32>
 }
@@ -2906,6 +3026,18 @@ func.func @reshape_invalid_shapes(%operand: tensor<2x4xf32>) -> tensor<3x3xf32> 
   // expected-error @+1 {{number of output elements (9) doesn't match expected number of elements (8)}}
   %0 = "mhlo.reshape"(%operand) : (tensor<2x4xf32>) -> tensor<3x3xf32>
   func.return %0 : tensor<3x3xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func @reshape_can_have_dynamic_dimensions
+func.func @reshape_can_have_dynamic_dimensions() -> tensor<?xi64, #mhlo.type_extensions<bounds = [7]>> {
+    %0 = "mhlo.constant"() {value = dense<[[1],[2],[3],[4],[5],[6],[7]]> : tensor<7x1xi64>} : () -> tensor<7x1xi64>
+    %size = builtin.unrealized_conversion_cast to tensor<i32>
+    %1 = "mhlo.set_dimension_size"(%0, %size) <{dimension = 0 : i64}> : (tensor<7x1xi64>, tensor<i32>) -> tensor<?x1xi64, #mhlo.type_extensions<bounds = [7, ?]>>
+    %2 = "mhlo.reshape"(%1) : (tensor<?x1xi64, #mhlo.type_extensions<bounds = [7, ?]>>)
+        -> tensor<?xi64, #mhlo.type_extensions<bounds = [7]>>
+    return %2 : tensor<?xi64, #mhlo.type_extensions<bounds = [7]>>
 }
 
 // -----
@@ -3377,70 +3509,6 @@ func.func @dot_general_three_element_precision_config(%arg0: tensor<2x3x4xf32>, 
 
 // -----
 
-// CHECK-LABEL: func @sparse_dot
-func.func @sparse_dot(%arg0: tensor<2x16xf32>, %arg1: tensor<32x2xf32>, %meta: tensor<2x2xi16>) -> tensor<2x2xf32> {
-  %0 = "mhlo.sparse_dot"(%arg0, %arg1, %meta) {
-    lhs_sparsity = #mhlo.sparsity<dimension = 1, n = 2, m = 4>,
-    dot_dimension_numbers = #mhlo.dot<
-      lhs_batching_dimensions = [],
-      rhs_batching_dimensions = [],
-      lhs_contracting_dimensions = [1],
-      rhs_contracting_dimensions = [0]
-    >
-  } : (tensor<2x16xf32>, tensor<32x2xf32>, tensor<2x2xi16>) -> tensor<2x2xf32>
-  func.return %0 : tensor<2x2xf32>
-}
-
-// -----
-
-func.func @sparse_dot_incorrect_dimension(%arg0: tensor<2x16xf32>, %arg1: tensor<32x2xf32>, %meta: tensor<2x2xi16>) -> tensor<2x2xf32> {
-  // expected-error@+1 {{sparsity dimension is incorrect}}
-  %0 = "mhlo.sparse_dot"(%arg0, %arg1, %meta) {
-    lhs_sparsity = #mhlo.sparsity<dimension = 2, n = 2, m = 4>,
-    dot_dimension_numbers = #mhlo.dot<
-      lhs_batching_dimensions = [],
-      rhs_batching_dimensions = [],
-      lhs_contracting_dimensions = [1],
-      rhs_contracting_dimensions = [0]
-    >
-  } : (tensor<2x16xf32>, tensor<32x2xf32>, tensor<2x2xi16>) -> tensor<2x2xf32>
-  func.return %0 : tensor<2x2xf32>
-}
-
-// -----
-
-func.func @sparse_dot_incorrect_dimension(%arg0: tensor<2x16xf32>, %arg1: tensor<32x2xf32>, %meta: tensor<2x2xi16>) -> tensor<2x2xf32> {
-  // expected-error@+1 {{only 2:4 sparsity is supported}}
-  %0 = "mhlo.sparse_dot"(%arg0, %arg1, %meta) {
-    lhs_sparsity = #mhlo.sparsity<dimension = 1, n = 1, m = 4>,
-    dot_dimension_numbers = #mhlo.dot<
-      lhs_batching_dimensions = [],
-      rhs_batching_dimensions = [],
-      lhs_contracting_dimensions = [1],
-      rhs_contracting_dimensions = [0]
-    >
-  } : (tensor<2x16xf32>, tensor<32x2xf32>, tensor<2x2xi16>) -> tensor<2x2xf32>
-  func.return %0 : tensor<2x2xf32>
-}
-
-// -----
-
-func.func @sparse_dot(%arg0: tensor<2x32xf32>, %arg1: tensor<32x2xf32>, %meta: tensor<2x2xi16>) -> tensor<2x2xf32> {
-  // expected-error@+1 {{contracting dimension sizes must match for lhs/rhs}}
-  %0 = "mhlo.sparse_dot"(%arg0, %arg1, %meta) {
-    lhs_sparsity = #mhlo.sparsity<dimension = 1, n = 2, m = 4>,
-    dot_dimension_numbers = #mhlo.dot<
-      lhs_batching_dimensions = [],
-      rhs_batching_dimensions = [],
-      lhs_contracting_dimensions = [1],
-      rhs_contracting_dimensions = [0]
-    >
-  } : (tensor<2x32xf32>, tensor<32x2xf32>, tensor<2x2xi16>) -> tensor<2x2xf32>
-  func.return %0 : tensor<2x2xf32>
-}
-
-// -----
-
 func.func @compatible_shapes(%arg0: tensor<?xf32>, %shape: tensor<2xindex>) -> tensor<?x?xf32> {
   %0 = "mhlo.dynamic_reshape"(%arg0, %shape) : (tensor<?xf32>, tensor<2xindex>) -> tensor<?x?xf32>
   func.return %0 : tensor<?x?xf32>
@@ -3492,7 +3560,7 @@ func.func @bitcast_convert_complex(%arg: tensor<complex<f64>>) -> tensor<2xcompl
 
 // -----
 
-func.func @invalid_bitcast_convert_decomplex(%arg: tensor<2x4xcomplex<f32>>) -> tensor<2x4xf64> {
+func.func @invalid_bitcast_convert_decomplex(%arg: tensor<2x4xcomplex<f32>>) -> tensor<2x2xf64> {
   // expected-error@+1 {{cannot convert between real and complex types}}
   %0 = "mhlo.bitcast_convert"(%arg) : (tensor<2x4xcomplex<f32>>) -> tensor<2x2xf64>
   return %0 : tensor<2x2xf64>
@@ -3546,7 +3614,7 @@ func.func @stochastic_convert(%arg0: tensor<2x4xf32>, %arg1: tensor<2x4xui32>) -
 // -----
 
 func.func @invalid_stochastic_convert_disallowed_random_type(%arg0: tensor<2x4xf32>, %arg1: tensor<2x4xi32>) -> tensor<2x4xi8> {
-  // expected-error@+1 {{must be ranked tensor of 4/8/16/32/64-bit unsigned integer values, but got 'tensor<2x4xi32>'}}
+  // expected-error-re@+1 {{must be ranked tensor of {{.*}}, but got 'tensor<2x4xi32>'}}
   %0 = "mhlo.stochastic_convert"(%arg0, %arg1) : (tensor<2x4xf32>, tensor<2x4xi32>) -> tensor<2x4xi8>
   return %0 : tensor<2x4xi8>
 }
@@ -3569,7 +3637,7 @@ func.func @reduce_precision(%arg: tensor<2x4xf32>) -> tensor<2x4xf32> {
 // -----
 
 func.func @reduce_precision_invalid_exponent(%arg: tensor<2x4xf32>) -> tensor<2x4xf32> {
-  // expected-error @+1 {{exponent_bits must be at least 1.}}
+  // expected-error @+1 {{op attribute 'exponent_bits' failed to satisfy constraint: 32-bit signless integer attribute whose value is positive}}
   %0 = "mhlo.reduce_precision"(%arg) {exponent_bits=0 : i32, mantissa_bits=3 : i32} : (tensor<2x4xf32>) -> tensor<2x4xf32>
   func.return %0 : tensor<2x4xf32>
 }
@@ -3577,7 +3645,7 @@ func.func @reduce_precision_invalid_exponent(%arg: tensor<2x4xf32>) -> tensor<2x
 // -----
 
 func.func @reduce_precision_invalid_mantissa(%arg: tensor<2x4xf32>) -> tensor<2x4xf32> {
-  // expected-error @+1 {{mantissa_bits must be at least 0.}}
+  // expected-error @+1 {{op attribute 'mantissa_bits' failed to satisfy constraint: 32-bit signless integer attribute whose value is non-negative}}
   %0 = "mhlo.reduce_precision"(%arg) {exponent_bits=1 : i32, mantissa_bits=-1 : i32} : (tensor<2x4xf32>) -> tensor<2x4xf32>
   func.return %0 : tensor<2x4xf32>
 }
@@ -4800,8 +4868,7 @@ func.func @get_dimension_size(%I: tensor<1x128x512xf32>) -> tensor<i32> {
 // -----
 
 func.func @get_dimension_size_negative_dimension(%I: tensor<1x128x512xf32>) -> tensor<i32> {
-  // @expected-error@+2 {{'mhlo.get_dimension_size' op failed to infer returned types}}
-  // expected-error@+1 {{requires non-negative dimension attribute; found (-1)}}
+  // expected-error@+1 {{op attribute 'dimension' failed to satisfy constraint: 64-bit signless integer attribute whose value is non-negative}}
   %size = "mhlo.get_dimension_size"(%I) <{dimension = -1 : i64}> : (tensor<1x128x512xf32>) -> tensor<i32>
   func.return %size : tensor<i32>
 }
@@ -4830,8 +4897,7 @@ func.func @set_dimension_size(%I: tensor<1x128x512xf32>) -> tensor<1x128x512xf32
 
 func.func @set_dimension_size_negative_dimension(%I: tensor<1x128x512xf32>) -> tensor<1x128x512xf32> {
   %dim = mhlo.constant dense<512> : tensor<i32>
-  // @expected-error@+2 {{'mhlo.set_dimension_size' op failed to infer returned types}}
-  // expected-error@+1 {{requires non-negative dimension attribute; found (-1)}}
+  // expected-error@+1 {{op attribute 'dimension' failed to satisfy constraint: 64-bit signless integer attribute whose value is non-negative}}
   %result = "mhlo.set_dimension_size"(%I, %dim) {dimension =-1 : i64} : (tensor<1x128x512xf32>, tensor<i32>) -> tensor<1x128x512xf32>
   func.return %result : tensor<1x128x512xf32>
 }
@@ -5662,8 +5728,7 @@ func.func @error_batch_norm_train(%input: tensor<2x2x2x2xf32>, %scale: tensor<2x
 // -----
 
 func.func @error_batch_norm_train(%input: tensor<2x2x2x2xf32>, %scale: tensor<2xf32>, %offset: tensor<2xf32>) -> tensor<2x2x2x2xf32> {
-  // @expected-error@+2 {{'mhlo.batch_norm_training' op failed to infer returned types}}
-  // expected-error@+1 {{expects featureIndex to be a non-negative number, got -1.}}
+  // expected-error@+1 {{op attribute 'feature_index' failed to satisfy constraint: 64-bit signless integer attribute whose value is non-negative}}
   %0:3 = "mhlo.batch_norm_training" (%input, %scale, %offset) {epsilon = 0.001 : f32, feature_index = -1 : i64} : (tensor<2x2x2x2xf32>, tensor<2xf32>, tensor<2xf32>) -> (tensor<2x2x2x2xf32>, tensor<2xf32>, tensor<2xf32>)
   func.return %0#0 : tensor<2x2x2x2xf32>
 }
@@ -5713,8 +5778,7 @@ func.func @error_batch_norm_inference(%input: tensor<4x256xf32>, %scale: tensor<
 // -----
 
 func.func @error_batch_norm_inference(%input: tensor<4x256xf32>, %scale: tensor<256xf32>, %offset: tensor<256xf32>, %mean: tensor<256xf32>, %variance: tensor<256xf32>) -> (tensor<4x256xf32>) {
-  // @expected-error@+2 {{'mhlo.batch_norm_inference' op failed to infer returned types}}
-  // expected-error@+1 {{expects featureIndex to be a non-negative number, got -1.}}
+  // expected-error@+1 {{op attribute 'feature_index' failed to satisfy constraint: 64-bit signless integer attribute whose value is non-negative}}
   %0 = "mhlo.batch_norm_inference" (%input, %scale, %offset, %mean, %variance) {epsilon = 1.001000e-05 : f32, feature_index = -1 : i64} :
       (tensor<4x256xf32>, tensor<256xf32>, tensor<256xf32>, tensor<256xf32>,
         tensor<256xf32>) -> tensor<4x256xf32>
@@ -5763,8 +5827,7 @@ func.func @error_batch_norm_grad(%input: tensor<2x2x2x2xf32>, %scale: tensor<2xf
 // -----
 
 func.func @error_batch_norm_grad(%input: tensor<2x2x2x2xf32>, %scale: tensor<2xf32>, %mean: tensor<2xf32>, %variance: tensor<2xf32>, %grad_output: tensor<2x2x2x2xf32>) -> tensor<2x2x2x2xf32> {
-  // @expected-error@+2 {{'mhlo.batch_norm_grad' op failed to infer returned types}}
-  // expected-error@+1 {{expects featureIndex to be a non-negative number, got -1.}}
+  // expected-error@+1 {{op attribute 'feature_index' failed to satisfy constraint: 64-bit signless integer attribute whose value is non-negative}}
   %0:3 = "mhlo.batch_norm_grad" (%input, %scale, %mean, %variance, %grad_output) {epsilon = 0.001 : f32, feature_index = -1 : i64} : (tensor<2x2x2x2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2x2x2x2xf32>) -> (tensor<2x2x2x2xf32>, tensor<2xf32>, tensor<2xf32>)
   func.return %0#0 : tensor<2x2x2x2xf32>
 }
@@ -5790,7 +5853,7 @@ func.func @error_batch_norm_grad(%input: tensor<2x2x2x2xf32>, %scale: tensor<4xf
 // -----
 
 func.func @error_batch_norm_grad(%input: tensor<2x2x2x2xi32>, %scale: tensor<2xf32>, %mean: tensor<2xf32>, %variance: tensor<2xf32>, %grad_output: tensor<2x2x2x2xf32>) -> tensor<2x2x2x2xf32> {
-  // expected-error@+1 {{op operand #0 must be ranked tensor of f8E4M3B11FNUZ type or f8E4M3FN type or f8E4M3FNUZ type or f8E5M2 type or f8E5M2FNUZ type or 16-bit float or 32-bit float or 64-bit float or bfloat16 type values, but got 'tensor<2x2x2x2xi32>'}}
+  // expected-error-re@+1 {{op operand #0 must be ranked tensor of {{.*}}, but got 'tensor<2x2x2x2xi32>'}}
   %0:3 = "mhlo.batch_norm_grad" (%input, %scale, %mean, %variance, %grad_output) {epsilon = 0.001 : f32, feature_index = 0 : i64} : (tensor<2x2x2x2xi32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2x2x2x2xf32>) -> (tensor<2x2x2x2xf32>, tensor<2xf32>, tensor<2xf32>)
   func.return %0#0 : tensor<2x2x2x2xf32>
 }
@@ -5823,7 +5886,7 @@ func.func @error_batch_norm_grad(%input: tensor<2x2x2x2xf32>, %scale: tensor<2xf
 // -----
 
 func.func @error_batch_norm_grad(%input: tensor<2x2x2x2xf32>, %scale: tensor<2xf32>, %mean: tensor<2xf32>, %variance: tensor<2xf32>, %grad_output: tensor<2x2x2x2xf32>) -> tensor<2x2x2x2xf32> {
-  // expected-error@+1 {{op result #1 must be 1D tensor of f8E4M3B11FNUZ type or f8E4M3FN type or f8E4M3FNUZ type or f8E5M2 type or f8E5M2FNUZ type or 16-bit float or 32-bit float or 64-bit float or bfloat16 type values, but got 'tensor<2x2xf32>'}}
+  // expected-error-re@+1 {{op result #1 must be 1D tensor of {{.*}}, but got 'tensor<2x2xf32>'}}
   %0:3 = "mhlo.batch_norm_grad" (%input, %scale, %mean, %variance, %grad_output) {epsilon = 0.001 : f32, feature_index = 0 : i64} : (tensor<2x2x2x2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2x2x2x2xf32>) -> (tensor<2x2x2x2xf32>, tensor<2x2xf32>, tensor<2xf32>)
   func.return %0#0 : tensor<2x2x2x2xf32>
 }
@@ -5831,7 +5894,7 @@ func.func @error_batch_norm_grad(%input: tensor<2x2x2x2xf32>, %scale: tensor<2xf
 // -----
 
 func.func @error_batch_norm_grad(%input: tensor<*xf32>, %scale: tensor<2xf32>, %mean: tensor<2xf32>, %variance: tensor<2xf32>, %grad_output: tensor<2x2x2x2xf32>) -> tensor<*xf32> {
-  // expected-error@+1 {{op operand #0 must be ranked tensor of f8E4M3B11FNUZ type or f8E4M3FN type or f8E4M3FNUZ type or f8E5M2 type or f8E5M2FNUZ type or 16-bit float or 32-bit float or 64-bit float or bfloat16 type values, but got 'tensor<*xf32>'}}
+  // expected-error-re@+1 {{op operand #0 must be ranked tensor of {{.*}}, but got 'tensor<*xf32>'}}
   %0:3 = "mhlo.batch_norm_grad" (%input, %scale, %mean, %variance, %grad_output) {epsilon = 0.001 : f32, feature_index = 0 : i64} : (tensor<*xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2x2x2x2xf32>) -> (tensor<*xf32>, tensor<2xf32>, tensor<2xf32>)
   func.return %0#0 : tensor<*xf32>
 }
@@ -6579,7 +6642,7 @@ func.func @complex(%arg0: tensor<10x10xf32>, %arg1: tensor<10x10xf32>) -> tensor
 // -----
 
 func.func @complex_int_input(%arg0: tensor<10x10xi32>, %arg1: tensor<10x10xi32>) -> tensor<10x10xcomplex<i32>> {
-  // expected-error@+1 {{operand #0 must be ranked tensor of 32-bit float or 64-bit float values, but got 'tensor<10x10xi32>'}}
+  // expected-error-re@+1 {{operand #0 must be ranked tensor of {{.*}}, but got 'tensor<10x10xi32>'}}
   %0 = "mhlo.complex"(%arg0, %arg1) {} : (tensor<10x10xi32>, tensor<10x10xi32>) -> tensor<10x10xcomplex<i32>>
   func.return %0 : tensor<10x10xcomplex<i32>>
 }
@@ -6595,7 +6658,7 @@ func.func @complex_f32_f64_mix_input(%arg0: tensor<10x10xf32>, %arg1: tensor<10x
 // -----
 
 func.func @complex_f16_input(%arg0: tensor<10x10xf16>, %arg1: tensor<10x10xf16>) -> tensor<10x10xcomplex<f16>> {
-  // expected-error@+1 {{operand #0 must be ranked tensor of 32-bit float or 64-bit float values, but got 'tensor<10x10xf16>'}}
+  // expected-error-re@+1 {{operand #0 must be ranked tensor of {{.*}}, but got 'tensor<10x10xf16>'}}
   %0 = "mhlo.complex"(%arg0, %arg1) {} : (tensor<10x10xf16>, tensor<10x10xf16>) -> tensor<10x10xcomplex<f16>>
   func.return %0 : tensor<10x10xcomplex<f16>>
 }
@@ -6787,7 +6850,7 @@ func.func @is_finite(%arg0: tensor<3xf32>) -> tensor<3xi1> {
 // -----
 
 func.func @is_finite_int_input(%arg0: tensor<3xi32>) -> tensor<3xi1> {
-  // expected-error@+1 {{op operand #0 must be ranked tensor of f8E4M3B11FNUZ type or f8E4M3FN type or f8E4M3FNUZ type or f8E5M2 type or f8E5M2FNUZ type or 16-bit float or 32-bit float or 64-bit float or bfloat16 type values, but got 'tensor<3xi32>'}}
+  // expected-error-re@+1 {{op operand #0 must be ranked tensor of {{.*}}, but got 'tensor<3xi32>'}}
   %0 = "mhlo.is_finite"(%arg0) {} : (tensor<3xi32>) -> tensor<3xi1>
   func.return %0 : tensor<3xi1>
 }
@@ -6795,7 +6858,7 @@ func.func @is_finite_int_input(%arg0: tensor<3xi32>) -> tensor<3xi1> {
 // -----
 
 func.func @is_finite_mismatch_return_element_type(%arg0: tensor<3xf32>) -> tensor<3xi10> {
-  // expected-error@+1 {{result #0 must be ranked tensor of pred (AKA boolean or 1-bit integer) values, but got 'tensor<3xi10>'}}
+  // expected-error-re@+1 {{result #0 must be ranked tensor of {{.*}}, but got 'tensor<3xi10>'}}
   %0 = "mhlo.is_finite"(%arg0) {} : (tensor<3xf32>) -> tensor<3xi10>
   func.return %0 : tensor<3xi10>
 }
@@ -6811,8 +6874,7 @@ func.func @is_finite_mismatch_return_shape(%arg0: tensor<3xf32>) -> tensor<4xi1>
 // -----
 
 func.func @negative_dimension_attr(%arg0: tensor<?x?xf32, #mhlo.type_extensions<bounds = [3, -1]>>, %arg1: tensor<i32>) -> tensor<?x?xf32> {
-  // expected-error@+2 {{'mhlo.set_dimension_size' op failed to infer returned types}}
-  // expected-error@+1 {{requires non-negative dimension attribute; found (-1)}}
+  // expected-error@+1 {{op attribute 'dimension' failed to satisfy constraint: 64-bit signless integer attribute whose value is non-negative}}
   %result = "mhlo.set_dimension_size"(%arg0, %arg1) {dimension = -1 : i64} : (tensor<?x?xf32, #mhlo.type_extensions<bounds = [3, -1]>>, tensor<i32>) -> tensor<?x?xf32>
   func.return %result : tensor<?x?xf32>
 }
@@ -6824,6 +6886,27 @@ func.func @invalid_dimension_attr(%arg0: tensor<?x?xf32, #mhlo.type_extensions<b
   // expected-error@+1 {{requires dimension attribute in range [0, 2); found (2)}}
   %result = "mhlo.set_dimension_size"(%arg0, %arg1) {dimension = 2 : i64} : (tensor<?x?xf32, #mhlo.type_extensions<bounds = [3, -1]>>, tensor<i32>) -> tensor<?x?xf32>
   func.return %result : tensor<?x?xf32>
+}
+
+// -----
+
+func.func @f4e2m1fn(%arg0: tensor<f16>) -> tensor<f4E2M1FN> {
+  %0 = "mhlo.convert"(%arg0) : (tensor<f16>) -> tensor<f4E2M1FN>
+  func.return %0 : tensor<f4E2M1FN>
+}
+
+// -----
+
+func.func @f8e3m4(%arg0: tensor<f16>) -> tensor<f8E3M4> {
+  %0 = "mhlo.convert"(%arg0) : (tensor<f16>) -> tensor<f8E3M4>
+  func.return %0 : tensor<f8E3M4>
+}
+
+// -----
+
+func.func @f8e4m3(%arg0: tensor<f16>) -> tensor<f8E4M3> {
+  %0 = "mhlo.convert"(%arg0) : (tensor<f16>) -> tensor<f8E4M3>
+  func.return %0 : tensor<f8E4M3>
 }
 
 // -----
@@ -6842,6 +6925,13 @@ func.func @f8e5m2(%arg0: tensor<f16>) -> tensor<f8E5M2> {
 
 // -----
 
+func.func @f8e8m0fnu(%arg0: tensor<f16>) -> tensor<f8E8M0FNU> {
+  %0 = "mhlo.convert"(%arg0) : (tensor<f16>) -> tensor<f8E8M0FNU>
+  func.return %0 : tensor<f8E8M0FNU>
+}
+
+// -----
+
 func.func @top_k_1d(%arg0 : tensor<16xf32>) {
   %0:2 = mhlo.topk(%arg0, k=8, largest=true) : tensor<16xf32> -> (tensor<8xf32>, tensor<8xi32>)
   return
@@ -6851,6 +6941,13 @@ func.func @top_k_1d(%arg0 : tensor<16xf32>) {
 
 func.func @top_k_nd(%arg0 : tensor<16x16xf32>) {
   %0:2 = mhlo.topk(%arg0, k=8, largest=false) : tensor<16x16xf32> -> (tensor<16x8xf32>, tensor<16x8xi32>)
+  return
+}
+
+// -----
+
+func.func @top_k_nd_unstable(%arg0 : tensor<16x16xf32>) {
+  %0:2 = mhlo.topk(%arg0, k=8, largest=true, is_stable = false) : tensor<16x16xf32> -> (tensor<16x8xf32>, tensor<16x8xi32>)
   return
 }
 
@@ -7058,3 +7155,385 @@ func.func @composite_c4(%arg0: !mhlo.token) {
   } : (!mhlo.token) -> tensor<f32>
   func.return
 }
+
+// -----
+
+// CHECK-LABEL: func @scan
+func.func @scan(%input: tensor<10xf32>, %init: tensor<f32>) -> tensor<10xf32> {
+  %0:2 = mhlo.scan (%input) inits (%init) dimension=0 attributes {
+      scan_dim_size = 10 : i64, is_reverse = true, is_associative = true
+  } {
+  ^bb0(%input0: tensor<f32>, %carry0: tensor<f32>):
+    %1 = mhlo.add %input0, %carry0 : tensor<f32>
+    mhlo.return %1, %1 : tensor<f32>, tensor<f32>
+  } : (tensor<10xf32>, tensor<f32>) -> (tensor<10xf32>, tensor<f32>)
+  func.return %0#0 : tensor<10xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func @scan_no_input_but_output
+func.func @scan_no_input_but_output(%init: tensor<f32>) -> tensor<10xf32> {
+  // The inferred return type has a dynamic dimension because there is no input.
+  // Check that this is compatible with the static dimension in the result type.
+  %0:2 = mhlo.scan () inits (%init) dimension=0 {
+  ^bb0(%carry0: tensor<f32>):
+    mhlo.return %carry0, %carry0 : tensor<f32>, tensor<f32>
+  } : (tensor<f32>) -> (tensor<10xf32>, tensor<f32>)
+  func.return %0#0 : tensor<10xf32>
+}
+
+// -----
+
+// ragged_dot mode 1: [b,m,k], [g,b,k,n], [g] -> [b,m,n]
+func.func @ragged_dot_non_contracting(%lhs : tensor<2x11x5xf32>, %rhs : tensor<3x2x5x7xf32>, %group_sizes : tensor<3xi64>) -> tensor<2x11x7xf32> {
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [0],
+        rhs_batching_dimensions = [1],
+        lhs_contracting_dimensions = [2],
+        rhs_contracting_dimensions = [2]
+      >,
+      lhs_ragged_dimensions = [1],
+      rhs_group_dimensions = [0]
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<2x11x5xf32>, tensor<3x2x5x7xf32>, tensor<3xi64>) -> tensor<2x11x7xf32>
+  func.return %0 : tensor<2x11x7xf32>
+}
+
+// -----
+
+// ragged_dot mode 2: [b,m,k], [b,k,n], [g] -> [g,b,m,n]
+func.func @ragged_dot_contracting(%lhs : tensor<2x11x5xf32>, %rhs : tensor<2x5x7xf32>, %group_sizes : tensor<3xi64>) -> tensor<3x2x11x7xf32> {
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [0],
+        rhs_batching_dimensions = [0],
+        lhs_contracting_dimensions = [2],
+        rhs_contracting_dimensions = [1]
+      >,
+      lhs_ragged_dimensions = [2],
+      rhs_group_dimensions = []
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<2x11x5xf32>, tensor<2x5x7xf32>, tensor<3xi64>) -> tensor<3x2x11x7xf32>
+  func.return %0 : tensor<3x2x11x7xf32>
+}
+
+// -----
+
+// ragged_dot mode 3: [b,m,k], [b,k,n], [g] -> [b,m,n]
+func.func @ragged_dot_batch(%lhs : tensor<3x11x5xf32>, %rhs : tensor<3x5x7xf32>, %group_sizes : tensor<3xi64>) -> tensor<3x11x7xf32> {
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [0],
+        rhs_batching_dimensions = [0],
+        lhs_contracting_dimensions = [2],
+        rhs_contracting_dimensions = [1]
+      >,
+      lhs_ragged_dimensions = [0],
+      rhs_group_dimensions = []
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<3x11x5xf32>, tensor<3x5x7xf32>, tensor<3xi64>) -> tensor<3x11x7xf32>
+  func.return %0 : tensor<3x11x7xf32>
+}
+
+// -----
+
+func.func @ragged_dot_incompatible_contracting_dims(%lhs : tensor<11x5xf32>, %rhs : tensor<3x2x7xf32>, %group_sizes : tensor<3xi64>) -> tensor<11x7xf32> {
+  // @expected-error@+1 {{contracting dimension sizes must match}}
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [],
+        rhs_batching_dimensions = [],
+        lhs_contracting_dimensions = [1],
+        rhs_contracting_dimensions = [1]
+      >,
+      lhs_ragged_dimensions = [0],
+      rhs_group_dimensions = [0]
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<11x5xf32>, tensor<3x2x7xf32>, tensor<3xi64>) -> tensor<11x7xf32>
+  func.return %0 : tensor<11x7xf32>
+}
+
+// -----
+
+func.func @ragged_dot_group_sizes_incorrect_rank(%lhs : tensor<11x5xf32>, %rhs : tensor<3x5x7xf32>, %group_sizes : tensor<3x2xi64>) -> tensor<11x7xf32> {
+  // @expected-error@+1 {{expected group_sizes to have rank 1, got 2}}
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [],
+        rhs_batching_dimensions = [],
+        lhs_contracting_dimensions = [1],
+        rhs_contracting_dimensions = [1]
+      >,
+      lhs_ragged_dimensions = [0],
+      rhs_group_dimensions = [0]
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<11x5xf32>, tensor<3x5x7xf32>, tensor<3x2xi64>) -> tensor<11x7xf32>
+  func.return %0 : tensor<11x7xf32>
+}
+
+// -----
+
+func.func @ragged_dot_mode1_group_sizes_broadcasted(%lhs : tensor<19x17x11x5xf32>, %rhs : tensor<3x19x5x7xf32>, %group_sizes : tensor<3xi64>) -> tensor<19x17x11x7xf32> {
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [0],
+        rhs_batching_dimensions = [1],
+        lhs_contracting_dimensions = [3],
+        rhs_contracting_dimensions = [2]
+      >,
+      lhs_ragged_dimensions = [2],
+      rhs_group_dimensions = [0]
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<19x17x11x5xf32>, tensor<3x19x5x7xf32>, tensor<3xi64>) -> tensor<19x17x11x7xf32>
+  func.return %0 : tensor<19x17x11x7xf32>
+}
+
+// -----
+
+func.func @ragged_dot_mode1_group_sizes_incorrect_shape(%lhs : tensor<19x17x11x5xf32>, %rhs : tensor<3x19x5x7xf32>, %group_sizes : tensor<19x11x3xi64>) -> tensor<19x17x11x7xf32> {
+  // @expected-error@+1 {{group_sizes is expected to have shape [19, 17, 3], got [19, 11, 3]}}
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [0],
+        rhs_batching_dimensions = [1],
+        lhs_contracting_dimensions = [3],
+        rhs_contracting_dimensions = [2]
+      >,
+      lhs_ragged_dimensions = [2],
+      rhs_group_dimensions = [0]
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<19x17x11x5xf32>, tensor<3x19x5x7xf32>, tensor<19x11x3xi64>) -> tensor<19x17x11x7xf32>
+  func.return %0 : tensor<19x17x11x7xf32>
+}
+
+// -----
+
+func.func @ragged_dot_mode2_group_sizes_incorrect_shape(%lhs : tensor<19x11x17x5xf32>, %rhs : tensor<19x17x5x7xf32>, %group_sizes : tensor<19x11x3xi64>) -> tensor<3x19x11x7xf32> {
+  // @expected-error@+1 {{group_sizes is expected to have shape [19, 17, 3], got [19, 11, 3]}}
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [0],
+        rhs_batching_dimensions = [0],
+        lhs_contracting_dimensions = [2,3],
+        rhs_contracting_dimensions = [1,2]
+      >,
+      lhs_ragged_dimensions = [3],
+      rhs_group_dimensions = []
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<19x11x17x5xf32>, tensor<19x17x5x7xf32>, tensor<19x11x3xi64>) -> tensor<3x19x11x7xf32>
+  func.return %0 : tensor<3x19x11x7xf32>
+}
+
+// -----
+
+func.func @ragged_dot_mode3_group_sizes_incorrect_shape(%lhs : tensor<17x19x11x5xf32>, %rhs : tensor<17x19x5x7xf32>, %group_sizes : tensor<19x3xi64>) -> tensor<17x19x11x7xf32> {
+  // @expected-error@+1 {{group_sizes is expected to have shape [17, 3], got [19, 3]}}
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [0,1],
+        rhs_batching_dimensions = [0,1],
+        lhs_contracting_dimensions = [3],
+        rhs_contracting_dimensions = [2]
+      >,
+      lhs_ragged_dimensions = [1],
+      rhs_group_dimensions = []
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<17x19x11x5xf32>, tensor<17x19x5x7xf32>, tensor<19x3xi64>) -> tensor<17x19x11x7xf32>
+  func.return %0 : tensor<17x19x11x7xf32>
+}
+
+// -----
+
+func.func @ragged_dot_incorrect_group_dim_size(%lhs : tensor<11x5xf32>, %rhs : tensor<3x5x7xf32>, %group_sizes : tensor<2xi64>) -> tensor<11x7xf32> {
+  // @expected-error@+1 {{rhs group dimension is expected to have size=2, got 3}}
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [],
+        rhs_batching_dimensions = [],
+        lhs_contracting_dimensions = [1],
+        rhs_contracting_dimensions = [1]
+      >,
+      lhs_ragged_dimensions = [0],
+      rhs_group_dimensions = [0]
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<11x5xf32>, tensor<3x5x7xf32>, tensor<2xi64>) -> tensor<11x7xf32>
+  func.return %0 : tensor<11x7xf32>
+}
+
+// -----
+
+func.func @ragged_dot_incorrect_number_of_lhs_ragged_dimensions(%lhs : tensor<11x5xf32>, %rhs : tensor<3x5x7xf32>, %group_sizes : tensor<3xi64>) -> tensor<11x7xf32> {
+  // @expected-error@+1 {{There must be exactly one ragged dimension in the lhs}}
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [],
+        rhs_batching_dimensions = [],
+        lhs_contracting_dimensions = [1],
+        rhs_contracting_dimensions = [1]
+      >,
+      lhs_ragged_dimensions = [0, 1],
+      rhs_group_dimensions = [0]
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<11x5xf32>, tensor<3x5x7xf32>, tensor<3xi64>) -> tensor<11x7xf32>
+  func.return %0 : tensor<11x7xf32>
+}
+
+// -----
+
+func.func @ragged_dot_rhs_group_dim_is_batch(%lhs : tensor<3x11x5xf32>, %rhs : tensor<3x5x7xf32>, %group_sizes : tensor<3xi64>) -> tensor<3x11x7xf32> {
+  // @expected-error@+1 {{has duplicated dimension from rhs_group_dimensions and rhs_batching_dimensions: 0}}
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [0],
+        rhs_batching_dimensions = [0],
+        lhs_contracting_dimensions = [2],
+        rhs_contracting_dimensions = [1]
+      >,
+      lhs_ragged_dimensions = [1],
+      rhs_group_dimensions = [0]
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<3x11x5xf32>, tensor<3x5x7xf32>, tensor<3xi64>) -> tensor<3x11x7xf32>
+  func.return %0 : tensor<3x11x7xf32>
+}
+
+// -----
+
+func.func @ragged_dot_rhs_group_dim_is_contracting(%lhs : tensor<11x3xf32>, %rhs : tensor<3x3x7xf32>, %group_sizes : tensor<3xi64>) -> tensor<11x7xf32> {
+  // @expected-error@+1 {{has duplicated dimension from rhs_group_dimensions and rhs_contracting_dimensions: 1}}
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [],
+        rhs_batching_dimensions = [],
+        lhs_contracting_dimensions = [1],
+        rhs_contracting_dimensions = [1]
+      >,
+      lhs_ragged_dimensions = [0],
+      rhs_group_dimensions = [1]
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<11x3xf32>, tensor<3x3x7xf32>, tensor<3xi64>) -> tensor<11x7xf32>
+  func.return %0 : tensor<11x7xf32>
+}
+
+// -----
+
+func.func @ragged_dot_nonzero_rhs_group_dims_for_ragged_batch(%lhs : tensor<2x11x5xf32>, %rhs : tensor<3x2x5x7xf32>, %group_sizes : tensor<3xi64>) -> tensor<2x11x7xf32> {
+  // @expected-error@+1 {{There must be zero group dimensions in the rhs when the ragged dimension is batch or contracting}}
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [0],
+        rhs_batching_dimensions = [1],
+        lhs_contracting_dimensions = [2],
+        rhs_contracting_dimensions = [2]
+      >,
+      lhs_ragged_dimensions = [0],
+      rhs_group_dimensions = [0]
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<2x11x5xf32>, tensor<3x2x5x7xf32>, tensor<3xi64>) -> tensor<2x11x7xf32>
+  func.return %0 : tensor<2x11x7xf32>
+}
+
+// -----
+
+func.func @ragged_dot_nonzero_rhs_group_dims_for_ragged_contracting(%lhs : tensor<11x5xf32>, %rhs : tensor<3x5x7xf32>, %group_sizes : tensor<3xi64>) -> tensor<11x7xf32> {
+  // @expected-error@+1 {{There must be zero group dimensions in the rhs when the ragged dimension is batch or contracting}}
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [],
+        rhs_batching_dimensions = [],
+        lhs_contracting_dimensions = [1],
+        rhs_contracting_dimensions = [1]
+      >,
+      lhs_ragged_dimensions = [1],
+      rhs_group_dimensions = [0]
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<11x5xf32>, tensor<3x5x7xf32>, tensor<3xi64>) -> tensor<11x7xf32>
+  func.return %0 : tensor<11x7xf32>
+}
+
+// -----
+
+func.func @ragged_dot_zero_rhs_group_dims_for_ragged_noncontracting(%lhs : tensor<11x5xf32>, %rhs : tensor<5x7xf32>, %group_sizes : tensor<3xi64>) -> tensor<11x7xf32> {
+  // @expected-error@+1 {{There must be exactly one group dimension in the rhs when the lhs ragged dimension is non-contracting}}
+  %0 = "mhlo.ragged_dot"(%lhs, %rhs, %group_sizes) {
+    ragged_dot_dimension_numbers = #mhlo.ragged_dot<
+      dot_dimension_numbers = #mhlo.dot<
+        lhs_batching_dimensions = [],
+        rhs_batching_dimensions = [],
+        lhs_contracting_dimensions = [1],
+        rhs_contracting_dimensions = [0]
+      >,
+      lhs_ragged_dimensions = [0],
+      rhs_group_dimensions = []
+    >,
+    precision_config = [#mhlo<precision DEFAULT>, #mhlo<precision DEFAULT>]
+  } : (tensor<11x5xf32>, tensor<5x7xf32>, tensor<3xi64>) -> tensor<11x7xf32>
+  func.return %0 : tensor<11x7xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func @mulhi_i32
+func.func @mulhi_i32(%arg0: tensor<4xi32>, %arg1: tensor<4xi32>) -> tensor<4xi32> {
+  %0 = "mhlo.mulhi"(%arg0, %arg1) : (tensor<4xi32>, tensor<4xi32>) -> tensor<4xi32>
+  func.return %0: tensor<4xi32>
+}
+
+// CHECK-LABEL: func @mulhi_i16
+func.func @mulhi_i16(%arg0: tensor<4xi16>, %arg1: tensor<4xi16>) -> tensor<4xi16> {
+  %0 = "mhlo.mulhi"(%arg0, %arg1) : (tensor<4xi16>, tensor<4xi16>) -> tensor<4xi16>
+  func.return %0: tensor<4xi16>
+}
+
+// -----
+// CHECK-LABEL: module @testOriginalArray
+module @testOriginalArray attributes {
+  // CHECK: mhlo.attr = #mhlo.original_array<"my_inst", [0, 1, 2]>
+  "mhlo.attr" = #mhlo.original_array<"my_inst", [0, 1, 2]>
+} {}
+
+// CHECK-LABEL: module @testOriginalValueElement
+module @testOriginalValueElement attributes {
+  // CHECK: mhlo.attr = #mhlo.original_value_element<[0], <"source_op", []>>
+  "mhlo.attr" = #mhlo.original_value_element<[0], <"source_op", []>>
+} {}
+
+// CHECK-LABEL: module @testOriginalValue
+module @testOriginalValue attributes {
+  // CHECK: mhlo.attr = #mhlo.original_value<false, [<[0], <"first_instruction", [0, 1]>>, <[1], <"second_instruction", [2]>>]>
+  "mhlo.attr" = #mhlo.original_value<false, [
+    <[0], <"first_instruction", [0, 1]>>,
+    <[1], <"second_instruction", [2]>>
+  ]>
+} {}

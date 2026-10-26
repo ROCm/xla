@@ -18,69 +18,33 @@ limitations under the License.
 #include <deque>
 #include <memory>
 #include <queue>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/memory/memory.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
+#include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/map_util.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
-#include "tsl/platform/errors.h"
 
 namespace xla {
 
 using absl::StrAppendFormat;
 using absl::StrCat;
-
-std::string CallContextToString(CallContext context) {
-  switch (context) {
-    case CallContext::kNone:
-      return "kNone";
-    case CallContext::kControlFlow:
-      return "kControlFlow";
-    case CallContext::kEmbedded:
-      return "kEmbedded";
-    case CallContext::kBoth:
-      return "kBoth";
-  }
-}
-
-std::ostream& operator<<(std::ostream& out, const CallContext& context) {
-  out << CallContextToString(context);
-  return out;
-}
-
-CallContext GetInstructionCallContext(HloOpcode opcode) {
-  switch (opcode) {
-    case HloOpcode::kCall:
-    case HloOpcode::kConditional:
-    case HloOpcode::kWhile:
-    case HloOpcode::kAsyncStart:
-    case HloOpcode::kAsyncUpdate:
-    case HloOpcode::kAsyncDone:
-      return CallContext::kControlFlow;
-    case HloOpcode::kAllReduce:
-    case HloOpcode::kReduceScatter:
-    case HloOpcode::kAllReduceStart:
-    case HloOpcode::kMap:
-    case HloOpcode::kReduce:
-    case HloOpcode::kReduceWindow:
-    case HloOpcode::kScatter:
-    case HloOpcode::kSelectAndScatter:
-    case HloOpcode::kSort:
-    case HloOpcode::kTopK:
-    case HloOpcode::kFusion:
-    case HloOpcode::kCustomCall:
-      return CallContext::kEmbedded;
-    default:
-      return CallContext::kNone;
-  }
-}
 
 std::string CallSite::ToString() const {
   return StrCat(
@@ -214,8 +178,8 @@ CallContext UnionContexts(CallContext a, CallContext b) {
   } else if (a == b) {
     return a;
   } else {
-    // Contexts are different and neither is kNone, ie one is kSequential and
-    // the other is kParallel.
+    // Contexts are different and neither is kNone, i.e. one is kControlFlow and
+    // the other is kEmbedded.
     return CallContext::kBoth;
   }
 }
@@ -333,9 +297,14 @@ std::unique_ptr<CallGraph> CallGraph::Build(
     call_graph->nodes_.emplace_back(computation);
 
     // Add all callsites in this computation.
-    for (HloInstruction* instruction : computation->instructions()) {
-      call_graph->nodes_.back().AddCallSiteForInstruction(instruction,
-                                                          execution_threads);
+    if (computation->HasCalledComputations()) {
+      for (const HloInstructionInfo& instruction :
+           computation->instructions_with_info()) {
+        if (HloInstruction::MightHaveCalledComputations(instruction.opcode())) {
+          call_graph->nodes_.back().AddCallSiteForInstruction(
+              instruction.get(), execution_threads);
+        }
+      }
     }
   }
 
@@ -373,11 +342,33 @@ absl::Status CallGraph::VisitNodesInternal(
   }
 
   for (const HloComputation* computation : node.callees()) {
-    TF_RETURN_IF_ERROR(
+    ABSL_RETURN_IF_ERROR(
         VisitNodesInternal(visitor_func, GetNode(computation), visited));
   }
 
   return visitor_func(node);
+}
+
+absl::StatusOr<bool> CallGraph::VisitNodesInternal(
+    ChangedVisitorFunction visitor_func, const CallGraphNode& node,
+    absl::flat_hash_set<const CallGraphNode*>* visited) const {
+  auto pair = visited->insert(&node);
+  if (!pair.second) {
+    // Node was not inserted. Node has already been visited.
+    return false;
+  }
+
+  bool changed = false;
+  for (const HloComputation* computation : node.callees()) {
+    ABSL_ASSIGN_OR_RETURN(
+        bool node_changed,
+        VisitNodesInternal(visitor_func, GetNode(computation), visited));
+    changed |= node_changed;
+  }
+
+  ABSL_ASSIGN_OR_RETURN(bool node_changed, visitor_func(node));
+  changed |= node_changed;
+  return changed;
 }
 
 absl::Status CallGraph::VisitNodes(VisitorFunction visitor_func,
@@ -387,16 +378,40 @@ absl::Status CallGraph::VisitNodes(VisitorFunction visitor_func,
     // Traverse from all roots in the call graph.
     for (const CallGraphNode& node : nodes()) {
       if (node.callers().empty()) {
-        TF_RETURN_IF_ERROR(VisitNodesInternal(visitor_func, node, &visited));
+        ABSL_RETURN_IF_ERROR(VisitNodesInternal(visitor_func, node, &visited));
       }
     }
   } else {
     // Traverse only from the entry computation.
-    TF_RETURN_IF_ERROR(VisitNodesInternal(
+    ABSL_RETURN_IF_ERROR(VisitNodesInternal(
         visitor_func, GetNode(module_->entry_computation()), &visited));
   }
 
   return absl::OkStatus();
+}
+
+absl::StatusOr<bool> CallGraph::VisitNodesWithReturn(
+    ChangedVisitorFunction visitor_func, bool visit_unreachable_nodes) const {
+  absl::flat_hash_set<const CallGraphNode*> visited;
+  bool changed = false;
+  if (visit_unreachable_nodes) {
+    // Traverse from all roots in the call graph.
+    for (const CallGraphNode& node : nodes()) {
+      if (node.callers().empty()) {
+        ABSL_ASSIGN_OR_RETURN(bool node_changed,
+                              VisitNodesInternal(visitor_func, node, &visited));
+        changed |= node_changed;
+      }
+    }
+  } else {
+    // Traverse only from the entry computation.
+    ABSL_ASSIGN_OR_RETURN(
+        changed,
+        VisitNodesInternal(visitor_func, GetNode(module_->entry_computation()),
+                           &visited));
+  }
+
+  return changed;
 }
 
 bool CallGraph::IsFlattened() const {
@@ -408,6 +423,34 @@ bool CallGraph::IsFlattened() const {
         !node.computation()->IsAsyncComputation() &&
         node.caller_callsites().size() > 1) {
       return false;
+    }
+  }
+  return true;
+}
+
+bool CallGraph::IsFlatOnControlFlow() const {
+  for (const CallGraphNode& node : nodes_) {
+    for (const CallSite& callsite : node.callsites()) {
+      if (callsite.instruction()->opcode() == HloOpcode::kWhile) {
+        HloComputation* body = callsite.instruction()->while_body();
+        HloComputation* cond = callsite.instruction()->while_condition();
+        if (body == cond || GetNode(body).caller_callsites().size() > 1 ||
+            GetNode(cond).caller_callsites().size() > 1) {
+          return false;
+        }
+        continue;
+      }
+      if (callsite.instruction()->opcode() == HloOpcode::kConditional) {
+        absl::flat_hash_set<const HloComputation*> seen_branches;
+        for (HloComputation* branch :
+             callsite.instruction()->called_computations()) {
+          if (!seen_branches.insert(branch).second ||
+              GetNode(branch).caller_callsites().size() > 1) {
+            return false;
+          }
+        }
+        continue;
+      }
     }
   }
   return true;
@@ -434,6 +477,11 @@ CallGraph::NearestAncestorsInSameComputation(HloInstruction* a,
     const CallGraphNode& node = GetNode(instruction->parent());
     if (node.caller_callsites().size() != 1) {
       if (instruction->parent()->IsAsyncComputation()) {
+        for (const CallSite& callsite : node.caller_callsites()) {
+          if (callsite.instruction()->opcode() == HloOpcode::kAsyncStart) {
+            return callsite.instruction();
+          }
+        }
         return node.caller_callsites()[0].instruction();
       }
       return nullptr;
@@ -445,25 +493,19 @@ CallGraph::NearestAncestorsInSameComputation(HloInstruction* a,
   // element.
   HloInstruction* a_ancestor = a;
   HloInstruction* b_ancestor = b;
-  int a_depth = GetNode(a->parent()).depth();
-  int b_depth = GetNode(b->parent()).depth();
 
   // Advance a_ancestor (b_ancestor) up the call chain until the call depth of
-  // a_ancestor or b_ancestor are the same. Necessarily each call to next_caller
-  // reduces the depth by exactly one.
-  if (a_depth > b_depth) {
-    for (int i = 0; i < a_depth - b_depth; ++i) {
+  // a_ancestor or b_ancestor are the same. Compare depths dynamically at each
+  // step because a loop-crossing async computation may have caller callsites at
+  // different depths (e.g., kAsyncStart in ENTRY and kAsyncDone in while_body).
+  while (a_ancestor != nullptr && b_ancestor != nullptr &&
+         GetNode(a_ancestor->parent()).depth() !=
+             GetNode(b_ancestor->parent()).depth()) {
+    if (GetNode(a_ancestor->parent()).depth() >
+        GetNode(b_ancestor->parent()).depth()) {
       a_ancestor = next_caller(a_ancestor);
-      if (a_ancestor == nullptr) {
-        return {nullptr, nullptr};
-      }
-    }
-  } else if (b_depth > a_depth) {
-    for (int i = 0; i < b_depth - a_depth; ++i) {
+    } else {
       b_ancestor = next_caller(b_ancestor);
-      if (b_ancestor == nullptr) {
-        return {nullptr, nullptr};
-      }
     }
   }
 
@@ -585,8 +627,7 @@ absl::flat_hash_set<const T*> CallGraph::NearestCommonAncestorsHelper(
         return nearest_common_ancestors.contains(nca);
       })) {
     absl::erase_if(nearest_common_ancestors, [&starting_nodes](const T* nca) {
-      return std::find(starting_nodes.begin(), starting_nodes.end(), nca) ==
-             starting_nodes.end();
+      return absl::c_find(starting_nodes, nca) == starting_nodes.end();
     });
   }
 

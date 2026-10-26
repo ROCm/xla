@@ -15,12 +15,17 @@ limitations under the License.
 
 #include "xla/service/dot_as_convolution_util.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <optional>
+#include <vector>
 
+#include "absl/status/status_macros.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/shape_inference.h"
 #include "xla/status_macros.h"
+#include "xla/util.h"
 
 namespace xla {
 namespace dot_as_convolution_util {
@@ -129,6 +134,9 @@ bool SpatialIsContracting(int64_t lhs_spatial_size, int64_t rhs_spatial_size,
     }
   }
 
+  dims.lhs_shape_rank = conv->operand(0)->shape().dimensions().size();
+  dims.rhs_shape_rank = conv->operand(1)->shape().dimensions().size();
+  dims.output_shape_rank = conv->shape().dimensions().size();
   return dims;
 }
 
@@ -164,19 +172,25 @@ CreateShardedConvForDotGeneralConvolution(
     wd->set_padding_high(wd->size() - 1);
     wd->set_padding_low(wd->size() - 1);
   }
-  TF_ASSIGN_OR_RETURN(
+  ABSL_ASSIGN_OR_RETURN(
       Shape sharded_conv_shape,
       ShapeInference::InferConvolveShape(
           sharded_lhs_hlo->shape(), sharded_rhs_hlo->shape(),
           /*feature_group_count=*/conv.feature_group_count(),
           /*batch_group_count=*/conv.batch_group_count(), window, conv_dnums,
+          conv.sparsity_config(),
           /*preferred_element_type=*/conv.shape().element_type()));
   *sharded_conv_shape.mutable_layout() = conv.shape().layout();
+  std::vector<HloInstruction*> operands(conv.operands().begin(),
+                                        conv.operands().end());
+  operands[0] = sharded_lhs_hlo;
+  operands[1] = sharded_rhs_hlo;
   return HloInstruction::CreateConvolve(
-      sharded_conv_shape, sharded_lhs_hlo, sharded_rhs_hlo,
+      sharded_conv_shape, operands,
       /*feature_group_count=*/conv.feature_group_count(),
       /*batch_group_count=*/conv.batch_group_count(), window, conv_dnums,
-      conv.precision_config());
+      conv.precision_config(), conv.sparsity_config(),
+      conv.block_scaling_config());
 }
 
 DotConvolutionDimsInfo ParseDotGeneralFromDot(const HloInstruction* dot) {
@@ -199,31 +213,35 @@ DotConvolutionDimsInfo ParseDotGeneralFromDot(const HloInstruction* dot) {
     dnums.contracting_dims.back().output = -1;
     dnums.contracting_dims.back().spatial_dim = -1;
   }
-  for (int64_t i = 0; i < dot->operand(0)->shape().rank(); ++i) {
-    if (!absl::c_linear_search(dot_dim_numbs.lhs_batch_dimensions(), i) &&
-        !absl::c_linear_search(dot_dim_numbs.lhs_contracting_dimensions(), i)) {
-      dnums.lhs_non_contracting_dims.emplace_back();
-      dnums.lhs_non_contracting_dims.back().lhs = i;
-      dnums.lhs_non_contracting_dims.back().rhs = -1;
-      dnums.lhs_non_contracting_dims.back().output =
-          dot_dim_numbs.lhs_batch_dimensions_size() +
-          dnums.lhs_non_contracting_dims.size() - 1;
-      dnums.lhs_non_contracting_dims.back().spatial_dim = -1;
-    }
+  for (auto i :
+       GetNonContractingDims(dot->operand(0)->shape().dimensions().size(),
+                             dot_dim_numbs.lhs_contracting_dimensions(),
+                             dot_dim_numbs.lhs_batch_dimensions())) {
+    dnums.lhs_non_contracting_dims.emplace_back();
+    dnums.lhs_non_contracting_dims.back().lhs = i;
+    dnums.lhs_non_contracting_dims.back().rhs = -1;
+    dnums.lhs_non_contracting_dims.back().output =
+        dot_dim_numbs.lhs_batch_dimensions_size() +
+        dnums.lhs_non_contracting_dims.size() - 1;
+    dnums.lhs_non_contracting_dims.back().spatial_dim = -1;
   }
-  for (int64_t i = 0; i < dot->operand(1)->shape().rank(); ++i) {
-    if (!absl::c_linear_search(dot_dim_numbs.rhs_batch_dimensions(), i) &&
-        !absl::c_linear_search(dot_dim_numbs.rhs_contracting_dimensions(), i)) {
-      dnums.rhs_non_contracting_dims.emplace_back();
-      dnums.rhs_non_contracting_dims.back().lhs = -1;
-      dnums.rhs_non_contracting_dims.back().rhs = i;
-      dnums.rhs_non_contracting_dims.back().output =
-          dot_dim_numbs.lhs_batch_dimensions_size() +
-          dnums.lhs_non_contracting_dims.size() +
-          dnums.rhs_non_contracting_dims.size() - 1;
-      dnums.rhs_non_contracting_dims.back().spatial_dim = -1;
-    }
+  for (auto i :
+       GetNonContractingDims(dot->operand(1)->shape().dimensions().size(),
+                             dot_dim_numbs.rhs_contracting_dimensions(),
+                             dot_dim_numbs.rhs_batch_dimensions())) {
+    dnums.rhs_non_contracting_dims.emplace_back();
+    dnums.rhs_non_contracting_dims.back().lhs = -1;
+    dnums.rhs_non_contracting_dims.back().rhs = i;
+    dnums.rhs_non_contracting_dims.back().output =
+        dot_dim_numbs.lhs_batch_dimensions_size() +
+        dnums.lhs_non_contracting_dims.size() +
+        dnums.rhs_non_contracting_dims.size() - 1;
+    dnums.rhs_non_contracting_dims.back().spatial_dim = -1;
   }
+
+  dnums.lhs_shape_rank = dot->operand(0)->shape().dimensions().size();
+  dnums.rhs_shape_rank = dot->operand(1)->shape().dimensions().size();
+  dnums.output_shape_rank = dot->shape().dimensions().size();
   return dnums;
 }
 

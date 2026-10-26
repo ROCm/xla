@@ -17,20 +17,20 @@ limitations under the License.
 #define XLA_SERVICE_LOCAL_SERVICE_H_
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "absl/status/statusor.h"
 #include "absl/types/span.h"
 #include "xla/client/executable_build_options.h"
-#include "xla/client/xla_computation.h"
+#include "xla/hlo/builder/xla_computation.h"
 #include "xla/service/backend.h"
 #include "xla/service/compiler.h"
 #include "xla/service/executable.h"
 #include "xla/service/service.h"
 #include "xla/service/shaped_buffer.h"
 #include "xla/shape.h"
-#include "xla/statusor.h"
-#include "xla/stream_executor/device_memory_allocator.h"
+#include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/xla_data.pb.h"
 
@@ -57,7 +57,7 @@ class LocalService : public Service {
   // Same as CompileExecutables() above, but return AotCompilationResult objects
   // (instead of Executable objects), which can be persisted to later load
   // Executable objects.
-  absl::StatusOr<std::vector<std::unique_ptr<AotCompilationResult>>>
+  absl::StatusOr<std::vector<std::unique_ptr<CompiledModule>>>
   CompileAotResults(const XlaComputation& computation,
                     const absl::Span<const Shape* const> argument_layouts,
                     const ExecutableBuildOptions& build_options);

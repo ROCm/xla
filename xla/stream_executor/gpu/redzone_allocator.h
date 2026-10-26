@@ -17,17 +17,19 @@ limitations under the License.
 #define XLA_STREAM_EXECUTOR_GPU_REDZONE_ALLOCATOR_H_
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "xla/stream_executor/device_memory.h"
-#include "xla/stream_executor/device_memory_allocator.h"
-#include "xla/stream_executor/gpu/gpu_asm_opts.h"
+#include "xla/shape.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/scratch_allocator.h"
-#include "xla/stream_executor/stream_executor.h"
+#include "xla/stream_executor/stream.h"
 
 namespace stream_executor {
 
@@ -47,8 +49,10 @@ class RedzoneAllocator : public ScratchAllocator {
   static constexpr int64_t kDefaultRedzoneSize =
       1LL << 23;  // 8MiB per side, 16MiB total.
   static constexpr uint8_t kDefaultRedzonePattern = -1;  // NOLINT
-  RedzoneAllocator(Stream* stream, DeviceMemoryAllocator* memory_allocator,
-                   const GpuAsmOpts& gpu_compilation_opts_,
+  // Maximum number of thread blocks to be used for redzone checker kernel
+  static constexpr int64_t kMaxNumThreadBlocksForKernel = 32768;
+
+  RedzoneAllocator(Stream* stream, DeviceAddressAllocator* memory_allocator,
                    int64_t memory_limit = (1LL << 32),  // 4GB
                    int64_t redzone_size = kDefaultRedzoneSize,
                    uint8_t redzone_pattern = kDefaultRedzonePattern);
@@ -60,7 +64,8 @@ class RedzoneAllocator : public ScratchAllocator {
     return allocated_bytes_excluding_redzones_;
   }
 
-  absl::StatusOr<DeviceMemory<uint8>> AllocateBytes(int64_t byte_size) override;
+  absl::StatusOr<DeviceAddress<uint8_t>> AllocateBytes(
+      int64_t byte_size) override;
 
   // Non-empty redzone check status implies that there was a write into a
   // redzone, with a string communicating the location of the write.
@@ -104,6 +109,12 @@ class RedzoneAllocator : public ScratchAllocator {
 
   Stream* stream() const { return stream_; }
 
+  // Create a buffer for a given operation using redzone checker, initialize
+  // based on a given rng state.
+  absl::StatusOr<DeviceAddressBase> CreateBuffer(const xla::Shape& shape,
+                                                 bool initialize_buffers,
+                                                 int64_t& rng_state);
+
  private:
   const int device_ordinal_;
   Stream* stream_;
@@ -118,8 +129,7 @@ class RedzoneAllocator : public ScratchAllocator {
   const int64_t redzone_size_;
 
   const uint8_t redzone_pattern_;
-  DeviceMemoryAllocator* memory_allocator_;
-  GpuAsmOpts gpu_compilation_opts_;
+  DeviceAddressAllocator* memory_allocator_;
 
   // The second element of the pair is the size of the user allocation.  This
   // isn't necessarily just first.size() - 2 * redzone_size_ because when the
@@ -127,10 +137,45 @@ class RedzoneAllocator : public ScratchAllocator {
   // the RHS redzone.
   //
   // ScratchAllocators need to free all allocated memory on destruction so we
-  // use `OwningDeviceMemory` here.
-  std::vector<std::pair<OwningDeviceMemory, int64_t>> allocated_buffers_;
+  // use `OwningDeviceAddress` here.
+  std::vector<std::pair<ScopedDeviceAddress<uint8_t>, int64_t>>
+      allocated_buffers_;
 
   int64_t allocated_bytes_excluding_redzones_ = 0;
+};
+
+// Wraps a DeviceAddressAllocator so that every buffer allocated through it is
+// surrounded by redzones (via an internal RedzoneAllocator). A write past the
+// end of an allocation lands in the mapped post-redzone rather than faulting
+// the GPU, and can be detected via CheckRedzones().
+//
+// Deallocate() is a no-op: the underlying RedzoneAllocator owns all memory it
+// hands out and frees it only when the RedzoneAllocator itself is destroyed.
+// Callers must not use this allocator for buffers whose lifetime can outlive
+// it.
+class RedzoneDeviceAddressAllocator : public DeviceAddressAllocator {
+ public:
+  RedzoneDeviceAddressAllocator(
+      Stream* stream, DeviceAddressAllocator* underlying, int64_t redzone_size,
+      int64_t memory_limit = std::numeric_limits<int64_t>::max());
+
+  absl::StatusOr<ScopedDeviceAddress<uint8_t>> Allocate(
+      int device_ordinal, uint64_t size, bool retry_on_failure,
+      int64_t memory_space) override;
+
+  absl::Status Deallocate(int device_ordinal, DeviceAddressBase mem) override;
+
+  absl::StatusOr<Stream*> GetStream(int device_ordinal) override;
+
+  bool AllowsAsynchronousDeallocation() const override { return true; }
+
+  absl::StatusOr<RedzoneAllocator::RedzoneCheckStatus> CheckRedzones() {
+    return rz_alloc_.CheckRedzones();
+  }
+
+ private:
+  DeviceAddressAllocator* underlying_;
+  RedzoneAllocator rz_alloc_;
 };
 
 }  // namespace stream_executor

@@ -16,13 +16,16 @@ limitations under the License.
 #include "xla/service/spmd/whole_graph_manual_pass.h"
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/ir/hlo_sharding.h"
-#include "xla/statusor.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -59,12 +62,12 @@ absl::StatusOr<bool> RunOnComputation(HloComputation* computation) {
 
 }  // namespace
 
-absl::StatusOr<bool> WholeGraphManualPass::Run(
+absl::StatusOr<bool> WholeGraphManualPass::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   bool changed = false;
   for (auto* comp : module->computations()) {
-    TF_ASSIGN_OR_RETURN(bool comp_changed, RunOnComputation(comp));
+    ABSL_ASSIGN_OR_RETURN(bool comp_changed, RunOnComputation(comp));
     changed |= comp_changed;
   }
   return changed;

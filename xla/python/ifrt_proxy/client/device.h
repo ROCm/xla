@@ -25,10 +25,11 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "llvm/Support/ExtensibleRTTI.h"
 #include "xla/pjrt/pjrt_device_description.h"
+#include "xla/python/ifrt/attribute_map.h"
 #include "xla/python/ifrt/device.h"
 #include "xla/python/ifrt/memory.h"
+#include "xla/python/ifrt/rtti.h"
 
 namespace xla {
 namespace ifrt {
@@ -73,26 +74,22 @@ class DeviceDescription final : public xla::PjRtDeviceDescription {
   absl::flat_hash_map<std::string, xla::PjRtDeviceAttribute> attributes_;
 };
 
-class Device final : public llvm::RTTIExtends<Device, xla::ifrt::Device> {
+class Device final : public RTTIExtends<Device, xla::ifrt::Device> {
  public:
-  Device(DeviceDescription description, int local_device_id,
-         int local_hardware_id, bool is_addressable)
-      : description_(std::move(description)),
-        local_device_id_(local_device_id),
-        local_hardware_id_(local_hardware_id),
-        is_addressable_(is_addressable) {}
+  Device(DeviceDescription description, std::string platform_name,
+         int local_device_id, int local_hardware_id, bool is_addressable);
 
   ifrt::Client* client() const override;
   bool IsAddressable() const override;
 
   DeviceId Id() const override;
+  absl::string_view PlatformName() const override;
   absl::string_view Kind() const override;
   absl::string_view ToString() const override;
   absl::string_view DebugString() const override;
   int ProcessIndex() const override;
 
-  const absl::flat_hash_map<std::string, PjRtDeviceAttribute>& Attributes()
-      const override;
+  const AttributeMap& Attributes() const override;
 
   absl::Span<ifrt::Memory* const> Memories() const override;
   absl::StatusOr<ifrt::Memory*> DefaultMemory() const override;
@@ -104,6 +101,10 @@ class Device final : public llvm::RTTIExtends<Device, xla::ifrt::Device> {
 
   ifrt::Client* client_;
   const DeviceDescription description_;
+  const std::string platform_name_;
+
+  const AttributeMap attributes_;
+
   const int local_device_id_;
   const int local_hardware_id_;
   const bool is_addressable_;

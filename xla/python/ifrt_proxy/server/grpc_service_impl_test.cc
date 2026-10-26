@@ -14,43 +14,53 @@
 
 #include "xla/python/ifrt_proxy/server/grpc_service_impl.h"
 
-#include <cstdint>
-#include <memory>
-#include <string>
-
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
+#include <utility>
+
 #include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/cord.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/notification.h"
+#include "absl/time/time.h"
+#include "grpcpp/client_context.h"
 #include "grpcpp/server.h"
 #include "grpcpp/server_builder.h"
 #include "grpcpp/support/channel_arguments.h"
 #include "grpcpp/support/status.h"
+#include "grpcpp/support/sync_stream.h"
+#include "xla/python/ifrt/attribute_map.h"
+#include "xla/python/ifrt/serdes_version.h"
 #include "xla/python/ifrt_proxy/client/grpc_host_buffer.h"
 #include "xla/python/ifrt_proxy/common/grpc_ifrt_service.grpc.pb.h"
+#include "xla/python/ifrt_proxy/common/grpc_ifrt_service.pb.h"
 #include "xla/python/ifrt_proxy/common/ifrt_service.pb.h"
+#include "xla/python/ifrt_proxy/common/versions.h"
 #include "xla/python/ifrt_proxy/server/grpc_server.h"
 #include "xla/python/ifrt_proxy/server/host_buffer.h"
-#include "xla/python/ifrt_proxy/server/version.h"
-#include "tsl/platform/status_matchers.h"
-#include "tsl/platform/test.h"
+#include "xla/python/ifrt_proxy/server/ifrt_backend.h"
+#include "xla/tsl/concurrency/future.h"
+#include "xla/tsl/platform/test.h"
 
 namespace xla {
 namespace ifrt {
 namespace proxy {
 namespace {
 
-using ::tsl::testing::IsOk;
-using ::tsl::testing::IsOkAndHolds;
-using ::tsl::testing::StatusIs;
-
 IfrtProxyVersion Version() {
   IfrtProxyVersion version;
-  version.set_protocol_version(kServerMaxVersion);
+  version.set_protocol_version(protocol_version::kServerMax);
+  version.set_ifrt_serdes_version_number(
+      SerDesVersion::current().version_number().value());
   return version;
 }
 
@@ -58,18 +68,94 @@ IfrtProxyVersion Version() {
 absl::StatusOr<std::unique_ptr<GrpcServer>> MakeGrpcServer() {
   // TODO(b/282993619): For external/GKE uses, we may need to find (or build)
   // a utility function that works similar to PickUnusedPortorDie().
-  auto addr = absl::StrCat("[::1]:", tsl::testing::PickUnusedPortOrDie());
-  return GrpcServer::CreateFromIfrtClientFactory(addr, []() {
-    return absl::UnimplementedError(
-        "IFRT client creation fails. This test is not expected to "
-        "instantiate any IFRT client");
-  });
+  auto addr = absl::StrCat("localhost:", tsl::testing::PickUnusedPortOrDie());
+  return GrpcServer::CreateFromIfrtClientFactory(
+      addr, [](AttributeMap initialization_data) {
+        return absl::UnimplementedError(
+            "IFRT client creation fails. This test is not expected to "
+            "instantiate any IFRT client");
+      });
 }
 
 TEST(GrpcServiceImplTest, CanBeUsedToSetupAnGrpcServer) {
-  ASSERT_THAT(MakeGrpcServer(), IsOk());
+  ASSERT_THAT(MakeGrpcServer(), absl_testing::IsOk());
   // Also implicitly tests that destruction of both the server and the
   // implementation objects.
+}
+
+class FakeBackend final : public BackendInterface {
+ public:
+  explicit FakeBackend(std::function<void()> on_destroy)
+      : on_destroy_(std::move(on_destroy)) {}
+  ~FakeBackend() override { on_destroy_(); }
+
+  tsl::Future<Response> Process(std::unique_ptr<IfrtRequest> request) override {
+    return tsl::Future<Response>(absl::UnimplementedError("FakeBackend"));
+  }
+
+ private:
+  std::function<void()> on_destroy_;
+};
+
+GrpcServiceImpl::BackendFactory FakeBackendFactory(
+    std::function<void()> on_destroy) {
+  return [on_destroy = std::move(on_destroy)](
+             IfrtProxyVersion version, uint64_t session_id,
+             std::shared_ptr<HostBufferStore> host_buffer_store,
+             AttributeMap initialization_data)
+             -> absl::StatusOr<std::unique_ptr<BackendInterface>> {
+    return std::make_unique<FakeBackend>(on_destroy);
+  };
+}
+
+// Opens a session on `service` and closes it, which tears it down.
+::grpc::Status OpenAndCloseSession(GrpcServiceImpl& service) {
+  ::grpc::ServerBuilder builder;
+  builder.RegisterService(&service);
+  std::unique_ptr<::grpc::Server> server = builder.BuildAndStart();
+  std::unique_ptr<grpc::GrpcIfrtService::Stub> stub =
+      grpc::GrpcIfrtService::NewStub(
+          server->InProcessChannel(::grpc::ChannelArguments()));
+
+  GrpcIfrtSessionMetadata metadata;
+  *metadata.mutable_version() = Version();
+  ::grpc::ClientContext context;
+  context.AddMetadata("ifrt-proxy-grpc-ifrt-session-metadata-bin",
+                      metadata.SerializeAsString());
+  std::unique_ptr<::grpc::ClientReaderWriter<IfrtRequest, IfrtResponse>>
+      stream = stub->IfrtSession(&context);
+  stream->WritesDone();
+  return stream->Finish();
+}
+
+TEST(GrpcServiceImplTest, SessionTeardownWithinTimeoutFinishes) {
+  absl::Notification torn_down;
+  GrpcServiceImpl::Options options;
+  options.session_teardown_timeout = absl::Seconds(5);
+  GrpcServiceImpl service(FakeBackendFactory([&] { torn_down.Notify(); }),
+                          std::move(options));
+
+  EXPECT_TRUE(OpenAndCloseSession(service).ok());
+  EXPECT_TRUE(torn_down.HasBeenNotified());
+}
+
+void RunSessionWhoseTeardownOutlastsTimeout() {
+  absl::Notification never_notified;
+  GrpcServiceImpl::Options options;
+  options.session_teardown_timeout = absl::Seconds(1);
+  GrpcServiceImpl service(
+      FakeBackendFactory([&] {
+        never_notified.WaitForNotificationWithTimeout(absl::Seconds(30));
+      }),
+      std::move(options));
+  (void)OpenAndCloseSession(service);
+}
+
+TEST(GrpcServiceImplDeathTest, SessionTeardownTimeoutCrashesProcess) {
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  EXPECT_DEATH(RunSessionWhoseTeardownOutlastsTimeout(),
+               "Teardown of IFRT session 1 did not finish within 1s; crashing "
+               "so that the server can be restarted");
 }
 
 class GrpcIfrtServiceImplHostBufferTest
@@ -77,7 +163,8 @@ class GrpcIfrtServiceImplHostBufferTest
  protected:
   GrpcIfrtServiceImplHostBufferTest()
       : impl_([](IfrtProxyVersion version, uint64_t session_id,
-                 std::shared_ptr<HostBufferStore> host_buffer_store) {
+                 std::shared_ptr<HostBufferStore> host_buffer_store,
+                 AttributeMap initialization_data) {
           return absl::UnimplementedError(
               "IFRT backend creation is not implemented");
         }) {
@@ -115,8 +202,8 @@ TEST_P(GrpcIfrtServiceImplHostBufferTest, StoreAndLookupStringView) {
   const std::string data = GetTestData();
   absl::string_view source(data);
 
-  ASSERT_THAT(client.Store(kHandle, source).Await(), IsOk());
-  EXPECT_THAT(client.Lookup(kHandle).Await(), IsOkAndHolds(data));
+  ASSERT_THAT(client.Store(kHandle, source).Await(), absl_testing::IsOk());
+  EXPECT_THAT(client.Lookup(kHandle).Await(), absl_testing::IsOkAndHolds(data));
 
   EXPECT_TRUE(impl_.Test_DeleteHostBufferStore(kSessionId));
 }
@@ -132,8 +219,8 @@ TEST_P(GrpcIfrtServiceImplHostBufferTest, StoreAndLookupCord) {
   const std::string data = GetTestData();
 
   absl::Cord source(data);
-  ASSERT_THAT(client.Store(kHandle, source).Await(), IsOk());
-  EXPECT_THAT(client.Lookup(kHandle).Await(), IsOkAndHolds(data));
+  ASSERT_THAT(client.Store(kHandle, source).Await(), absl_testing::IsOk());
+  EXPECT_THAT(client.Lookup(kHandle).Await(), absl_testing::IsOkAndHolds(data));
 
   EXPECT_TRUE(impl_.Test_DeleteHostBufferStore(kSessionId));
 }
@@ -147,9 +234,9 @@ TEST_P(GrpcIfrtServiceImplHostBufferTest, Lookup) {
 
   constexpr uint64_t kHandle = 2;
   const std::string data = GetTestData();
-  ASSERT_THAT(store->Store(kHandle, data), IsOk());
+  ASSERT_THAT(store->Store(kHandle, data), absl_testing::IsOk());
 
-  EXPECT_THAT(client.Lookup(kHandle).Await(), IsOkAndHolds(data));
+  EXPECT_THAT(client.Lookup(kHandle).Await(), absl_testing::IsOkAndHolds(data));
 
   EXPECT_TRUE(impl_.Test_DeleteHostBufferStore(kSessionId));
 }
@@ -163,11 +250,11 @@ TEST_P(GrpcIfrtServiceImplHostBufferTest, Delete) {
 
   constexpr uint64_t kHandle = 2;
   const std::string data = GetTestData();
-  ASSERT_THAT(store->Store(kHandle, data), IsOk());
+  ASSERT_THAT(store->Store(kHandle, data), absl_testing::IsOk());
 
-  ASSERT_THAT(client.Delete(kHandle).Await(), IsOk());
+  ASSERT_THAT(client.Delete(kHandle).Await(), absl_testing::IsOk());
   EXPECT_THAT(client.Lookup(kHandle).Await(),
-              StatusIs(absl::StatusCode::kNotFound));
+              absl_testing::StatusIs(absl::StatusCode::kNotFound));
 
   EXPECT_TRUE(impl_.Test_DeleteHostBufferStore(kSessionId));
 }

@@ -15,16 +15,17 @@ limitations under the License.
 
 #include "xla/service/cpu/ir_emission_utils.h"
 
+#include <cstdint>
 #include <memory>
 
-#include "xla/service/cpu/target_machine_features_fake.h"
-#include "xla/test.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/service/cpu/target_machine_features_stub.h"
 
 namespace xla {
 namespace {
 
-using IrEmitterTest = HloTestBase;
+using IrEmitterTest = HloHardwareIndependentTestBase;
 
 TEST_F(IrEmitterTest, ConvWithZeroSizedKernelNotImplementedAsEigen) {
   const char* const hlo_string = R"(
@@ -38,13 +39,12 @@ ENTRY Conv {
     dim_labels=bf01_io01->bf01
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
 
   HloComputation* entry_computation = module->entry_computation();
 
   HloInstruction* conv_instr = entry_computation->root_instruction();
-  cpu::TargetMachineFeaturesWithFakeAlignmentLogic target_machine_features(
+  cpu::TargetMachineFeaturesStub target_machine_features(
       [](int64_t shape_size) {
         return cpu::TargetMachineFeatures::kEigenExpectedTensorAlignment;
       });

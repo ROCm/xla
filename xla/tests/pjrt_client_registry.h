@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_TESTS_PJRT_CLIENT_REGISTRY_H_
 #define XLA_TESTS_PJRT_CLIENT_REGISTRY_H_
 
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -23,51 +24,79 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/strings/str_cat.h"
 #include "xla/pjrt/pjrt_client.h"
 
 namespace xla {
 
 class PjRtClientTestFactoryRegistry {
  public:
-  typedef std::function<Shape(const Shape&)> DeviceShapeRepresentationFn;
-  typedef std::function<DeviceShapeRepresentationFn(PjRtClient*)>
-      DeviceShapeRepresentationFnFactory;
-  typedef std::function<absl::StatusOr<std::unique_ptr<PjRtClient>>()>
-      PjRtClientFactory;
+  using DeviceShapeRepresentationFn = std::function<Shape(const Shape&)>;
+  using DeviceShapeRepresentationFnFactory =
+      std::function<DeviceShapeRepresentationFn(PjRtClient*)>;
+  using DeviceShapeSizeFn = std::function<int64_t(const Shape&)>;
+  using DeviceShapeSizeFnFactory =
+      std::function<DeviceShapeSizeFn(PjRtClient*)>;
+  using PjRtClientFactory =
+      std::function<absl::StatusOr<std::unique_ptr<PjRtClient>>()>;
 
   static DeviceShapeRepresentationFn DefaultShapeRepresentationRegisteredFn(
-      absl::StatusOr<PjRtClient*> client) {
+      PjRtClient* client) {
     return [](const Shape& host_shape) { return host_shape; };
+  }
+  static DeviceShapeSizeFn DefaultDeviceShapeSizeRegisteredFn(
+      PjRtClient* client) {
+    return [](const Shape& shape) -> int64_t {
+      if (shape.IsOpaque()) {
+        return sizeof(void*);
+      }
+      return ShapeUtil::ByteSizeOf(shape, sizeof(void*));
+    };
   }
 
   void Register(PjRtClientFactory factory,
                 DeviceShapeRepresentationFnFactory
-                    registered_device_shape_representation_fn) {
+                    registered_device_shape_representation_fn,
+                DeviceShapeSizeFnFactory registered_device_shape_size_fn)
+      ABSL_LOCKS_EXCLUDED(mu_) {
     if (HasRegisteredFactory()) {
       LOG(FATAL) << "A PjRtClient has already been registered.";
       return;
     }
 
-    absl::MutexLock lock(&mu_);
+    absl::MutexLock lock(mu_);
     factory_ = std::move(factory);
     registered_device_shape_representation_fn_ =
         std::move(registered_device_shape_representation_fn);
+    registered_device_shape_size_fn_ =
+        std::move(registered_device_shape_size_fn);
   }
 
   // Return the device shape representation of 'host_shape'.
   DeviceShapeRepresentationFn GetDeviceShapeRepresentationFn(
-      PjRtClient* pjrt_client) {
-    absl::MutexLock lock(&mu_);
+      PjRtClient* pjrt_client) ABSL_LOCKS_EXCLUDED(mu_) {
+    absl::MutexLock lock(mu_);
     return registered_device_shape_representation_fn_(pjrt_client);
   }
 
-  bool HasRegisteredFactory() {
-    absl::MutexLock lock(&mu_);
+  // Return the device shape size of 'host_shape'.
+  // This function is used e.g. to create a VerifiedHloModule. It returns an
+  // integer representing the size of the shape in bytes as opposed to a Shape.
+  DeviceShapeSizeFn GetDeviceShapeSizeFn(PjRtClient* pjrt_client)
+      ABSL_LOCKS_EXCLUDED(mu_) {
+    absl::MutexLock lock(mu_);
+    return registered_device_shape_size_fn_(pjrt_client);
+  }
+
+  bool HasRegisteredFactory() ABSL_LOCKS_EXCLUDED(mu_) {
+    absl::MutexLock lock(mu_);
     return factory_ != nullptr;
   }
 
   std::function<absl::StatusOr<std::unique_ptr<PjRtClient>>()> Get() const {
-    absl::MutexLock lock(&mu_);
+    absl::MutexLock lock(mu_);
     return factory_;
   }
 
@@ -75,7 +104,10 @@ class PjRtClientTestFactoryRegistry {
   mutable absl::Mutex mu_;
   std::function<absl::StatusOr<std::unique_ptr<PjRtClient>>()> factory_
       ABSL_GUARDED_BY(mu_);
-  DeviceShapeRepresentationFnFactory registered_device_shape_representation_fn_;
+  DeviceShapeRepresentationFnFactory registered_device_shape_representation_fn_
+      ABSL_GUARDED_BY(mu_);
+  DeviceShapeSizeFnFactory registered_device_shape_size_fn_
+      ABSL_GUARDED_BY(mu_);
 };
 
 PjRtClientTestFactoryRegistry& GetGlobalPjRtClientTestFactory();
@@ -85,7 +117,10 @@ void RegisterPjRtClientTestFactory(
     PjRtClientTestFactoryRegistry::DeviceShapeRepresentationFnFactory
         registered_device_shape_representation_fn =
             PjRtClientTestFactoryRegistry::
-                DefaultShapeRepresentationRegisteredFn);
+                DefaultShapeRepresentationRegisteredFn,
+    PjRtClientTestFactoryRegistry::DeviceShapeSizeFnFactory
+        registered_device_shape_size_fn_ =
+            PjRtClientTestFactoryRegistry::DefaultDeviceShapeSizeRegisteredFn);
 
 bool ShouldUsePjRt();
 

@@ -13,26 +13,31 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <memory>
+#include <cstdint>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/match.h"
+#include "xla/client/client.h"
 #include "xla/client/client_library.h"
-#include "xla/client/global_data.h"
-#include "xla/client/xla_builder.h"
-#include "xla/client/xla_computation.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/layout.h"
 #include "xla/layout_util.h"
 #include "xla/literal.h"
+#include "xla/literal_util.h"
 #include "xla/shape_util.h"
-#include "xla/status_macros.h"
-#include "xla/statusor.h"
-#include "xla/test.h"
+#include "xla/stream_executor/platform.h"
 #include "xla/tests/literal_test_util.h"
-#include "xla/tests/test_macros.h"
-#include "xla/tests/test_utils.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/util/proto/proto_matchers.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/lib/core/status_test_util.h"
 
 namespace xla {
 namespace {
@@ -55,13 +60,12 @@ class ComputeConstantTest : public ::testing::Test {
     if (client_type == ClientType::kLocal) {
       absl::StatusOr<Client*> result =
           ClientLibrary::GetOrCreateLocalClient(platform);
-      TF_CHECK_OK(result.status())
-          << "could not create LocalClient for testing";
+      CHECK_OK(result.status()) << "could not create LocalClient for testing";
       return result.value();
     } else if (client_type == ClientType::kCompileOnly) {
       absl::StatusOr<Client*> result =
           ClientLibrary::GetOrCreateCompileOnlyClient(platform);
-      TF_CHECK_OK(result.status())
+      CHECK_OK(result.status())
           << "could not create CompileOnlyClient for testing";
       return result.value();
     }
@@ -71,9 +75,10 @@ class ComputeConstantTest : public ::testing::Test {
   absl::StatusOr<Literal> ComputeConstantLiteral(
       Client* client, const XlaOp operand, XlaBuilder* builder,
       Layout* output_layout = nullptr) {
-    TF_ASSIGN_OR_RETURN(auto subgraph, builder->BuildConstantSubGraph(operand));
-    TF_ASSIGN_OR_RETURN(auto computed,
-                        client->ComputeConstant(subgraph, output_layout));
+    ABSL_ASSIGN_OR_RETURN(auto subgraph,
+                          builder->BuildConstantSubGraph(operand));
+    ABSL_ASSIGN_OR_RETURN(auto computed,
+                          client->ComputeConstant(subgraph, output_layout));
     return std::move(computed);
   }
 
@@ -81,8 +86,8 @@ class ComputeConstantTest : public ::testing::Test {
   absl::StatusOr<Scalar> ComputeConstantScalar(Client* client,
                                                const XlaOp operand,
                                                XlaBuilder* builder) {
-    TF_ASSIGN_OR_RETURN(auto literal, ComputeConstantLiteral(client, operand,
-                                                             builder, nullptr));
+    ABSL_ASSIGN_OR_RETURN(auto literal, ComputeConstantLiteral(
+                                            client, operand, builder, nullptr));
     return literal.Get<Scalar>({});
   }
 
@@ -242,7 +247,7 @@ TEST_F(ComputeConstantTest, IntegerDivide) {
   }
 }
 
-XLA_TEST_F(ComputeConstantTest, Layout) {
+TEST_F(ComputeConstantTest, Layout) {
   for (ClientType client_type : client_types) {
     Client* client = ClientOrDie(platform_, client_type);
     XlaBuilder b(TestName());
@@ -259,8 +264,9 @@ XLA_TEST_F(ComputeConstantTest, Layout) {
 
       Literal expected_literal = LiteralUtil::CreateR2WithLayout<int32_t>(
           {{11, 22}, {33, 44}}, LayoutUtil::MakeLayout(layout));
-      ASSERT_TRUE(LiteralTestUtil::EqualShapesAndLayouts(
-          expected_literal.shape(), computed.shape()));
+      ASSERT_THAT(
+          computed.shape().ToProto(),
+          tsl::proto_testing::EqualsProto(expected_literal.shape().ToProto()));
       EXPECT_TRUE(LiteralTestUtil::Equal(expected_literal, computed));
     }
   }

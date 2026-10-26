@@ -16,7 +16,9 @@ limitations under the License.
 #ifndef XLA_CLIENT_EXECUTABLE_BUILD_OPTIONS_H_
 #define XLA_CLIENT_EXECUTABLE_BUILD_OPTIONS_H_
 
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -24,18 +26,23 @@ limitations under the License.
 
 #include "absl/algorithm/container.h"
 #include "absl/container/inlined_vector.h"
-#include "xla/pjrt/compile_options.pb.h"
+#include "absl/log/check.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "xla/pjrt/distributed/key_value_store_interface.h"
+#include "xla/pjrt/proto/compile_options.pb.h"
 #include "xla/service/compilation_environments.h"
 #include "xla/service/computation_placer.h"
+#include "xla/service/gpu_topology.h"
 #include "xla/shape.h"
+#include "xla/tsl/platform/threadpool.h"
 #include "xla/xla.pb.h"
-#include "tsl/platform/threadpool.h"
 
 namespace stream_executor {
 
 // Forward-declared to avoid StreamExecutor dependency.
-class DeviceMemoryAllocator;
+class DeviceAddressAllocator;
 
 }  // namespace stream_executor
 
@@ -81,11 +88,11 @@ class ExecutableBuildOptions {
   // want to run various algorithms on the device and pick the fastest one -- it
   // might allocate buffers for use by these algorithms using this allocator.
   //
-  // This does not need to be the same as the se::DeviceMemoryAllocator passed
+  // This does not need to be the same as the se::DeviceAddressAllocator passed
   // when running the executable.
   ExecutableBuildOptions& set_device_allocator(
-      se::DeviceMemoryAllocator* allocator);
-  se::DeviceMemoryAllocator* device_allocator() const;
+      se::DeviceAddressAllocator* allocator);
+  se::DeviceAddressAllocator* device_allocator() const;
 
   // The number of replicas of this computation that are to be executed.
   // Defaults to 1.
@@ -119,6 +126,24 @@ class ExecutableBuildOptions {
   }
   ExecutableBuildOptions& set_auto_spmd_partitioning_mesh_ids(
       std::vector<int64_t> mesh_ids);
+
+  ExecutionOptions::EffortLevel optimization_level() const {
+    return optimization_level_;
+  }
+  ExecutableBuildOptions& set_optimization_level(
+      ExecutionOptions::EffortLevel optimization_level) {
+    optimization_level_ = optimization_level;
+    return *this;
+  }
+
+  ExecutionOptions::EffortLevel memory_fitting_level() const {
+    return memory_fitting_level_;
+  }
+  ExecutableBuildOptions& set_memory_fitting_level(
+      ExecutionOptions::EffortLevel memory_fitting_level) {
+    memory_fitting_level_ = memory_fitting_level;
+    return *this;
+  }
 
   bool deduplicate_hlo() const { return deduplicate_hlo_; }
   ExecutableBuildOptions& set_deduplicate_hlo(bool deduplicate_hlo);
@@ -231,6 +256,13 @@ class ExecutableBuildOptions {
     return *this;
   }
 
+  bool use_shardy_partitioner() const { return use_shardy_partitioner_; }
+  ExecutableBuildOptions& set_use_shardy_partitioner(
+      bool use_shardy_partitioner) {
+    use_shardy_partitioner_ = use_shardy_partitioner;
+    return *this;
+  }
+
   // Returns a string representation of the build options, suitable for
   // debugging.
   std::string ToString() const;
@@ -253,19 +285,30 @@ class ExecutableBuildOptions {
     key_value_store_ = kv_store;
   }
 
+  const std::optional<GpuTopology>& gpu_topology() const {
+    return gpu_topology_;
+  }
+  void set_gpu_topology(const GpuTopology& gpu_topology) {
+    gpu_topology_ = gpu_topology;
+  }
+
  private:
   int device_ordinal_ = -1;
   Shape result_layout_;
   bool result_layout_set_ = false;
   std::optional<CompilationEnvironments> comp_envs_;
   std::optional<DebugOptions> debug_options_;
-  se::DeviceMemoryAllocator* device_allocator_ = nullptr;
+  se::DeviceAddressAllocator* device_allocator_ = nullptr;
   int num_replicas_ = 1;
   int num_partitions_ = 1;
   bool use_spmd_partitioning_ = false;
   bool use_auto_spmd_partitioning_ = false;
   std::vector<int64_t> auto_spmd_partitioning_mesh_shape_;
   std::vector<int64_t> auto_spmd_partitioning_mesh_ids_;
+  ExecutionOptions::EffortLevel optimization_level_ =
+      ExecutionOptions::EFFORT_UNKNOWN;
+  ExecutionOptions::EffortLevel memory_fitting_level_ =
+      ExecutionOptions::EFFORT_UNKNOWN;
   bool deduplicate_hlo_ = false;
   bool broadcast_replicated_params_ = false;
   std::optional<DeviceAssignment> device_assignment_;
@@ -279,9 +322,11 @@ class ExecutableBuildOptions {
   LayoutCanonicalizationCallback layout_canonicalization_callback_;
   std::string fdo_profile_;
   int64_t device_memory_size_ = 0;
+  bool use_shardy_partitioner_ = false;
   int process_index_ = 0;
   int process_count_ = 1;
   std::shared_ptr<KeyValueStoreInterface> key_value_store_;
+  std::optional<GpuTopology> gpu_topology_;
 };
 
 absl::StatusOr<ExecutableBuildOptions> ExecutableBuildOptionsFromProto(

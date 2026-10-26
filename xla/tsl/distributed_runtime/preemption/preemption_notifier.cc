@@ -20,13 +20,14 @@ limitations under the License.
 #include <memory>
 #include <utility>
 
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/synchronization/mutex.h"
 #include "absl/synchronization/notification.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/mutex.h"
-#include "tsl/platform/statusor.h"
+#include "xla/tsl/platform/env.h"
 #if defined(PLATFORM_GOOGLE)
 #include "thread/executor.h"
 #include "thread/signal.h"
@@ -59,11 +60,15 @@ SigtermNotifier::SigtermNotifier(Env* env) : PreemptionNotifier(env) {
 #if defined(PLATFORM_GOOGLE)
   thread::signal::Token unused_token;
 
+  // Override default SIGTERM handler so the process does not terminate
+  // immediately before preemption listeners are notified. Note that
+  // kOverrideDefault only suppresses the pre-existing kernel sigaction()
+  // handler; all handlers registered via thread::signal::AddHandler are still
+  // invoked.
   thread::signal::AddHandler(
       SIGTERM, thread::Executor::DefaultExecutor(),
       []() { sigterm_received.store(true); },
-      /*flags=*/0,  // Don't override existing signal handlers.
-      &unused_token);
+      /*flags=*/thread::signal::kOverrideDefault, &unused_token);
 #else
   std::signal(SIGTERM, [](int signal) { sigterm_received.store(true); });
 #endif
@@ -80,7 +85,7 @@ void SigtermNotifier::StartListenerThread() {
             // 1) Cancel any pending callbacks and blocking WillBePreemptedAt()
             // calls.
             NotifyRegisteredListeners(
-                errors::Cancelled("Preemption notifier is being deleted."));
+                absl::CancelledError("Preemption notifier is being deleted."));
             // 2) Exit listener thread.
             return;
           }
@@ -107,7 +112,7 @@ absl::StatusOr<absl::Time> PreemptionNotifier::WillBePreemptedAt() {
 }
 
 void PreemptionNotifier::WillBePreemptedAtAsync(PreemptTimeCallback callback) {
-  mutex_lock l(mu_);
+  absl::MutexLock l(mu_);
   if (death_time_ == kUnsetDeathTime) {
     // Did not receive preemption notice yet.
     callbacks_.push_back(std::move(callback));
@@ -119,7 +124,7 @@ void PreemptionNotifier::WillBePreemptedAtAsync(PreemptTimeCallback callback) {
 
 void PreemptionNotifier::NotifyRegisteredListeners(
     absl::StatusOr<absl::Time> death_time) {
-  mutex_lock l(mu_);
+  absl::MutexLock l(mu_);
   if (death_time.ok()) {
     death_time_ = death_time.value();
   }

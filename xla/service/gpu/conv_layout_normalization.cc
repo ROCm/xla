@@ -19,7 +19,10 @@ limitations under the License.
 #include <optional>
 #include <vector>
 
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "tsl/platform/protobuf.h"  // IWYU pragma: keep
+#include "tsl/platform/statusor.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
@@ -30,8 +33,7 @@ limitations under the License.
 #include "xla/shape_util.h"
 #include "xla/status_macros.h"
 #include "xla/util.h"
-#include "tsl/platform/protobuf.h"  // IWYU pragma: keep
-#include "tsl/platform/statusor.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace gpu {
@@ -45,7 +47,7 @@ absl::StatusOr<std::optional<HloInstruction*>> UpdateLayoutForCudnnConvolution(
       hlo->convolution_dimension_numbers();
 
   auto transpose_dim = [&](int64_t dim, const Shape& unnormalized_shape) {
-    return unnormalized_shape.rank() -
+    return unnormalized_shape.dimensions().size() -
            FindIndex(unnormalized_shape.layout().minor_to_major(), dim) - 1;
   };
 
@@ -60,7 +62,7 @@ absl::StatusOr<std::optional<HloInstruction*>> UpdateLayoutForCudnnConvolution(
       hlo->shape().IsTuple() ? hlo->shape().tuple_shapes(0) : hlo->shape();
 
   Shape input_shape, filter_shape, output_shape;
-  TF_ASSIGN_OR_RETURN(
+  ABSL_ASSIGN_OR_RETURN(
       gpu::CudnnConvKind conv_kind,
       gpu::GetCudnnConvKind(Cast<HloCustomCallInstruction>(hlo)));
   switch (conv_kind) {
@@ -110,7 +112,7 @@ absl::StatusOr<std::optional<HloInstruction*>> UpdateLayoutForCudnnConvolution(
 
   Shape normalized_shape;
   if (hlo->shape().IsTuple()) {
-    TF_RET_CHECK(hlo->shape().tuple_shapes().back().rank() == 1)
+    TF_RET_CHECK(hlo->shape().tuple_shapes().back().dimensions().size() == 1)
         << "The last element in the tuple returned by a convolution Custom "
            "Call is expected to be an "
            "allocator of rank one";
@@ -136,15 +138,7 @@ absl::StatusOr<std::optional<HloInstruction*>> UpdateLayoutForCudnnConvolution(
     const Shape& s = op->shape();
     Shape s_reordered =
         ShapeUtil::MakeShapeWithDescendingLayoutAndSamePhysicalLayout(s);
-    HloInstruction* normalized_op = op->mutable_operand(0);
-    HloInstruction* new_op;
-    if (normalized_op->shape() == s_reordered) {
-      new_op = normalized_op;
-    } else {
-      new_op = MakeBitcastHlo(op, s_reordered);
-      performed_normalization = true;
-    }
-    normalized_operands.push_back(new_op);
+    normalized_operands.emplace_back(MakeBitcastHlo(op, s_reordered));
   }
 
   // Avoid replacing the Custom Call with an identical copy.
@@ -174,11 +168,11 @@ absl::StatusOr<std::optional<HloInstruction*>> UpdateLayoutForCudnnConvolution(
   HloInstruction* bc_to_orig;
   if (normalized_conv->shape().IsTuple()) {
     std::vector<HloInstruction*> tuple_elements(
-        normalized_conv->shape().tuple_shapes_size());
+        normalized_conv->shape().tuple_shapes().size());
 
-    for (int i = 0; i < normalized_conv->shape().tuple_shapes_size(); ++i) {
-      TF_ASSIGN_OR_RETURN(HloInstruction * normalized_out,
-                          MakeGetTupleElementHlo(normalized_conv, i));
+    for (int i = 0; i < normalized_conv->shape().tuple_shapes().size(); ++i) {
+      ABSL_ASSIGN_OR_RETURN(HloInstruction * normalized_out,
+                            MakeGetTupleElementHlo(normalized_conv, i));
       tuple_elements[i] =
           MakeBitcastHlo(normalized_out, hlo->shape().tuple_shapes(i));
     }
@@ -194,8 +188,8 @@ absl::StatusOr<std::optional<HloInstruction*>> UpdateLayoutForCudnnConvolution(
 absl::StatusOr<std::optional<HloInstruction*>> NormalizeLayoutForGpuCustomCalls(
     HloCustomCallInstruction* hlo) {
   if (IsCustomCallToDnnConvolution(*hlo)) {
-    TF_ASSIGN_OR_RETURN(std::optional<HloInstruction*> bc_to_orig,
-                        UpdateLayoutForCudnnConvolution(hlo));
+    ABSL_ASSIGN_OR_RETURN(std::optional<HloInstruction*> bc_to_orig,
+                          UpdateLayoutForCudnnConvolution(hlo));
     return bc_to_orig;
   }
   return std::nullopt;

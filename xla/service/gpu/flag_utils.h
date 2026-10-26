@@ -1,0 +1,50 @@
+/* Copyright 2024 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#ifndef XLA_SERVICE_GPU_FLAG_UTILS_H_
+#define XLA_SERVICE_GPU_FLAG_UTILS_H_
+
+#include "xla/backends/gpu/transforms/double_buffer_loop_unrolling.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/service/collective_pipeliner.h"
+#include "xla/service/hlo_module_config.h"
+#include "xla/service/latency_hiding_scheduler.h"
+
+namespace xla {
+namespace gpu {
+
+// Returns true if the pass is enabled via `optimization_level` at
+// the potential expense of compile time.
+template <typename Pass>
+bool IsPassEnabledAtOptimizationEffort(const HloModule& module) {
+  bool is_collective_optimization_pass =
+      std::is_same_v<Pass, CollectivePipeliner> ||
+      std::is_same_v<Pass, DoubleBufferLoopUnrolling> ||
+      std::is_same_v<Pass, LatencyHidingScheduler>;
+
+  if (is_collective_optimization_pass) {
+    ExecutionOptions::EffortLevel opt_level =
+        module.config().optimization_level();
+
+    return opt_level >= ExecutionOptions::EFFORT_O1;
+  }
+
+  return true;
+}
+
+}  // namespace gpu
+}  // namespace xla
+
+#endif  // XLA_SERVICE_GPU_FLAG_UTILS_H_

@@ -15,23 +15,21 @@ limitations under the License.
 
 #include "xla/service/gpu_compilation_environment.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <string>
 #include <vector>
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
+#include "absl/status/status_matchers.h"
 #include "xla/parse_flags_from_env.h"
 #include "xla/service/compilation_environments.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/status_matchers.h"
-#include "tsl/platform/statusor.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/xla.pb.h"
 
 namespace xla {
 namespace {
-
-using ::tsl::testing::StatusIs;
 
 void set_xla_flags_env_var(const std::string& xla_flags) {
   int* pargc;
@@ -43,9 +41,8 @@ void set_xla_flags_env_var(const std::string& xla_flags) {
 TEST(CreateGpuCompEnvFromFlagStringsTest, ValidFlags) {
   std::vector<std::string> flags = {"--dummy_flag=2"};
 
-  TF_ASSERT_OK_AND_ASSIGN(
-      GpuCompilationEnvironment gpu_comp_env,
-      CreateGpuCompEnvFromFlagStrings(flags, /*strict=*/true));
+  ASSERT_OK_AND_ASSIGN(GpuCompilationEnvironment gpu_comp_env,
+                       CreateGpuCompEnvFromFlagStrings(flags, /*strict=*/true));
 
   ASSERT_EQ(gpu_comp_env.dummy_flag(), 2);
   ASSERT_TRUE(flags.empty());
@@ -54,18 +51,17 @@ TEST(CreateGpuCompEnvFromFlagStringsTest, ValidFlags) {
 TEST(CreateGpuCompEnvFromFlagStringsTest, EmptyFlags) {
   std::vector<std::string> flags;
 
-  TF_ASSERT_OK_AND_ASSIGN(
-      GpuCompilationEnvironment gpu_comp_env,
-      CreateGpuCompEnvFromFlagStrings(flags, /*strict=*/true));
+  ASSERT_OK_AND_ASSIGN(GpuCompilationEnvironment gpu_comp_env,
+                       CreateGpuCompEnvFromFlagStrings(flags, /*strict=*/true));
 }
 
 TEST(CreateGpuCompEnvFromFlagStringsTest, InvalidFlagName) {
   std::vector<std::string> flags = {"--xla_gpu_invalid_flag=2"};
 
   EXPECT_THAT(CreateGpuCompEnvFromFlagStrings(flags, /*strict=*/true),
-              StatusIs(tsl::error::INVALID_ARGUMENT));
+              absl_testing::StatusIs(tsl::error::INVALID_ARGUMENT));
 
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       GpuCompilationEnvironment gpu_comp_env,
       CreateGpuCompEnvFromFlagStrings(flags, /*strict=*/false));
   ASSERT_EQ(flags.size(), 1);
@@ -74,8 +70,8 @@ TEST(CreateGpuCompEnvFromFlagStringsTest, InvalidFlagName) {
 TEST(CreateGpuCompEnvFromEnvVarTest, ValidFlags) {
   set_xla_flags_env_var("--dummy_flag=4");
 
-  TF_ASSERT_OK_AND_ASSIGN(GpuCompilationEnvironment gpu_comp_env,
-                          CreateGpuCompEnvFromEnvVar());
+  ASSERT_OK_AND_ASSIGN(GpuCompilationEnvironment gpu_comp_env,
+                       CreateGpuCompEnvFromEnvVar());
 
   ASSERT_EQ(gpu_comp_env.dummy_flag(), 4);
 }
@@ -84,7 +80,7 @@ TEST(InitializeMissingFieldsFromXLAFlagsTest, BothProtoAndEnvVarUnset) {
   set_xla_flags_env_var("");
   GpuCompilationEnvironment env;
 
-  TF_ASSERT_OK(InitializeMissingFieldsFromXLAFlags(env));
+  ASSERT_OK(InitializeMissingFieldsFromXLAFlags(env));
   EXPECT_EQ(env.dummy_flag(), 1);
 }
 
@@ -93,7 +89,7 @@ TEST(InitializeMissingFieldsFromXLAFlagsTest, ProtoSetButEnvVarUnset) {
   GpuCompilationEnvironment env;
   env.set_dummy_flag(2);
 
-  TF_ASSERT_OK(InitializeMissingFieldsFromXLAFlags(env));
+  ASSERT_OK(InitializeMissingFieldsFromXLAFlags(env));
 
   EXPECT_EQ(env.dummy_flag(), 2);
 }
@@ -102,7 +98,7 @@ TEST(InitializeMissingFieldsFromXLAFlagsTest, ProtoUnsetButEnvVarSet) {
   set_xla_flags_env_var("--dummy_flag=4");
 
   GpuCompilationEnvironment env;
-  TF_ASSERT_OK(InitializeMissingFieldsFromXLAFlags(env));
+  ASSERT_OK(InitializeMissingFieldsFromXLAFlags(env));
 
   EXPECT_EQ(env.dummy_flag(), 4);
 }
@@ -112,7 +108,7 @@ TEST(InitializeMissingFieldsFromXLAFlagsTest,
   set_xla_flags_env_var("--dummy_flag=4");
   CompilationEnvironments envs;
   GpuCompilationEnvironment env;
-  TF_ASSERT_OK(InitializeMissingFieldsFromXLAFlags(env));
+  ASSERT_OK(InitializeMissingFieldsFromXLAFlags(env));
   EXPECT_EQ(env.dummy_flag(), 4);
 }
 
@@ -124,7 +120,7 @@ TEST(InitializeMissingFieldsFromXLAFlagsTest,
   GpuCompilationEnvironment env;
   env.set_dummy_flag(2);
   EXPECT_THAT(InitializeMissingFieldsFromXLAFlags(env),
-              StatusIs(tsl::error::INVALID_ARGUMENT));
+              absl_testing::StatusIs(tsl::error::INVALID_ARGUMENT));
 }
 
 }  // namespace

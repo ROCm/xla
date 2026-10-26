@@ -15,30 +15,34 @@ limitations under the License.
 
 #include <cstdint>
 #include <memory>
-#include <numeric>
 #include <optional>
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "absl/types/span.h"
-#include "llvm/Support/Casting.h"
 #include "xla/python/ifrt/array.h"
 #include "xla/python/ifrt/array_spec.h"
 #include "xla/python/ifrt/client.h"
 #include "xla/python/ifrt/device.h"
+#include "xla/python/ifrt/device_list.h"
 #include "xla/python/ifrt/dtype.h"
 #include "xla/python/ifrt/memory.h"
 #include "xla/python/ifrt/remap_plan.h"
+#include "xla/python/ifrt/rtti.h"
 #include "xla/python/ifrt/shape.h"
 #include "xla/python/ifrt/sharding.h"
 #include "xla/python/ifrt/test_util.h"
 #include "xla/status_macros.h"
 #include "xla/tsl/concurrency/ref_count.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/statusor.h"
-#include "tsl/platform/test.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
 
 namespace xla {
 namespace ifrt {
@@ -48,88 +52,139 @@ using ::testing::ElementsAre;
 using ::testing::ElementsAreArray;
 using ::testing::HasSubstr;
 using ::testing::SizeIs;
-using ::tsl::testing::StatusIs;
 
-// Creates an array with (base_values.size()) shards. The constructed array
-// shape is [2 * base_values.size(), 3]. Each shard has a shape of [2, 3] and
-// has a content reshaped from an iota starting from `base_values[i]` for shard
-// i. Shard i is placed on addressable device (device_indices[i]).
-absl::StatusOr<tsl::RCReference<Array>> CreateArray(
-    Client* client, absl::Span<const int32_t> base_values,
-    absl::Span<const int> device_indices) {
+// Returns a shape for an array whose first dimension is fully sharded across
+// `num_shards` devices. For example, [2, 3] with num_shards=5 becomes [10, 3].
+absl::StatusOr<Shape> GetShape(int64_t num_shards, Shape shard_shape) {
+  TF_RET_CHECK(!shard_shape.dims().empty());
+  Shape::Dimensions dims(shard_shape.dims().begin(), shard_shape.dims().end());
+  dims.front() *= num_shards;
+  return Shape(std::move(dims));
+}
+
+// Returns an array spec that expresses an array whose first dimension is fully
+// sharded across `device_indices`. For example, [2, 3] with
+// device_indices.size()=5 becomes [10, 3].
+absl::StatusOr<ArraySpec> CreateArraySpec(Client* client,
+                                          absl::Span<const int> device_indices,
+                                          Shape shard_shape = Shape({2, 3}),
+                                          DType dtype = DType(DType::kS32)) {
+  ABSL_ASSIGN_OR_RETURN(
+      DeviceListRef device_list,
+      test_util::GetAddressableDevices(client, device_indices));
+  ABSL_ASSIGN_OR_RETURN(Shape shape,
+                        GetShape(device_indices.size(), shard_shape));
+  return ArraySpec{/*dtype=*/dtype,
+                   /*shape=*/shape,
+                   /*sharding=*/
+                   ConcreteEvenSharding::Create(device_list, MemoryKind(),
+                                                shape, shard_shape)};
+}
+
+// Creates an array with (base_values.size()) shards. Each shard of the
+// constructed array has a shape of `shard_shape` and it is fully sharded on
+// first dimension. For example, if shard_shape=[2, 3] then the array shaps is
+// [2 * base_values.size(), 3]. The contents of shard i is reshaped from an iota
+// starting from `base_values[i]` and placed on addressable device
+// `device_indices[i]`.
+
+template <typename ValueType>
+struct CppTypeToDType;
+
+template <>
+struct CppTypeToDType<int32_t> {
+  static constexpr DType::Kind kDType = DType::kS32;
+};
+
+template <>
+struct CppTypeToDType<float> {
+  static constexpr DType::Kind kDType = DType::kF32;
+};
+
+template <typename ValueType>
+absl::StatusOr<ArrayRef> CreateArray(Client* client,
+                                     absl::Span<const ValueType> base_values,
+                                     absl::Span<const int> device_indices,
+                                     Shape shard_shape = Shape({2, 3})) {
   TF_RET_CHECK(base_values.size() == device_indices.size());
 
-  DType dtype(DType::kS32);
-  Shape shape({2 * static_cast<int64_t>(base_values.size()), 3});
-  Shape shard_shape({2, 3});
+  DType dtype(CppTypeToDType<ValueType>::kDType);
+  ABSL_ASSIGN_OR_RETURN(Shape shape, GetShape(base_values.size(), shard_shape));
 
-  std::vector<tsl::RCReference<Array>> shards;
+  std::vector<ArrayRef> shards;
   shards.reserve(base_values.size());
-  DeviceList::Devices devices;
+  absl::InlinedVector<xla::ifrt::Device*, 1> devices;
   devices.reserve(device_indices.size());
 
   for (int i = 0; i < base_values.size(); ++i) {
-    std::vector<int32_t> data(6);
-    std::iota(data.begin(), data.end(), base_values[i]);
+    std::vector<ValueType> data(shard_shape.num_elements());
+    absl::c_iota(data, base_values[i]);
 
     Device* device = client->addressable_devices().at(device_indices[i]);
     devices.push_back(device);
-    std::shared_ptr<const Sharding> sharding =
-        SingleDeviceSharding::Create(device, MemoryKind());
+    ShardingRef sharding = SingleDeviceSharding::Create(device, MemoryKind());
 
-    TF_ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         shards.emplace_back(),
         client->MakeArrayFromHostBuffer(
             data.data(), dtype, shard_shape,
             /*byte_strides=*/std::nullopt, std::move(sharding),
+            /*layout=*/nullptr,
             Client::HostBufferSemantics::kImmutableOnlyDuringCall,
             /*on_done_with_host_buffer=*/{}));
   }
 
-  std::shared_ptr<const Sharding> assembled_sharding =
-      ConcreteEvenSharding::Create(DeviceList(std::move(devices)), MemoryKind(),
+  ABSL_ASSIGN_OR_RETURN(DeviceListRef device_list,
+                        client->MakeDeviceList(devices));
+  ShardingRef assembled_sharding =
+      ConcreteEvenSharding::Create(std::move(device_list), MemoryKind(),
                                    /*shape=*/shape,
                                    /*shard_shape=*/std::move(shard_shape));
+  absl::Span<ArrayRef> arrays = absl::MakeSpan(shards);
   return client->AssembleArrayFromSingleDeviceArrays(
-      std::move(shape), std::move(assembled_sharding), absl::MakeSpan(shards),
-      ArrayCopySemantics::kDonateInput);
+      arrays.at(0)->dtype(), std::move(shape), std::move(assembled_sharding),
+      arrays, ArrayCopySemantics::kDonateInput,
+      SingleDeviceShardSemantics::kAddressableShards);
 }
 
-// Checks the shards of an array. The expected array shape is [2 *
-// base_values.size(), 3]. Each shard has an expected shape of [2, 3], whose
-// content is an iota starting from `base_values[i]` for shard i. Shard i is
-// expected to be placed on addressable device (device_indices[i]).
+// Checks the shards and contents of an array, same as what CreateArray would
+// generate given the same arguments.
+template <typename ValueType>
 void AssertArrayContent(Client* client, Array* array,
-                        absl::Span<const int32_t> base_values,
-                        absl::Span<const int> device_indices) {
-  DType expected_dtype(DType::kS32);
-  Shape expected_shape({2 * static_cast<int64_t>(base_values.size()), 3});
-  Shape expected_shard_shape({2, 3});
+                        absl::Span<const ValueType> base_values,
+                        absl::Span<const int> device_indices,
+                        Shape expected_shard_shape = Shape({2, 3})) {
+  DType expected_dtype(CppTypeToDType<ValueType>::kDType);
+  TF_ASSERT_OK_AND_ASSIGN(Shape expected_shape,
+                          GetShape(base_values.size(), expected_shard_shape));
   EXPECT_EQ(array->dtype(), expected_dtype);
   EXPECT_EQ(array->shape(), expected_shape);
   const auto* actual_sharding =
-      llvm::dyn_cast<ConcreteEvenSharding>(array->shared_ptr_sharding().get());
+      dyn_cast<ConcreteEvenSharding>(array->shared_ptr_sharding().get());
   ASSERT_NE(actual_sharding, nullptr);
   EXPECT_EQ(actual_sharding->shape(), expected_shape);
   EXPECT_EQ(actual_sharding->shard_shape(), expected_shard_shape);
 
-  TF_ASSERT_OK_AND_ASSIGN(auto shards, array->DisassembleIntoSingleDeviceArrays(
-                                           ArrayCopySemantics::kReuseInput));
+  TF_ASSERT_OK_AND_ASSIGN(auto shards,
+                          array->DisassembleIntoSingleDeviceArrays(
+                              ArrayCopySemantics::kReuseInput,
+                              SingleDeviceShardSemantics::kAddressableShards));
   ASSERT_THAT(shards, SizeIs(base_values.size()));
   for (int i = 0; i < shards.size(); ++i) {
     EXPECT_EQ(shards[i]->dtype(), expected_dtype);
     EXPECT_EQ(shards[i]->shape(), expected_shard_shape);
-    const auto* actual_shard_sharding = llvm::dyn_cast<SingleDeviceSharding>(
-        shards[i]->shared_ptr_sharding().get());
+    const auto* actual_shard_sharding =
+        dyn_cast<SingleDeviceSharding>(shards[i]->shared_ptr_sharding().get());
     ASSERT_NE(actual_shard_sharding, nullptr);
     Device* expected_device =
         client->addressable_devices().at(device_indices[i]);
-    EXPECT_THAT(actual_shard_sharding->devices(), ElementsAre(expected_device));
+    EXPECT_THAT(actual_shard_sharding->devices()->devices(),
+                ElementsAre(expected_device));
 
-    std::vector<int32_t> expected_data(6);
-    std::iota(expected_data.begin(), expected_data.end(), base_values[i]);
+    std::vector<ValueType> expected_data(expected_shard_shape.num_elements());
+    absl::c_iota(expected_data, base_values[i]);
 
-    std::vector<int32_t> actual_data(6);
+    std::vector<ValueType> actual_data(shards[i]->shape().num_elements());
     TF_ASSERT_OK(shards[i]
                      ->CopyToHostBuffer(actual_data.data(),
                                         /*byte_strides=*/std::nullopt,
@@ -139,116 +194,96 @@ void AssertArrayContent(Client* client, Array* array,
   }
 };
 
-TEST(RemapImplTest, ExtractSingleShard) {
+class RemapImplTest : public testing::Test {
+ protected:
+  absl::StatusOr<RemapPlan> CreateRemapPlan(
+      std::vector<ArraySpec> input_specs, std::vector<ArraySpec> output_specs,
+      absl::flat_hash_map<int, std::vector<RemapPlan::InputDeviceRange>>
+          input_devices_for_output_map) {
+    RemapPlan plan(std::move(input_specs), std::move(output_specs),
+                   std::move(input_devices_for_output_map));
+    ABSL_RETURN_IF_ERROR(plan.Validate());
+    return plan;
+  }
+};
+
+TEST_F(RemapImplTest, ExtractSingleShard) {
   TF_ASSERT_OK_AND_ASSIGN(auto client, test_util::GetClient());
 
-  RemapPlan plan;
-  plan.input_specs.push_back(
-      ArraySpec{/*dtype=*/DType(DType::kS32),
-                /*shape=*/Shape({8, 3}),
-                /*sharding=*/
-                ConcreteEvenSharding::Create(
-                    test_util::GetDevices(client.get(), {0, 1, 2, 3}).value(),
-                    MemoryKind(), /*shape=*/Shape({8, 3}),
-                    /*shard_shape=*/Shape({2, 3}))});
-  plan.output_specs.push_back(
-      ArraySpec{/*dtype=*/DType(DType::kS32),
-                /*shape=*/Shape({2, 3}),
-                /*sharding=*/
-                ConcreteEvenSharding::Create(
-                    test_util::GetDevices(client.get(), {1}).value(),
-                    MemoryKind(), /*shape=*/Shape({2, 3}),
-                    /*shard_shape=*/Shape({2, 3}))});
-  // arrays[0].shards[1:2:1] is mapped into out_arrays[0].shards[0:1:1].
-  plan.mappings = std::make_shared<std::vector<RemapPlan::Mapping>>();
-  plan.mappings->push_back(
-      RemapPlan::Mapping{/*in_array=*/0, /*out_array=*/0,
-                         /*from=*/{RemapPlan::Interval{1, 2, 1}},
-                         /*to=*/{RemapPlan::Interval{0, 1, 1}}});
-  TF_ASSERT_OK(plan.Validate());
+  std::vector<ArraySpec> input_specs;
+  input_specs.push_back(
+      CreateArraySpec(client.get(), /*device_indices=*/{0, 1}).value());
+  std::vector<ArraySpec> output_specs;
+  output_specs.push_back(
+      CreateArraySpec(client.get(), /*device_indices=*/{1}).value());
+  absl::flat_hash_map<int, std::vector<RemapPlan::InputDeviceRange>>
+      input_devices_for_output_map;
+  input_devices_for_output_map[0] = {{0, output_specs[0].sharding->devices()}};
+  ASSERT_OK_AND_ASSIGN(
+      RemapPlan plan,
+      CreateRemapPlan(std::move(input_specs), std::move(output_specs),
+                      std::move(input_devices_for_output_map)));
 
-  std::vector<tsl::RCReference<Array>> arrays;
+  std::vector<ArrayRef> arrays;
   TF_ASSERT_OK_AND_ASSIGN(
       arrays.emplace_back(),
-      CreateArray(client.get(), /*base_values=*/{0, 6, 100, 106},
-                  /*device_indices=*/{0, 1, 2, 3}));
+      CreateArray<int32_t>(client.get(), /*base_values=*/{0, 6},
+                           /*device_indices=*/{0, 1}));
 
   {
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto out_arrays, client->RemapArrays(plan, absl::MakeSpan(arrays),
+    ASSERT_OK_AND_ASSIGN(auto out_arrays,
+                         client->RemapArrays(plan, absl::MakeSpan(arrays),
                                              ArrayCopySemantics::kReuseInput));
     ASSERT_THAT(out_arrays, SizeIs(1));
+    EXPECT_FALSE(arrays[0]->IsDeleted());
     // `out_arrays[0].shards[0] == arrays[0].shards[1]`.
-    AssertArrayContent(client.get(), out_arrays[0].get(), /*base_values=*/{6},
-                       /*device_indices=*/{1});
+    AssertArrayContent<int32_t>(client.get(), out_arrays[0].get(),
+                                /*base_values=*/{6},
+                                /*device_indices=*/{1});
   }
   {
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto out_arrays, client->RemapArrays(plan, absl::MakeSpan(arrays),
+    ASSERT_OK_AND_ASSIGN(auto out_arrays,
+                         client->RemapArrays(plan, absl::MakeSpan(arrays),
                                              ArrayCopySemantics::kDonateInput));
     ASSERT_THAT(out_arrays, SizeIs(1));
+    EXPECT_TRUE(arrays[0]->IsDeleted());
+    EXPECT_THAT(arrays[0]->Delete().Await(), absl_testing::IsOk());
     // `out_arrays[0].shards[0] == arrays[0].shards[1]`.
-    AssertArrayContent(client.get(), out_arrays[0].get(), /*base_values=*/{6},
-                       /*device_indices=*/{1});
+    AssertArrayContent<int32_t>(client.get(), out_arrays[0].get(),
+                                /*base_values=*/{6},
+                                /*device_indices=*/{1});
   }
 }
 
-TEST(RemapImplTest, InterleaveArrays) {
+TEST_F(RemapImplTest, InterleaveArraysDonate) {
   TF_ASSERT_OK_AND_ASSIGN(auto client, test_util::GetClient());
 
-  RemapPlan plan;
-  plan.input_specs.push_back(
-      ArraySpec{/*dtype=*/DType(DType::kS32),
-                /*shape=*/Shape({4, 3}),
-                /*sharding=*/
-                ConcreteEvenSharding::Create(
-                    test_util::GetDevices(client.get(), {0, 1}).value(),
-                    MemoryKind(), /*shape=*/Shape({4, 3}),
-                    /*shard_shape=*/Shape({2, 3}))});
-  plan.input_specs.push_back(
-      ArraySpec{/*dtype=*/DType(DType::kS32),
-                /*shape=*/Shape({4, 3}),
-                /*sharding=*/
-                ConcreteEvenSharding::Create(
-                    test_util::GetDevices(client.get(), {2, 3}).value(),
-                    MemoryKind(), /*shape=*/Shape({4, 3}),
-                    /*shard_shape=*/Shape({2, 3}))});
-  plan.output_specs.push_back(
-      ArraySpec{/*dtype=*/DType(DType::kS32),
-                /*shape=*/Shape({8, 3}),
-                /*sharding=*/
-                ConcreteEvenSharding::Create(
-                    test_util::GetDevices(client.get(), {0, 2, 1, 3}).value(),
-                    MemoryKind(), /*shape=*/Shape({8, 3}),
-                    /*shard_shape=*/Shape({2, 3}))});
-  // arrays[0].shards[0:2:1] is mapped into out_arrays[0].shards[0:4:2].
-  plan.mappings = std::make_shared<std::vector<RemapPlan::Mapping>>();
-  plan.mappings->reserve(2);
-  plan.mappings->push_back(
-      RemapPlan::Mapping{/*in_array=*/0, /*out_array=*/0,
-                         /*from=*/{RemapPlan::Interval{0, 2, 1}},
-                         /*to=*/{RemapPlan::Interval{0, 4, 2}}});
-  // arrays[1].shards[0:2:1] is mapped into out_arrays[0].shards[1:4:2].
-  plan.mappings->push_back(
-      RemapPlan::Mapping{/*in_array=*/1, /*out_array=*/0,
-                         /*from=*/{RemapPlan::Interval{0, 2, 1}},
-                         /*to=*/{RemapPlan::Interval{1, 4, 2}}});
-  TF_ASSERT_OK(plan.Validate());
+  std::vector<ArraySpec> input_specs;
+  input_specs.push_back(
+      CreateArraySpec(client.get(), /*device_indices=*/{0, 1}).value());
+  input_specs.push_back(
+      CreateArraySpec(client.get(), /*device_indices=*/{2, 3}).value());
+  std::vector<ArraySpec> output_specs;
+  output_specs.push_back(
+      CreateArraySpec(client.get(), /*device_indices=*/{0, 2, 1, 3}).value());
+  absl::flat_hash_map<int, std::vector<RemapPlan::InputDeviceRange>>
+      input_devices_for_output_map;
+  input_devices_for_output_map[0] = {{0, input_specs[0].sharding->devices()},
+                                     {1, input_specs[1].sharding->devices()}};
+  ASSERT_OK_AND_ASSIGN(
+      RemapPlan plan,
+      CreateRemapPlan(std::move(input_specs), std::move(output_specs),
+                      std::move(input_devices_for_output_map)));
 
-  std::vector<tsl::RCReference<Array>> arrays;
-  TF_ASSERT_OK_AND_ASSIGN(arrays.emplace_back(),
-                          CreateArray(client.get(), /*base_values=*/{0, 6},
-                                      /*device_indices=*/{0, 1}));
-  TF_ASSERT_OK_AND_ASSIGN(arrays.emplace_back(),
-                          CreateArray(client.get(), /*base_values=*/{100, 106},
-                                      /*device_indices=*/{2, 3}));
-
-  EXPECT_THAT(
-      client->RemapArrays(plan, absl::MakeSpan(arrays),
-                          ArrayCopySemantics::kReuseInput),
-      StatusIs(
-          absl::StatusCode::kInvalidArgument,
-          HasSubstr("kDonateInput is required if multiple inputs are used")));
+  std::vector<ArrayRef> arrays;
+  TF_ASSERT_OK_AND_ASSIGN(
+      arrays.emplace_back(),
+      CreateArray<int32_t>(client.get(), /*base_values=*/{0, 6},
+                           /*device_indices=*/{0, 1}));
+  TF_ASSERT_OK_AND_ASSIGN(
+      arrays.emplace_back(),
+      CreateArray<int32_t>(client.get(), /*base_values=*/{100, 106},
+                           /*device_indices=*/{2, 3}));
 
   TF_ASSERT_OK_AND_ASSIGN(
       auto out_arrays, client->RemapArrays(plan, absl::MakeSpan(arrays),
@@ -259,58 +294,74 @@ TEST(RemapImplTest, InterleaveArrays) {
   // `out_arrays[0].shards[1] == arrays[1].shards[0]`
   // `out_arrays[0].shards[2] == arrays[0].shards[1]`
   // `out_arrays[0].shards[3] == arrays[1].shards[1]`
-  AssertArrayContent(client.get(), out_arrays[0].get(),
-                     /*base_values=*/{0, 100, 6, 106},
-                     /*device_indices=*/{0, 2, 1, 3});
+  AssertArrayContent<int32_t>(client.get(), out_arrays[0].get(),
+                              /*base_values=*/{0, 100, 6, 106},
+                              /*device_indices=*/{0, 2, 1, 3});
 }
 
-TEST(RemapImplTest, DeinterleaveArrays) {
+TEST_F(RemapImplTest, InterleaveArraysReuse) {
   TF_ASSERT_OK_AND_ASSIGN(auto client, test_util::GetClient());
 
-  RemapPlan plan;
-  plan.input_specs.push_back(
-      ArraySpec{/*dtype=*/DType(DType::kS32),
-                /*shape=*/Shape({8, 3}),
-                /*sharding=*/
-                ConcreteEvenSharding::Create(
-                    test_util::GetDevices(client.get(), {0, 2, 1, 3}).value(),
-                    MemoryKind(), /*shape=*/Shape({8, 3}),
-                    /*shard_shape=*/Shape({2, 3}))});
-  plan.output_specs.push_back(
-      ArraySpec{/*dtype=*/DType(DType::kS32),
-                /*shape=*/Shape({4, 3}),
-                /*sharding=*/
-                ConcreteEvenSharding::Create(
-                    test_util::GetDevices(client.get(), {0, 1}).value(),
-                    MemoryKind(), /*shape=*/Shape({4, 3}),
-                    /*shard_shape=*/Shape({2, 3}))});
-  plan.output_specs.push_back(
-      ArraySpec{/*dtype=*/DType(DType::kS32),
-                /*shape=*/Shape({4, 3}),
-                /*sharding=*/
-                ConcreteEvenSharding::Create(
-                    test_util::GetDevices(client.get(), {2, 3}).value(),
-                    MemoryKind(), /*shape=*/Shape({4, 3}),
-                    /*shard_shape=*/Shape({2, 3}))});
-  // arrays[0].shards[0:4:2] is mapped into out_arrays[0].shards[0:2:1].
-  plan.mappings = std::make_shared<std::vector<RemapPlan::Mapping>>();
-  plan.mappings->reserve(2);
-  plan.mappings->push_back(
-      RemapPlan::Mapping{/*in_array=*/0, /*out_array=*/0,
-                         /*from=*/{RemapPlan::Interval{0, 4, 2}},
-                         /*to=*/{RemapPlan::Interval{0, 2, 1}}});
-  // arrays[0].shards[1:4:2] is mapped into out_arrays[1].shards[0:2:1].
-  plan.mappings->push_back(
-      RemapPlan::Mapping{/*in_array=*/0, /*out_array=*/1,
-                         /*from=*/{RemapPlan::Interval{1, 4, 2}},
-                         /*to=*/{RemapPlan::Interval{0, 2, 1}}});
-  TF_ASSERT_OK(plan.Validate());
+  std::vector<ArraySpec> input_specs;
+  input_specs.push_back(
+      CreateArraySpec(client.get(), /*device_indices=*/{0, 1}).value());
+  input_specs.push_back(
+      CreateArraySpec(client.get(), /*device_indices=*/{2, 3}).value());
+  std::vector<ArraySpec> output_specs;
+  output_specs.push_back(
+      CreateArraySpec(client.get(), /*device_indices=*/{0, 2, 1, 3}).value());
+  absl::flat_hash_map<int, std::vector<RemapPlan::InputDeviceRange>>
+      input_devices_for_output_map;
+  input_devices_for_output_map[0] = {{0, input_specs[0].sharding->devices()},
+                                     {1, input_specs[1].sharding->devices()}};
+  ASSERT_OK_AND_ASSIGN(
+      RemapPlan plan,
+      CreateRemapPlan(std::move(input_specs), std::move(output_specs),
+                      std::move(input_devices_for_output_map)));
 
-  std::vector<tsl::RCReference<Array>> arrays;
+  std::vector<ArrayRef> arrays;
   TF_ASSERT_OK_AND_ASSIGN(
       arrays.emplace_back(),
-      CreateArray(client.get(), /*base_values=*/{0, 100, 6, 106},
-                  /*device_indices=*/{0, 2, 1, 3}));
+      CreateArray<int32_t>(client.get(), /*base_values=*/{0, 6},
+                           /*device_indices=*/{0, 1}));
+  TF_ASSERT_OK_AND_ASSIGN(
+      arrays.emplace_back(),
+      CreateArray<int32_t>(client.get(), /*base_values=*/{100, 106},
+                           /*device_indices=*/{2, 3}));
+
+  EXPECT_THAT(client->RemapArrays(plan, absl::MakeSpan(arrays),
+                                  ArrayCopySemantics::kReuseInput),
+              absl_testing::StatusIs(
+                  absl::StatusCode::kInvalidArgument,
+                  HasSubstr("kDonateInput is required if multiple inputs "
+                            "are mapped to one output")));
+}
+
+TEST_F(RemapImplTest, DeinterleaveArrays) {
+  TF_ASSERT_OK_AND_ASSIGN(auto client, test_util::GetClient());
+
+  std::vector<ArraySpec> input_specs;
+  input_specs.push_back(
+      CreateArraySpec(client.get(), /*device_indices=*/{0, 2, 1, 3}).value());
+  std::vector<ArraySpec> output_specs;
+  output_specs.push_back(
+      CreateArraySpec(client.get(), /*device_indices=*/{0, 1}).value());
+  output_specs.push_back(
+      CreateArraySpec(client.get(), /*device_indices=*/{2, 3}).value());
+  absl::flat_hash_map<int, std::vector<RemapPlan::InputDeviceRange>>
+      input_devices_for_output_map;
+  input_devices_for_output_map[0] = {{0, output_specs[0].sharding->devices()}};
+  input_devices_for_output_map[1] = {{0, output_specs[1].sharding->devices()}};
+  ASSERT_OK_AND_ASSIGN(
+      RemapPlan plan,
+      CreateRemapPlan(std::move(input_specs), std::move(output_specs),
+                      std::move(input_devices_for_output_map)));
+
+  std::vector<ArrayRef> arrays;
+  TF_ASSERT_OK_AND_ASSIGN(
+      arrays.emplace_back(),
+      CreateArray<int32_t>(client.get(), /*base_values=*/{0, 100, 6, 106},
+                           /*device_indices=*/{0, 2, 1, 3}));
 
   {
     TF_ASSERT_OK_AND_ASSIGN(
@@ -322,12 +373,12 @@ TEST(RemapImplTest, DeinterleaveArrays) {
     // `out_arrays[0].shards[1] == arrays[0].shards[2]`
     // `out_arrays[1].shards[0] == arrays[0].shards[1]`
     // `out_arrays[1].shards[1] == arrays[0].shards[3]`
-    AssertArrayContent(client.get(), out_arrays[0].get(),
-                       /*base_values=*/{0, 6},
-                       /*device_indices=*/{0, 1});
-    AssertArrayContent(client.get(), out_arrays[1].get(),
-                       /*base_values=*/{100, 106},
-                       /*device_indices=*/{2, 3});
+    AssertArrayContent<int32_t>(client.get(), out_arrays[0].get(),
+                                /*base_values=*/{0, 6},
+                                /*device_indices=*/{0, 1});
+    AssertArrayContent<int32_t>(client.get(), out_arrays[1].get(),
+                                /*base_values=*/{100, 106},
+                                /*device_indices=*/{2, 3});
   }
   {
     TF_ASSERT_OK_AND_ASSIGN(
@@ -339,12 +390,215 @@ TEST(RemapImplTest, DeinterleaveArrays) {
     // `out_arrays[0].shards[1] == arrays[0].shards[2]`
     // `out_arrays[1].shards[0] == arrays[0].shards[1]`
     // `out_arrays[1].shards[1] == arrays[0].shards[3]`
-    AssertArrayContent(client.get(), out_arrays[0].get(),
-                       /*base_values=*/{0, 6},
-                       /*device_indices=*/{0, 1});
-    AssertArrayContent(client.get(), out_arrays[1].get(),
-                       /*base_values=*/{100, 106},
-                       /*device_indices=*/{2, 3});
+    AssertArrayContent<int32_t>(client.get(), out_arrays[0].get(),
+                                /*base_values=*/{0, 6},
+                                /*device_indices=*/{0, 1});
+    AssertArrayContent<int32_t>(client.get(), out_arrays[1].get(),
+                                /*base_values=*/{100, 106},
+                                /*device_indices=*/{2, 3});
+  }
+}
+
+TEST_F(RemapImplTest, BatchMappingIdentity) {
+  TF_ASSERT_OK_AND_ASSIGN(std::shared_ptr<Client> client,
+                          test_util::GetClient());
+  Shape first_shard_shape({2, 3});
+  Shape second_shard_shape({3, 5});
+  TF_ASSERT_OK_AND_ASSIGN(
+      ArraySpec all_device_spec,
+      CreateArraySpec(client.get(), /*device_indices=*/{0, 1, 2, 3},
+                      first_shard_shape));
+  TF_ASSERT_OK_AND_ASSIGN(
+      ArraySpec first_two_device_spec,
+      CreateArraySpec(client.get(), /*device_indices=*/{0, 1},
+                      second_shard_shape));
+
+  std::vector<ArraySpec> input_specs = {all_device_spec, first_two_device_spec};
+  std::vector<ArraySpec> output_specs = {all_device_spec,
+                                         first_two_device_spec};
+  absl::flat_hash_map<int, std::vector<RemapPlan::InputDeviceRange>>
+      input_devices_for_output_map;
+  input_devices_for_output_map[0] = {{0, output_specs[0].sharding->devices()}};
+  input_devices_for_output_map[1] = {{1, output_specs[1].sharding->devices()}};
+  ASSERT_OK_AND_ASSIGN(
+      RemapPlan plan,
+      CreateRemapPlan(std::move(input_specs), std::move(output_specs),
+                      std::move(input_devices_for_output_map)));
+
+  std::vector<ArrayRef> inputs;
+  TF_ASSERT_OK_AND_ASSIGN(
+      inputs.emplace_back(),
+      CreateArray<int32_t>(client.get(), /*base_values=*/{10, 20, 30, 40},
+                           /*device_indices=*/{0, 1, 2, 3}, first_shard_shape));
+  TF_ASSERT_OK_AND_ASSIGN(
+      inputs.emplace_back(),
+      CreateArray<int32_t>(client.get(), /*base_values=*/{50, 60},
+                           /*device_indices=*/{0, 1}, second_shard_shape));
+  for (ArrayCopySemantics copy_semantics : std::vector<ArrayCopySemantics>{
+           ArrayCopySemantics::kReuseInput, ArrayCopySemantics::kDonateInput}) {
+    TF_ASSERT_OK_AND_ASSIGN(
+        std::vector<ArrayRef> outputs,
+        client->RemapArrays(plan, absl::MakeSpan(inputs), copy_semantics));
+    ASSERT_THAT(outputs, SizeIs(2));
+    AssertArrayContent<int32_t>(client.get(), outputs[0].get(),
+                                /*base_values=*/{10, 20, 30, 40},
+                                /*device_indices=*/{0, 1, 2, 3},
+                                first_shard_shape);
+    AssertArrayContent<int32_t>(client.get(), outputs[1].get(),
+                                /*base_values=*/{50, 60},
+                                /*device_indices=*/{0, 1}, second_shard_shape);
+  }
+}
+
+// For a specific output, kDonateInput allows mapping multiple inputs to this
+// output, whereas kReuseInput does not. See CheckArrayCopySemantics. As such,
+// only test DeinterleaveArrays situation, not InterleaveArrays.
+TEST_F(RemapImplTest, BatchMappingDeinterleave) {
+  TF_ASSERT_OK_AND_ASSIGN(std::shared_ptr<Client> client,
+                          test_util::GetClient());
+  Shape first_shard_shape({2, 3});
+  Shape second_shard_shape({3, 5});
+  TF_ASSERT_OK_AND_ASSIGN(
+      ArraySpec first_input_spec,
+      CreateArraySpec(client.get(), {0, 1, 2, 3}, first_shard_shape,
+                      DType(DType::kF32)));
+  TF_ASSERT_OK_AND_ASSIGN(
+      ArraySpec first_output_spec_one,
+      CreateArraySpec(client.get(), {0, 1}, first_shard_shape,
+                      DType(DType::kF32)));
+  TF_ASSERT_OK_AND_ASSIGN(
+      ArraySpec first_output_spec_two,
+      CreateArraySpec(client.get(), {2, 3}, first_shard_shape,
+                      DType(DType::kF32)));
+  TF_ASSERT_OK_AND_ASSIGN(
+      ArraySpec second_input_spec,
+      CreateArraySpec(client.get(), {0, 1}, second_shard_shape));
+  TF_ASSERT_OK_AND_ASSIGN(
+      ArraySpec second_output_spec_one,
+      CreateArraySpec(client.get(), {0}, second_shard_shape));
+  TF_ASSERT_OK_AND_ASSIGN(
+      ArraySpec second_output_spec_two,
+      CreateArraySpec(client.get(), {1}, second_shard_shape));
+
+  std::vector<ArraySpec> input_specs = {first_input_spec, second_input_spec};
+  std::vector<ArraySpec> output_specs = {
+      first_output_spec_one, first_output_spec_two, second_output_spec_one,
+      second_output_spec_two};
+  absl::flat_hash_map<int, std::vector<RemapPlan::InputDeviceRange>>
+      input_devices_for_output_map;
+  input_devices_for_output_map[0] = {{0, output_specs[0].sharding->devices()}};
+  input_devices_for_output_map[1] = {{0, output_specs[1].sharding->devices()}};
+  input_devices_for_output_map[2] = {{1, output_specs[2].sharding->devices()}};
+  input_devices_for_output_map[3] = {{1, output_specs[3].sharding->devices()}};
+  ASSERT_OK_AND_ASSIGN(
+      RemapPlan plan,
+      CreateRemapPlan(std::move(input_specs), std::move(output_specs),
+                      std::move(input_devices_for_output_map)));
+
+  std::vector<ArrayRef> inputs;
+  TF_ASSERT_OK_AND_ASSIGN(
+      inputs.emplace_back(),
+      CreateArray<float>(client.get(), /*base_values=*/{10, 20, 30, 40},
+                         /*device_indices=*/{0, 1, 2, 3}, first_shard_shape));
+  TF_ASSERT_OK_AND_ASSIGN(
+      inputs.emplace_back(),
+      CreateArray<int32_t>(client.get(), /*base_values=*/{50, 60},
+                           /*device_indices=*/{0, 1}, second_shard_shape));
+  for (ArrayCopySemantics copy_semantics : std::vector<ArrayCopySemantics>{
+           ArrayCopySemantics::kReuseInput, ArrayCopySemantics::kDonateInput}) {
+    TF_ASSERT_OK_AND_ASSIGN(
+        std::vector<ArrayRef> outputs,
+        client->RemapArrays(plan, absl::MakeSpan(inputs), copy_semantics));
+    ASSERT_THAT(outputs, SizeIs(4));
+    AssertArrayContent<float>(client.get(), outputs[0].get(),
+                              /*base_values=*/{10, 20},
+                              /*device_indices=*/{0, 1}, first_shard_shape);
+    AssertArrayContent<float>(client.get(), outputs[1].get(),
+                              /*base_values=*/{30, 40},
+                              /*device_indices=*/{2, 3}, first_shard_shape);
+    AssertArrayContent<int32_t>(client.get(), outputs[2].get(),
+                                /*base_values=*/{50},
+                                /*device_indices=*/{0}, second_shard_shape);
+    AssertArrayContent<int32_t>(client.get(), outputs[3].get(),
+                                /*base_values=*/{60},
+                                /*device_indices=*/{1}, second_shard_shape);
+  }
+}
+
+TEST_F(RemapImplTest, DetectBadInput) {
+  TF_ASSERT_OK_AND_ASSIGN(auto client, test_util::GetClient());
+
+  // Trivial remap plan for a single device array on device 0.
+  std::vector<ArraySpec> input_specs;
+  input_specs.push_back(
+      CreateArraySpec(client.get(), /*device_indices=*/{0}).value());
+  std::vector<ArraySpec> output_specs;
+  output_specs.push_back(
+      CreateArraySpec(client.get(), /*device_indices=*/{0}).value());
+  absl::flat_hash_map<int, std::vector<RemapPlan::InputDeviceRange>>
+      input_devices_for_output_map;
+  input_devices_for_output_map[0] = {{0, output_specs[0].sharding->devices()}};
+  ASSERT_OK_AND_ASSIGN(
+      RemapPlan plan,
+      CreateRemapPlan(std::move(input_specs), std::move(output_specs),
+                      std::move(input_devices_for_output_map)));
+
+  {
+    std::vector<ArrayRef> arrays;
+    TF_ASSERT_OK_AND_ASSIGN(
+        arrays.emplace_back(),
+        CreateArray<int32_t>(client.get(), /*base_values=*/{0},
+                             /*device_indices=*/{0}));
+    TF_ASSERT_OK_AND_ASSIGN(
+        arrays.emplace_back(),
+        CreateArray<int32_t>(client.get(), /*base_values=*/{0},
+                             /*device_indices=*/{0}));
+    EXPECT_THAT(
+        client->RemapArrays(plan, absl::MakeSpan(arrays),
+                            ArrayCopySemantics::kReuseInput),
+        absl_testing::StatusIs(
+            absl::StatusCode::kInvalidArgument,
+            HasSubstr("RemapArrays expects 1 input arrays, but got 2")));
+  }
+
+  {
+    std::vector<ArrayRef> arrays;
+    TF_ASSERT_OK_AND_ASSIGN(
+        arrays.emplace_back(),
+        CreateArray<float>(client.get(), /*base_values=*/{0},
+                           /*device_indices=*/{0}));
+    EXPECT_THAT(client->RemapArrays(plan, absl::MakeSpan(arrays),
+                                    ArrayCopySemantics::kReuseInput),
+                absl_testing::StatusIs(
+                    absl::StatusCode::kInvalidArgument,
+                    HasSubstr("RemapArrays expects input #0 to have dtype")));
+  }
+
+  {
+    std::vector<ArrayRef> arrays;
+    TF_ASSERT_OK_AND_ASSIGN(
+        arrays.emplace_back(),
+        CreateArray<int32_t>(client.get(), /*base_values=*/{0},
+                             /*device_indices=*/{0},
+                             /*shard_shape=*/Shape({20, 30})));
+    EXPECT_THAT(client->RemapArrays(plan, absl::MakeSpan(arrays),
+                                    ArrayCopySemantics::kReuseInput),
+                absl_testing::StatusIs(
+                    absl::StatusCode::kInvalidArgument,
+                    HasSubstr("RemapArrays expects input #0 to have shape")));
+  }
+
+  {
+    std::vector<ArrayRef> arrays;
+    TF_ASSERT_OK_AND_ASSIGN(
+        arrays.emplace_back(),
+        CreateArray<int32_t>(client.get(), /*base_values=*/{0},
+                             /*device_indices=*/{1}));
+    EXPECT_THAT(client->RemapArrays(plan, absl::MakeSpan(arrays),
+                                    ArrayCopySemantics::kReuseInput),
+                absl_testing::StatusIs(
+                    absl::StatusCode::kInvalidArgument,
+                    HasSubstr("RemapArrays expects input #0 to be on")));
   }
 }
 

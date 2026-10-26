@@ -1,0 +1,53 @@
+# Copyright 2024 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+name: Bazel Tags
+permissions:
+  contents: read
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      # Trigger on `closed` so the concurrency group cancels any in-progress
+      # `synchronize` run when a PR is closed or merged by Copybara.
+      - closed
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  bazel-tags:
+    # Skip job execution on `closed` events; the run only exists to cancel
+    # in-progress runs in the same concurrency group.
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
+    runs-on: "linux-x86-n4-16"
+    container:
+      image: "us-docker.pkg.dev/ml-oss-artifacts-published/ml-public-container/ml-build:latest" # zizmor: ignore[unpinned-images]
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 10
+    steps:
+      - name: "Checking out repository"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: "Assert all tags are documented"
+        run: bazel query //xla/... --output=build | python3 build_tools/lint/tags.py

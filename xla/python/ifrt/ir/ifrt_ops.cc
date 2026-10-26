@@ -17,11 +17,13 @@ limitations under the License.
 
 #include <algorithm>
 #include <cstdint>
-#include <optional>
+#include <tuple>
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -30,17 +32,21 @@ limitations under the License.
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Casting.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
-#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "mlir/IR/Operation.h"  // from @llvm-project
-#include "mlir/IR/SymbolTable.h"  // from @llvm-project
-#include "mlir/IR/Types.h"  // from @llvm-project
-#include "mlir/IR/Value.h"  // from @llvm-project
-#include "mlir/IR/ValueRange.h"  // from @llvm-project
-#include "mlir/Interfaces/CallInterfaces.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
-#include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/Types.h"
+#include "mlir/IR/Value.h"
+#include "mlir/IR/ValueRange.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Support/DebugStringHelper.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Support/LogicalResult.h"
+#include "stablehlo/dialect/StablehloOps.h"
+#include "xla/pjrt/layout_mode.h"
 #include "xla/python/ifrt/ir/constants.h"
 #include "xla/python/ifrt/ir/ifrt_dialect.h"
 #include "xla/python/ifrt/ir/ifrt_interfaces.h"
@@ -57,11 +63,15 @@ namespace {
 mlir::FailureOr<mlir::RankedTensorType> GetGlobalShape(mlir::Type type) {
   if (auto ranked_tensor = mlir::dyn_cast<mlir::RankedTensorType>(type)) {
     return ranked_tensor;
-  } else if (auto array = mlir::dyn_cast<IfrtArrayType>(type)) {
-    return array.getShape();
-  } else {
-    return mlir::failure();
   }
+  if (auto array = mlir::dyn_cast<IfrtArrayType>(type)) {
+    return array.getShape();
+  }
+  if (llvm::isa<mlir::stablehlo::TokenType>(type)) {
+    return mlir::RankedTensorType::get({},
+                                       IfrtTokenType::get(type.getContext()));
+  }
+  return mlir::failure();
 }
 
 mlir::FailureOr<mlir::RankedTensorType> GetGlobalShape(mlir::Value value) {
@@ -76,13 +86,15 @@ mlir::FailureOr<mlir::RankedTensorType> GetGlobalShapeFromLocal(
     if (global_shape.ok()) {
       return mlir::RankedTensorType::get(global_shape.value(),
                                          local_ranked_tensor.getElementType());
-    } else {
-      return mlir::failure();
     }
-  } else {
-    // IFRT arrays cannot be in the local view.
     return mlir::failure();
   }
+  if (llvm::isa<mlir::stablehlo::TokenType>(type)) {
+    return mlir::RankedTensorType::get({},
+                                       IfrtTokenType::get(type.getContext()));
+  }
+  // IFRT arrays cannot be in the local view.
+  return mlir::failure();
 }
 
 template <typename T, typename U>
@@ -180,6 +192,35 @@ struct IoAlias {
   int output_index;
 };
 
+mlir::LogicalResult VerifyPerShardShapesAreEqual(mlir::Operation* op,
+                                                 IfrtArrayType t1,
+                                                 IfrtArrayType t2) {
+  absl::StatusOr<llvm::SmallVector<int64_t>> shard_shape1 =
+      t1.getShardingAttr().LocalShapeFromGlobalShape(t1.getShape().getShape());
+  if (!shard_shape1.ok()) {
+    return op->emitOpError() << "unable to get per-shard shape of array " << t1
+                             << ": " << shard_shape1.status().message();
+  }
+  absl::StatusOr<llvm::SmallVector<int64_t>> shard_shape2 =
+      t2.getShardingAttr().LocalShapeFromGlobalShape(t2.getShape().getShape());
+  if (!shard_shape2.ok()) {
+    return op->emitOpError() << "unable to get per-shard shape of array " << t2
+                             << ": " << shard_shape2.status().message();
+  }
+  if (shard_shape1->size() != shard_shape2->size()) {
+    return op->emitOpError()
+           << "Arrays have different per-shard shapes: " << t1 << " vs. " << t2;
+  }
+  for (const auto& [dim1, dim2] : llvm::zip(*shard_shape1, *shard_shape2)) {
+    if (dim1 != dim2) {
+      return op->emitOpError()
+             << "Arrays have different per-shard shapes: " << t1 << " vs. "
+             << t2;
+    }
+  }
+  return mlir::success();
+}
+
 mlir::LogicalResult VerifyIoAlias(mlir::Operation* op, IoAlias io_alias,
                                   llvm::ArrayRef<IfrtArrayType> inputs,
                                   llvm::ArrayRef<IfrtArrayType> outputs) {
@@ -196,21 +237,45 @@ mlir::LogicalResult VerifyIoAlias(mlir::Operation* op, IoAlias io_alias,
            << " outputs";
   }
   if (inputs[io_alias.input_index] != outputs[io_alias.output_index]) {
-    return op->emitOpError()
-           << "can't alias input #" << io_alias.input_index << " to output #"
-           << io_alias.output_index
-           << " with different types: " << inputs[io_alias.input_index]
-           << " vs " << outputs[io_alias.output_index];
+    // TODO(b/382761415): Relax this aliasing check to allow for different
+    // per-shard shapes as long as the byte size is the same. We cannot do this
+    // now because we do not have layout information.
+    if (inputs[io_alias.input_index].getShape().getElementType() !=
+        outputs[io_alias.output_index].getShape().getElementType()) {
+      return op->emitOpError()
+             << "can't alias input #" << io_alias.input_index << " to output #"
+             << io_alias.output_index
+             << " with different dtypes: " << inputs[io_alias.input_index]
+             << " vs. " << outputs[io_alias.output_index];
+    }
+    if (mlir::failed(
+            VerifyPerShardShapesAreEqual(op, inputs[io_alias.input_index],
+                                         outputs[io_alias.output_index]))) {
+      return op->emitOpError() << "can't alias input #" << io_alias.input_index
+                               << " to output #" << io_alias.output_index;
+    }
   }
   return mlir::success();
 }
 
-mlir::LogicalResult VerifyIoAliases(mlir::Operation* op,
-                                    mlir::ArrayAttr io_aliases,
-                                    llvm::ArrayRef<IfrtArrayType> inputs,
-                                    llvm::ArrayRef<IfrtArrayType> outputs) {
-  llvm::SmallSet<int, 4> aliased_inputs;
+mlir::LogicalResult VerifyIoAliasesAndDonations(
+    mlir::Operation* op, mlir::ArrayAttr io_aliases,
+    llvm::ArrayRef<int32_t> donated_input_indices,
+    llvm::ArrayRef<IfrtArrayType> inputs,
+    llvm::ArrayRef<IfrtArrayType> outputs) {
+  llvm::SmallSet<int, 4> aliased_or_donated_inputs;
   llvm::SmallSet<int, 4> aliased_outputs;
+  for (const int32_t donated_input_index : donated_input_indices) {
+    if (donated_input_index < 0 || donated_input_index >= inputs.size()) {
+      return op->emitOpError()
+             << "can't donate input #" << donated_input_index
+             << " as only having " << inputs.size() << " inputs";
+    }
+    if (!aliased_or_donated_inputs.insert(donated_input_index).second) {
+      return op->emitOpError() << "can't donate input #" << donated_input_index
+                               << " more than once";
+    }
+  }
   for (const auto& raw_io_alias :
        io_aliases.getAsRange<mlir::DenseI32ArrayAttr>()) {
     llvm::ArrayRef<int> io_alias_as_array = raw_io_alias.asArrayRef();
@@ -220,9 +285,9 @@ mlir::LogicalResult VerifyIoAliases(mlir::Operation* op,
                                    inputs, outputs))) {
       return mlir::failure();
     }
-    if (!aliased_inputs.insert(aliased_input).second) {
-      return op->emitOpError()
-             << "can't alias input #" << aliased_input << " more than once";
+    if (!aliased_or_donated_inputs.insert(aliased_input).second) {
+      return op->emitOpError() << "can't alias or donate input #"
+                               << aliased_input << " more than once";
     }
     if (!aliased_outputs.insert(aliased_output).second) {
       return op->emitOpError()
@@ -232,21 +297,91 @@ mlir::LogicalResult VerifyIoAliases(mlir::Operation* op,
   return mlir::success();
 }
 
+bool IsAutoLayout(mlir::Type type) {
+  auto array = llvm::cast_or_null<IfrtArrayType>(type);
+  if (array && array.getLayoutAttr()) {
+    return array.getLayoutAttr().str() == "auto";
+  }
+  return false;
+}
+
+bool SameLayout(IfrtArrayType t1, IfrtArrayType t2) {
+  xla::LayoutMode layout_mode1 = t1.LayoutMode();
+  xla::LayoutMode layout_mode2 = t2.LayoutMode();
+  if (layout_mode1.mode != layout_mode2.mode) {
+    return false;
+  }
+  if (layout_mode1.mode == xla::LayoutMode::Mode::kUserSpecified) {
+    return layout_mode1.user_layout == layout_mode2.user_layout;
+  }
+  return true;
+}
+
+int GetNumberOfSteps(IfrtIntervalAttr interval) {
+  return (interval.getEnd() - interval.getStart() + interval.getStep() - 1) /
+         interval.getStep();
+}
+
+mlir::LogicalResult CheckIntervalRange(int64_t num_shards,
+                                       IfrtIntervalAttr interval,
+                                       mlir::Location loc) {
+  if (interval.getStart() < 0 || interval.getStart() > num_shards - 1) {
+    return mlir::emitError(
+        loc, absl::StrCat("start must be in [0, ", num_shards - 1, "], but is ",
+                          interval.getStart()));
+  }
+  if (interval.getStep() <= 0) {
+    return mlir::emitError(loc, absl::StrCat("step must be positive, but is ",
+                                             interval.getStep()));
+  }
+  if (interval.getEnd() < 0 ||
+      interval.getEnd() > num_shards + interval.getStep() - 1) {
+    return mlir::emitError(
+        loc, absl::StrCat("end must be in [0, ",
+                          num_shards + interval.getStep() - 1, "] if step is ",
+                          interval.getStep(), ", but is ", interval.getEnd()));
+  }
+  return mlir::success();
+}
+
 }  // namespace
 
 mlir::LogicalResult ReshardOp::verify() {
-  return VerifySameGlobalShape(*this, "Input", getInput(), "Output",
-                               getOutput());
+  if (getInputs().empty()) {
+    return emitOpError() << "requires at least one input array";
+  }
+  if (getInputs().size() != getOutputs().size()) {
+    return emitOpError()
+           << "requires the same number of input and output arrays";
+  }
+  for (const auto [idx, pair] :
+       llvm::enumerate(llvm::zip(getInputs(), getOutputs()))) {
+    auto input = std::get<0>(pair);
+    auto output = std::get<1>(pair);
+    if (IsAutoLayout(input.getType()) || IsAutoLayout(output.getType())) {
+      return emitOpError()
+             << "does not allow input or output arrays with `auto` layout";
+    }
+    if (mlir::failed(VerifySameGlobalShape(*this, absl::StrCat("input #", idx),
+                                           input, absl::StrCat("output #", idx),
+                                           output))) {
+      return mlir::failure();
+    }
+  }
+  return mlir::success();
 }
 
 mlir::LogicalResult AssembleOp::verify() {
   std::vector<int> input_devices;
   for (const mlir::Value input : getInputs()) {
-    const auto array = llvm::cast<IfrtArrayType>(input.getType());
+    const IfrtArrayType array = GetArrayType(input);
     if (array.getDevices().size() != 1) {
       return emitOpError()
              << "requires every input to be a single device array. Actual: "
              << input.getType();
+    }
+    if (IsAutoLayout(array)) {
+      return emitOpError() << "does not allow input arrays with `auto` layout";
     }
     input_devices.push_back(array.getDevices()[0]);
   }
@@ -256,17 +391,23 @@ mlir::LogicalResult AssembleOp::verify() {
     return emitOpError() << "requires the same input/output device list. Input "
                          << input_devices << " vs Output " << output_devices;
   }
+  if (IsAutoLayout(getOutput().getType())) {
+    return emitOpError() << "does not allow output arrays with `auto` layout";
+  }
   return mlir::success();
 }
 
 mlir::LogicalResult DisassembleOp::verify() {
   std::vector<int> output_devices;
   for (const mlir::Value output : getOutputs()) {
-    const auto array = llvm::cast<IfrtArrayType>(output.getType());
+    const IfrtArrayType array = GetArrayType(output);
     if (array.getDevices().size() != 1) {
       return emitOpError()
              << "requires every output to be a single device array. Actual: "
              << output.getType();
+    }
+    if (IsAutoLayout(array)) {
+      return emitOpError() << "does not allow output arrays with `auto` layout";
     }
     output_devices.push_back(array.getDevices()[0]);
   }
@@ -275,6 +416,77 @@ mlir::LogicalResult DisassembleOp::verify() {
                   output_devices.begin())) {
     return emitOpError() << "requires the same input/output device list. Input "
                          << input_devices << " vs Output " << output_devices;
+  }
+  if (IsAutoLayout(getInput().getType())) {
+    return emitOpError() << "does not allow input array with `auto` layout";
+  }
+  return mlir::success();
+}
+
+mlir::LogicalResult CopyArraysOp::verify() {
+  int num_in_arrays = getInputs().size();
+  int num_out_arrays = getOutputs().size();
+  if (num_in_arrays == 0) {
+    return emitOpError() << "requires at least one input array";
+  }
+  if (num_in_arrays != num_out_arrays) {
+    return emitOpError()
+           << "requires the same number of input and output arrays";
+  }
+  if (getDonated() && getReuse()) {
+    return emitOpError()
+           << "requires at most one of `donated` or `reuse` to be "
+              "set to true";
+  }
+  IfrtArrayType first_input = GetArrayType(getInputs().front());
+  auto src_devices = first_input.getDevicesAttr();
+  auto src_memory_kind = first_input.MemoryKind();
+  IfrtArrayType first_output = GetArrayType(getOutputs().front());
+  auto dst_devices = first_output.getDevicesAttr();
+  auto dst_memory_kind = first_output.MemoryKind();
+  for (const auto [idx, pair] :
+       llvm::enumerate(llvm::zip(getInputs(), getOutputs()))) {
+    const IfrtArrayType input_array = GetArrayType(std::get<0>(pair));
+    if (src_devices != input_array.getDevicesAttr()) {
+      return emitOpError() << "requires all input arrays to have the same "
+                              "devices, but input #"
+                           << idx << " has different devices";
+    }
+    if (src_memory_kind != input_array.MemoryKind()) {
+      return emitOpError() << "requires all input arrays to have the same "
+                              "memory kind, but input #"
+                           << idx << " has a different memory kind";
+    }
+    if (IsAutoLayout(input_array)) {
+      return emitOpError() << "does not allow input arrays with `auto` layout";
+    }
+    const IfrtArrayType output_array = GetArrayType(std::get<1>(pair));
+    if (dst_devices != output_array.getDevicesAttr()) {
+      return emitOpError() << "requires all output arrays to have the same "
+                              "devices, but output #"
+                           << idx << " has different devices";
+    }
+    if (dst_memory_kind != output_array.MemoryKind()) {
+      return emitOpError() << "requires all output arrays to have the same "
+                              "memory kind, but output #"
+                           << idx << " has a different memory kind";
+    }
+    if (IsAutoLayout(output_array)) {
+      return emitOpError() << "does not allow output arrays with `auto` layout";
+    }
+    if (input_array.getShape() != output_array.getShape()) {
+      return emitOpError() << "requires input #" << idx << " and output #"
+                           << idx << " to have the same shape and dtype";
+    }
+    // If the sharding is specified, then it should be the same.
+    if (!mlir::isa<xla::ifrt::IfrtUnspecifiedShardingAttr>(
+            input_array.getShardingAttr()) &&
+        !mlir::isa<xla::ifrt::IfrtUnspecifiedShardingAttr>(
+            output_array.getShardingAttr()) &&
+        input_array.getShardingAttr() != output_array.getShardingAttr()) {
+      return emitOpError() << "requires input #" << idx << " and output #"
+                           << idx << " to have the same sharding";
+    }
   }
   return mlir::success();
 }
@@ -285,99 +497,131 @@ mlir::LogicalResult RemapArraysOp::verify() {
   if (num_in_arrays == 0) {
     return emitOpError() << "requires at least one input array";
   }
-  IfrtArrayType first_array =
-      llvm::cast<IfrtArrayType>(getInputs()[0].getType());
-  mlir::Type dtype = first_array.getShape().getElementType();
-  absl::StatusOr<llvm::SmallVector<int64_t>> in_per_shard_shape =
-      first_array.getShardingAttr().LocalShapeFromGlobalShape(
-          first_array.getShape().getShape());
-  if (!in_per_shard_shape.ok()) {
-    return emitOpError() << "unable to get per-shard shape of input #0. "
-                         << in_per_shard_shape.status().message();
-  }
+
   std::vector<std::vector<bool>> in_used_shards_list(num_in_arrays);
-  // Verify that all input/output arrays have the same DType and per-shard
-  // shape.
-  for (const auto [idx, input] : llvm::enumerate(getInputs())) {
-    const auto array = llvm::cast<IfrtArrayType>(input.getType());
-    if (array.getShape().getElementType() != dtype) {
-      return emitOpError()
-             << "requires every input and output array to have the same dtype.";
-    }
-    auto input_per_shard_shape =
-        array.getShardingAttr().LocalShapeFromGlobalShape(
-            array.getShape().getShape());
-    if (!input_per_shard_shape.ok()) {
-      return emitOpError() << "unable to get per-shard shape of input #" << idx
-                           << ". " << input_per_shard_shape.status().message();
-    }
-    if (*input_per_shard_shape != *in_per_shard_shape) {
-      return emitOpError() << "requires every input array to have the same "
-                              "per-shard shape, but input #"
-                           << idx << " has a different shape.";
-    }
-    in_used_shards_list[idx].resize(/*count=*/array.getDevices().size(),
+  for (const auto& [idx, input] : llvm::enumerate(getInputs())) {
+    const IfrtArrayType in_array_type = GetArrayType(input);
+    in_used_shards_list[idx].resize(/*count=*/in_array_type.getDevices().size(),
                                     /*value=*/false);
   }
   std::vector<std::vector<bool>> out_mapped_shards_list(num_out_arrays);
-  if (num_out_arrays > 0) {
-    IfrtArrayType first_out_array =
-        llvm::cast<IfrtArrayType>(getOutputs()[0].getType());
-    absl::StatusOr<llvm::SmallVector<int64_t>> out_per_shard_shape =
-        first_out_array.getShardingAttr().LocalShapeFromGlobalShape(
-            first_out_array.getShape().getShape());
-    if (!out_per_shard_shape.ok()) {
-      return emitOpError() << "unable to get per-shard shape of output #0. "
-                           << out_per_shard_shape.status().message();
-    }
-    for (const auto [idx, output] : llvm::enumerate(getOutputs())) {
-      const auto array = llvm::cast<IfrtArrayType>(output.getType());
-      if (array.getShape().getElementType() != dtype) {
-        return emitOpError() << "requires every input and output array to have "
-                                "the same dtype.";
-      }
-      auto output_per_shard_shape =
-          array.getShardingAttr().LocalShapeFromGlobalShape(
-              array.getShape().getShape());
-      if (!output_per_shard_shape.ok()) {
-        return emitOpError()
-               << "unable to get per-shard shape of output #" << idx << ". "
-               << output_per_shard_shape.status().message();
-      }
-      if (*output_per_shard_shape != *out_per_shard_shape) {
-        return emitOpError() << "requires every output array to have the same "
-                                "per-shard shape, but output #"
-                             << idx << " has a different shape.";
-      }
-      out_mapped_shards_list[idx].resize(/*count=*/array.getDevices().size(),
-                                         /*value=*/false);
-    }
+  for (const auto& [idx, output] : llvm::enumerate(getOutputs())) {
+    const IfrtArrayType out_array_type = GetArrayType(output);
+    out_mapped_shards_list[idx].resize(
+        /*count=*/out_array_type.getDevices().size(),
+        /*value=*/false);
   }
 
-  // Verify that an input shard is used at most once, and that every output
-  // shard has exactly one input shard mapped.
-  for (const auto& array_mapping : getMappings()) {
-    const auto array_mapping_attr =
+  auto mappings = getMappings();
+  if (mappings.empty()) {
+    return emitOpError() << "requires at least one mapping";
+  }
+
+  absl::flat_hash_map<int, int> out_array_index_to_in_array_index;
+  bool donated = getDonated();
+  for (const auto& [idx, array_mapping] : llvm::enumerate(mappings)) {
+    const IfrtArrayMappingAttr array_mapping_attr =
         llvm::cast<IfrtArrayMappingAttr>(array_mapping);
     int in_index = array_mapping_attr.getInArrayIndex();
     int out_index = array_mapping_attr.getOutArrayIndex();
-    if (in_index < 0 || in_index >= in_used_shards_list.size()) {
-      return emitOpError() << "mapping array index " << in_index
-                           << " is out of range of input arrays.";
+    if (in_index < 0 || in_index >= num_in_arrays) {
+      return emitOpError() << "mappings in array index " << idx
+                           << " must be in [0, " << num_in_arrays
+                           << "], but is " << in_index;
     }
-    if (out_index < 0 || out_index >= out_mapped_shards_list.size()) {
-      return emitOpError() << "mapping array index " << out_index
-                           << " is out of range of output arrays.";
+    if (out_index < 0 || out_index >= num_out_arrays) {
+      return emitOpError() << "mapping out array index " << idx
+                           << " must be in [0, " << num_out_arrays
+                           << "], but is " << out_index;
     }
+
+    if (!donated) {
+      const auto [it, inserted] =
+          out_array_index_to_in_array_index.insert({out_index, in_index});
+      if (!inserted && it->second != in_index) {
+        return emitOpError()
+               << "all arguments must be donated because multiple input arrays "
+                  "are mapped to output array #"
+               << out_index;
+      }
+    }
+
+    IfrtArrayType in_array_type = GetArrayType(getInputs()[in_index]);
+    IfrtArrayType out_array_type = GetArrayType(getOutputs()[out_index]);
+    if (in_array_type.getShape().getElementType() !=
+        out_array_type.getShape().getElementType()) {
+      return emitOpError() << "requires input array #" << in_index
+                           << " and output array #" << out_index
+                           << " to have the same dtype: "
+                           << in_array_type.getShape().getElementType()
+                           << " vs. "
+                           << out_array_type.getShape().getElementType();
+    }
+
+    if (in_array_type.MemoryKind() != out_array_type.MemoryKind()) {
+      return emitOpError() << "requires input array #" << in_index
+                           << " and output array #" << out_index
+                           << " to have the same memory kind: "
+                           << in_array_type.getMemoryKindAttr() << " vs. "
+                           << out_array_type.getMemoryKindAttr();
+    }
+
+    if (IsAutoLayout(in_array_type) || IsAutoLayout(out_array_type)) {
+      return emitOpError()
+             << "does not allow input or output arrays with `auto` layout.";
+    }
+
+    if (!SameLayout(in_array_type, out_array_type)) {
+      return emitOpError() << "requires input array #" << in_index
+                           << " and output array #" << out_index
+                           << " to have the same layout: "
+                           << in_array_type.getLayoutAttr() << " vs. "
+                           << out_array_type.getLayoutAttr();
+    }
+
+    if (mlir::failed(VerifyPerShardShapesAreEqual(getOperation(), in_array_type,
+                                                  out_array_type))) {
+      return emitOpError() << "requires input array #" << in_index
+                           << " and output array #" << out_index
+                           << " to have the same per-shard shape";
+    }
+
     std::vector<bool>& in_used_shards = in_used_shards_list[in_index];
     std::vector<bool>& out_mapped_shards = out_mapped_shards_list[out_index];
-    for (const auto& mapping : array_mapping_attr.getMappings()) {
+    const int64_t in_shards_count = in_used_shards.size();
+    const int64_t out_shards_count = out_mapped_shards.size();
+
+    for (const auto& [sidx, mapping] :
+         llvm::enumerate(array_mapping_attr.getMappings())) {
       const auto mapping_attr = llvm::cast<IfrtMappingAttr>(mapping);
-      auto from_shards = mapping_attr.getFromShards();
-      auto to_shards = mapping_attr.getToShards();
-      int in_shard = from_shards.getStart();
-      int out_shard = to_shards.getStart();
-      while (in_shard < from_shards.getEnd()) {
+      IfrtIntervalAttr in_interval = mapping_attr.getFromShards();
+      IfrtIntervalAttr out_interval = mapping_attr.getToShards();
+
+      if (mlir::failed(
+              CheckIntervalRange(in_shards_count, in_interval, getLoc()))) {
+        return emitOpError()
+               << "mapping #" << idx << " from #" << sidx << " has invalid "
+               << "in_interval: " << mlir::debugString(in_interval);
+      }
+      if (mlir::failed(
+              CheckIntervalRange(out_shards_count, out_interval, getLoc()))) {
+        return emitOpError()
+               << "mapping #" << idx << " from #" << sidx << " has invalid "
+               << "out_interval: " << mlir::debugString(out_interval);
+      }
+
+      if (GetNumberOfSteps(in_interval) != GetNumberOfSteps(out_interval)) {
+        return emitOpError()
+               << "mapping #" << idx << " from #" << sidx << " and mapping #"
+               << idx << " to #" << sidx << " must have the same number of "
+               << "steps, but were " << GetNumberOfSteps(in_interval) << " and "
+               << GetNumberOfSteps(out_interval) << " ("
+               << mlir::debugString(in_interval) << " vs. "
+               << mlir::debugString(out_interval) << ")";
+      }
+      int in_shard = in_interval.getStart();
+      int out_shard = out_interval.getStart();
+      while (in_shard < in_interval.getEnd()) {
         if (in_shard >= in_used_shards.size()) {
           return emitOpError()
                  << "input array #" << in_index << " shard #" << in_shard
@@ -398,11 +642,13 @@ mlir::LogicalResult RemapArraysOp::verify() {
                                << out_shard << " is already assigned.";
         }
         out_mapped_shards[out_shard] = true;
-        in_shard += from_shards.getStep();
-        out_shard += to_shards.getStep();
+
+        in_shard += in_interval.getStep();
+        out_shard += out_interval.getStep();
       }
     }
   }
+
   for (int idx = 0; idx < num_out_arrays; ++idx) {
     for (int out_shard = 0; out_shard < out_mapped_shards_list[idx].size();
          ++out_shard) {
@@ -415,16 +661,52 @@ mlir::LogicalResult RemapArraysOp::verify() {
   return mlir::success();
 }
 
+mlir::LogicalResult BitcastArraysOp::verify() {
+  auto inputs = getInputs();
+  auto outputs = getOutputs();
+  if (inputs.size() != outputs.size()) {
+    return emitOpError()
+           << "requires the same number of input and output arrays. "
+           << inputs.size() << " inputs vs. " << outputs.size() << " outputs";
+  }
+  for (const auto& [idx, input] : llvm::enumerate(inputs)) {
+    const IfrtArrayType in_array_type = GetArrayType(input);
+    const IfrtArrayType out_array_type = GetArrayType(outputs[idx]);
+    // Ideally, the code here would check that the devices are the same.
+    // However, since this can be expensive, we only check that the number of
+    // devices are the same, and instead rely that an error will be raised
+    // at runtime.
+    if (in_array_type.getDevices().size() !=
+        out_array_type.getDevices().size()) {
+      return emitOpError() << "requires input array #" << idx
+                           << " and output array #" << idx
+                           << " to have the same number of devices: "
+                           << in_array_type.getDevices().size() << " vs. "
+                           << out_array_type.getDevices().size();
+    }
+    if (in_array_type.MemoryKind() != out_array_type.MemoryKind()) {
+      return emitOpError() << "requires input array #" << idx
+                           << " and output array #" << idx
+                           << " to have the same memory kind: "
+                           << in_array_type.getMemoryKindAttr() << " vs. "
+                           << out_array_type.getMemoryKindAttr();
+    }
+    // TODO(b/382761415): Verify on-device size is the same once we have layout
+    // info.
+  }
+  return mlir::success();
+}
+
 mlir::CallInterfaceCallable CallOp::getCallableForCallee() {
   return (*this)->getAttrOfType<mlir::SymbolRefAttr>("callee");
 }
 void CallOp::setCalleeFromCallable(mlir::CallInterfaceCallable callee) {
   // Direct call
   if ((*this)->getAttrOfType<mlir::SymbolRefAttr>("callee")) {
-    (*this)->setAttr("callee", callee.get<mlir::SymbolRefAttr>());
+    (*this)->setAttr("callee", mlir::cast<mlir::SymbolRefAttr>(callee));
   }
   // Indirect call, callee Value is the first operand.
-  return setOperand(0, callee.get<mlir::Value>());
+  return setOperand(0, mlir::cast<mlir::Value>(callee));
 }
 
 mlir::Operation::operand_range CallOp::getArgOperands() { return getInputs(); }
@@ -489,19 +771,20 @@ mlir::LogicalResult CallOp::verify() {
   llvm::SmallVector<IfrtArrayType, 4> input_arrays;
   input_arrays.reserve(getInputs().size());
   for (const mlir::Value input : getInputs()) {
-    input_arrays.push_back(mlir::cast<IfrtArrayType>(input.getType()));
+    input_arrays.push_back(GetArrayType(input));
   }
 
   llvm::SmallVector<IfrtArrayType, 4> output_arrays;
   output_arrays.reserve(getOutputs().size());
   for (const mlir::Value output : getOutputs()) {
-    output_arrays.push_back(mlir::cast<IfrtArrayType>(output.getType()));
+    output_arrays.push_back(GetArrayType(output));
   }
 
   if (mlir::failed(VerifyDevicePlacement(*this, getDevices(), input_arrays,
                                          output_arrays)) ||
-      mlir::failed(VerifyIoAliases(*this, getIoAliases(), input_arrays,
-                                   output_arrays))) {
+      mlir::failed(VerifyIoAliasesAndDonations(*this, getIoAliases(),
+                                               getDonatedInputIndices(),
+                                               input_arrays, output_arrays))) {
     return mlir::failure();
   }
   return mlir::success();
@@ -514,10 +797,10 @@ void CallLoadedExecutableOp::setCalleeFromCallable(
     mlir::CallInterfaceCallable callee) {
   // Direct call
   if ((*this)->getAttrOfType<mlir::SymbolRefAttr>("callee")) {
-    (*this)->setAttr("callee", callee.get<mlir::SymbolRefAttr>());
+    (*this)->setAttr("callee", mlir::cast<mlir::SymbolRefAttr>(callee));
   }
   // Indirect call, callee Value is the first operand.
-  return setOperand(0, callee.get<mlir::Value>());
+  return setOperand(0, mlir::cast<mlir::Value>(callee));
 }
 
 mlir::Operation::operand_range CallLoadedExecutableOp::getArgOperands() {
@@ -553,16 +836,18 @@ mlir::LogicalResult CallLoadedExecutableOp::verify() {
   llvm::SmallVector<IfrtArrayType, 4> input_arrays;
   input_arrays.reserve(getInputs().size());
   for (const mlir::Value input : getInputs()) {
-    input_arrays.push_back(mlir::cast<IfrtArrayType>(input.getType()));
+    input_arrays.push_back(GetArrayType(input));
   }
 
   llvm::SmallVector<IfrtArrayType, 4> output_arrays;
   output_arrays.reserve(getOutputs().size());
   for (const mlir::Value output : getOutputs()) {
-    output_arrays.push_back(mlir::cast<IfrtArrayType>(output.getType()));
+    output_arrays.push_back(GetArrayType(output));
   }
 
-  return VerifyIoAliases(*this, getIoAliases(), input_arrays, output_arrays);
+  return VerifyIoAliasesAndDonations(*this, getIoAliases(),
+                                     getDonatedInputIndices(), input_arrays,
+                                     output_arrays);
 }
 
 mlir::LogicalResult LoadedExecutableOp::verify() {

@@ -16,43 +16,37 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_MOCK_STREAM_EXECUTOR_H_
 #define XLA_STREAM_EXECUTOR_MOCK_STREAM_EXECUTOR_H_
 
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <variant>
 
-#include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/types/span.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/stream_executor/activate_context.h"
 #include "xla/stream_executor/allocator_stats.h"
+#include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/command_buffer.h"
+#include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/device_description.h"
-#include "xla/stream_executor/device_memory.h"
+#include "xla/stream_executor/dnn.h"
 #include "xla/stream_executor/event.h"
+#include "xla/stream_executor/event_based_timer.h"
+#include "xla/stream_executor/fft.h"
 #include "xla/stream_executor/kernel.h"
 #include "xla/stream_executor/kernel_spec.h"
-#include "xla/stream_executor/launch_dim.h"
 #include "xla/stream_executor/memory_allocation.h"
+#include "xla/stream_executor/memory_allocator.h"
+#include "xla/stream_executor/memory_space.h"
 #include "xla/stream_executor/module_spec.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
-#include "xla/test.h"
 
 namespace stream_executor {
-
-namespace fft {
-class FftSupport;
-}
-namespace dnn {
-class DnnSupport;
-}
-namespace blas {
-class BlasSupport;
-}
 
 // Implements StreamExecutor for testing.
 class MockStreamExecutor : public StreamExecutor {
@@ -60,93 +54,38 @@ class MockStreamExecutor : public StreamExecutor {
   MockStreamExecutor() = default;
   MOCK_METHOD(absl::Status, Init, (), (override));
   MOCK_METHOD(int, device_ordinal, (), (const, override));
-  MOCK_METHOD(absl::Status, GetKernel,
-              (const MultiKernelLoaderSpec& spec, Kernel* kernel), (override));
+  MOCK_METHOD(int, numa_node, (), (const, override));
+  MOCK_METHOD(absl::StatusOr<std::unique_ptr<Kernel>>, LoadKernel,
+              (const KernelLoaderSpec& spec), (override));
+  MOCK_METHOD(std::unique_ptr<ActivateContext>, Activate, (), (override));
   MOCK_METHOD(bool, UnloadModule, (ModuleHandle module_handle), (override));
-  MOCK_METHOD(absl::Status, LoadModule,
-              (const MultiModuleLoaderSpec& spec, ModuleHandle* module_handle),
-              (override));
-  MOCK_METHOD(absl::StatusOr<std::shared_ptr<DeviceMemoryBase>>,
+  MOCK_METHOD(absl::StatusOr<ModuleHandle>, LoadModule,
+              (const MultiModuleLoaderSpec& spec), (override));
+  MOCK_METHOD(absl::StatusOr<std::shared_ptr<DeviceAddressBase>>,
               CreateOrShareConstant,
               (Stream * stream, absl::Span<const uint8_t> content), (override));
-  MOCK_METHOD(absl::Status, Launch,
-              (Stream * stream, const ThreadDim& thread_dims,
-               const BlockDim& block_dims, const Kernel& k,
-               const KernelArgs& args),
-              (override));
-  MOCK_METHOD(absl::Status, Launch,
-              (Stream * stream, const ThreadDim& thread_dims,
-               const BlockDim& block_dims, const ClusterDim& cluster_dims,
-               const Kernel& k, const KernelArgs& args),
-              (override));
-  MOCK_METHOD(absl::Status, Submit,
-              (Stream * stream, const CommandBuffer& command_buffer));
-  MOCK_METHOD(void, UnloadKernel, (const Kernel* kernel), (override));
-  MOCK_METHOD(DeviceMemoryBase, Allocate, (uint64_t size, int64_t memory_space),
-              (override));
-  MOCK_METHOD(void, Deallocate, (DeviceMemoryBase * mem), (override));
-  MOCK_METHOD(void*, UnifiedMemoryAllocate, (uint64_t size), (override));
-  MOCK_METHOD(void, UnifiedMemoryDeallocate, (void* mem), (override));
-  MOCK_METHOD(absl::StatusOr<void*>, CollectiveMemoryAllocate, (uint64_t size),
-              (override));
-  MOCK_METHOD(absl::Status, CollectiveMemoryDeallocate, (void* mem),
-              (override));
+  MOCK_METHOD(DeviceAddressBase, Allocate,
+              (uint64_t size, int64_t memory_space), (override));
+  MOCK_METHOD(void, Deallocate, (DeviceAddressBase * mem), (override));
   MOCK_METHOD(absl::StatusOr<std::unique_ptr<MemoryAllocation>>,
               HostMemoryAllocate, (uint64_t size), (override));
-  MOCK_METHOD(void, HostMemoryDeallocate, (void* mem), (override));
   MOCK_METHOD(bool, SynchronizeAllActivity, (), (override));
-  MOCK_METHOD(absl::Status, SynchronousMemZero,
-              (DeviceMemoryBase * location, uint64_t size), (override));
   MOCK_METHOD(absl::Status, SynchronousMemcpy,
-              (DeviceMemoryBase * device_dst, const void* host_src,
+              (DeviceAddressBase * device_dst, const void* host_src,
                uint64_t size),
               (override));
   MOCK_METHOD(absl::Status, SynchronousMemcpy,
-              (void* host_dst, const DeviceMemoryBase& device_src,
+              (void* host_dst, const DeviceAddressBase& device_src,
                uint64_t size),
-              (override));
-  MOCK_METHOD(absl::Status, MemZero,
-              (Stream * stream, DeviceMemoryBase* location, uint64_t size),
-              (override));
-  MOCK_METHOD(absl::Status, Memset,
-              (Stream * stream, DeviceMemoryBase* location, uint8_t pattern,
-               uint64_t size),
-              (override));
-  MOCK_METHOD(absl::Status, Memset32,
-              (Stream * stream, DeviceMemoryBase* location, uint32_t pattern,
-               uint64_t size),
-              (override));
-  MOCK_METHOD(absl::Status, Memcpy,
-              (Stream * stream, void* host_dst,
-               const DeviceMemoryBase& device_src, uint64_t size),
-              (override));
-  MOCK_METHOD(absl::Status, Memcpy,
-              (Stream * stream, DeviceMemoryBase* device_dst,
-               const void* host_src, uint64_t size),
-              (override));
-  MOCK_METHOD(bool, MemcpyDeviceToDevice,
-              (Stream * stream, DeviceMemoryBase* device_dst,
-               const DeviceMemoryBase& device_src, uint64_t size),
-              (override));
-  MOCK_METHOD(bool, HostCallback,
-              (Stream * stream, absl::AnyInvocable<absl::Status() &&> callback),
-              (override));
-  MOCK_METHOD(absl::Status, RecordEvent, (Stream * stream, Event* event),
-              (override));
-  MOCK_METHOD(absl::Status, WaitForEvent, (Stream * stream, Event* event),
               (override));
   MOCK_METHOD(void, DeallocateStream, (Stream * stream), (override));
-  MOCK_METHOD(bool, CreateStreamDependency, (Stream * dependent, Stream* other),
-              (override));
-  MOCK_METHOD(absl::Status, BlockHostUntilDone, (Stream * stream), (override));
-  MOCK_METHOD(absl::Status, GetStatus, (Stream * stream));
   MOCK_METHOD(absl::Status, EnablePeerAccessTo, (StreamExecutor * other),
               (override));
   MOCK_METHOD(bool, CanEnablePeerAccessTo, (StreamExecutor * other),
               (override));
   MOCK_METHOD(bool, DeviceMemoryUsage, (int64_t* free, int64_t* total),
               (const, override));
-  MOCK_METHOD(absl::StatusOr<DeviceMemoryBase>, GetSymbol,
+  MOCK_METHOD(absl::StatusOr<DeviceAddressBase>, GetSymbol,
               (const std::string& symbol_name, ModuleHandle module_handle),
               (override));
   MOCK_METHOD(absl::StatusOr<std::unique_ptr<DeviceDescription>>,
@@ -154,8 +93,6 @@ class MockStreamExecutor : public StreamExecutor {
   MOCK_METHOD(blas::BlasSupport*, AsBlas, (), (override));
   MOCK_METHOD(fft::FftSupport*, AsFft, (), (override));
   MOCK_METHOD(dnn::DnnSupport*, AsDnn, (), (override));
-  MOCK_METHOD(absl::StatusOr<std::unique_ptr<Kernel>>, CreateKernel, (),
-              (override));
   MOCK_METHOD(absl::StatusOr<std::unique_ptr<CommandBuffer>>,
               CreateCommandBuffer, (CommandBuffer::Mode mode), (override));
   MOCK_METHOD(std::optional<AllocatorStats>, GetAllocatorStats, (), (override));
@@ -170,6 +107,14 @@ class MockStreamExecutor : public StreamExecutor {
               (const, override));
   MOCK_METHOD(absl::StatusOr<std::unique_ptr<Event>>, CreateEvent, (),
               (override));
+  MOCK_METHOD(void, UnloadKernel, (const Kernel* kernel), (override));
+  MOCK_METHOD(absl::Status, UpdateMaxDynamicSharedMemoryBytes,
+              (const Kernel* kernel, int32_t shared_memory_bytes), (override));
+  MOCK_METHOD(absl::StatusOr<std::unique_ptr<EventBasedTimer>>,
+              CreateEventBasedTimer, (Stream * stream, bool use_delay_kernel),
+              (override));
+  MOCK_METHOD(absl::StatusOr<std::unique_ptr<MemoryAllocator>>,
+              CreateMemoryAllocator, (MemorySpace memory_space), (override));
 };
 
 }  // namespace stream_executor

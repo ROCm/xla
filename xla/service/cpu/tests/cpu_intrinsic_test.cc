@@ -13,10 +13,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <algorithm>
-#include <string>
-
 #include <gtest/gtest.h>
+
+#include <algorithm>
+#include <memory>
+#include <string>
+#include <utility>
+
 #include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
@@ -24,13 +27,12 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/service/cpu/cpu_compiler.h"
-#include "xla/service/cpu/tests/cpu_codegen_test.h"
+#include "xla/service/cpu/cpu_aot_compilation_result.h"
+#include "xla/service/cpu/tests/cpu_pjrt_codegen_test.h"
 #include "xla/shape_util.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/tsl/platform/test.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/test.h"
 
 namespace xla {
 namespace cpu {
@@ -41,6 +43,8 @@ const char* const kTriple_android_arm = "armv7-none-android";
 
 struct IntrinsicTestSpec {
   HloOpcode opcode;
+  PrimitiveType type;
+  bool match_optimized_ir;
   absl::string_view triple;
   absl::string_view features;
   absl::string_view check_lines;
@@ -48,7 +52,7 @@ struct IntrinsicTestSpec {
 
 // Tests that unary functions get lowered using intrinsic calls.
 class CpuUnaryIntrinsicTest
-    : public CpuCodegenTest,
+    : public CpuPjRtCodegenTest,
       public ::testing::WithParamInterface<IntrinsicTestSpec> {
  public:
   static std::string Name(
@@ -56,7 +60,10 @@ class CpuUnaryIntrinsicTest
     auto spec = info.param;
 
     std::string opcode(HloOpcodeString(spec.opcode));
-    opcode[0] = toupper(opcode[0]);
+    opcode[0] = absl::ascii_toupper(opcode[0]);
+
+    std::string type(PrimitiveType_Name(spec.type));
+    type[0] = absl::ascii_toupper(type[0]);
 
     std::string triple{spec.triple.data(), spec.triple.size()};
     if (triple == kTriple_x86_64) {
@@ -76,14 +83,16 @@ class CpuUnaryIntrinsicTest
       features = "";
     }
 
-    return absl::StrCat(opcode, "_On_", triple,
+    std::string opt = spec.match_optimized_ir ? "" : "_PreOpt_";
+
+    return absl::StrCat(opcode, "_", type, opt, "_On_", triple,
                         (features.empty() ? "" : "_With"), features);
   }
 
  private:
-  DebugOptions GetDebugOptionsForTest() override {
-    DebugOptions debug_options = HloTestBase::GetDebugOptionsForTest();
-    HloTestBase::SetAotFastMathDebugOptions(&debug_options);
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions debug_options = CpuPjRtCodegenTest::GetDebugOptionsForTest();
+    CpuPjRtCodegenTest::SetAotFastMathDebugOptions(&debug_options);
     return debug_options;
   }
 };
@@ -101,7 +110,7 @@ TEST_P(CpuUnaryIntrinsicTest, DoIt) {
   LLVMInitializeARMTargetInfo();
   LLVMInitializeARMTargetMC();
 
-  auto param_shape = ShapeUtil::MakeShape(F32, {1024});
+  auto param_shape = ShapeUtil::MakeShape(spec.type, {1024});
   HloInstruction* param = builder.AddInstruction(
       HloInstruction::CreateParameter(0, param_shape, "input"));
   builder.AddInstruction(
@@ -119,10 +128,14 @@ TEST_P(CpuUnaryIntrinsicTest, DoIt) {
   auto hlo_module = CreateNewVerifiedModule();
   hlo_module->AddEntryComputation(std::move(computation));
 
+  hlo_module->mutable_config()
+      .mutable_debug_options()
+      .clear_xla_cpu_prefer_vector_width();
+
   std::string check_lines{spec.check_lines.data(), spec.check_lines.size()};
 
   CompileAheadOfTimeAndVerifyIr(std::move(hlo_module), options, check_lines,
-                                /*match_optimized_ir=*/true);
+                                spec.match_optimized_ir);
 }
 
 IntrinsicTestSpec CpuUnaryIntrinsicTestCases[] = {
@@ -130,40 +143,80 @@ IntrinsicTestSpec CpuUnaryIntrinsicTestCases[] = {
     // a function call.
 
     IntrinsicTestSpec{
-        HloOpcode::kExp, kTriple_x86_64, "",
-        R"(CHECK: fmul fast <4 x float> <float 0xBF2BD01060000000, float 0xBF2BD01060000000, float 0xBF2BD01060000000, float 0xBF2BD01060000000>)"},
+        HloOpcode::kExp, F32, true, kTriple_x86_64, "",
+        R"(CHECK: fmul fast <4 x float> {{.*}}splat (float f0x3FB8AA3B)"},
+
+    // Check that we see inlined vectorized exp.f64 code
+    IntrinsicTestSpec{HloOpcode::kExp, F64, true, kTriple_x86_64, "",
+                      R"(
+                      CHECK-NOT: define {{[a-z]* ?}}<4 x double> @xla.exp.v4f32
+                      CHECK-NOT: define {{[a-z]* ?}}<4 x double> @xla.exp.v4f64
+                      CHECK: fmul contract <2 x double> {{.*}}splat (double f0x3FF71547652B82FE)
+                      CHECK-NOT: define {{[a-z]* ?}}<2 x double> @xla.exp.v2f32
+                      CHECK-NOT: define {{[a-z]* ?}}<4 x double> @xla.exp.v4f64
+    )"},
+
+    IntrinsicTestSpec{HloOpcode::kExp, F64, true, kTriple_x86_64, "+avx",
+                      R"(
+                      CHECK-NOT: define {{[a-z]* ?}}<2 x double> @xla.exp.v2f64
+                      CHECK-NOT: define {{[a-z]* ?}}<4 x float> @xla.exp.v4f32
+                      CHECK: fmul contract <4 x double> {{.*}}splat (double f0x3FF71547652B82FE)
+                      CHECK-NOT: define {{[a-z]* ?}}<4 x float> @xla.exp.v4f32
+                      CHECK-NOT: define {{[a-z]* ?}}<2 x double> @xla.exp.v2f64
+    )"},
+
+    IntrinsicTestSpec{HloOpcode::kExp, F64, false, kTriple_x86_64, "",
+                      R"(CHECK: call fast double @xla.exp.f64(double)"},
 
     IntrinsicTestSpec{
-        HloOpcode::kExp, kTriple_x86_64, "+avx",
-        R"(CHECK: fmul fast <8 x float> <float 0xBF2BD01060000000, float 0xBF2BD01060000000, float 0xBF2BD01060000000, float 0xBF2BD01060000000, float 0xBF2BD01060000000, float 0xBF2BD01060000000, float 0xBF2BD01060000000, float 0xBF2BD01060000000>)"},
+        HloOpcode::kExp, F32, true, kTriple_x86_64, "+avx",
+        R"(CHECK: fmul fast <8 x float> {{.*}}splat (float f0x3FB8AA3B)"},
 
     IntrinsicTestSpec{
-        HloOpcode::kExp, kTriple_android_arm, "+neon",
-        R"(CHECK: fmul fast <4 x float> <float 0xBF2BD01060000000, float 0xBF2BD01060000000, float 0xBF2BD01060000000, float 0xBF2BD01060000000>)"},
+        HloOpcode::kExp, F32, true, kTriple_android_arm, "+neon",
+        R"(CHECK: fmul fast <4 x float> {{.*}}splat (float f0x3FB8AA3B)"},
 
     IntrinsicTestSpec{
-        HloOpcode::kTanh, kTriple_x86_64, "",
-        R"(CHECK: fcmp fast uge <4 x float> %wide.load, <float 0xC01FFEC880000000, float 0xC01FFEC880000000, float 0xC01FFEC880000000, float 0xC01FFEC880000000>)"},
+        HloOpcode::kRsqrt, F32, true, kTriple_x86_64, "+avx",
+        R"(CHECK: fmul contract <8 x float>{{.*}}splat (float -5.000000e-01)"},
 
     IntrinsicTestSpec{
-        HloOpcode::kTanh, kTriple_x86_64, "+avx",
-        R"(CHECK: fcmp fast uge <8 x float> %wide.load, <float 0xC01FFEC880000000, float 0xC01FFEC880000000, float 0xC01FFEC880000000, float 0xC01FFEC880000000, float 0xC01FFEC880000000, float 0xC01FFEC880000000, float 0xC01FFEC880000000, float 0xC01FFEC880000000>)"},
+        HloOpcode::kRsqrt, F32, true, kTriple_x86_64, "+avx512f",
+        R"(CHECK: fmul contract <16 x float>{{.*}} splat (float -5.000000e-01)"},
+
+    // F16 tanh is implemented via upcast to F32; should have the same
+    // vectorized IR.
+    IntrinsicTestSpec{
+        HloOpcode::kTanh, F16, true, kTriple_x86_64, "",
+        R"(CHECK: fcmp {{(fast |contract )?(uge|olt)}} <8 x float> %{{[^,]+}}, splat (float
+        0xC01FFEC880000000)"},
 
     IntrinsicTestSpec{
-        HloOpcode::kTanh, kTriple_android_arm, "",
-        R"(CHECK: fcmp fast uge <4 x float> %wide.load, <float 0xC01FFEC880000000, float 0xC01FFEC880000000, float 0xC01FFEC880000000, float 0xC01FFEC880000000>)"},
+        HloOpcode::kTanh, F32, true, kTriple_x86_64, "",
+        R"(CHECK: fcmp {{(fast |contract )?(uge|olt)}} <4 x float> %{{[^,]+}}, splat (float
+        0xC01FFEC880000000)"},
 
     IntrinsicTestSpec{
-        HloOpcode::kLog, kTriple_x86_64, "",
-        R"(CHECK: fadd fast <4 x float> <float 0x3FBDE4A340000000, float 0x3FBDE4A340000000, float 0x3FBDE4A340000000, float 0x3FBDE4A340000000>)"},
+        HloOpcode::kTanh, F32, true, kTriple_x86_64, "+avx",
+        R"(CHECK: fcmp {{(fast |contract )?(uge|olt)}} <8 x float> %{{[^,]+}}, splat (float
+        0xC01FFEC880000000)"},
 
     IntrinsicTestSpec{
-        HloOpcode::kLog, kTriple_x86_64, "+avx",
-        R"(CHECK: fadd fast <8 x float> <float 0x3FBDE4A340000000, float 0x3FBDE4A340000000, float 0x3FBDE4A340000000, float 0x3FBDE4A340000000, float 0x3FBDE4A340000000, float 0x3FBDE4A340000000, float 0x3FBDE4A340000000, float 0x3FBDE4A340000000>)"},
+        HloOpcode::kTanh, F32, true, kTriple_android_arm, "",
+        R"(CHECK: fcmp {{(fast |contract )?(uge|olt)}} <4 x float> %{{[^,]+}}, splat (float
+        0xC01FFEC880000000)"},
 
     IntrinsicTestSpec{
-        HloOpcode::kLog, kTriple_android_arm, "",
-        R"(CHECK: fadd fast <4 x float> <float 0x3FBDE4A340000000, float 0x3FBDE4A340000000, float 0x3FBDE4A340000000, float 0x3FBDE4A340000000>)"}};
+        HloOpcode::kLog, F32, true, kTriple_x86_64, "",
+        R"(CHECK: fadd fast <4 x float> splat (float f0x3DEF251A)"},
+
+    IntrinsicTestSpec{
+        HloOpcode::kLog, F32, true, kTriple_x86_64, "+avx",
+        R"(CHECK: fadd fast <8 x float> splat (float f0x3DEF251A)"},
+
+    IntrinsicTestSpec{
+        HloOpcode::kLog, F32, true, kTriple_android_arm, "",
+        R"(CHECK: fadd fast <4 x float> splat (float f0x3DEF251A)"}};
 
 INSTANTIATE_TEST_SUITE_P(CpuUnaryIntrinsicTestInstantiation,
                          CpuUnaryIntrinsicTest,

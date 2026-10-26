@@ -18,17 +18,20 @@ limitations under the License.
 #include <utility>
 
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/cord.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/ExtensibleRTTI.h"
 #include "xla/hlo/ir/hlo_sharding.h"
-#include "xla/python/ifrt/device.h"
+#include "xla/python/ifrt/device_list.h"
 #include "xla/python/ifrt/memory.h"
+#include "xla/python/ifrt/rtti.h"
 #include "xla/python/ifrt/serdes.h"
+#include "xla/python/ifrt/serdes_version.h"
+#include "xla/python/ifrt/sharding.h"
 #include "xla/python/pjrt_ifrt/xla_sharding.h"
 #include "xla/python/pjrt_ifrt/xla_sharding.pb.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 namespace ifrt {
@@ -36,44 +39,69 @@ namespace ifrt {
 namespace {
 
 // Serialization/deserialization for `HloSharding`.
-class HloShardingSerDes : public llvm::RTTIExtends<HloSharding, SerDes> {
+class HloShardingSerDes : public RTTIExtends<HloSharding, SerDes> {
  public:
   absl::string_view type_name() const override {
     return "xla::ifrt::HloSharding";
   }
 
-  absl::StatusOr<std::string> Serialize(Serializable& serializable) override {
-    const HloSharding& sharding = llvm::cast<HloSharding>(serializable);
+  absl::StatusOr<absl::Cord> Serialize(
+      const Serializable& serializable,
+      std::unique_ptr<SerializeOptions> options) override {
+    const SerDesVersion version = GetRequestedSerDesVersion(options.get());
+    if (version.version_number() < SerDesVersionNumber(0)) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Unsupported ", version.version_number(),
+                       " for HloSharding serialization"));
+    }
+
+    const HloSharding& sharding = cast<HloSharding>(serializable);
+    if (sharding.xla_hlo_sharding().UseNamedShardingLeaf()) {
+      return absl::InvalidArgumentError(
+          "HloSharding with XLA HloShardingV3 format is not supported for "
+          "serialization");
+    }
+
     HloShardingProto proto;
-    *proto.mutable_devices() = sharding.devices().ToProto();
-    if (sharding.memory_kind().memory_kind().has_value()) {
-      proto.set_memory_kind(std::string(*sharding.memory_kind().memory_kind()));
+    proto.set_version_number(SerDesVersionNumber(0).value());
+    sharding.devices()->ToProto(*proto.mutable_devices(), version);
+    if (!sharding.memory_kind().is_default()) {
+      proto.set_memory_kind(std::string(sharding.memory_kind().value()));
     }
     *proto.mutable_xla_op_sharding() = sharding.xla_hlo_sharding().ToProto();
-    return proto.SerializeAsString();
+    return proto.SerializeAsCord();
   }
 
   absl::StatusOr<std::unique_ptr<Serializable>> Deserialize(
-      const std::string& serialized,
+      const absl::Cord& serialized,
       std::unique_ptr<DeserializeOptions> options) override {
     const auto* deserialize_sharding_options =
-        llvm::cast<DeserializeShardingOptions>(options.get());
+        dyn_cast_or_null<DeserializeShardingOptions>(options.get());
+    if (deserialize_sharding_options == nullptr) {
+      return absl::InvalidArgumentError(
+          "DeserializeShardingOptions must be provided");
+    }
 
     HloShardingProto proto;
     if (!proto.ParseFromString(serialized)) {
       return absl::InvalidArgumentError(
           "Failed to parse serialized HloSharding");
     }
-    TF_ASSIGN_OR_RETURN(
+    const SerDesVersionNumber version_number(proto.version_number());
+    if (version_number != SerDesVersionNumber(0)) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "Unsupported ", version_number, " for HloSharding deserialization"));
+    }
+    ABSL_ASSIGN_OR_RETURN(
         auto devices,
-        DeviceList::FromProto(deserialize_sharding_options->lookup_device,
+        DeviceList::FromProto(deserialize_sharding_options->client,
                               proto.devices()));
     MemoryKind memory_kind;
     if (proto.has_memory_kind()) {
       memory_kind = MemoryKind(proto.memory_kind());
     }
-    TF_ASSIGN_OR_RETURN(auto xla_hlo_sharding,
-                        xla::HloSharding::FromProto(proto.xla_op_sharding()));
+    ABSL_ASSIGN_OR_RETURN(auto xla_hlo_sharding,
+                          xla::HloSharding::FromProto(proto.xla_op_sharding()));
     return HloSharding::Create(std::move(devices), memory_kind,
                                std::move(xla_hlo_sharding));
   }

@@ -50,7 +50,10 @@ defvar MHLO_QuantizedInt = AnyTypeOf<[HLO_QuantizedSignedInt, HLO_PerAxisQuantiz
 defvar MHLO_BroadcastDimAttr = I64ElementsAttr;
 
 // Token type.
-defvar MHLO_Token = HLO_Token;
+def MHLO_Token : Type<CPred<"::llvm::isa<::mlir::mhlo::TokenType>($_self)">, "token">;
+
+defvar StableHLO_TokenType = HLO_Token;
+defvar MHLO_AnyToken = AnyTypeOf<[MHLO_Token, StableHLO_TokenType]>;
 
 // Any integer tensor types
 defvar MHLO_IntTensor = HLO_IntTensor;
@@ -77,18 +80,25 @@ defvar MHLO_AnyTensor = HLO_AnyTensor;
 
 defvar MHLO_ComplexTensor = HLO_ComplexTensor;
 
-defvar MHLO_Tuple = HLO_Tuple;
+defvar MHLO_Buffer = HLO_Buffer;
 
-defvar MHLO_TensorOrToken = HLO_TensorOrPerAxisQuantizedTensorOrToken;
+defvar MHLO_Tuple = NestedTupleOf<[MHLO_Tensor, MHLO_Buffer, MHLO_Token]>;
+
+defvar MHLO_TensorOrToken = AnyTypeOf<[MHLO_Tensor, MHLO_Token]>;
+defvar MHLO_TensorOrTokenOrBuffer = AnyTypeOf<[MHLO_TensorOrToken, MHLO_Buffer]>;
+defvar MHLO_TensorOrAnyToken = AnyTypeOf<[MHLO_TensorOrToken, StableHLO_TokenType]>;
 
 defvar MHLO_TensorOrTokenOrTuple = AnyTypeOf<[MHLO_Tensor, MHLO_Token, MHLO_Tuple]>;
+defvar MHLO_TensorOrAnyTokenOrTuple = AnyTypeOf<[MHLO_Tensor, MHLO_AnyToken, MHLO_Tuple]>;
+defvar MHLO_TensorOrTokenOrTupleOrBuffer = AnyTypeOf<[MHLO_TensorOrTokenOrTuple, MHLO_Buffer]>;
 
 defvar MHLO_DimensionValue = HLO_DimensionValue;
 
 // Dynamic representation of a shape vector as a tensor.
 defvar MHLO_DimensionTensor = HLO_DimensionTensor;
 
-defvar MHLO_CustomCallValue = HLO_CustomCallValue;
+defvar MHLO_CustomCallTuple = NestedTupleOf<[MHLO_AnyTensor, MHLO_Buffer, MHLO_Token]>;
+defvar MHLO_CustomCallValue = AnyTypeOf<[MHLO_AnyTensor, MHLO_Buffer, MHLO_Token, MHLO_CustomCallTuple, HLO_Future]>;
 
 //===----------------------------------------------------------------------===//
 // MHLO combined type definitions.
@@ -104,6 +114,9 @@ defvar MHLO_PredOrIntTensor = HLO_PredOrIntTensor;
 
 // Any floating-point or complex tensor types
 defvar MHLO_FpOrComplexTensor = HLO_FpOrComplexTensor;
+
+// Any floating-point or quantized tensor types
+defvar MHLO_FpOrQuantizedIntTensor = HLO_FpOrQuantizedIntTensor;
 
 // Any floating-point, complex or quantized tensor types
 defvar MHLO_FpComplexOrQuantizedIntTensor = HLO_FpComplexOrQuantizedIntTensor;
@@ -125,7 +138,9 @@ defvar MHLO_PredIntFpOrQuantizedTensor = HLO_PredIntFpOrQuantizedTensor;
 // it is for a legacy op which is only correct with static shapes.
 defvar MHLO_StaticShapeTensor = HLO_StaticShapeTensorOrPerAxisQuantizedTensor;
 
-defvar MHLO_StaticShapeTensorOrToken = HLO_StaticShapeTensorOrPerAxisQuantizedTensorOrToken;
+defvar MHLO_StaticShapeOrBoundedDimTensor = HLO_StaticShapeTensorPerAxisQuantizedTensorOrBoundedTensor;
+
+defvar MHLO_StaticShapeTensorOrToken = AnyTypeOf<[HLO_StaticShapeTensor, MHLO_StaticShapeTensor, MHLO_Token]>;
 
 defvar MHLO_StaticShapeIntOrFpTensor = HLO_StaticShapeIntOrFpTensor;
 

@@ -13,28 +13,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <memory>
-
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <memory>
+#include <vector>
+
+#include "absl/log/log.h"
+#include "tsl/platform/logging.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_sharding.h"
 #include "xla/service/hlo_module_config.h"
-#include "xla/service/pattern_matcher.h"
-#include "xla/service/pattern_matcher_gmock.h"
-#include "xla/shape_util.h"
-#include "xla/tests/hlo_test_base.h"
-#include "tsl/platform/logging.h"
+#include "xla/tests/restricted/hlo_test_base_legacy.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace gpu {
 namespace {
 
-namespace m = ::xla::match;
-
-using ::testing::Conditional;
-
-class AutoShardingTest : public HloTestBase {
+class AutoShardingTest : public HloTestBaseLegacy {
  protected:
   const char* const dot_hlo_string_ = R"(
 HloModule module
@@ -63,44 +60,15 @@ ENTRY matmul {
   }
 };
 
-TEST_F(AutoShardingTest, MatMulWithAutosharding) {
-  std::unique_ptr<HloModule> compiled_module = CompileMatMul(true, 4);
-  const HloInstruction* parameter1 =
-      compiled_module->entry_computation()->parameter_instruction(0);
-  const HloInstruction* parameter2 =
-      compiled_module->entry_computation()->parameter_instruction(1);
-  bool is_parameter1_replicated = ShapeUtil::Equal(
-      parameter1->shape(), ShapeUtil::MakeShape(PrimitiveType::F32, {32, 64}));
-  bool is_parameter2_replicated = ShapeUtil::Equal(
-      parameter2->shape(), ShapeUtil::MakeShape(PrimitiveType::F32, {64, 128}));
-
-  // Check that at least one of the parameters is sharded, thereby telling us
-  // that the dot is as well.
-  VLOG(2) << parameter1->ToString();
-  EXPECT_THAT(
-      parameter1,
-      Conditional(
-          is_parameter2_replicated,
-          AnyOf(GmockMatch(m::Op().WithShape(PrimitiveType::F32, {8, 64})),
-                GmockMatch(m::Op().WithShape(PrimitiveType::F32, {32, 16}))),
-          GmockMatch(m::Op().WithShape(PrimitiveType::F32, {32, 64}))));
-
-  VLOG(2) << parameter2->ToString();
-  EXPECT_THAT(
-      parameter2,
-      Conditional(
-          is_parameter1_replicated,
-          AnyOf(GmockMatch(m::Op().WithShape(PrimitiveType::F32, {16, 128})),
-                GmockMatch(m::Op().WithShape(PrimitiveType::F32, {64, 32}))),
-          GmockMatch(m::Op().WithShape(PrimitiveType::F32, {64, 128}))));
-}
-
 TEST_F(AutoShardingTest, MatMulWithoutAutosharding) {
   auto compiled_module = CompileMatMul(false, 4);
   auto* instruction =
       compiled_module->entry_computation()->parameter_instruction(0);
   VLOG(2) << instruction->ToString();
-  EXPECT_THAT(instruction, GmockMatch(m::Op().WithSharding("{replicated}")));
+  EXPECT_FALSE(instruction->has_sharding());
+  ASSERT_TRUE(compiled_module->has_spmd_parameters_shardings());
+  EXPECT_EQ(compiled_module->spmd_parameters_shardings()[0],
+            HloSharding::Replicate());
 }
 
 }  // namespace

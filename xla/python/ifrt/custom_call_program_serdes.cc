@@ -14,24 +14,25 @@ limitations under the License.
 ==============================================================================*/
 
 #include <memory>
-#include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/cord.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/ExtensibleRTTI.h"
 #include "xla/python/ifrt/array_spec.h"
 #include "xla/python/ifrt/array_spec.pb.h"
 #include "xla/python/ifrt/custom_call_program.h"
 #include "xla/python/ifrt/custom_call_program.pb.h"
-#include "xla/python/ifrt/device.h"
+#include "xla/python/ifrt/device_list.h"
 #include "xla/python/ifrt/program_serdes.h"
+#include "xla/python/ifrt/rtti.h"
 #include "xla/python/ifrt/serdes.h"
+#include "xla/python/ifrt/serdes_version.h"
 #include "xla/python/ifrt/sharding.pb.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 namespace ifrt {
@@ -40,67 +41,90 @@ namespace {
 
 // Serialization/deserialization for `CustomCallProgram`.
 class CustomCallProgramSerDes
-    : public llvm::RTTIExtends<CustomCallProgramSerDes, SerDes> {
+    : public RTTIExtends<CustomCallProgramSerDes, SerDes> {
  public:
   absl::string_view type_name() const override {
     return "xla::ifrt::CustomCallProgram";
   }
 
-  absl::StatusOr<std::string> Serialize(Serializable& serializable) override {
-    const CustomCallProgram& program =
-        llvm::cast<CustomCallProgram>(serializable);
+  absl::StatusOr<absl::Cord> Serialize(
+      const Serializable& serializable,
+      std::unique_ptr<SerializeOptions> options) override {
+    const SerDesVersion version = GetRequestedSerDesVersion(options.get());
+    if (version.version_number() < SerDesVersionNumber(0)) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Unsupported ", version.version_number(),
+                       " for CustomCallProgram serialization"));
+    }
+
+    const CustomCallProgram& program = cast<CustomCallProgram>(serializable);
     CustomCallProgramProto proto;
+    proto.set_version_number(SerDesVersionNumber(0).value());
     proto.set_type(program.type);
     proto.set_name(program.name);
-    proto.set_serialized_program_text(program.serialized_program_text);
-    *proto.mutable_devices() = program.devices.ToProto();
+    // TODO(hyeontaek): Remove absl::Cord flattening once protobuf [CTYPE=CORD]
+    // generates `absl::Cord` support on all platforms.
+    absl::CopyCordToString(program.serialized_program_text,
+                           proto.mutable_serialized_program_text());
+    program.devices->ToProto(*proto.mutable_devices(), version);
     for (const ArraySpec& spec : program.input_specs) {
-      TF_ASSIGN_OR_RETURN(*proto.add_input_specs(), spec.ToProto());
+      ABSL_RETURN_IF_ERROR(spec.ToProto(*proto.add_input_specs(), version));
     }
     for (const ArraySpec& spec : program.output_specs) {
-      TF_ASSIGN_OR_RETURN(*proto.add_output_specs(), spec.ToProto());
+      ABSL_RETURN_IF_ERROR(spec.ToProto(*proto.add_output_specs(), version));
     }
-    return proto.SerializeAsString();
+    return proto.SerializeAsCord();
   }
 
   absl::StatusOr<std::unique_ptr<Serializable>> Deserialize(
-      const std::string& serialized,
+      const absl::Cord& serialized,
       std::unique_ptr<DeserializeOptions> options) override {
     const auto* deserialize_program_options =
-        llvm::cast<DeserializeProgramOptions>(options.get());
+        dyn_cast_or_null<DeserializeProgramOptions>(options.get());
+    if (deserialize_program_options == nullptr) {
+      return absl::InvalidArgumentError(
+          "DeserializeProgramOptions must be provided");
+    }
 
     CustomCallProgramProto proto;
     if (!proto.ParseFromString(serialized)) {
       return absl::InvalidArgumentError(
           "Failed to parse serialized CustomCallProgramProto");
     }
-    TF_ASSIGN_OR_RETURN(
-        DeviceList devices,
-        DeviceList::FromProto(deserialize_program_options->lookup_device,
+    const SerDesVersionNumber version_number(proto.version_number());
+    if (version_number != SerDesVersionNumber(0)) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Unsupported ", version_number,
+                       " for CustomCallProgram deserialization"));
+    }
+
+    ABSL_ASSIGN_OR_RETURN(
+        DeviceListRef devices,
+        DeviceList::FromProto(deserialize_program_options->client,
                               proto.devices()));
     std::vector<ArraySpec> input_specs;
     input_specs.reserve(proto.input_specs_size());
     for (const ArraySpecProto& spec_proto : proto.input_specs()) {
-      TF_ASSIGN_OR_RETURN(
-          ArraySpec spec,
-          ArraySpec::FromProto(deserialize_program_options->lookup_device,
-                               spec_proto));
+      ABSL_ASSIGN_OR_RETURN(
+          ArraySpec spec, ArraySpec::FromProto(
+                              deserialize_program_options->client, spec_proto));
       input_specs.push_back(std::move(spec));
     }
     std::vector<ArraySpec> output_specs;
     output_specs.reserve(proto.output_specs_size());
     for (const ArraySpecProto& spec_proto : proto.output_specs()) {
-      TF_ASSIGN_OR_RETURN(
-          ArraySpec spec,
-          ArraySpec::FromProto(deserialize_program_options->lookup_device,
-                               spec_proto));
+      ABSL_ASSIGN_OR_RETURN(
+          ArraySpec spec, ArraySpec::FromProto(
+                              deserialize_program_options->client, spec_proto));
       output_specs.push_back(std::move(spec));
     }
 
+    // TODO(hyeontaek): Remove explicit absl::Cord wrapping once protobuf
+    // [CTYPE=CORD] generates `absl::Cord` support on all platforms.
     return std::make_unique<CustomCallProgram>(
         /*type=*/proto.type(), /*name=*/proto.name(),
         /*serialized_program_text=*/
-        std::move(*proto.mutable_serialized_program_text()),
+        absl::Cord(std::move(*proto.mutable_serialized_program_text())),
         /*devices=*/std::move(devices),
         /*input_specs=*/std::move(input_specs),
         /*output_specs=*/std::move(output_specs));
@@ -111,25 +135,71 @@ class CustomCallProgramSerDes
 
 // Serialization/deserialization for `CustomCallCompileOptions`.
 class CustomCallCompileOptionsSerDes
-    : public llvm::RTTIExtends<CustomCallCompileOptionsSerDes, SerDes> {
+    : public RTTIExtends<CustomCallCompileOptionsSerDes, SerDes> {
  public:
   absl::string_view type_name() const override {
     return "xla::ifrt::CustomCallCompileOptions";
   }
 
-  absl::StatusOr<std::string> Serialize(Serializable& serializable) override {
-    return "";
+  absl::StatusOr<absl::Cord> Serialize(
+      const Serializable& serializable,
+      std::unique_ptr<SerializeOptions> options) override {
+    const SerDesVersion version = GetRequestedSerDesVersion(options.get());
+    if (version.version_number() < SerDesVersionNumber(0)) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Unsupported ", version.version_number(),
+                       " for CustomCallCompileOptions serialization"));
+    }
+    const auto& compile_options = cast<CustomCallCompileOptions>(serializable);
+
+    if (version.version_number() >= SerDesVersionNumber(4)) {
+      CustomCallCompileOptionsProto proto;
+      proto.set_version_number(SerDesVersionNumber(4).value());
+      if (compile_options.outputs_bundle_slice_sizes.has_value()) {
+        proto.mutable_outputs_bundle_slice_sizes()->Add(
+            compile_options.outputs_bundle_slice_sizes->begin(),
+            compile_options.outputs_bundle_slice_sizes->end());
+      }
+      return proto.SerializeAsCord();
+    }
+
+    if (compile_options.outputs_bundle_slice_sizes.has_value()) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Unsupported ", version.version_number(),
+                       " for CustomCallCompileOptions serialization with "
+                       "outputs_bundle_slice_sizes"));
+    }
+    return absl::Cord();
   }
 
   absl::StatusOr<std::unique_ptr<Serializable>> Deserialize(
-      const std::string& serialized,
-      std::unique_ptr<DeserializeOptions> options) override {
-    if (!serialized.empty()) {
-      return absl::InvalidArgumentError(
-          "Invalid serialized CustomCallCompileOptions; a serialized "
-          "CustomCallCompileOptions is expected to be an empty string");
+      const absl::Cord& serialized,
+      std::unique_ptr<DeserializeOptions>) override {
+    if (serialized.empty()) {
+      // For a compatibility with version 0, which uses an empty string.
+      return std::make_unique<CustomCallCompileOptions>();
     }
-    return std::make_unique<CustomCallCompileOptions>();
+    CustomCallCompileOptionsProto proto;
+    if (!proto.ParseFromString(serialized)) {
+      return absl::InvalidArgumentError(
+          "Failed to parse serialized CustomCallCompileOptionsProto");
+    }
+    const SerDesVersionNumber version_number(proto.version_number());
+    if (version_number > SerDesVersionNumber(4)) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Unsupported ", version_number,
+                       " for CustomCallCompileOptions deserialization"));
+    }
+
+    auto compile_options = std::make_unique<CustomCallCompileOptions>();
+    if (version_number >= SerDesVersionNumber(4)) {
+      if (!proto.outputs_bundle_slice_sizes().empty()) {
+        compile_options->outputs_bundle_slice_sizes.emplace(
+            proto.outputs_bundle_slice_sizes().begin(),
+            proto.outputs_bundle_slice_sizes().end());
+      }
+    }
+    return compile_options;
   }
 
   static char ID;  // NOLINT

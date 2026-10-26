@@ -15,6 +15,8 @@ limitations under the License.
 
 #include "xla/service/gpu/target_util.h"
 
+#include <gtest/gtest.h>
+
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -22,7 +24,8 @@ limitations under the License.
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
-#include "tsl/platform/test.h"
+#include "llvm/TargetParser/Triple.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace gpu {
@@ -47,7 +50,7 @@ class TargetUtilTest : public testing::Test {
 };
 
 TEST_F(TargetUtilTest, NVPTXGroupBarrier) {
-  module_.setTargetTriple("nvptx");
+  module_.setTargetTriple(llvm::Triple("nvptx"));
   EmitCallToTargetIntrinsic(TargetIntrinsicID::kGroupBarrierId,
                             {/*membermask=*/builder_.getInt32(-1)}, {},
                             &builder_);
@@ -56,11 +59,81 @@ TEST_F(TargetUtilTest, NVPTXGroupBarrier) {
 }
 
 TEST_F(TargetUtilTest, AMDGCNGroupBarrier) {
-  module_.setTargetTriple("amdgcn");
+  module_.setTargetTriple(llvm::Triple("amdgcn"));
   EmitCallToTargetIntrinsic(TargetIntrinsicID::kGroupBarrierId, {}, {},
                             &builder_);
   builder_.CreateRetVoid();
   EXPECT_FALSE(llvm::verifyModule(module_, &llvm::errs()));
+}
+
+TEST(TargetUtil, ObtainDeviceFunctionNameExp) {
+  llvm::Triple triple("nvptx64-unknown-unknown");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kExp,
+                                     /*output_type=*/F32, triple),
+            "__nv_expf");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kExp,
+                                     /*output_type=*/BF16, triple),
+            "__nv_fast_expf");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kExp,
+                                     /*output_type=*/F16, triple),
+            "__nv_fast_expf");
+}
+
+TEST(TargetUtil, ObtainDeviceFunctionNameLog) {
+  llvm::Triple triple("nvptx64-unknown-unknown");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kLog,
+                                     /*output_type=*/F32, triple),
+            "__nv_logf");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kLog,
+                                     /*output_type=*/BF16, triple),
+            "__nv_fast_logf");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kLog,
+                                     /*output_type=*/F16, triple),
+            "__nv_fast_logf");
+}
+
+TEST(TargetUtil, ObtainDeviceFunctionNameAtan) {
+  llvm::Triple nvptx_triple("nvptx64-unknown-unknown");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kAtan,
+                                     /*output_type=*/F32, nvptx_triple),
+            "__nv_atanf");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kAtan,
+                                     /*output_type=*/F16, nvptx_triple),
+            "__nv_atanf");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kAtan,
+                                     /*output_type=*/BF16, nvptx_triple),
+            "__nv_atanf");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kAtan,
+                                     /*output_type=*/F64, nvptx_triple),
+            "__nv_atan");
+
+  llvm::Triple amdgpu_triple("amdgcn-amd-amdhsa");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kAtan,
+                                     /*output_type=*/F32, amdgpu_triple),
+            "__ocml_atan_f32");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kAtan,
+                                     /*output_type=*/F16, amdgpu_triple),
+            "__ocml_atan_f16");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kAtan,
+                                     /*output_type=*/BF16, amdgpu_triple),
+            "__ocml_atan_f32");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kAtan,
+                                     /*output_type=*/F64, amdgpu_triple),
+            "__ocml_atan_f64");
+
+  llvm::Triple spir_triple("spir64-unknown-unknown");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kAtan,
+                                     /*output_type=*/F32, spir_triple),
+            "_Z16__spirv_ocl_atanf");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kAtan,
+                                     /*output_type=*/F16, spir_triple),
+            "_Z16__spirv_ocl_atanf");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kAtan,
+                                     /*output_type=*/BF16, spir_triple),
+            "_Z16__spirv_ocl_atanf");
+  EXPECT_EQ(ObtainDeviceFunctionName(TargetDeviceFunctionID::kAtan,
+                                     /*output_type=*/F64, spir_triple),
+            "_Z16__spirv_ocl_atand");
 }
 
 }  // namespace

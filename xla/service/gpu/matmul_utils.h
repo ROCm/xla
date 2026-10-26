@@ -22,44 +22,25 @@ limitations under the License.
 #include <string>
 #include <tuple>
 #include <utility>
-#include <vector>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/types/span.h"
 #include "xla/autotuning.pb.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/layout.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/shape.h"
 #include "xla/stream_executor/blas.h"
-#include "xla/stream_executor/device_memory.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
+#include "xla/stream_executor/stream.h"
 #include "xla/xla_data.pb.h"
-
-#if TENSORFLOW_USE_ROCM
-#include "rocm/rocm_config.h"
-#endif
 
 namespace xla {
 namespace gpu {
-
-// Ordered non-contracting dimensions for a dot instruction operand.
-absl::StatusOr<std::vector<int64_t>> GetNonContractingDims(
-    const Shape& shape, absl::Span<const int64_t> batch_dims,
-    absl::Span<const int64_t> contracting_dims);
-
-// Batch dimensions of an operand of a dot instruction.
-// Just an unified accessor to lhs_batch_dimensions and rhs_batch_dimensions.
-const tsl::protobuf::RepeatedField<int64_t>& BatchDimensionsForOperand(
-    const HloInstruction& dot, int operand_number);
-
-// Index of the only contracting dimension of dot instruction operand.
-absl::StatusOr<int64_t> ContractingDimensionIndex(const HloInstruction& dot,
-                                                  int operand_number);
-
-// Index of the only non-contracting dimension of dot instruction operand.
-absl::StatusOr<int64_t> NonContractingDimensionIndex(const HloInstruction& dot,
-                                                     int operand_number);
 
 // Normalize shape to (batch, rows, columns) logical dimensions.
 absl::StatusOr<Shape> GetBatchRowColumnShape(
@@ -80,6 +61,27 @@ absl::StatusOr<bool> IsMatrixMultiplicationTooSmallForRewriting(
 // so we need to always use cuBLAS or Triton for those.
 bool IsDotSupportedByClassicalEmitters(const HloInstruction& dot);
 
+// Returns true if GEMMs require the contracting dimensions of both operands of
+// `dot` to be physically minor (s8 x s8 -> s32, and FP8 before Blackwell).
+bool DotRequiresMinorContractingDims(
+    const HloInstruction& dot, const se::GpuComputeCapability& gpu_version);
+
+// Returns true if the most minor physical dimensions of `layout` are exactly
+// `contracting_dims`.
+bool AreContractingDimsMinor(const Layout& layout,
+                             absl::Span<const int64_t> contracting_dims);
+
+// Returns the accumulator type for the given dot instruction (either extracted
+// from the dot algorithm or inferred from the output type).
+PrimitiveType GetGemmAccumulatorType(const HloDotInstruction* dot);
+
+// Makes algorithm specific set of instructions which would multiply lhs and rhs
+// like the dot with the given precision algorithm would. Useful e.g. rewriting
+// dot as multiply+reduce.
+absl::StatusOr<HloInstruction*> MakeMultiplyForDotPrecisionAlgorithm(
+    HloInstruction* lhs, HloInstruction* rhs,
+    const PrecisionConfig::Algorithm& algorithm);
+
 // extending plain MatrixLayout struct with creator functions
 struct MatrixLayout : public se::gpu::MatrixLayout {
   // Returns the matrix layout for a logical shape (batch, rows, columns).
@@ -98,15 +100,32 @@ struct MatrixLayout : public se::gpu::MatrixLayout {
 };
 
 struct GemmConfig : public se::gpu::GemmConfig {
+  GemmConfig() = default;
+  explicit GemmConfig(const se::gpu::GemmConfig& base)
+      : se::gpu::GemmConfig(base) {}
+  explicit GemmConfig(se::gpu::GemmConfig&& base)
+      : se::gpu::GemmConfig(std::move(base)) {}
+
   // For legacy Gemm operations XLA:GPU allocates its own workspace and passes
   // it to all BLAS API calls.
   //
   // Size of the workspace based on NVIDIA recommendation:
   // https://docs.nvidia.com/cuda/cublas/#cublassetworkspace
   static constexpr int64_t kHopperWorkspace = 32 * 1024 * 1024;  // 32 MiB
+  static constexpr int64_t kGFX942Workspace = 76 * 1024 * 1024;  // 76 MiB
+  static constexpr int64_t kGFX950Workspace = 64 * 1024 * 1024;  // 64 MiB
   static constexpr int64_t kDefaultWorkspace = 4 * 1024 * 1024;  // 4 MiB
+  // the number of algorithms to consider for autotuning by default
+  static constexpr int64_t kNumAlgorithms = 128;
 
-  static absl::StatusOr<GemmConfig> For(const HloInstruction* gemm);
+  static absl::StatusOr<GemmConfig> For(
+      const HloInstruction* gemm, const se::GpuComputeCapability& gpu_version);
+
+  // Gets the GemmConfig of the `gemm` instruction with overridden
+  // GemmBackendConfig.
+  static absl::StatusOr<GemmConfig> For(
+      const HloInstruction* gemm, const GemmBackendConfig& config,
+      const se::GpuComputeCapability& gpu_version);
 
   static absl::StatusOr<GemmConfig> For(
       const Shape& lhs_shape, absl::Span<const int64_t> lhs_batch_dims,
@@ -116,7 +135,8 @@ struct GemmConfig : public se::gpu::GemmConfig {
       double alpha_real, double alpha_imag, double beta,
       PrecisionConfig::Algorithm precision_algorithm,
       std::optional<int64_t> algorithm, int64_t compute_precision, bool grad_x,
-      bool grad_y);
+      bool grad_y, se::gpu::ScaleMode scale_mode,
+      const se::GpuComputeCapability& gpu_version);
 
   // As above with additional `c_shape` and `bias_shape_ptr` parameter, both
   // which are only necessarily for F8 gemms.
@@ -129,7 +149,8 @@ struct GemmConfig : public se::gpu::GemmConfig {
       double alpha_imag, double beta,
       PrecisionConfig::Algorithm precision_algorithm,
       std::optional<int64_t> algorithm, int64_t compute_precision, bool grad_x,
-      bool grad_y);
+      bool grad_y, se::gpu::ScaleMode scale_mode,
+      const se::GpuComputeCapability& gpu_version);
 
   struct DescriptorsTuple {
     se::gpu::MatrixDescriptor lhs;
@@ -138,8 +159,44 @@ struct GemmConfig : public se::gpu::GemmConfig {
     bool operands_swapped;
   };
   absl::StatusOr<DescriptorsTuple> GetMatrixDescriptors(
-      se::DeviceMemoryBase lhs_buf, se::DeviceMemoryBase rhs_buf,
-      se::DeviceMemoryBase out_buf) const;
+      se::DeviceAddressBase lhs_buf, se::DeviceAddressBase rhs_buf,
+      se::DeviceAddressBase out_buf,
+      const se::GpuComputeCapability& gpu_version) const;
+};
+
+struct GroupedGemmConfig : public se::gpu::GroupedGemmConfig {
+  GroupedGemmConfig() = default;
+  explicit GroupedGemmConfig(const se::gpu::GroupedGemmConfig& base)
+      : se::gpu::GroupedGemmConfig(base) {}
+  explicit GroupedGemmConfig(se::gpu::GroupedGemmConfig&& base)
+      : se::gpu::GroupedGemmConfig(std::move(base)) {}
+
+  // For legacy Gemm operations XLA:GPU allocates its own workspace and passes
+  // it to all BLAS API calls.
+  static constexpr int64_t kUserArgsSizeBytes = 196;
+
+  // Gets the GroupedGemmConfig of the `grouped_gemm` instruction with
+  // overridden GroupedGemmBackendConfig.
+  static absl::StatusOr<GroupedGemmConfig> For(
+      const HloInstruction* grouped_gemm,
+      const GroupedGemmBackendConfig& config,
+      const se::GpuComputeCapability& gpu_version);
+
+  static absl::StatusOr<GroupedGemmConfig> For(
+      const Shape& lhs_shape, absl::Span<const int64_t> lhs_batch_dims,
+      absl::Span<const int64_t> lhs_contracting_dims,
+      int64_t lhs_ragged_dimension, const Shape& rhs_shape,
+      absl::Span<const int64_t> rhs_batch_dims,
+      absl::Span<const int64_t> rhs_contracting_dims,
+      absl::Span<const int64_t> rhs_group_dimensions, const Shape& c_shape,
+      const Shape& output_shape, double alpha_real, double alpha_imag,
+      double beta, PrecisionConfig::Algorithm precision_algorithm,
+      std::optional<int64_t> algorithm, int64_t compute_precision,
+      uint64_t group_count, const se::GpuComputeCapability& gpu_version);
+
+  static absl::StatusOr<GroupedGemmConfig> For(
+      const HloInstruction* grouped_gemm,
+      const se::GpuComputeCapability& gpu_version);
 };
 
 // Run the given GEMM instruction `gemm` subject to the configuration
@@ -147,9 +204,9 @@ struct GemmConfig : public se::gpu::GemmConfig {
 //
 // If `algorithm` is provided, it overrides the one specified in `config`.
 absl::Status RunGemm(
-    const GemmConfig& config, se::DeviceMemoryBase lhs_buffer,
-    se::DeviceMemoryBase rhs_buffer, se::DeviceMemoryBase output_buffer,
-    se::DeviceMemoryBase workspace_buffer, bool deterministic_ops,
+    const GemmConfig& config, se::DeviceAddressBase lhs_buffer,
+    se::DeviceAddressBase rhs_buffer, se::DeviceAddressBase output_buffer,
+    se::DeviceAddressBase workspace_buffer, bool deterministic_ops,
     se::Stream* stream,
     std::optional<se::blas::AlgorithmType> algorithm = std::nullopt,
     se::blas::ProfileResult* profile_result = nullptr);
@@ -170,35 +227,58 @@ absl::StatusOr<se::gpu::BlasLt::Epilogue> AsBlasLtEpilogue(
 // This has some advantages, for example it can be used in hashmaps.
 struct TritonGemmConfig {
   constexpr TritonGemmConfig() = default;
-  constexpr TritonGemmConfig(int block_m, int block_n, int block_k, int split_k,
-                             int num_stages, int num_warps, int num_ctas = 1)
+  constexpr TritonGemmConfig(int block_m, int block_n, int block_k,
+                             int num_stages, int num_warps, int num_ctas = 1,
+                             bool is_tma_allowed = false,
+                             bool is_warp_specialization_allowed = false,
+                             int waves_per_eu = 0, int group_size = 1,
+                             int mfma_size = 0)
       : block_m(block_m),
         block_n(block_n),
         block_k(block_k),
-        split_k(split_k),
         num_stages(num_stages),
         num_warps(num_warps),
-        num_ctas(num_ctas) {}
+        num_ctas(num_ctas),
+        is_tma_allowed(is_tma_allowed),
+        is_warp_specialization_allowed(is_warp_specialization_allowed),
+        waves_per_eu(waves_per_eu),
+        group_size(group_size),
+        mfma_size(mfma_size) {}
+  // LINT.IfChange
   int block_m = 0;
   int block_n = 0;
   int block_k = 0;
-  int split_k = 0;
   int num_stages = 0;
   int num_warps = 0;
   // Number of blocks in a block cluster.
   int num_ctas = 0;
+  // Allow/disallow TMA usage for all arguments of the kernel (where possible).
+  bool is_tma_allowed = false;
+  // Allow/disallow automatic warp specialization.
+  bool is_warp_specialization_allowed = false;
+  // Number of waves per execution unit (0 = no restriction).
+  int waves_per_eu = 0;
+  // Tile reordering group size for L2 locality (1 = no reordering).
+  // Only applicable to ragged-dot (group-GEMM) fusions.
+  int group_size = 1;
+  // AMD MFMA MN instruction size, 0 = auto or 16. Ignored on WMMA and on
+  // non-ROCm targets.
+  int mfma_size = 0;
+  // LINT.ThenChange(//tensorflow/compiler/xla/autotuning.proto)
 
   // When adding new members, please update all methods, such as ToTuple,
   // FromProto, ToProto, ToString, etc. Updating ToTuple is not enough.
   // Please also add new members to AutotuneResult::TritonGemmKey in
-  // autotuning.proto. Also kVersion has to be incremented in autotuner_util.cc
-  // and all the autotuning results stored in tests, repos, etc. will have to
-  // be updated.
+  // autotuning.proto. When the change is not backward compatible, kVersion has
+  // to be incremented in autotuner_util.cc and all the autotuning results
+  // stored in tests, repos, etc. will have to be updated.
 
  private:
   auto ToTuple() const {
-    return std::make_tuple(block_m, block_n, block_k, split_k, num_stages,
-                           num_warps, num_ctas);
+    return std::make_tuple(block_m, block_n, block_k, num_stages, num_warps,
+                           num_ctas, is_tma_allowed,
+                           is_warp_specialization_allowed, waves_per_eu,
+                           group_size, mfma_size);
   }
 
  public:

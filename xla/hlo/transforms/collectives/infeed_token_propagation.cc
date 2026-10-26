@@ -1,0 +1,696 @@
+/* Copyright 2024 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include "xla/hlo/transforms/collectives/infeed_token_propagation.h"
+
+#include <cstdint>
+#include <memory>
+#include <queue>
+#include <vector>
+
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "tsl/platform/errors.h"
+#include "tsl/platform/statusor.h"
+#include "xla/hlo/analysis/hlo_ordering.h"
+#include "xla/hlo/ir/hlo_computation.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/ir/hlo_original_value.h"
+#include "xla/hlo/ir/hlo_original_value_util.h"
+#include "xla/hlo/ir/hlo_sharding.h"
+#include "xla/hlo/transforms/simplifiers/hlo_dce.h"
+#include "xla/hlo/transforms/simplifiers/tuple_simplifier.h"
+#include "xla/service/call_graph.h"
+#include "xla/service/tuple_util.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/util.h"
+
+namespace xla {
+namespace {
+HloInstruction* InfeedToken(HloInstruction* infeed) {
+  CHECK_EQ(infeed->opcode(), HloOpcode::kInfeed);
+  for (HloInstruction* user : infeed->users()) {
+    if (user->opcode() == HloOpcode::kGetTupleElement &&
+        user->tuple_index() == 1) {
+      return user;
+    }
+  }
+  return nullptr;
+}
+
+HloInstruction* InfeedChainBegin(HloInstruction* infeed) {
+  CHECK_EQ(infeed->opcode(), HloOpcode::kInfeed);
+  HloInstruction* begin = infeed;
+  while (begin->operand(0)->opcode() == HloOpcode::kGetTupleElement &&
+         begin->operand(0)->operand(0)->opcode() == HloOpcode::kInfeed) {
+    begin = begin->mutable_operand(0)->mutable_operand(0);
+  }
+  return begin;
+}
+
+HloInstruction* InfeedChainEnd(HloInstruction* infeed) {
+  CHECK_EQ(infeed->opcode(), HloOpcode::kInfeed);
+  HloInstruction* end = infeed;
+  HloInstruction* token = InfeedToken(end);
+  while (token != nullptr && token->user_count() == 1) {
+    if (token->users()[0]->opcode() == HloOpcode::kInfeed) {
+      end = token->users()[0];
+      token = InfeedToken(end);
+    } else {
+      break;
+    }
+  }
+  return end;
+}
+
+HloInstruction* OutfeedChainBegin(HloInstruction* outfeed) {
+  CHECK_EQ(outfeed->opcode(), HloOpcode::kOutfeed);
+  HloInstruction* begin = outfeed;
+  while (begin->operand(1)->opcode() == HloOpcode::kOutfeed) {
+    begin = begin->mutable_operand(1);
+  }
+  return begin;
+}
+
+HloInstruction* OutfeedChainEnd(HloInstruction* outfeed) {
+  CHECK_EQ(outfeed->opcode(), HloOpcode::kOutfeed);
+  HloInstruction* end = outfeed;
+  while (end->user_count() == 1 &&
+         end->users()[0]->opcode() == HloOpcode::kOutfeed) {
+    end = end->users()[0];
+  }
+  return end;
+}
+
+HloInstruction* ChainBegin(HloInstruction* instruction) {
+  if (instruction->opcode() == HloOpcode::kInfeed) {
+    return InfeedChainBegin(instruction);
+  } else if (instruction->opcode() == HloOpcode::kOutfeed) {
+    return OutfeedChainBegin(instruction);
+  } else {
+    LOG(FATAL) << "Unexpected opcode";
+  }
+  return nullptr;
+}
+
+HloInstruction* ChainEnd(HloInstruction* instruction) {
+  if (instruction->opcode() == HloOpcode::kInfeed) {
+    return InfeedChainEnd(instruction);
+  } else if (instruction->opcode() == HloOpcode::kOutfeed) {
+    return OutfeedChainEnd(instruction);
+  } else {
+    LOG(FATAL) << "Unexpected opcode";
+  }
+  return nullptr;
+}
+
+bool IsDanglingInfeed(HloInstruction* infeed) {
+  CHECK(infeed->opcode() == HloOpcode::kInfeed);
+
+  // Check for dangling input token.
+  if (const HloInstruction* after_all = ChainBegin(infeed)->operand(0);
+      after_all->opcode() != HloOpcode::kAfterAll ||
+      after_all->operand_count() != 0) {
+    return false;
+  }
+
+  // Check for dangling output token.
+  for (const HloInstruction* user : ChainEnd(infeed)->users()) {
+    if (user->opcode() == HloOpcode::kGetTupleElement &&
+        user->tuple_index() == 1) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool IsDanglingOutfeed(HloInstruction* outfeed) {
+  CHECK(outfeed->opcode() == HloOpcode::kOutfeed);
+
+  // Check for dangling input token.
+  if (const HloInstruction* after_all = OutfeedChainBegin(outfeed)->operand(1);
+      after_all->opcode() != HloOpcode::kAfterAll ||
+      after_all->operand_count() != 0) {
+    return false;
+  }
+
+  // Check for dangling output token.
+  if (OutfeedChainEnd(outfeed)->user_count() != 0) {
+    return false;
+  }
+
+  return true;
+}
+
+absl::StatusOr<HloInstruction*> InsertTokenIntoTuple(HloInstruction* tuple,
+                                                     bool add_token_operand) {
+  CHECK(tuple->shape().IsTuple());
+  HloComputation* computation = tuple->parent();
+
+  // Recreate the original tuple, we'll need to pass this to all the users.
+  // Trying to use tuple->ReplaceAllUsesWith(original_tuple) cause a cycle.
+  std::vector<HloInstruction*> original_users = tuple->users();
+  HloInstruction* original_tuple = TupleUtil::Duplicate(tuple);
+  if (tuple->original_value() &&
+      !tuple->original_value()->is_synthetic_call()) {
+    original_tuple->set_original_value(tuple->original_value());
+  }
+  for (HloInstruction* original_user : original_users) {
+    for (int64_t idx : original_user->operand_indices(tuple)) {
+      // We expect the shape to be same, but checking that it is the same is
+      // expensive.
+      ABSL_RETURN_IF_ERROR(
+          original_user->ReplaceOperandWithDifferentShape(idx, original_tuple));
+    }
+  }
+
+  int64_t old_tuple_size = tuple->shape().tuple_shapes().size();
+  // Append the token to the parameter tuple.
+  *tuple->mutable_shape()->add_tuple_shapes() = ShapeUtil::MakeTokenShape();
+  absl::flat_hash_map<int64_t, int64_t> old_to_new_tuple_idx;
+  for (int64_t i = 0; i < old_tuple_size; ++i) {
+    old_to_new_tuple_idx[i] = i;
+  }
+  CopyOriginalValue(original_tuple, tuple, old_to_new_tuple_idx);
+  if (add_token_operand) {
+    tuple->AppendOperand(
+        computation->AddInstruction(HloInstruction::CreateToken()));
+  }
+  if (tuple->has_sharding()) {
+    // Assign arbitrary sharding for the token.
+    HloSharding sharding = tuple->sharding();
+    sharding.tuple_elements().push_back(HloSharding::SingleDevice(0));
+    tuple->set_sharding(sharding);
+  }
+
+  HloInstruction* input_token_gte =
+      computation->AddInstruction(HloInstruction::CreateGetTupleElement(
+          tuple, tuple->shape().tuple_shapes().size() - 1));
+  return input_token_gte;
+}
+
+void TuplifyInstructionShape(HloInstruction* instruction) {
+  if (instruction->shape().IsTuple()) {
+    return;
+  }
+  *instruction->mutable_shape() =
+      ShapeUtil::MakeTupleShape({instruction->shape()});
+  if (instruction->has_sharding()) {
+    instruction->set_sharding(
+        HloSharding::Tuple(instruction->shape(), {instruction->sharding()}));
+  }
+  if (instruction->original_value() &&
+      !instruction->original_value()->is_synthetic_call()) {
+    auto new_ov = std::make_shared<OriginalValue>(instruction->shape());
+    new_ov->mutable_tree()->CopySubtreeFrom(
+        instruction->original_value()->tree(), {}, {0});
+    instruction->set_original_value(new_ov);
+  }
+}
+}  // namespace
+
+absl::Status CanonicalizeConditionalInstruction(HloInstruction* conditional) {
+  CHECK_EQ(conditional->opcode(), HloOpcode::kConditional);
+
+  for (HloComputation* branch : conditional->branch_computations()) {
+    // Tuplify the branch parameter if needed.
+    HloInstruction* parameter = branch->parameter_instruction(0);
+    if (!parameter->shape().IsTuple()) {
+      TuplifyInstructionShape(parameter);
+      HloInstruction* original = branch->AddInstruction(
+          HloInstruction::CreateGetTupleElement(parameter, 0));
+      if (parameter->original_value()) {
+        original->set_original_value(
+            OriginalValue::CreateFromInstruction(original));
+      }
+      ABSL_RETURN_IF_ERROR(
+          parameter->ReplaceAllUsesWithDifferentShape(original));
+    }
+
+    // Tuplify the branch tuple if needed.
+    int64_t branch_operand_idx = conditional->branch_index(branch) + 1;
+    HloInstruction* branch_tuple =
+        conditional->mutable_operand(branch_operand_idx);
+    if (!branch_tuple->shape().IsTuple()) {
+      branch_tuple = conditional->parent()->AddInstruction(
+          HloInstruction::CreateTuple({branch_tuple}));
+      if (branch_tuple->operand(0)->original_value()) {
+        branch_tuple->set_original_value(
+            OriginalValue::CreateFromInstruction(branch_tuple));
+      }
+      ABSL_RETURN_IF_ERROR(conditional->ReplaceOperandWithDifferentShape(
+          branch_operand_idx, branch_tuple));
+    }
+
+    // Explicitly disjoin computation parameters from branch inputs, so we can
+    // insert tokens into the input tuple.
+    if (branch_tuple->opcode() == HloOpcode::kParameter) {
+      HloInstruction* old_branch_tuple = branch_tuple;
+      branch_tuple = TupleUtil::Duplicate(branch_tuple);
+      if (old_branch_tuple->original_value()) {
+        branch_tuple->set_original_value(old_branch_tuple->original_value());
+      }
+      // We expect the shape to be same, but checking that it is the same is
+      // expensive.
+      ABSL_RETURN_IF_ERROR(conditional->ReplaceOperandWithDifferentShape(
+          branch_operand_idx, branch_tuple));
+    }
+
+    // Explicitly make the root of the branch a tuple.
+    HloInstruction* root = branch->root_instruction();
+    if (root->opcode() != HloOpcode::kTuple) {
+      HloInstruction* old_root = root;
+      root = TupleUtil::Duplicate(root);
+      if (old_root->original_value()) {
+        root->set_original_value(old_root->original_value());
+      }
+      branch->set_root_instruction(root);
+    }
+  }
+
+  // ConditionalCanonicalizer should have already turned the conditional output
+  // to be a tuple.
+  CHECK(conditional->shape().IsTuple());
+
+  // Explicitly disjoin the conditional from being a computation root, so that
+  // we can insert tokens into, while preserving the original computation shape.
+  if (conditional->IsRoot()) {
+    HloInstruction* old_conditional = conditional;
+    HloInstruction* new_root = TupleUtil::Duplicate(conditional);
+    if (old_conditional->original_value()) {
+      new_root->set_original_value(old_conditional->original_value());
+    }
+    conditional->parent()->set_root_instruction(new_root);
+  }
+
+  return absl::OkStatus();
+}
+
+absl::Status CanonicalizeWhileInstruction(HloInstruction* loop) {
+  CHECK_EQ(loop->opcode(), HloOpcode::kWhile);
+  HloComputation* body = loop->while_body();
+  HloComputation* cond = loop->while_condition();
+
+  // Tuplify the body parameter if needed.
+  HloInstruction* body_parameter = body->parameter_instruction(0);
+  if (!body_parameter->shape().IsTuple()) {
+    TuplifyInstructionShape(body_parameter);
+    HloInstruction* original = body->AddInstruction(
+        HloInstruction::CreateGetTupleElement(body_parameter, 0));
+    if (body_parameter->original_value()) {
+      original->set_original_value(
+          OriginalValue::CreateFromInstruction(original));
+    }
+    ABSL_RETURN_IF_ERROR(
+        body_parameter->ReplaceAllUsesWithDifferentShape(original));
+  }
+
+  // Tuplify the body root if needed.
+  HloInstruction* root = body->root_instruction();
+  if (!root->shape().IsTuple()) {
+    root = body->AddInstruction(HloInstruction::CreateTuple({root}));
+    if (root->operand(0)->original_value()) {
+      root->set_original_value(OriginalValue::CreateFromInstruction(root));
+    }
+    body->set_root_instruction(root, /*accept_different_shape=*/true);
+  }
+
+  // Tuplify the condition parameter if needed.
+  HloInstruction* cond_parameter = cond->parameter_instruction(0);
+  if (!cond_parameter->shape().IsTuple()) {
+    TuplifyInstructionShape(cond_parameter);
+    HloInstruction* original = cond->AddInstruction(
+        HloInstruction::CreateGetTupleElement(cond_parameter, 0));
+    if (cond_parameter->original_value()) {
+      original->set_original_value(
+          OriginalValue::CreateFromInstruction(original));
+    }
+    ABSL_RETURN_IF_ERROR(
+        cond_parameter->ReplaceAllUsesWithDifferentShape(original));
+  }
+
+  // Tuplify the while instruction if needed.
+  if (!loop->shape().IsTuple()) {
+    TuplifyInstructionShape(loop);
+    HloInstruction* original = loop->parent()->AddInstruction(
+        HloInstruction::CreateGetTupleElement(loop, 0));
+    if (loop->original_value()) {
+      original->set_original_value(
+          OriginalValue::CreateFromInstruction(original));
+    }
+    ABSL_RETURN_IF_ERROR(loop->ReplaceAllUsesWithDifferentShape(original));
+  }
+
+  // Tuplify the while tuple if needed.
+  HloInstruction* loop_tuple = loop->mutable_operand(0);
+  if (!loop_tuple->shape().IsTuple()) {
+    loop_tuple = loop->parent()->AddInstruction(
+        HloInstruction::CreateTuple({loop_tuple}));
+    if (loop_tuple->operand(0)->original_value()) {
+      loop_tuple->set_original_value(
+          OriginalValue::CreateFromInstruction(loop_tuple));
+    }
+    ABSL_RETURN_IF_ERROR(loop->ReplaceOperandWithDifferentShape(0, loop_tuple));
+  }
+
+  // Explicitly disjoin computation parameters from loop inputs, so we can
+  // insert tokens into the input tuple.
+  if (loop_tuple->opcode() == HloOpcode::kParameter) {
+    HloInstruction* old_loop_tuple = loop_tuple;
+    loop_tuple = TupleUtil::Duplicate(loop_tuple);
+    if (old_loop_tuple->original_value()) {
+      loop_tuple->set_original_value(old_loop_tuple->original_value());
+    }
+    // We expect the shape to be same, but checking that it is the same is
+    // expensive.
+    ABSL_RETURN_IF_ERROR(loop->ReplaceOperandWithDifferentShape(0, loop_tuple));
+  }
+
+  // Explicitly make the root of the body a tuple.
+  if (root->opcode() != HloOpcode::kTuple) {
+    HloInstruction* old_root = root;
+    root = TupleUtil::Duplicate(root);
+    if (old_root->original_value()) {
+      root->set_original_value(old_root->original_value());
+    }
+    body->set_root_instruction(root);
+  }
+
+  // Explicitly disjoin the loop from being a computation root, so that
+  // we can insert tokens into, while preserving the original computation shape.
+  if (loop->IsRoot()) {
+    HloInstruction* old_loop = loop;
+    HloInstruction* new_root = TupleUtil::Duplicate(loop);
+    if (old_loop->original_value()) {
+      new_root->set_original_value(old_loop->original_value());
+    }
+    loop->parent()->set_root_instruction(new_root);
+  }
+
+  return absl::OkStatus();
+}
+
+absl::Status InfeedTokenPropagation::PropagateTokenThroughConditionalBranch() {
+  // Conditional branches can diverge in inputs, but must converge on outputs.
+
+  HloComputation* comp = dangling_instruction_->parent();
+  dangling_instruction_ = call_graph_->GetComputationCallers(comp)[0];
+  CHECK_EQ(dangling_instruction_->opcode(), HloOpcode::kConditional);
+
+  // Insert the output token into each branch.
+  for (HloComputation* branch : dangling_instruction_->branch_computations()) {
+    HloInstruction* root = branch->root_instruction();
+    if (branch == comp) {
+      ABSL_RETURN_IF_ERROR(
+          InsertTokenIntoTuple(root, /*add_token_operand=*/false).status());
+      root->AppendOperand(output_token_);
+    } else {
+      ABSL_RETURN_IF_ERROR(
+          InsertTokenIntoTuple(root, /*add_token_operand=*/true).status());
+    }
+  }
+
+  // Insert the input token into the branch parameter.
+  HloInstruction* parameter = comp->parameter_instruction(0);
+  ABSL_ASSIGN_OR_RETURN(
+      HloInstruction * input_token_gte,
+      InsertTokenIntoTuple(parameter, /*add_token_operand=*/false));
+  ABSL_RETURN_IF_ERROR(input_token_->ReplaceAllUsesWith(input_token_gte));
+
+  // Insert the input token into the branch tuple.
+  int64_t branch_operand_idx = dangling_instruction_->branch_index(comp) + 1;
+  HloInstruction* branch_tuple =
+      dangling_instruction_->mutable_operand(branch_operand_idx);
+  ABSL_ASSIGN_OR_RETURN(
+      HloInstruction * next_input_token_gte,
+      InsertTokenIntoTuple(branch_tuple, /*add_token_operand=*/true));
+  ABSL_RETURN_IF_ERROR(dangling_instruction_->ReplaceOperandWithDifferentShape(
+      branch_operand_idx, branch_tuple));
+  input_token_ =
+      branch_tuple->mutable_operand(next_input_token_gte->tuple_index());
+
+  // Insert the output token into conditional instruction.
+  ABSL_ASSIGN_OR_RETURN(
+      output_token_,
+      InsertTokenIntoTuple(dangling_instruction_, /*add_token_operand=*/false));
+
+  return absl::OkStatus();
+}
+
+absl::Status InfeedTokenPropagation::PropagateTokenThroughWhileBody() {
+  // While loops need to converge on input and output.
+
+  HloComputation* comp = dangling_instruction_->parent();
+  dangling_instruction_ = call_graph_->GetComputationCallers(comp)[0];
+  CHECK_EQ(dangling_instruction_->opcode(), HloOpcode::kWhile);
+
+  // Insert the output token into the body root.
+  HloInstruction* root = comp->root_instruction();
+  ABSL_RETURN_IF_ERROR(
+      InsertTokenIntoTuple(root, /*add_token_operand=*/false).status());
+  root->AppendOperand(output_token_);
+
+  // Insert the input token into the body parameter.
+  HloInstruction* body_parameter = comp->parameter_instruction(0);
+  ABSL_ASSIGN_OR_RETURN(
+      HloInstruction * input_token_gte,
+      InsertTokenIntoTuple(body_parameter, /*add_token_operand=*/false));
+  ABSL_RETURN_IF_ERROR(input_token_->ReplaceAllUsesWith(input_token_gte));
+
+  // Insert the input token into the condition parameter.
+  HloComputation* cond = dangling_instruction_->while_condition();
+  HloInstruction* cond_parameter = cond->parameter_instruction(0);
+  ABSL_RETURN_IF_ERROR(
+      InsertTokenIntoTuple(cond_parameter, /*add_token_operand=*/false)
+          .status());
+
+  // Insert the input token into the while tuple.
+  HloInstruction* while_tuple = dangling_instruction_->mutable_operand(0);
+  ABSL_ASSIGN_OR_RETURN(
+      input_token_,
+      InsertTokenIntoTuple(while_tuple, /*add_token_operand=*/true));
+  // Retrieve the actual token added to the tuple.
+  input_token_ = input_token_->mutable_operand(0)->mutable_operand(
+      input_token_->tuple_index());
+  ABSL_RETURN_IF_ERROR(
+      dangling_instruction_->ReplaceOperandWithDifferentShape(0, while_tuple));
+
+  // Insert the input token into the while instruction.
+  ABSL_ASSIGN_OR_RETURN(
+      output_token_,
+      InsertTokenIntoTuple(dangling_instruction_, /*add_token_operand=*/false));
+
+  return absl::OkStatus();
+}
+
+absl::Status InfeedTokenPropagation::PropagateToken(
+    const HloOrdering& ordering) {
+  HloComputation* comp = dangling_instruction_->parent();
+  if (dangling_instruction_->opcode() != HloOpcode::kInfeed &&
+      dangling_instruction_->opcode() != HloOpcode::kOutfeed) {
+    for (HloInstruction* instruction : comp->instructions()) {
+      if ((instruction->opcode() == HloOpcode::kInfeed &&
+           !instruction->infeed_config().empty()) ||
+          (instruction->opcode() == HloOpcode::kOutfeed &&
+           !instruction->outfeed_config().empty())) {
+        continue;
+      }
+      if (instruction->opcode() == original_opcode_) {
+        HloInstruction* begin = ChainBegin(instruction);
+        HloInstruction* end = ChainEnd(instruction);
+        if (ordering.ExecutesBefore(end, dangling_instruction_)) {
+          // Parent infeed happens before child infeed. Stitch via parent result
+          // token.
+          CHECK_EQ(begin->opcode(), HloOpcode::kInfeed);
+          HloInstruction* parent_output_token = comp->AddInstruction(
+              HloInstruction::CreateGetTupleElement(end, 1));
+          ABSL_RETURN_IF_ERROR(
+              input_token_->ReplaceAllUsesWith(parent_output_token));
+          input_token_ = begin->mutable_operand(0);
+        } else if (ordering.ExecutesBefore(dangling_instruction_, begin)) {
+          // Parent outfeed happens after child infeed. Stitch via parent input
+          // token.
+          CHECK_EQ(begin->opcode(), HloOpcode::kOutfeed);
+          // We expect the shape to be same, but checking that it is the same
+          // is expensive.
+          ABSL_RETURN_IF_ERROR(
+              begin->ReplaceOperandWithDifferentShape(1, output_token_));
+          output_token_ = end;
+        } else {
+          LOG(WARNING) << absl::StrFormat(
+              "Execution order of %s, %s and %s is undefined. This may lead to "
+              "incorrect results",
+              begin->name(), end->name(), dangling_instruction_->name());
+        }
+        // We assume that a well defined HLO graph only contains a single
+        // infeed chain per computation.
+        break;
+      }
+    }
+  }
+  if (comp->IsEntryComputation()) {
+    return absl::OkStatus();
+  }
+  VLOG(2) << "Propagating tokens for: " << dangling_instruction_->name();
+
+  HloInstruction* caller = call_graph_->GetComputationCallers(comp)[0];
+  // TODO: b/368327832 - Skip handling sharding until it is removed.
+  if (caller->has_sharding()) {
+    return absl::OkStatus();
+  }
+  if (caller->opcode() == HloOpcode::kConditional) {
+    ABSL_RETURN_IF_ERROR(CanonicalizeConditionalInstruction(caller));
+    ABSL_RETURN_IF_ERROR(PropagateTokenThroughConditionalBranch());
+  } else if (caller->opcode() == HloOpcode::kWhile &&
+             comp == caller->while_body()) {
+    ABSL_RETURN_IF_ERROR(CanonicalizeWhileInstruction(caller));
+    ABSL_RETURN_IF_ERROR(PropagateTokenThroughWhileBody());
+  } else {
+    // We only expect to encounter computations behind while and conditional
+    // instructions. In the case of it being behind a while condition, there is
+    // no way to propagate the output token, as the root only returns a
+    // predicate. All other computations that could possibly contain infeed
+    // or outfeed ops should have already been inlined.
+    VLOG(2) << "Unhandled computation: " << comp->name();
+    return absl::OkStatus();
+  }
+
+  return PropagateToken(ordering);
+}
+
+absl::StatusOr<bool> InfeedTokenPropagation::RunImpl(
+    HloModule* module,
+    const absl::flat_hash_set<absl::string_view>& execution_threads) {
+  VLOG(5) << "Before InfeedTokenPropagation:";
+  XLA_VLOG_LINES(5, module->ToString());
+
+  std::vector<HloInstruction*> dangling_infeeds;
+  std::vector<HloInstruction*> dangling_outfeeds;
+  for (HloComputation* computation :
+       module->MakeNonfusionComputations(execution_threads)) {
+    if (!computation->IsEntryComputation()) {
+      for (HloInstruction* instruction : computation->instructions()) {
+        // Bail in the presence of HLO domains.
+        if (instruction->opcode() == HloOpcode::kDomain) {
+          return false;
+        }
+      }
+      for (HloInstruction* instruction : computation->instructions()) {
+        if (instruction->opcode() == HloOpcode::kInfeed &&
+            instruction->infeed_config().empty() &&
+            IsDanglingInfeed(instruction)) {
+          VLOG(1) << "Found dangling infeed: " << instruction->ToString();
+          dangling_infeeds.push_back(instruction);
+          break;
+        }
+      }
+      for (HloInstruction* instruction : computation->instructions()) {
+        if (instruction->opcode() == HloOpcode::kOutfeed &&
+            instruction->outfeed_config().empty() &&
+            IsDanglingOutfeed(instruction)) {
+          VLOG(1) << "Found dangling outfeed: " << instruction->ToString();
+          dangling_outfeeds.push_back(instruction);
+          break;
+        }
+      }
+    }
+  }
+  bool changed = !dangling_infeeds.empty() || !dangling_outfeeds.empty();
+
+  if (changed) {
+    call_graph_ = CallGraph::Build(module, execution_threads);
+
+    absl::flat_hash_set<HloComputation*> visited;
+    std::queue<HloComputation*> worklist;
+    for (const std::vector<HloInstruction*>& inst_vector :
+         {dangling_infeeds, dangling_outfeeds}) {
+      for (HloInstruction* instruction : inst_vector) {
+        if (visited.insert(instruction->parent()).second) {
+          worklist.push(instruction->parent());
+        }
+      }
+    }
+
+    while (!worklist.empty()) {
+      HloComputation* computation = worklist.front();
+      worklist.pop();
+      const CallGraphNode& node = call_graph_->GetNode(computation);
+      if (node.caller_callsites().empty()) {
+        continue;
+      }
+      if (node.caller_callsites().size() > 1) {
+        return FailedPrecondition(
+            "Call graph must be flattened before infeed token propagation.");
+      }
+      HloComputation* parent = node.callers()[0];
+      if (visited.insert(parent).second) {
+        worklist.push(parent);
+      }
+    }
+
+    DependencyHloOrdering ordering = DependencyHloOrdering(module);
+
+    for (HloInstruction* dangling_infeed : dangling_infeeds) {
+      // In the process of token propagation, we might have stitched two
+      // previously dangling infeeds token, causing both to no longer be
+      // dangling.
+      if (!IsDanglingInfeed(dangling_infeed)) {
+        continue;
+      }
+      dangling_instruction_ = dangling_infeed;
+      original_opcode_ = HloOpcode::kInfeed;
+      input_token_ = ChainBegin(dangling_infeed)->mutable_operand(0);
+      output_token_ =
+          ChainEnd(dangling_infeed)
+              ->AddInstruction(
+                  HloInstruction::CreateGetTupleElement(dangling_infeed, 1));
+      ABSL_RETURN_IF_ERROR(PropagateToken(ordering));
+    }
+    for (HloInstruction* dangling_outfeed : dangling_outfeeds) {
+      // In the process of token propagation, we might have stitched two
+      // previously dangling outfeeds token, causing both to no longer be
+      // dangling.
+      if (!IsDanglingOutfeed(dangling_outfeed)) {
+        continue;
+      }
+      dangling_instruction_ = dangling_outfeed;
+      original_opcode_ = HloOpcode::kOutfeed;
+      input_token_ = ChainBegin(dangling_outfeed)->mutable_operand(1);
+      output_token_ = ChainEnd(dangling_outfeed);
+      ABSL_RETURN_IF_ERROR(PropagateToken(ordering));
+    }
+
+    ABSL_RETURN_IF_ERROR(
+        TupleSimplifier().Run(module, execution_threads).status());
+    ABSL_RETURN_IF_ERROR(HloDCE().Run(module, execution_threads).status());
+  }
+
+  VLOG(5) << "After InfeedTokenPropagation:";
+  XLA_VLOG_LINES(5, module->ToString());
+  return changed;
+}
+}  // namespace xla

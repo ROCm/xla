@@ -15,26 +15,41 @@ limitations under the License.
 
 #include "xla/service/hlo_creation_utils.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <cstdint>
 #include <memory>
 
+#include "absl/log/check.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "xla/array2d.h"
 #include "xla/hlo/evaluator/hlo_evaluator.h"
+#include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/testlib/pattern_matcher_gmock.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/testlib/verified_hlo_module.h"
+#include "xla/literal.h"
+#include "xla/literal_util.h"
 #include "xla/service/pattern_matcher.h"
-#include "xla/service/pattern_matcher_gmock.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/test.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/tests/literal_test_util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/test.h"
 
 namespace xla {
 namespace {
 
 namespace m = match;
 
-class HloCreationUtilsTest : public HloTestBase {
+class HloCreationUtilsTest : public HloHardwareIndependentTestBase {
  protected:
   std::unique_ptr<VerifiedHloModule> CreateModuleWithProgramShape(
       PrimitiveType primitive_type, absl::Span<const int64_t> input_shape_dims,
@@ -75,12 +90,12 @@ TEST_F(HloCreationUtilsTest, CollapseFirst1Dim) {
                                              /*output_shape_dims=*/{2}, &param,
                                              &entry_computation);
 
-  TF_ASSERT_OK_AND_ASSIGN(HloInstruction * first_1_dims_collapsed,
-                          CollapseFirstNDims(param, 1));
+  ASSERT_OK_AND_ASSIGN(HloInstruction * first_1_dims_collapsed,
+                       CollapseFirstNDims(param, 1));
   entry_computation->set_root_instruction(first_1_dims_collapsed);
 
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module, {LiteralUtil::CreateR1<int32_t>({3, 4})}));
   CHECK_EQ(result_literal, LiteralUtil::CreateR1<int32_t>({3, 4}));
@@ -94,12 +109,12 @@ TEST_F(HloCreationUtilsTest, CollapseFirst2Dims) {
       S32, /*input_shape_dims=*/{2, 3, 2}, /*output_shape_dims=*/{6, 2}, &param,
       &entry_computation);
 
-  TF_ASSERT_OK_AND_ASSIGN(HloInstruction * first_2_dims_collapsed,
-                          CollapseFirstNDims(param, 2));
+  ASSERT_OK_AND_ASSIGN(HloInstruction * first_2_dims_collapsed,
+                       CollapseFirstNDims(param, 2));
   entry_computation->set_root_instruction(first_2_dims_collapsed);
 
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module, {LiteralUtil::CreateR3<int32_t>(
                                       {{{1, 2}, {3, 4}, {5, 6}},
@@ -117,12 +132,12 @@ TEST_F(HloCreationUtilsTest, Prepend1DegenerateDim) {
                                              /*output_shape_dims=*/{1, 2},
                                              &param, &entry_computation);
 
-  TF_ASSERT_OK_AND_ASSIGN(HloInstruction * with_1_degenerate_dim_prepended,
-                          PrependDegenerateDims(param, 1));
+  ASSERT_OK_AND_ASSIGN(HloInstruction * with_1_degenerate_dim_prepended,
+                       PrependDegenerateDims(param, 1));
   entry_computation->set_root_instruction(with_1_degenerate_dim_prepended);
 
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module, {LiteralUtil::CreateR1<int32_t>({9, 10})}));
   CHECK_EQ(result_literal, LiteralUtil::CreateR2<int32_t>({{9, 10}}));
@@ -136,12 +151,12 @@ TEST_F(HloCreationUtilsTest, Prepend2DegenerateDims) {
                                              /*output_shape_dims=*/{1, 1, 2},
                                              &param, &entry_computation);
 
-  TF_ASSERT_OK_AND_ASSIGN(HloInstruction * with_2_degenerate_dims_prepended,
-                          PrependDegenerateDims(param, 2));
+  ASSERT_OK_AND_ASSIGN(HloInstruction * with_2_degenerate_dims_prepended,
+                       PrependDegenerateDims(param, 2));
   entry_computation->set_root_instruction(with_2_degenerate_dims_prepended);
 
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module, {LiteralUtil::CreateR1<int32_t>({9, 10})}));
   CHECK_EQ(result_literal, LiteralUtil::CreateR3<int32_t>({{{9, 10}}}));
@@ -155,12 +170,12 @@ TEST_F(HloCreationUtilsTest, Prepend2DegenerateDimsToScalar) {
                                              /*output_shape_dims=*/{1, 1},
                                              &param, &entry_computation);
 
-  TF_ASSERT_OK_AND_ASSIGN(HloInstruction * with_2_degenerate_dims_prepended,
-                          PrependDegenerateDims(param, 2));
+  ASSERT_OK_AND_ASSIGN(HloInstruction * with_2_degenerate_dims_prepended,
+                       PrependDegenerateDims(param, 2));
   entry_computation->set_root_instruction(with_2_degenerate_dims_prepended);
 
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module, {LiteralUtil::CreateR0<int32_t>(9)}));
   CHECK_EQ(result_literal, LiteralUtil::CreateR2<int32_t>({{9}}));
@@ -174,12 +189,12 @@ TEST_F(HloCreationUtilsTest, ExpandFirstDimInto3Dims) {
                                              /*output_shape_dims=*/{3, 1, 2},
                                              &param, &entry_computation);
 
-  TF_ASSERT_OK_AND_ASSIGN(HloInstruction * first_dim_expanded,
-                          ExpandFirstDimIntoNDims(param, {3, 1, 2}));
+  ASSERT_OK_AND_ASSIGN(HloInstruction * first_dim_expanded,
+                       ExpandFirstDimIntoNDims(param, {3, 1, 2}));
   entry_computation->set_root_instruction(first_dim_expanded);
 
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module,
                          {LiteralUtil::CreateR1<int32_t>({1, 2, 3, 4, 5, 6})}));
@@ -195,13 +210,13 @@ TEST_F(HloCreationUtilsTest, PadVectorWithZeros) {
                                              /*output_shape_dims=*/{6}, &param,
                                              &entry_computation);
 
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       HloInstruction * zero_padded_param,
       PadVectorWithZeros(param, /*zeros_to_prepend=*/3, /*zeros_to_append=*/1));
   entry_computation->set_root_instruction(zero_padded_param);
 
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module, {LiteralUtil::CreateR1<int32_t>({3, 4})}));
   CHECK_EQ(result_literal, LiteralUtil::CreateR1<int32_t>({0, 0, 0, 3, 4, 0}));
@@ -220,7 +235,7 @@ TEST_F(HloCreationUtilsTest, BroadcastZeros_S32) {
   entry_computation->set_root_instruction(zeros);
 
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module, {LiteralUtil::CreateR0<int32_t>(0)}));
   CHECK_EQ(result_literal, LiteralUtil::CreateR2<int32_t>({{0, 0}, {0, 0}}));
@@ -239,7 +254,7 @@ TEST_F(HloCreationUtilsTest, BroadcastZeros_F32) {
   entry_computation->set_root_instruction(zeros);
 
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module, {LiteralUtil::CreateR0<float>(0.0f)}));
   CHECK_EQ(result_literal,
@@ -261,7 +276,7 @@ TEST_F(HloCreationUtilsTest, MakeBitcastConvertToHlo_S32) {
   entry_computation->set_root_instruction(output);
 
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module,
                          {LiteralUtil::CreateR2<int32_t>({{0, 0}, {0, 0}})}));
@@ -281,7 +296,7 @@ TEST_F(HloCreationUtilsTest, MakeIotaHlo_I32) {
   entry_computation->set_root_instruction(output);
 
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module, {LiteralUtil::CreateR0<int32_t>(0.0)}));
   CHECK_EQ(result_literal,
@@ -300,7 +315,7 @@ TEST_F(HloCreationUtilsTest, MakeBroadcast_F32) {
   entry_computation->set_root_instruction(output);
 
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module, {LiteralUtil::CreateR0<float>(0.0f)}));
   CHECK_EQ(result_literal,
@@ -320,7 +335,7 @@ TEST_F(HloCreationUtilsTest, MakeBroadcast_Shape_I32) {
   entry_computation->set_root_instruction(output);
 
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module, {LiteralUtil::CreateR0<int32_t>(0.0)}));
   CHECK_EQ(result_literal, LiteralUtil::CreateR2<int32_t>({{0, 0}, {0, 0}}));
@@ -341,7 +356,7 @@ TEST_F(HloCreationUtilsTest, MaybeMakeTupleForwardsSingleElement) {
   entry_computation->set_root_instruction(output);
 
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module,
                          {LiteralUtil::CreateR2<int32_t>({{0, 0}, {0, 0}})}));
@@ -367,7 +382,7 @@ TEST_F(HloCreationUtilsTest, MaybeMakeTupleTuplizesMultipleOperands) {
   Literal input0 = LiteralUtil::CreateR1<int32_t>({{2, 4}});
   Literal input1 =
       LiteralUtil::CreateR2<float>({{3, 2, 1}, {4, 5, 6}, {9, 8, 7}});
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result_literal,
       evaluator.Evaluate(*module, {input0.Clone(), input1.Clone()}));
   Literal expected_result = LiteralUtil::MakeTuple({&input1, &input0});
@@ -403,7 +418,7 @@ TEST_F(HloCreationUtilsTest, DynamicUpdateSliceVectorStartIndices) {
           .value();
   entry_computation->set_root_instruction(dus);
   HloEvaluator evaluator;
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       Literal result, evaluator.Evaluate(*module, {&operand_literal, &update}));
   auto expected = LiteralUtil::CreateR2<double>({
       {1, -2, -3},
@@ -421,8 +436,7 @@ TEST_F(HloCreationUtilsTest, ExpandDegenerateReshape) {
       ROOT reshape = f32[1,12,10,1,32,1,8] reshape(param)
     }
   )";
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
   auto expanded =
       ExpandDegenerateReshape(module->entry_computation()->root_instruction());
   EXPECT_THAT(expanded, GmockMatch(m::Reshape(m::Reshape(
@@ -475,8 +489,56 @@ TEST_F(HloCreationUtilsTest, ReduceWindow) {
   auto init = builder.AddInstruction(
       HloInstruction::CreateConstant(LiteralUtil::CreateR0<float>(0.0)));
   module->AddEntryComputation(builder.Build());
-  TF_ASSERT_OK_AND_ASSIGN(HloInstruction * reduce_window,
-                          MakeReduceWindowHlo(a_param, init, window, addition));
+  ASSERT_OK_AND_ASSIGN(HloInstruction * reduce_window,
+                       MakeReduceWindowHlo(a_param, init, window, addition));
+  module->entry_computation()->set_root_instruction(
+      reduce_window,
+      /*accept_different_shape=*/true);
+
+  *module->mutable_entry_computation_layout() =
+      module->compute_computation_layout();
+  EXPECT_EQ(module->entry_computation()->root_instruction()->shape(),
+            expected_output_shape);
+}
+
+TEST_F(HloCreationUtilsTest, ReduceWindowBinaryOpcode) {
+  const Shape scalar_shape = ShapeUtil::MakeShape(S32, {});
+  std::unique_ptr<HloModule> module = CreateNewVerifiedModule();
+
+  auto builder = HloComputation::Builder(TestName());
+  Shape input_shape = ShapeUtil::MakeShape(F32, {2, 4, 4});
+  Shape expected_output_shape = ShapeUtil::MakeShape(F32, {2, 2, 2});
+
+  Window window;
+  // First dimension is unchanged.
+  WindowDimension* batch_dim = window.add_dimensions();
+  batch_dim->set_size(1);
+  batch_dim->set_stride(1);
+  batch_dim->set_padding_low(0);
+  batch_dim->set_padding_high(0);
+  batch_dim->set_window_dilation(1);
+  batch_dim->set_base_dilation(1);
+
+  // Second and third dimension are reduced.
+  for (int64_t i = 0; i < 2; ++i) {
+    WindowDimension* dim = window.add_dimensions();
+    dim->set_size(2);
+    dim->set_stride(2);
+    dim->set_padding_low(0);
+    dim->set_padding_high(0);
+    dim->set_window_dilation(1);
+    dim->set_base_dilation(1);
+  }
+
+  auto* a_param = builder.AddInstruction(HloInstruction::CreateParameter(
+      /*parameter_number=*/0, input_shape, "A"));
+
+  auto init = builder.AddInstruction(
+      HloInstruction::CreateConstant(LiteralUtil::CreateR0<float>(0.0)));
+  module->AddEntryComputation(builder.Build());
+  ASSERT_OK_AND_ASSIGN(
+      HloInstruction * reduce_window,
+      MakeReduceWindowHlo(a_param, init, window, HloOpcode::kAdd));
   module->entry_computation()->set_root_instruction(
       reduce_window,
       /*accept_different_shape=*/true);
@@ -501,5 +563,48 @@ TEST_F(HloCreationUtilsTest, DynamicBroadcastShape) {
   EXPECT_TRUE(one_constant->shape().is_static());
 }
 
+TEST_F(HloCreationUtilsTest, NewModuleWithFusion) {
+  static constexpr absl::string_view kModuleStr = R"(
+    HloModule test
+    apply_op {
+      x = f32[] parameter(0)
+      y = f32[] parameter(1)
+      ROOT apply_op = f32[] add(x, y)
+    }
+
+    ENTRY test_computation {
+      param_0 = f32[65536] parameter(0)
+      all-reduce-start = f32[65536] all-reduce-start(param_0), to_apply=apply_op, replica_groups={{0,1}}
+      ROOT all-reduce-done = f32[65536] all-reduce-done(all-reduce-start)
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kModuleStr));
+  const HloInstruction* all_reduce_start =
+      module->entry_computation()->GetInstructionWithName("all-reduce-start");
+  std::unique_ptr<HloModule> fusion_module =
+      NewModuleWithFusion(all_reduce_start, HloInstruction::FusionKind::kLoop);
+  EXPECT_EQ(fusion_module->entry_computation()->root_instruction()->opcode(),
+            HloOpcode::kFusion);
+  auto* fusion_instruction = Cast<HloFusionInstruction>(
+      fusion_module->entry_computation()->root_instruction());
+  EXPECT_EQ(fusion_instruction->fusion_kind(),
+            HloInstruction::FusionKind::kLoop);
+  EXPECT_EQ(fusion_instruction->fused_instructions_computation()
+                ->root_instruction()
+                ->opcode(),
+            HloOpcode::kAllReduceStart);
+  HloAllReduceInstruction* all_reduce = Cast<HloAllReduceInstruction>(
+      fusion_instruction->fused_instructions_computation()->root_instruction());
+  EXPECT_EQ(all_reduce->replica_groups().size(), 1);
+  EXPECT_EQ(all_reduce->replica_groups()[0].replica_ids().size(), 2);
+  // Check that all-reduce has the correct to_apply.
+  HloComputation* to_apply = all_reduce->to_apply();
+  EXPECT_EQ(to_apply->name(), "apply_op");
+  EXPECT_EQ(to_apply->num_parameters(), 2);
+  EXPECT_EQ(to_apply->root_instruction()->opcode(), HloOpcode::kAdd);
+  EXPECT_EQ(fusion_module->entry_computation()->root_instruction()->name(),
+            absl::StrCat(all_reduce_start->name(), "-", "fusion"));
+}
 }  // namespace
 }  // namespace xla

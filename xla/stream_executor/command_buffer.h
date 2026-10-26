@@ -18,18 +18,28 @@ limitations under the License.
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <variant>
+#include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
+#include "absl/base/thread_annotations.h"
+#include "absl/container/flat_hash_map.h"
 #include "absl/functional/any_invocable.h"
+#include "absl/functional/function_ref.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
-#include "xla/stream_executor/device_memory.h"
+#include "xla/stream_executor/bit_pattern.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/dnn.h"
 #include "xla/stream_executor/kernel.h"
+#include "xla/stream_executor/kernel_args.h"
 #include "xla/stream_executor/launch_dim.h"
-#include "tsl/lib/gtl/int_type.h"
-#include "tsl/platform/errors.h"
+#include "xla/stream_executor/platform.h"
+#include "xla/tsl/lib/gtl/int_type.h"
 
 namespace stream_executor {
 
@@ -47,93 +57,52 @@ class Stream;
 // device.
 class CommandBuffer {
  public:
-  // Execution scope enables fine-grained synchronization scopes inside
-  // commands buffers. Implementation is very backend-specific and for CUDA/ROCM
-  // backends it's implemented as DAG edges. By default all commands launched in
-  // the `kDefaulExecutionScope` execution scope.
-  //
-  // Example #1: independent execution scopes and independent barriers
-  //
-  // ExecutionScope #0       ExecutionScope #1
-  //
-  //          A                        D
-  //          B                        E
-  // ----- barrier -----      ----- barrier -----
-  //          C                        F
-  //
-  //   (1) Commands A and B can run concurrently and must complete before C.
-  //   (2) Commands D and E can run concurrently and must complete before F.
-  //   (3) There is no syncrhonization between execution scopes, and commands
-  //       from different execution scopes can execute concurrently with each
-  //       other as long as they satisfy constraints of their respective
-  //       execution scopes.
-  //
-  //
-  //
-  // Example #2: dependencies between scopes and inter-scope barriers
-  //
-  // ExecutionScope #0       ExecutionScope #1
-  //
-  //          A                        D
-  //          B                        E
-  // ----------------- barrier ------------------
-  //          C                        F
-  //
-  //   (1) Commands A and B can run concurrently and must complete before
-  //       C and F.
-  //   (2) Commands D and E can run concurrently and must complete before
-  //       C and F.
-  //   (3) Commands C and F can run concurrently.
-  //   (4) All commands before a shared barrier (in both excecution scopes)
-  //       should complete before any command after a berrier starts execution.
-  //
-  //
-  //
-  // Example #3: one-directional barriers between execution scopes
-  //
-  // ExecutionScope #0       ExecutionScope #1
-  //
-  //          A
-  //          B
-  // ----- barrier -----               D
-  //          C            \           E
-  //                           ----- barrier -----
-  //                                   F
-  //
-  //   (1) Commands A and B can run concurrently and must complete before
-  //       C and F.
-  //   (2) Commands D and E can run concurrently and must complete before
-  //       F (does not synchronize with C).
-  //   (3) Commands C and F can run concurrently.
-  //
-  //  This is a more fine-grained barrier than in example #2: it enforces
-  //  synchronization from execution scope #0 to execution scope #1 but no
-  //  synchronization in other direction. For CUDA/ROCM backend it has the same
-  //  semantics as stream wait operation.
-  //
-  TSL_LIB_GTL_DEFINE_INT_TYPE(ExecutionScopeId, uint64_t);
-  static constexpr auto kDefaulExecutionScope = ExecutionScopeId(0);
+  // Command represents an operation recorded into a command buffer. It's owned
+  // by the command buffer and returned to the caller to enable efficient
+  // command buffer updates.
+  class Command {
+   public:
+    virtual ~Command() = default;
 
-  // Builder constructs nested command buffers owned by a parent command buffer.
-  //
-  // Builder can use arbitrary number of nested execution scopes, the only
-  // requirement is that after builder constructed all commands, they all must
-  // be synchronized with a default execution scope.
-  using Builder = std::function<absl::Status(CommandBuffer*)>;
+   protected:
+    Command() = default;
 
-  // An extension of a `Builder` defined above that builds a nested command
-  // buffer in a given execution scope. Builder can use arbitrary number of
-  // nested execution scopes, the only requirement is that after builder
-  // constructed all commands, they all must be synchronized with an execution
-  // scope passed as an argument.
-  using ExecutionScopeBuilder =
-      std::function<absl::Status(ExecutionScopeId, CommandBuffer*)>;
+    Command(const Command&) = default;
+    Command& operator=(const Command&) = default;
+
+    Command(Command&&) = default;
+    Command& operator=(Command&&) = default;
+  };
+
+  // A callback to construct a nested `command_buffer` by creating commands in
+  // it. Created commands must execute after `dependencies`, and the callback
+  // must return a vector of commands that will be used as external dependencies
+  // for the next callback recording into the same command buffer.
+  using CreateCommands =
+      absl::AnyInvocable<absl::StatusOr<std::vector<const Command*>>(
+          CommandBuffer* command_buffer,
+          absl::Span<const Command* const> dependencies)>;
+
+  // A callback to update a nested `command_buffer` owned by a conditional
+  // command. At command buffer update time we can't change the dependency
+  // structure of the previously created commands, and can only update the
+  // parameters of the commands (i.e. device memory pointers).
+  using UpdateCommands =
+      absl::AnyInvocable<absl::Status(CommandBuffer* command_buffer)>;
 
   CommandBuffer() = default;
   virtual ~CommandBuffer() = default;
 
   CommandBuffer(const CommandBuffer&) = delete;
   void operator=(const CommandBuffer&) = delete;
+
+  // A base class for external resources that can be attached to a CommandBuffer
+  // instance. When a CommandBuffer instance is destroyed, all attached
+  // resources are destroyed as well.
+  class Resource {
+   public:
+    virtual ~Resource() = default;
+  };
 
   // Command buffer state:
   //
@@ -148,6 +117,21 @@ class CommandBuffer {
   //
   enum class State { kCreate, kUpdate, kFinalized };
 
+  template <typename Sink>
+  friend void AbslStringify(Sink& sink, State state) {
+    switch (state) {
+      case CommandBuffer::State::kCreate:
+        sink.Append("create");
+        break;
+      case CommandBuffer::State::kUpdate:
+        sink.Append("update");
+        break;
+      case CommandBuffer::State::kFinalized:
+        sink.Append("finalized");
+        break;
+    }
+  }
+
   // Command buffers have two modes of execution:
   //
   //   (1) kPrimary: command buffer can be submitted for execution via
@@ -157,154 +141,190 @@ class CommandBuffer {
   //
   enum class Mode { kPrimary, kNested };
 
+  template <typename Sink>
+  friend void AbslStringify(Sink& sink, Mode mode) {
+    switch (mode) {
+      case CommandBuffer::Mode::kPrimary:
+        sink.Append("primary");
+        break;
+      case CommandBuffer::Mode::kNested:
+        sink.Append("nested");
+        break;
+    }
+  }
+
   //===--------------------------------------------------------------------===//
   // Command buffer API
   //===--------------------------------------------------------------------===//
 
-  // Adds an execution barrier to a given execution scope: all commands added
-  // before a barrier in a the execution scope will complete before any of the
-  // commands added after a barrier in the same execution scope.
-  virtual absl::Status Barrier(ExecutionScopeId execution_scope_id) = 0;
+  // Creates an empty command.
+  virtual absl::StatusOr<const Command*> CreateEmptyCmd(
+      absl::Span<const Command* const> dependencies,
+      StreamPriority priority = StreamPriority::Default) = 0;
 
-  // Adds an execution barrier that synchronizes commands across multiple
-  // execution scopes. See example #2 in execution scope id documentation.
-  virtual absl::Status Barrier(
-      absl::Span<const ExecutionScopeId> execution_scope_ids) = 0;
+  // Creates a kernel launch command.
+  virtual absl::StatusOr<const Command*> CreateLaunch(
+      const ThreadDim& threads, const BlockDim& blocks,
+      const std::optional<ClusterDim>& cluster_dims, const Kernel& kernel,
+      const KernelArgs& args, absl::Span<const Command* const> dependencies,
+      StreamPriority priority = StreamPriority::Default) = 0;
 
-  // Adds an execution barrier from execution scope `from_execution_scope_id` to
-  // execution scope `to_execution_scope_id`. See example #3 for details.
-  virtual absl::Status Barrier(ExecutionScopeId from_execution_scope_id,
-                               ExecutionScopeId to_execution_scope_id) = 0;
+  // Creates a kernel launch command from an externally-managed native function.
+  // Nolint because it matches existing CreateLaunch virtual method signature
+  // precedent for default arguments.
+  // NOLINTNEXTLINE
+  virtual absl::StatusOr<const Command*> CreateLaunch(
+      const ThreadDim& threads, const BlockDim& blocks,
+      const std::optional<ClusterDim>& cluster_dims, const NativeKernel& kernel,
+      const KernelArgsPackedArrayBase& args,
+      absl::Span<const Command* const> dependencies,
+      StreamPriority priority = StreamPriority::Default) = 0;
 
-  // Adds an execution barrier to the default execution scope.
-  absl::Status Barrier() { return Barrier(kDefaulExecutionScope); }
+  // Updates a kernel launch command.
+  virtual absl::Status UpdateLaunch(
+      const Command* command, const ThreadDim& threads, const BlockDim& blocks,
+      const std::optional<ClusterDim>& cluster_dims, const Kernel& kernel,
+      const KernelArgs& args) = 0;
 
-  // Adds a kernel launch command.
-  virtual absl::Status Launch(ExecutionScopeId execution_scope_id,
-                              const ThreadDim& threads, const BlockDim& blocks,
-                              const Kernel& kernel, const KernelArgs& args) = 0;
-
-  // Adds a kernel launch command to the default execution scope.
-  absl::Status Launch(const ThreadDim& threads, const BlockDim& blocks,
-                      const Kernel& kernel, const KernelArgs& args) {
-    return Launch(kDefaulExecutionScope, threads, blocks, kernel, args);
-  }
+  virtual absl::Status UpdateLaunch(
+      const Command* command, const ThreadDim& threads, const BlockDim& blocks,
+      const std::optional<ClusterDim>& cluster_dims, const NativeKernel& kernel,
+      const KernelArgsPackedArrayBase& args) = 0;
 
   // Type-safe wrapper for launching typed kernels. Notice that the order of
   // arguments is different do disambiguate from the regular launch API.
   template <typename... Params, typename... Args>
-  absl::Status Launch(const TypedKernel<Params...>& kernel,
-                      ExecutionScopeId execution_scope_id,
-                      const ThreadDim& threads, const BlockDim& blocks,
-                      Args... args);
+  absl::StatusOr<const Command*> CreateLaunch(
+      const TypedKernel<Params...>& kernel, const ThreadDim& threads,
+      const BlockDim& blocks, const std::optional<ClusterDim>& cluster_dims,
+      absl::Span<const Command* const> dependencies, Args... args);
 
-  // Type-safe wrapper for launching typed kernels in default execution scope.
+  // Type-safe wrapper for updating typed kernels. Notice that the order of
+  // arguments is different do disambiguate from the regular launch API.
   template <typename... Params, typename... Args>
-  absl::Status Launch(const TypedKernel<Params...>& kernel,
-                      const ThreadDim& threads, const BlockDim& blocks,
-                      Args... args) {
-    return Launch(kernel, kDefaulExecutionScope, threads, blocks, args...);
-  }
+  absl::Status UpdateLaunch(const Command* command,
+                            const TypedKernel<Params...>& kernel,
+                            const ThreadDim& threads, const BlockDim& blocks,
+                            const std::optional<ClusterDim>& cluster_dims,
+                            Args... args);
 
-  // Adds a nested command buffer.
-  virtual absl::Status AddNestedCommandBuffer(
-      ExecutionScopeId execution_scope_id, const CommandBuffer& nested) = 0;
+  // Creates a child command from a pre-recorded command buffer.
+  virtual absl::StatusOr<const Command*> CreateChildCommand(
+      const CommandBuffer& nested,
+      absl::Span<const Command* const> dependencies) = 0;
 
-  // Adds a nested command buffer to the default execution scope.
-  absl::Status AddNestedCommandBuffer(const CommandBuffer& nested) {
-    return AddNestedCommandBuffer(kDefaulExecutionScope, nested);
-  }
+  // Updates a child command with a new command buffer. New command buffer must
+  // be compatible with the one that was used to create command.
+  virtual absl::Status UpdateChildCommand(const Command* command,
+                                          const CommandBuffer& nested) = 0;
 
-  // Adds a device-to-device memory copy.
-  virtual absl::Status MemcpyDeviceToDevice(ExecutionScopeId execution_scope_id,
-                                            DeviceMemoryBase* dst,
-                                            const DeviceMemoryBase& src,
-                                            uint64_t size) = 0;
+  // Creates a child command from a user-provided callback by recording commands
+  // into the child command buffer owned by this command buffer. In contrast to
+  // the child command created from pre-recorded command buffer (see API
+  // above), such child commands can be efficiently updated by updating the
+  // command buffer itself.
+  virtual absl::StatusOr<const Command*> CreateChildCommand(
+      absl::AnyInvocable<absl::Status(CommandBuffer*)> record_fn,
+      absl::Span<const Command* const> dependencies) = 0;
 
-  // Adds a device-to-device memory copy to the default execution scope.
-  absl::Status MemcpyDeviceToDevice(DeviceMemoryBase* dst,
-                                    const DeviceMemoryBase& src,
-                                    uint64_t size) {
-    return MemcpyDeviceToDevice(kDefaulExecutionScope, dst, src, size);
-  }
+  // Updates a child command using a user-provided callback to record command
+  // updates into the child command buffer owned by this command buffer. In
+  // contrast to the child command update from pre-recorded command buffer (see
+  // API above) it allows fine grained command update. Updating from a
+  // pre-recorded command buffer requires swapping the whole child command
+  // buffer to a new one, which might be expensive for large command buffers.
+  virtual absl::Status UpdateChildCommand(
+      const Command* command,
+      absl::AnyInvocable<absl::Status(CommandBuffer*)> update_fn) = 0;
 
-  // Supported bit patterns for memset commands.
-  using BitPattern = std::variant<uint8_t, uint16_t, uint32_t>;
+  // Creates a device-to-device memory copy.
+  virtual absl::StatusOr<const Command*> CreateMemcpyD2D(
+      DeviceAddressBase* dst, const DeviceAddressBase& src, uint64_t size,
+      absl::Span<const Command* const> dependencies) = 0;
 
-  // Adds a memset command.
-  virtual absl::Status Memset(ExecutionScopeId execution_scope_id,
-                              DeviceMemoryBase* dst, BitPattern bit_pattern,
-                              size_t num_elements) = 0;
+  // Updates a device-to-device memory copy.
+  virtual absl::Status UpdateMemcpyD2D(const Command* command,
+                                       DeviceAddressBase* dst,
+                                       const DeviceAddressBase& src,
+                                       uint64_t size) = 0;
 
-  // Adds a memset command to the default execution scope.
-  absl::Status Memset(DeviceMemoryBase* dst, BitPattern bit_pattern,
-                      size_t num_elements) {
-    return Memset(kDefaulExecutionScope, dst, bit_pattern, num_elements);
-  }
+  // Creates a device-to-host memory copy.
+  virtual absl::StatusOr<const Command*> CreateMemcpyD2H(
+      void* dst, const DeviceAddressBase& src, uint64_t size,
+      absl::Span<const Command* const> dependencies) = 0;
+
+  // Updates a device-to-host memory copy.
+  virtual absl::Status UpdateMemcpyD2H(const Command* command, void* dst,
+                                       const DeviceAddressBase& src,
+                                       uint64_t size) = 0;
+
+  // Creates a host-to-device memory copy.
+  virtual absl::StatusOr<const Command*> CreateMemcpyH2D(
+      DeviceAddressBase* dst, const void* src, uint64_t size,
+      absl::Span<const Command* const> dependencies) = 0;
+
+  // Updates a host-to-device memory copy.
+  virtual absl::Status UpdateMemcpyH2D(const Command* command,
+                                       DeviceAddressBase* dst, const void* src,
+                                       uint64_t size) = 0;
+
+  // Creates a memset command.
+  virtual absl::StatusOr<const Command*> CreateMemset(
+      DeviceAddressBase* dst, BitPattern bit_pattern, size_t num_elements,
+      absl::Span<const Command* const> dependencies) = 0;
+
+  // Updates a memset command.
+  virtual absl::Status UpdateMemset(const Command* command,
+                                    DeviceAddressBase* dst,
+                                    const BitPattern& bit_pattern,
+                                    size_t num_elements) = 0;
 
   //--------------------------------------------------------------------------//
-  // Command buffer condtitional commands API
+  // Command buffer DNN graph API
   //--------------------------------------------------------------------------//
 
-  // Adds a conditional operation that will execute a command buffer constructed
-  // by `then_builder` if `pred` value is `true`.
-  virtual absl::Status If(ExecutionScopeId execution_scope_id,
-                          DeviceMemory<bool> pred, Builder then_builder) = 0;
+  // Creates a DNN graph launch command.
+  virtual absl::StatusOr<const Command*> CreateDnnGraphCommand(
+      dnn::DnnGraph&, Stream&, absl::Span<DeviceAddressBase> operands,
+      absl::Span<const Command* const> dependencies) = 0;
 
-  // Adds a conditional If operation to default execution scope.
-  absl::Status If(DeviceMemory<bool> pred, Builder then_builder) {
-    return If(kDefaulExecutionScope, pred, then_builder);
-  }
+  // Updates a DNN graph command.
+  virtual absl::Status UpdateDnnGraphCommand(
+      const Command*, dnn::DnnGraph&, Stream&,
+      absl::Span<DeviceAddressBase> operands) = 0;
 
-  // Adds a conditional operation that will execute a command buffer constructed
-  // by `then_builder` if `pred` value is `true`, or a command buffer
-  // constructed by `else_builder` if `pred` is `false`.
-  virtual absl::Status IfElse(ExecutionScopeId execution_scope_id,
-                              DeviceMemory<bool> pred, Builder then_builder,
-                              Builder else_builder) = 0;
+  //--------------------------------------------------------------------------//
+  // Command buffer conditional commands API
+  //--------------------------------------------------------------------------//
 
-  // Adds a conditional IfElse operation to default execution scope.
-  absl::Status IfElse(DeviceMemory<bool> pred, Builder then_builder,
-                      Builder else_builder) {
-    return IfElse(kDefaulExecutionScope, pred, then_builder, else_builder);
-  }
-
-  // Adds a conditional operation that will execute a command buffer constructed
-  // by the `branches` builder at `index`. If `index` is out of range, then it
-  // will run a conditional command buffer constructed by the last builder.
+  // Creates a conditional operation that will execute a command buffer
+  // constructed by the `branches` builder at `index`. If `index` is out of
+  // range, then it will run a conditional command buffer constructed by the
+  // last builder.
   //
   // See: https://github.com/openxla/stablehlo/blob/main/docs/spec.md#case
-  virtual absl::Status Case(ExecutionScopeId execution_scope_id,
-                            DeviceMemory<int32_t> index,
-                            std::vector<Builder> branches) = 0;
+  virtual absl::StatusOr<const Command*> CreateCase(
+      DeviceAddress<int32_t> index, std::vector<CreateCommands> create_branches,
+      absl::Span<const Command* const> dependencies) = 0;
 
-  // Adds a conditional Case operation to default execution scope.
-  absl::Status Case(DeviceMemory<int32_t> index,
-                    std::vector<Builder> branches) {
-    return Case(kDefaulExecutionScope, index, branches);
-  }
+  virtual absl::StatusOr<const Command*> CreateCase(
+      DeviceAddress<bool> index, std::vector<CreateCommands> create_branches,
+      absl::Span<const Command* const> dependencies) = 0;
 
-  // Adds a conditional operation that will execute a command buffer constructed
-  // by the `body_builder` exactly `num_iteration` times. This means the
-  // condition is known at compile time (`num_iteration` < `loop_counter`), and
-  // does not require a `cond_builder`.
-  virtual absl::Status For(ExecutionScopeId execution_scope_id,
-                           int32_t num_iteration,
-                           DeviceMemory<int32_t> loop_counter,
-                           Builder body_builder) = 0;
+  // Updates a Case command.
+  virtual absl::Status UpdateCase(
+      const Command* command, DeviceAddress<int32_t> index,
+      std::vector<UpdateCommands> update_branches) = 0;
 
-  // Adds a conditional For operation to default execution scope.
-  absl::Status For(int32_t num_iteration, DeviceMemory<int32_t> loop_counter,
-                   Builder body_builder) {
-    return For(kDefaulExecutionScope, num_iteration, loop_counter,
-               body_builder);
-  }
+  virtual absl::Status UpdateCase(
+      const Command* command, DeviceAddress<bool> index,
+      std::vector<UpdateCommands> update_branches) = 0;
 
-  // Adds a conditional operation that will execute a command buffer constructed
-  // by the `cond_builder` that must update `pred` value, and then depending on
-  // the value might execute command buffer constructed by `body_builder` and
-  // `cond_builder`. Will continue while `pred` value (which is continuously
-  // updated by `cond_builder`) is `true`.
+  // Creates a conditional operation that will execute a command buffer
+  // constructed by the `cond_builder` that must update `pred` value, and then
+  // depending on the value might execute command buffer constructed by
+  // `body_builder` and `cond_builder`. Will continue while `pred` value (which
+  // is continuously updated by `cond_builder`) is `true`.
   //
   // In pseudocode:
   //
@@ -313,18 +333,30 @@ class CommandBuffer {
   //     body_builder()
   //     cond_builder()
   //
-  // We use execution scope builder for the condition because we have to build
-  // condition twice: (1) before the conditional node in the scope defined by
-  // `execution_scope_id` (2) inside the loop body with default execution scope.
-  virtual absl::Status While(ExecutionScopeId execution_scope_id,
-                             DeviceMemory<bool> pred,
-                             ExecutionScopeBuilder cond_builder,
-                             Builder body_builder) = 0;
+  virtual absl::StatusOr<const Command*> CreateWhile(
+      DeviceAddress<bool> pred, CreateCommands create_cond,
+      CreateCommands create_body,
+      absl::Span<const Command* const> dependencies) = 0;
 
-  // Adds a conditional While operation to default execution scope.
-  absl::Status While(DeviceMemory<bool> pred,
-                     ExecutionScopeBuilder cond_builder, Builder body_builder) {
-    return While(kDefaulExecutionScope, pred, cond_builder, body_builder);
+  // Updates a While command.
+  virtual absl::Status UpdateWhile(const Command* command,
+                                   DeviceAddress<bool> pred,
+                                   UpdateCommands update_cond,
+                                   UpdateCommands update_body) = 0;
+
+  // Adds a host node (callback) to the command buffer.
+  // The `callback` will be executed on the CPU (host) when this node is
+  // processed during command buffer execution.
+  virtual absl::StatusOr<const Command*> CreateHost(
+      absl::AnyInvocable<void()> callback,
+      absl::Span<const Command* const> dependencies) = 0;
+
+  // Set the priority of all nodes in the command buffer.
+  virtual absl::Status SetPriority(StreamPriority priority) = 0;
+
+  // Submits the command buffer for execution.
+  virtual absl::Status Submit(Stream* stream) {
+    return absl::UnimplementedError("Not implemented for this command buffer.");
   }
 
   //--------------------------------------------------------------------------//
@@ -345,11 +377,42 @@ class CommandBuffer {
   // Returns command buffer state.
   virtual State state() const = 0;
 
+  virtual std::string ToString() const = 0;
+
   //--------------------------------------------------------------------------//
-  // Command buffer tracing API
+  // Command buffer user-attached resources API
   //--------------------------------------------------------------------------//
+
+  // Returns a pointer to the resource of the given type, or nullptr if resource
+  // of the given type is not attached to this command buffer.
+  template <typename R>
+  R* GetOrNullResource() {
+    static_assert(std::is_base_of_v<Resource, R>);
+    return static_cast<R*>(GetOrNullResource(GetResourceTypeId<R>()));
+  }
+
+  // Returns a pointer to the resource of the given type, or creates a new
+  // resource of the given type and attaches it to this command buffer.
+  template <typename R>
+  R* GetOrCreateResource(absl::FunctionRef<std::unique_ptr<R>()> create) {
+    static_assert(std::is_base_of_v<Resource, R>);
+    return static_cast<R*>(
+        GetOrCreateResource(GetResourceTypeId<R>(), [&] { return create(); }));
+  }
+
+  // Returns a pointer to the resource of the given type, or creates a new
+  // resource of the given type and attaches it to this command buffer.
+  // Constructor arguments are forwarded to std::make_unique<R>.
+  template <typename R, typename... Args>
+  R* GetOrConstructResource(Args&&... args) {
+    return GetOrCreateResource<R>(
+        [&] { return std::make_unique<R>(std::forward<Args>(args)...); });
+  }
+
  private:
+  friend class CommandBufferTest;
   friend class TraceCommandBufferFactory;
+
   // Tracing APIs are private because they do not compose with command buffer
   // updates. Instead of tracing directly into the command buffer users should
   // create traced command buffers using factory methods and add them to primary
@@ -357,8 +420,29 @@ class CommandBuffer {
 
   // Traces `function` invocation by recording all operations on the `stream`
   // into the command buffer. Command buffer must be empty.
-  virtual absl::Status Trace(Stream* stream,
-                             absl::AnyInvocable<absl::Status()> function) = 0;
+  virtual absl::Status Trace(
+      Stream* stream,
+      absl::AnyInvocable<absl::Status(Stream* stream)> function) = 0;
+
+  // We use ResourceTypeId to distinguish between different resource types.
+  TSL_LIB_GTL_DEFINE_INT_TYPE(ResourceTypeId, int64_t);
+
+  Resource* GetOrNullResource(ResourceTypeId type_id);
+  Resource* GetOrCreateResource(
+      ResourceTypeId type_id,
+      absl::FunctionRef<std::unique_ptr<Resource>()> create);
+
+  template <typename F>
+  static ResourceTypeId GetResourceTypeId() {
+    static const ResourceTypeId id = GetNextResourceTypeId();
+    return id;
+  }
+
+  static ResourceTypeId GetNextResourceTypeId();
+
+  absl::Mutex resource_mutex_;
+  absl::flat_hash_map<ResourceTypeId, std::unique_ptr<Resource>> resources_
+      ABSL_GUARDED_BY(resource_mutex_);
 };
 
 //===----------------------------------------------------------------------===//
@@ -366,15 +450,23 @@ class CommandBuffer {
 //===----------------------------------------------------------------------===//
 
 template <typename... Params, typename... Args>
-inline absl::Status CommandBuffer::Launch(const TypedKernel<Params...>& kernel,
-                                          ExecutionScopeId execution_scope_id,
-                                          const ThreadDim& threads,
-                                          const BlockDim& blocks,
-                                          Args... args) {
+absl::StatusOr<const CommandBuffer::Command*> CommandBuffer::CreateLaunch(
+    const TypedKernel<Params...>& kernel, const ThreadDim& threads,
+    const BlockDim& blocks, const std::optional<ClusterDim>& cluster_dims,
+    absl::Span<const Command* const> dependencies, Args... args) {
   auto kernel_args = PackKernelArgs(kernel, args...);
-  TF_RETURN_IF_ERROR(
-      Launch(execution_scope_id, threads, blocks, *kernel, *kernel_args));
-  return absl::OkStatus();
+  return CreateLaunch(threads, blocks, cluster_dims, *kernel, *kernel_args,
+                      dependencies);
+}
+
+template <typename... Params, typename... Args>
+absl::Status CommandBuffer::UpdateLaunch(
+    const Command* command, const TypedKernel<Params...>& kernel,
+    const ThreadDim& threads, const BlockDim& blocks,
+    const std::optional<ClusterDim>& cluster_dims, Args... args) {
+  auto kernel_args = PackKernelArgs(kernel, args...);
+  return UpdateLaunch(command, threads, blocks, cluster_dims, *kernel,
+                      *kernel_args);
 }
 
 }  // namespace stream_executor

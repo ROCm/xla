@@ -25,14 +25,20 @@ limitations under the License.
 #include <string>
 #include <utility>
 
+#include "absl/base/attributes.h"
 #include "absl/container/fixed_array.h"
 #include "absl/container/flat_hash_map.h"
-#include "absl/container/node_hash_set.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "tsl/platform/mutex.h"
+#include "absl/synchronization/mutex.h"
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_activity.h"
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_callbacks.h"
 #include "tsl/platform/thread_annotations.h"
-#include "tsl/profiler/utils/buffer_pool.h"
+#include "xla/backends/profiler/gpu/cupti_interface.h"
+#include "xla/backends/profiler/gpu/cupti_utils.h"
+#include "xla/backends/profiler/gpu/string_deduper.h"
+#include "xla/tsl/profiler/utils/buffer_pool.h"
+#include "xla/tsl/profiler/utils/lock_free_queue.h"
 
 namespace xla {
 namespace profiler {
@@ -54,7 +60,7 @@ struct MemcpyDetails {
   int8_t dst_mem_kind;
 
   // ID of the hardware channel on which this operation ran.
-  uint32_t channel_id = -1;
+  uint32_t channel_id = static_cast<uint32_t>(-1);
   // CUpti_ChannelType of the channel above.
   int8_t channel_type = 0;  // CUPTI_CHANNEL_TYPE_INVALID
 };
@@ -128,6 +134,29 @@ struct KernelDetails {
   int8_t channel_type = 0;  // CUPTI_CHANNEL_TYPE_INVALID
 };
 
+struct GenericDetails {
+  uint32_t cbid;
+};
+
+struct CudaGraphDetails {
+  uint32_t cbid;  // 0 for activity events, otherwise the cbid of the callback
+  uint32_t orig_graph_id;  // The original graph from which new graph is
+                           // instantiated. Note graph_id is put into general
+                           // fields as if trace in node mode, many activity
+                           // events will contains graph id.
+  uint64_t orig_graph_node_id;  // The original graph node from which new graph
+                                // node is cloned.
+};
+
+struct MarkerDataDetails {
+  absl::string_view marker_string;
+};
+
+struct EnvironmentDetails {
+  // The value of the environment metric collected (e.g., power, temp).
+  uint64_t metric_value;
+};
+
 inline std::string ToXStat(const KernelDetails& kernel_info,
                            double occupancy_pct) {
   return absl::StrCat(
@@ -142,6 +171,9 @@ inline std::string ToXStat(const KernelDetails& kernel_info,
 
 // Gets the name of the CUpti_ActivityMemoryKind value.
 absl::string_view GetMemoryKindName(int8_t memory_kind);
+
+// Maps an OverheadKind enum to a string.
+std::string GetActivityOverheadKindString(CUpti_ActivityOverheadKind kind);
 
 enum class CuptiTracerEventType {
   Unsupported = 0,
@@ -159,6 +191,13 @@ enum class CuptiTracerEventType {
   MemoryResidency = 12,
   HostRegister = 13,
   HostUnregister = 14,
+  CudaGraph = 15,
+  ThreadMarkerRange = 16,
+  ThreadMarkerStart = 17,
+  ThreadMarkerEnd = 18,
+  CudaGraphNodeMap = 19,
+  MarkerData = 20,
+  Environment = 21,
   Generic = 100,
 };
 
@@ -172,8 +211,8 @@ enum class CuptiTracerEventSource {
 };
 
 struct CuptiTracerEvent {
-  static constexpr uint32_t kInvalidThreadId =
-      std::numeric_limits<uint32_t>::max();
+  static constexpr uint64_t kInvalidThreadId =
+      std::numeric_limits<uint64_t>::max();
   static constexpr uint32_t kInvalidCorrelationId =
       std::numeric_limits<uint32_t>::max();
   static constexpr uint64_t kInvalidContextId =
@@ -194,9 +233,12 @@ struct CuptiTracerEvent {
   uint64_t end_time_ns = 0;
   uint32_t device_id = 0;
   uint32_t correlation_id = kInvalidCorrelationId;
-  uint32_t thread_id = kInvalidThreadId;
+  uint64_t thread_id = kInvalidThreadId;
   int64_t context_id = kInvalidContextId;
   int64_t stream_id = kInvalidStreamId;
+  uint32_t graph_id = 0;
+  int64_t scope_range_id = 0;
+  uint64_t graph_node_id = 0;
   union {
     // For Memcpy API and activities. `type` must be Memcpy*.
     MemcpyDetails memcpy_info;
@@ -214,33 +256,51 @@ struct CuptiTracerEvent {
     MemsetDetails memset_info;
     // Used for Memory residency activities. `type` must be MemoryResidency.
     MemoryResidencyDetails memory_residency_info;
+    // Used for `source` DriverCallback, `type` must be Generic.
+    GenericDetails generic_info;
+    // Used for `source` DriverCallback, `type` must be CudaGraph.
+    CudaGraphDetails cuda_graph_info;
+    // Used for `source` Activity, `type` must be ThreadMarkerRange.
+    MarkerDataDetails marker_data_info;
+    // Used for environment activities. `type` must be Environment.
+    EnvironmentDetails environment_info;
   };
+  uint32_t source_graph_id = 0;
+  uint64_t source_graph_node_id = 0;
 };
 
+// AnnotationMap keep the map from a correlation id to its corresponding
+// annotation and nvtx_range. During Add(), unseen input string view will
+// cause new internal string constructed. This annotation map also controls
+// per-device annotation string count.
 class AnnotationMap {
  public:
   struct AnnotationInfo {
     absl::string_view annotation;
     absl::string_view nvtx_range;
+    int64_t scope_range_id = 0;
   };
 
   explicit AnnotationMap(uint64_t max_size, uint32_t num_gpus)
       : max_size_(max_size), per_device_map_(num_gpus) {}
-  void Add(uint32_t device_id, uint32_t correlation_id,
-           absl::string_view annotation, absl::string_view nvtx_range);
-  AnnotationInfo LookUp(uint32_t device_id, uint32_t correlation_id);
+
+  // Returns a string_view of the dedupped annotation string. The string_view is
+  // valid as long as the AnnotationMap is alive. If the annotation is dropped
+  // due to size limit or any other reason, an empty string_view will be
+  // returned.
+  absl::string_view Add(uint32_t device_id, uint32_t correlation_id,
+                        absl::string_view annotation,
+                        absl::string_view nvtx_range,
+                        int64_t scope_range_id = 0);
+
+  AnnotationInfo LookUp(uint32_t device_id, uint32_t correlation_id) const
+      ABSL_ATTRIBUTE_LIFETIME_BOUND;
 
  private:
   struct PerDeviceAnnotationMap {
-    // The population/consumption of annotations might happen from multiple
-    // callback/activity api related threads.
-    tsl::mutex mutex;
-    // Annotation tends to be repetitive, use a hash_set to store the strings,
-    // an use the reference to the string in the map.
-    absl::node_hash_set<std::string> annotations TF_GUARDED_BY(mutex);
-    absl::node_hash_set<std::string> nvtx_ranges TF_GUARDED_BY(mutex);
-    absl::flat_hash_map<uint32_t, AnnotationInfo> correlation_map
-        TF_GUARDED_BY(mutex);
+    StringDeduper annotation_deduper;
+    StringDeduper nvtx_range_deduper;
+    absl::flat_hash_map<uint32_t, AnnotationInfo> correlation_map;
   };
   const uint64_t max_size_;
   absl::FixedArray<PerDeviceAnnotationMap> per_device_map_;
@@ -252,22 +312,44 @@ class AnnotationMap {
 struct CuptiEventCollectorDelegate {
   AnnotationMap& annotation_map;
   std::function<void(CuptiTracerEvent&&)> receive;
+
   explicit CuptiEventCollectorDelegate(
       AnnotationMap& p_annotation_map,
       std::function<void(CuptiTracerEvent&&)> p_receive)
       : annotation_map(p_annotation_map), receive(std::move(p_receive)) {}
 };
 
+// A tree of scope range ids which map child_id ==> parent_id
+typedef absl::flat_hash_map<int64_t, int64_t> ScopeRangeIdTree;
+
+// Manages the fixed size raw buffers that CUPTI fills with activity records.
+// A tracing session can have multiple buffers in flight. The manager allocates
+// or reuses empty buffers and holds completed buffers until they are parsed.
 class CuptiActivityBufferManager {
  public:
+  // Owns one raw CUPTI buffer and records how many bytes contain valid activity
+  // records. A buffer can contain multiple records.
   struct ActivityBufferAndSize {
     std::unique_ptr<uint8_t, std::function<void(uint8_t*)>> buffer;
     size_t size;  // size in bytes for the events filled by CUPTI.
     explicit ActivityBufferAndSize(uint8_t* p = nullptr, size_t sz = 0);
   };
 
-  explicit CuptiActivityBufferManager(size_t buffer_size_in_bytes)
-      : buffer_pool_(buffer_size_in_bytes) {}
+  // A batch detached from the manager for periodic flushing or final trace
+  // shutdown. All buffers in a batch come from the same tracing session, so
+  // they share one subscriber and one activity record API version.
+  struct CachedActivityBufferBatch {
+    std::list<ActivityBufferAndSize> buffers;
+    CUpti_SubscriberHandle subscriber = nullptr;
+    bool use_v2_records = false;
+  };
+
+  explicit CuptiActivityBufferManager(
+      size_t buffer_size_in_bytes, CUpti_SubscriberHandle subscriber = nullptr,
+      bool use_v2_records = false)
+      : buffer_pool_(buffer_size_in_bytes),
+        subscriber_(subscriber),
+        use_v2_records_(use_v2_records) {}
 
   size_t GetBufferSizeInBytes() { return buffer_pool_.GetBufferSizeInBytes(); }
 
@@ -276,18 +358,80 @@ class CuptiActivityBufferManager {
   void ReclaimBuffer(uint8_t* p) { buffer_pool_.ReclaimBuffer(p); }
 
   void CacheCuptiFilledActivityBuffer(uint8_t* p, size_t sz) {
-    tsl::mutex_lock lock(buffer_mutex_);
+    absl::MutexLock lock(buffer_mutex_);
     cached_buffers_.emplace_back(p, sz);
   }
 
-  void AddCachedActivityEventsTo(CuptiEventCollectorDelegate& receiver,
-                                 size_t max_activity_event_count,
-                                 size_t& dropped_activity_event_count);
+  // Atomically removes and returns all currently cached buffers. The manager is
+  // left empty and can collect more buffers. This is used for periodic flushing
+  // and final trace shutdown.
+  CachedActivityBufferBatch PopCachedBuffers() {
+    CachedActivityBufferBatch result;
+    result.subscriber = subscriber_;
+    result.use_v2_records = use_v2_records_;
+    absl::MutexLock lock(buffer_mutex_);
+    std::swap(result.buffers, cached_buffers_);
+    return result;
+  }
 
  private:
   tsl::profiler::BufferPool buffer_pool_;
-  tsl::mutex buffer_mutex_;
+  // Fixed for the tracing session represented by this manager.
+  CUpti_SubscriberHandle subscriber_;
+  bool use_v2_records_;
+  absl::Mutex buffer_mutex_;
   std::list<ActivityBufferAndSize> cached_buffers_ TF_GUARDED_BY(buffer_mutex_);
+};
+
+// Converts the records in `cached_buffers` into events for `collector`,
+// reading them through `cupti_interface`.
+void AddActivityBufferListEventsTo(
+    CuptiEventCollectorDelegate& collector,
+    CuptiActivityBufferManager::CachedActivityBufferBatch& cached_buffers,
+    size_t max_activity_event_count, size_t& dropped_activity_event_count,
+    CuptiInterface* cupti_interface = GetCuptiInterface());
+
+class CallbackAnnotationsAndEvents {
+ public:
+  static constexpr size_t kQueueBlockSize = 256 * 1024;
+  using EventQueue =
+      tsl::profiler::BlockedQueue<CuptiTracerEvent, kQueueBlockSize>;
+
+  CallbackAnnotationsAndEvents() = default;
+
+  CallbackAnnotationsAndEvents(CallbackAnnotationsAndEvents&& another);
+
+  CallbackAnnotationsAndEvents& operator=(
+      CallbackAnnotationsAndEvents&& another);
+
+  void Clear();
+
+  size_t NumAnnotations() const { return annotations_.Size(); }
+
+  absl::string_view DedupAnnotation(absl::string_view str) {
+    return annotations_.Dedup(str);
+  }
+
+  absl::string_view DedupNvtxRange(absl::string_view str) {
+    return nvtx_ranges_.Dedup(str);
+  }
+
+  EventQueue& event_queue() { return event_queue_; }
+
+  ScopeRangeIdTree& scope_range_id_tree() { return scope_range_id_tree_; }
+
+  size_t NumDroppedEvents() const { return num_dropped_events_; }
+
+  void IncNumDroppedEvents() { ++num_dropped_events_; }
+
+ private:
+  // Annotation tends to be repetitive, use a hash_set to store the strings,
+  // and use the reference to the string in the hash_set.
+  StringDeduper annotations_;
+  StringDeduper nvtx_ranges_;
+  size_t num_dropped_events_ = 0;
+  EventQueue event_queue_;
+  ScopeRangeIdTree scope_range_id_tree_;
 };
 
 }  // namespace profiler

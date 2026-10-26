@@ -16,7 +16,7 @@ limitations under the License.
 #ifndef XLA_LAZY_H_
 #define XLA_LAZY_H_
 
-#include <variant>
+#include <memory>
 
 #include "absl/functional/any_invocable.h"
 
@@ -24,22 +24,62 @@ namespace xla {
 
 template <typename T>
 class Lazy {
- public:
-  explicit Lazy(absl::AnyInvocable<T() &&> func)
-      : maybe_value_(std::move(func)) {}
+  using Value = std::unique_ptr<T>;
 
-  bool has_value() const { return std::holds_alternative<T>(maybe_value_); }
+ public:
+  using Initializer = absl::AnyInvocable<T() &&>;
+
+  explicit Lazy(Initializer init)
+      : initializer_(std::move(init)), initialized_(false) {}
+
+  Lazy(const Lazy& other) = delete;
+  Lazy& operator=(const Lazy& other) = delete;
+
+  Lazy(Lazy&& other) : initialized_(other.initialized_) {
+    if (other.initialized_) {
+      new (&value_) Value(std::move(other.value_));
+    } else {
+      new (&initializer_) Initializer(std::move(other.initializer_));
+    }
+  }
+
+  Lazy& operator=(Lazy&& other) {
+    if (this != &other) {
+      this->~Lazy();
+      new (this) Lazy(std::move(other));
+    }
+    return *this;
+  }
+
+  ~Lazy() {
+    if (initialized_) {
+      value_.~unique_ptr();
+    } else {
+      initializer_.~Initializer();
+    }
+  }
+
+  bool has_value() const { return initialized_; }
 
   const T& get() const {
-    if (!std::holds_alternative<T>(maybe_value_)) {
-      maybe_value_ =
-          std::move(std::get<absl::AnyInvocable<T() &&>>(maybe_value_))();
+    if (!has_value()) {
+      // Using `make_unique` here since `Value` is a `unique_ptr`. If this
+      // changes, we'll need to update this.
+      auto value_ptr = std::make_unique<T>(std::move(initializer_)());
+      initializer_.~Initializer();
+
+      new (&value_) Value(std::move(value_ptr));
+      initialized_ = true;
     }
-    return std::get<T>(maybe_value_);
+    return *value_;
   }
 
  private:
-  mutable std::variant<absl::AnyInvocable<T() &&>, T> maybe_value_;
+  union {
+    mutable Initializer initializer_;
+    mutable Value value_;
+  };
+  mutable bool initialized_;
 };
 
 }  // namespace xla

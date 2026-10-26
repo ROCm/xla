@@ -18,13 +18,14 @@ limitations under the License.
 
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/types/span.h"
+#include "xla/backends/cpu/runtime/xfeed_manager.h"
 #include "xla/literal.h"
-#include "xla/service/cpu/xfeed_manager.h"
 #include "xla/service/generic_transfer_manager.h"
 #include "xla/service/transfer_manager.h"
-#include "xla/statusor.h"
-#include "xla/stream_executor/device_memory.h"
+#include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/xla_data.pb.h"
 
@@ -50,7 +51,7 @@ class CpuTransferManager : public GenericTransferManager {
 
   bool CanBufferBeAccessedNow(
       se::StreamExecutor* executor,
-      const se::DeviceMemoryBase& device_buffer) const override {
+      const se::DeviceAddressBase& device_buffer) const override {
     return true;
   }
 

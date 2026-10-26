@@ -18,6 +18,14 @@ limitations under the License.
 #include <cstdint>
 #include <memory>
 
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/xla.pb.h"
+
 namespace xla {
 
 PartitioningAlgorithm::PartitioningAlgorithm(AlgorithmKind kind,
@@ -86,7 +94,7 @@ PartitionAssignment::ChoosePartitioningAlgorithm(
   return PartitioningAlgorithm::CreateNoopPartitioning(num_partitions());
 }
 
-absl::StatusOr<bool> PartitionAssignment::Run(
+absl::StatusOr<bool> PartitionAssignment::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   VLOG(2) << "Running partition assignment on module " << module->name();

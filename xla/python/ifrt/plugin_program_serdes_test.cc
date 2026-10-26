@@ -12,16 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <memory>
-
 #include <gtest/gtest.h>
+
+#include <memory>
+#include <utility>
+
 #include "xla/python/ifrt/plugin_program.h"
 #include "xla/python/ifrt/serdes.h"
 #include "xla/python/ifrt/serdes.pb.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/statusor.h"
-#include "tsl/protobuf/error_codes.pb.h"
-#include "tsl/protobuf/status.pb.h"
+#include "xla/python/ifrt/serdes_version.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/protobuf/error_codes.pb.h"
+#include "xla/tsl/protobuf/status.pb.h"
 
 namespace xla {
 namespace ifrt {
@@ -30,7 +33,9 @@ namespace {
 TEST(PluginProgramSerDesTest, RoundTrip) {
   PluginProgram orig;
   orig.data = "foo";
-  TF_ASSERT_OK_AND_ASSIGN(Serialized serialized, Serialize(orig));
+  auto options = std::make_unique<SerializeOptions>(SerDesVersion::current());
+  TF_ASSERT_OK_AND_ASSIGN(Serialized serialized,
+                          Serialize(orig, std::move(options)));
   TF_ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<PluginProgram> deserialized_program,
       Deserialize<PluginProgram>(serialized, /*options=*/nullptr));
@@ -40,7 +45,9 @@ TEST(PluginProgramSerDesTest, RoundTrip) {
 
 TEST(PluginCompileOptionsSerDesTest, RoundTrip) {
   PluginCompileOptions orig;
-  TF_ASSERT_OK_AND_ASSIGN(Serialized serialized, Serialize(orig));
+  auto options = std::make_unique<SerializeOptions>(SerDesVersion::current());
+  TF_ASSERT_OK_AND_ASSIGN(Serialized serialized,
+                          Serialize(orig, std::move(options)));
   TF_EXPECT_OK(
       Deserialize<PluginCompileOptions>(serialized, /*options=*/nullptr)
           .status());

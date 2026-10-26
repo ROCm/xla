@@ -18,41 +18,27 @@ limitations under the License.
 #ifndef XLA_SERVICE_CALL_GRAPH_H_
 #define XLA_SERVICE_CALL_GRAPH_H_
 
+#include <cstdint>
 #include <memory>
-#include <ostream>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/functional/function_ref.h"
+#include "absl/status/status.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "tsl/platform/logging.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
-
-// The context in which a computation is called by another computation.
-enum class CallContext {
-  // In an embedded call context, the body of the function cannot allocate
-  // buffers.
-  kEmbedded,
-
-  // A control flow call context can allocate buffers.
-  kControlFlow,
-
-  // A computation is called from both an embedded and control flow context.
-  kBoth,
-
-  // During call graph construction kNone is used to indicate that the context
-  // has not been determined. This is the top value for the context
-  // lattice. After construction, no call sites or call graph nodes should have
-  // this value.
-  kNone
-};
-
-std::string CallContextToString(CallContext context);
-std::ostream& operator<<(std::ostream& out, const CallContext& context);
-
-CallContext GetInstructionCallContext(HloOpcode opcode);
 
 // Represents an HLO instruction which calls one or more computations.
 class CallSite {
@@ -131,7 +117,7 @@ class CallGraphNode {
   CallGraphNode(const CallGraphNode&) = delete;
   CallGraphNode& operator=(const CallGraphNode&) = delete;
   CallGraphNode(CallGraphNode&&) = default;
-  CallGraphNode& operator=(CallGraphNode&&) = default;
+  CallGraphNode& operator=(CallGraphNode&&) noexcept = default;
 
  private:
   // Only CallGraph can modify CallGraphNode.
@@ -189,6 +175,8 @@ class CallGraphNode {
 class CallGraph {
  public:
   using VisitorFunction = absl::FunctionRef<absl::Status(const CallGraphNode&)>;
+  using ChangedVisitorFunction =
+      absl::FunctionRef<absl::StatusOr<bool>(const CallGraphNode&)>;
 
   // Builds and returns a call graph for the given HLO module. If a non-empty
   // execution_threads is provided, only computations that are in
@@ -210,6 +198,12 @@ class CallGraph {
   // reachable from the entry computation are visited.
   absl::Status VisitNodes(VisitorFunction visitor_func,
                           bool visit_unreachable_nodes = true) const;
+
+  // Same as above, except the visitor function returns a StatusOr<bool>. The
+  // visit returns true if any of the visitor functions returned true.
+  absl::StatusOr<bool> VisitNodesWithReturn(
+      ChangedVisitorFunction visitor_func,
+      bool visit_unreachable_nodes = true) const;
 
   // Returns true if 'a' dominates 'b' in the call graph. Computation 'a'
   // dominates computation 'b' iff all callgraph paths in the caller-to-callee
@@ -334,6 +328,12 @@ class CallGraph {
   // FlattenCallGraph.
   bool IsFlattened() const;
 
+  // Returns whether the call graph is flat for control flow (kWhile and
+  // kConditional). All called computations of control flow instructions must be
+  // called by exactly one control flow instruction, and each called computation
+  // of a control flow instruction should be separate from each other.
+  bool IsFlatOnControlFlow() const;
+
   // Returns a vector of instructions calling the passed computation.
   // (Often a vector of size 1.)
   std::vector<HloInstruction*> GetComputationCallers(
@@ -362,6 +362,9 @@ class CallGraph {
   // 'visited'.
   absl::Status VisitNodesInternal(
       VisitorFunction visitor_func, const CallGraphNode& node,
+      absl::flat_hash_set<const CallGraphNode*>* visited) const;
+  absl::StatusOr<bool> VisitNodesInternal(
+      ChangedVisitorFunction visitor_func, const CallGraphNode& node,
       absl::flat_hash_set<const CallGraphNode*>* visited) const;
 
   // Recursive helper for computing whether 'a' dominates 'b' in the call

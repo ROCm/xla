@@ -12,7 +12,6 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
-#include <memory>
 #include <utility>
 
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
@@ -43,8 +42,8 @@ limitations under the License.
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
-#include "mlir/Dialect/X86Vector/Transforms.h"
-#include "mlir/Dialect/X86Vector/X86VectorDialect.h"  // IWYU pragma: keep
+#include "mlir/Dialect/X86/Transforms.h"
+#include "mlir/Dialect/X86/X86Dialect.h"  // IWYU pragma: keep
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Pass/PassManager.h"
@@ -78,15 +77,15 @@ class GenericHostToLLVMPass
       vector::populateVectorToVectorCanonicalizationPatterns(patterns);
       vector::populateVectorBroadcastLoweringPatterns(patterns);
       vector::populateVectorContractLoweringPatterns(
-          patterns, vector::VectorTransformsOptions());
+          patterns, vector::VectorContractLowering());
       vector::populateVectorMaskOpLoweringPatterns(patterns);
       vector::populateVectorShapeCastLoweringPatterns(patterns);
       vector::populateVectorTransposeLoweringPatterns(
-          patterns, vector::VectorTransformsOptions());
+          patterns, vector::VectorTransposeLowering());
       // Vector transfer ops with rank > 1 should be lowered with VectorToSCF.
       vector::populateVectorTransferLoweringPatterns(patterns,
                                                      /*maxTransferRank=*/1);
-      (void)applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+      (void)applyPatternsGreedily(getOperation(), std::move(patterns));
     }
 
     LLVMConversionTarget target(*ctx);
@@ -109,11 +108,10 @@ class GenericHostToLLVMPass
     // Vector patterns.
     vector::populateVectorMaskMaterializationPatterns(patterns, true);
     vector::populateVectorTransferLoweringPatterns(patterns);
-    populateVectorToLLVMMatrixConversionPatterns(typeConverter, patterns);
     populateVectorToLLVMConversionPatterns(typeConverter, patterns);
     if (enableAvx2) {
-      configureX86VectorLegalizeForExportTarget(target);
-      populateX86VectorLegalizeForLLVMExportPatterns(typeConverter, patterns);
+      configureX86LegalizeForExportTarget(target);
+      populateX86LegalizeForLLVMExportPatterns(typeConverter, patterns);
     }
 
     //  Setup target.
@@ -133,13 +131,4 @@ class GenericHostToLLVMPass
 };
 
 }  // namespace
-
-namespace hlo {
-
-std::unique_ptr<OperationPass<ModuleOp>> createGenericHostToLLVMPass(
-    const GenericHostToLLVMPassOptions& options) {
-  return std::make_unique<GenericHostToLLVMPass>(options);
-}
-
-}  // namespace hlo
 }  // namespace mlir

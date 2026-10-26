@@ -15,19 +15,32 @@ limitations under the License.
 
 #include "xla/literal_util.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "absl/base/casts.h"
+#include "absl/container/inlined_vector.h"
+#include "absl/log/check.h"
+#include "absl/random/uniform_int_distribution.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "tsl/platform/ml_dtypes.h"
 #include "xla/array2d.h"
 #include "xla/index_util.h"
 #include "xla/layout_util.h"
@@ -35,14 +48,13 @@ limitations under the License.
 #include "xla/primitive_util.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/statusor.h"
+#include "xla/status_macros.h"
+#include "xla/tests/constraint_state.h"
+#include "xla/tsl/lib/core/bitmap.h"
+#include "xla/tsl/platform/logging.h"  // IWYU pragma: keep
 #include "xla/types.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/lib/core/bitmap.h"
-#include "tsl/platform/logging.h"  // IWYU pragma: keep
-#include "tsl/platform/ml_dtypes.h"
-#include "tsl/platform/status.h"
 
 namespace xla {
 namespace {
@@ -79,9 +91,9 @@ Literal ConvertType(LiteralSlice literal) {
               dest[i] = static_cast<ToNativeT>(src[i]);
             }
           } else {
-            TF_CHECK_OK(result.CopyFrom(literal,
-                                        /*dest_shape_index=*/shape_index,
-                                        /*src_shape_index=*/shape_index));
+            CHECK_OK(result.CopyFrom(literal,
+                                     /*dest_shape_index=*/shape_index,
+                                     /*src_shape_index=*/shape_index));
           }
         }
       });
@@ -115,6 +127,16 @@ struct ZeroProvider {
   NativeT<kType> operator()() const { return static_cast<NativeT<kType>>(0); }
 };
 
+// Use template specialization for the E8M0 type, as it has no zero
+// representation, so static_cast<> returns NaN. The actual zero-like value
+// is 2^-127.
+template <>
+struct ZeroProvider<F8E8M0FNU> {
+  NativeT<F8E8M0FNU> operator()() const {
+    return Eigen::numext::bit_cast<NativeT<F8E8M0FNU>>('\0');
+  }
+};
+
 template <PrimitiveType kType>
 struct OneProvider {
   NativeT<kType> operator()() const { return static_cast<NativeT<kType>>(1); }
@@ -142,6 +164,14 @@ NativeT GetMaxImpl() {
 }
 
 template <typename NativeT>
+NativeT GetMaxFiniteImpl() {
+  if constexpr (IsReal<NativeT>::value) {
+    return std::numeric_limits<NativeT>::max();
+  }
+  LOG(FATAL) << "No finite max value for given type.";
+}
+
+template <typename NativeT>
 NativeT GetMinImpl() {
   if constexpr (IsReal<NativeT>::value) {
     if constexpr (std::numeric_limits<NativeT>::has_infinity) {
@@ -158,15 +188,15 @@ struct MaxProvider {
 };
 
 template <PrimitiveType kType>
-struct MinProvider {
-  NativeT<kType> operator()() const { return GetMinImpl<NativeT<kType>>(); }
+struct MaxFiniteProvider {
+  NativeT<kType> operator()() const {
+    return GetMaxFiniteImpl<NativeT<kType>>();
+  }
 };
 
 template <PrimitiveType kType>
-struct FirstElementProvider {
-  NativeT<kType> operator()(const LiteralBase& literal) const {
-    return literal.GetFirstElement<NativeT<kType>>();
-  }
+struct MinProvider {
+  NativeT<kType> operator()() const { return GetMinImpl<NativeT<kType>>(); }
 };
 
 template <typename NativeT>
@@ -189,36 +219,405 @@ struct MaxElementProvider {
   }
 };
 
-template <typename NativeT>
-std::enable_if_t<IsValidScalarType<NativeT>::value, NativeT>
-GetElementAtIndexImpl(const LiteralBase* literal,
-                      absl::Span<const int64_t> multi_index) {
-  return literal->Get<NativeT>(multi_index);
-}
-
-template <typename NativeT>
-std::enable_if_t<!IsValidScalarType<NativeT>::value, NativeT>
-GetElementAtIndexImpl(const LiteralBase* literal,
-                      absl::Span<const int64_t> multi_index) {
-  LOG(FATAL) << "Not a valid scalar element type.";
-}
-
-template <PrimitiveType kType>
-struct GetElementAtIndexProvider {
-  NativeT<kType> operator()(const LiteralBase* literal,
-                            absl::Span<const int64_t> multi_index) const {
-    DCHECK_EQ(literal->shape().element_type(), kType);
-    return GetElementAtIndexImpl<NativeT<kType>>(literal, multi_index);
+template <typename FloatT>
+void PopulateWithIntNext(Literal* literal) {
+  using BitRepT = UnsignedIntegerTypeForSizeType<sizeof(FloatT)>;
+  // Duplicates may be generated if we don't have enough bits.
+  // Skip bfloat16 and float32 subnormals.
+  const FloatT kFirstValue =
+      std::is_same_v<FloatT, bfloat16> || sizeof(FloatT) >= sizeof(float)
+          ? std::numeric_limits<FloatT>::min()
+          : std::numeric_limits<FloatT>::denorm_min();
+  // `current` keeps track of the next value we need to populate.
+  auto current = literal->data<FloatT>().begin();
+  auto end = literal->data<FloatT>().end();
+  // `sign` keeps track of the sign of the next value.
+  bool sign = false;
+  while (current != end) {
+    // We start populating values at zero and increase magnitude from there.
+    *current = sign ? static_cast<FloatT>(-0.0f) : static_cast<FloatT>(0.0f);
+    current++;
+    // The next value is either the smallest denormal or normal.
+    auto value = sign ? -kFirstValue : kFirstValue;
+    // Fill the array with values of increasing magnitude until we hit a
+    // non-finite value.
+    while (current != end && Eigen::numext::isfinite(value)) {
+      // Populate the value.
+      *current = value;
+      // Generate the next value by lexicographically increasing the bit
+      // representation.
+      const BitRepT next_value = Eigen::numext::bit_cast<BitRepT>(value) + 1;
+      value = Eigen::numext::bit_cast<FloatT>(next_value);
+      current++;
+    }
+    // We ran out of finite values, flip the sign and begin again.
+    sign = !sign;
   }
-};
+}
 
-template <PrimitiveType kType>
-void SetScalarAtIndexImpl(MutableLiteralBase& literal,
-                          absl::Span<const int64_t> multi_index,
-                          const LiteralBase& scalar) {
-  DCHECK_EQ(literal.shape().element_type(), kType);
-  using NativeT = typename primitive_util::PrimitiveTypeToNative<kType>::type;
-  literal.Set<NativeT>(multi_index, scalar.Get<NativeT>({}));
+template <typename FloatT>
+void PopulateWithNoDuplicateData(Literal* literal, std::minstd_rand0* engine) {
+  PopulateWithIntNext<FloatT>(literal);
+  std::shuffle(literal->data<FloatT>().begin(), literal->data<FloatT>().end(),
+               *engine);
+}
+
+// Populates a floating point literal with random floating points sampled from a
+// uniform-log distribution spanning approximately the entire range of the
+// representable floating point.
+template <typename FloatT>
+void PopulateWithRandomFullRangeFloatingPointData(Literal* literal,
+                                                  std::minstd_rand0* engine) {
+  constexpr float kSpecialValueProbability = 1e-6;
+  constexpr float kSpecialValues[] = {+0.F,
+                                      -0.F,
+                                      1.F,
+                                      -1.F,
+                                      std::numeric_limits<float>::infinity(),
+                                      -std::numeric_limits<float>::infinity()};
+  constexpr int kNumSpecialValues = sizeof(kSpecialValues) / sizeof(float);
+  std::uniform_real_distribution<float> special_value_gen(0, 1);
+
+  // Generates floating points with a log-uniform distribution. This causes the
+  // exponent of the floating point to have a uniform distribution.
+  const int min_exp = std::numeric_limits<FloatT>::min_exponent;
+  const int max_exp = std::numeric_limits<FloatT>::max_exponent;
+
+  using GeneratorT =
+      std::conditional_t<sizeof(FloatT) >= sizeof(double), double, float>;
+  std::uniform_real_distribution<GeneratorT> generator(min_exp - 1,
+                                                       max_exp - 1);
+
+  for (FloatT& value : literal->data<FloatT>()) {
+    // Each special value has a kSpecialValueProbability chance to be generated
+    // instead of sampling using the normal distributions.
+    float random_interval = special_value_gen(*engine);
+    if (random_interval < kSpecialValueProbability * kNumSpecialValues) {
+      value =
+          static_cast<FloatT>(kSpecialValues[(*engine)() % kNumSpecialValues]);
+    } else {
+      // Non special values range from [kSpecialValueProbability, 1]. Take the
+      // lower half of that range as a sign of -1, the upper half is +1.
+      const float kHalfInterval =
+          0.5f + (kSpecialValueProbability * kNumSpecialValues) / 2;
+      const float sign = (random_interval < kHalfInterval) ? 1 : -1;
+      value = static_cast<FloatT>(exp2(generator(*engine)) * sign);
+    }
+  }
+}
+
+template <typename FloatT, typename GeneratorT>
+void PopulateWithRandomFloatingPointData(
+    Literal* literal, std::minstd_rand0* engine,
+    std::optional<ConstraintInterval> interval) {
+  GeneratorT min = std::max<GeneratorT>(
+      static_cast<GeneratorT>(-0.1),
+      static_cast<GeneratorT>(std::numeric_limits<FloatT>::lowest()));
+  GeneratorT max = std::min<GeneratorT>(
+      static_cast<GeneratorT>(0.2),
+      static_cast<GeneratorT>(std::numeric_limits<FloatT>::max()));
+  if (interval.has_value() && !interval->IsUnconstrained()) {
+    min = interval->min == ConstraintInterval::kMin
+              ? min
+              : static_cast<GeneratorT>(interval->min);
+    max = interval->max == ConstraintInterval::kMax
+              ? max
+              : static_cast<GeneratorT>(interval->max);
+
+    // Prevent Undefined Behavior by fixing inverted ranges.
+    // If a single explicit bound crossed the opposite default bound,
+    // shift the unconstrained bound to maintain a 0.3 generation spread.
+    if (interval->max == ConstraintInterval::kMax && min > max) {
+      max = min + static_cast<GeneratorT>(0.3);
+    } else if (interval->min == ConstraintInterval::kMin && max < min) {
+      min = max - static_cast<GeneratorT>(0.3);
+    }
+  }
+  if (min == max) {
+    for (FloatT& value : literal->data<FloatT>()) {
+      value = static_cast<FloatT>(min);
+    }
+    return;
+  }
+  std::uniform_real_distribution<GeneratorT> generator(min, max);
+  for (FloatT& value : literal->data<FloatT>()) {
+    value = static_cast<FloatT>(generator(*engine));
+    while (interval.has_value() && interval->exclude_zero && value == 0.0f) {
+      value = static_cast<FloatT>(generator(*engine));
+    }
+  }
+}
+
+// Populates the literal with uniformly distributed full-range floating point
+// data. The difference from PopulateWithRandomFullRangeFloatingPointData is
+// that it samples uniformly from all possible values of the float (including
+// subnormals, 0, etc). It excludes inf and nan.
+template <typename FloatT>
+void PopulateWithUniformFullRangeFloatingPointData(Literal* literal,
+                                                   std::minstd_rand0* engine) {
+  CHECK_LE(sizeof(FloatT), 4) << "Only floats up to 4 bytes supported.";
+  // Needed for C++ template.
+  const int64_t bit_width =
+      std::min(32, primitive_util::BitWidth(
+                       primitive_util::NativeToPrimitiveType<FloatT>()));
+  const uint32_t max_val = bit_width == 32
+                               ? std::numeric_limits<uint32_t>::max()
+                               : (1U << bit_width) - 1;
+  absl::uniform_int_distribution<uint32_t> generator(0, max_val);
+  for (FloatT& value : literal->data<FloatT>()) {
+    int repeats = 0;
+    while (true) {
+      if constexpr (sizeof(FloatT) == 1) {
+        value =
+            absl::bit_cast<FloatT>(static_cast<uint8_t>(generator(*engine)));
+      } else if constexpr (sizeof(FloatT) == 2) {
+        value =
+            absl::bit_cast<FloatT>(static_cast<uint16_t>(generator(*engine)));
+      } else if constexpr (sizeof(FloatT) == 4) {
+        value =
+            absl::bit_cast<FloatT>(static_cast<uint32_t>(generator(*engine)));
+      } else {
+        LOG(FATAL) << "Unsupported float size: " << sizeof(FloatT);
+      }
+
+      bool is_forbidden = std::isinf(value) || std::isnan(value);
+
+      if (!is_forbidden) {
+        break;
+      }
+
+      repeats++;
+      CHECK_LE(repeats, 5)
+          << "Exceeded max_repeats=5 when generating float values";
+    }
+  }
+}
+
+template <typename FloatT>
+void PopulateWithFloatingPointData(
+    Literal* literal, std::minstd_rand0* engine, bool no_duplicates,
+    bool use_large_range, std::optional<int64_t> max_bits_of_precision,
+    std::function<double(std::minstd_rand0*)> generator = nullptr,
+    std::optional<ConstraintInterval> interval = std::nullopt) {
+  using ComputeT =
+      std::conditional_t<sizeof(FloatT) < sizeof(float), float, FloatT>;
+  CHECK_NOTNULL(engine);
+  CHECK_EQ(literal->shape().element_type(),
+           primitive_util::NativeToPrimitiveType<FloatT>());
+  const int64_t bit_width =
+      primitive_util::BitWidth(primitive_util::NativeToPrimitiveType<FloatT>());
+  // Floats with exceptionally small bit width can represent just a handful of
+  // values. No sense in restricting the output values in the way we do for
+  // higher precision formats. We just let the random generator do its thing.
+  const bool float_with_small_bit_width = (bit_width <= 4);
+  if (generator != nullptr) {
+    for (FloatT& value : literal->data<FloatT>()) {
+      value = static_cast<FloatT>(generator(engine));
+    }
+  } else if (max_bits_of_precision.has_value()) {
+    CHECK(!use_large_range) << "Cannot set both use_large_range and "
+                               "max_bits_of_precision for floating points.";
+    CHECK(!no_duplicates) << "Cannot set both no_duplicates and "
+                             "max_bits_of_precision for floating points.";
+    absl::uniform_int_distribution<int64_t> generator(
+        -(1 << *max_bits_of_precision), 1 << *max_bits_of_precision);
+    for (FloatT& value : literal->data<FloatT>()) {
+      int64_t temp = generator(*engine);
+      // We want to generate floating point numbers to a fixed precision, while
+      // keeping them between -1 and 1. This preserves their bits of precision
+      // while keeping the numbers small.
+      value = static_cast<FloatT>(
+          temp == 0 ? 0 : temp * pow(2, -ceil(log2(abs(temp)))));
+    }
+  } else if (no_duplicates) {
+    PopulateWithNoDuplicateData<FloatT>(literal, engine);
+  } else if (float_with_small_bit_width) {
+    PopulateWithUniformFullRangeFloatingPointData<FloatT>(literal, engine);
+  } else if (use_large_range) {
+    PopulateWithRandomFullRangeFloatingPointData<FloatT>(literal, engine);
+  } else {
+    PopulateWithRandomFloatingPointData<FloatT, ComputeT>(literal, engine,
+                                                          interval);
+  }
+}
+
+template <typename ComplexT>
+void PopulateWithComplexData(
+    Literal* result, std::minstd_rand0* engine, bool no_duplicates,
+    bool use_large_range,
+    std::function<double(std::minstd_rand0*)> generator = nullptr) {
+  using InnerFloatT = typename ComplexT::value_type;
+  CHECK_NOTNULL(engine);
+  CHECK_EQ(result->shape().element_type(),
+           primitive_util::NativeToPrimitiveType<ComplexT>());
+  Shape floating_point_shape = ShapeUtil::ChangeElementType(
+      result->shape(), primitive_util::NativeToPrimitiveType<InnerFloatT>());
+  Literal real_lit(floating_point_shape);
+  Literal imaginary_lit(floating_point_shape);
+
+  PopulateWithFloatingPointData<InnerFloatT>(
+      &real_lit, engine, no_duplicates, use_large_range,
+      /*max_bits_of_precision=*/std::nullopt, generator);
+  PopulateWithFloatingPointData<InnerFloatT>(
+      &imaginary_lit, engine, no_duplicates, use_large_range,
+      /*max_bits_of_precision=*/std::nullopt, generator);
+
+  absl::Span<const InnerFloatT> real_data = real_lit.data<InnerFloatT>();
+  absl::Span<const InnerFloatT> imaginary_data =
+      imaginary_lit.data<InnerFloatT>();
+  absl::Span<ComplexT> result_data = result->data<ComplexT>();
+  for (int i = 0; i < real_lit.data<InnerFloatT>().size(); i++) {
+    result_data[i] = ComplexT(real_data[i], imaginary_data[i]);
+  }
+}
+
+template <typename TargetT>
+TargetT SafeClampInt64(int64_t value) {
+  static_assert(std::numeric_limits<TargetT>::is_integer,
+                "TargetT must be an integral type.");
+  if constexpr (!std::numeric_limits<TargetT>::is_signed) {
+    if (value <= 0) {
+      return TargetT{0};
+    }
+    uint64_t uval = static_cast<uint64_t>(value);
+    if (uval > static_cast<uint64_t>(std::numeric_limits<TargetT>::max())) {
+      return std::numeric_limits<TargetT>::max();
+    }
+    return static_cast<TargetT>(uval);
+  } else {
+    if (value < static_cast<int64_t>(std::numeric_limits<TargetT>::lowest())) {
+      return std::numeric_limits<TargetT>::lowest();
+    }
+    if (value > static_cast<int64_t>(std::numeric_limits<TargetT>::max())) {
+      return std::numeric_limits<TargetT>::max();
+    }
+    return static_cast<TargetT>(value);
+  }
+}
+
+// uniform_int_distribution is not defined for 8-bit integers.
+// Use 'short' for those types.
+template <typename IntT>
+using RngT = std::conditional_t<
+    sizeof(IntT) < sizeof(uint16_t),
+    std::conditional_t<std::numeric_limits<IntT>::is_signed, int16_t, uint16_t>,
+    IntT>;
+
+// Computes safe [min, max] bounds for integral literal generation.
+// - If no limit is specified, returns the full type range [lowest, max].
+// - If use_large_range is true or bit_width <= 4, clamps the limit directly.
+// - Otherwise, bounds values to B/2 bits to prevent hardware ALU overflow
+//   (multiplication, squaring, etc.) and float conversion explosions.
+// - Expands to full range if no_duplicates requires more unique elements than
+//   B/2 capacity.
+template <typename IntT>
+std::pair<IntT, IntT> GetIntegralBounds(
+    const Shape& shape, bool use_large_range, bool no_duplicates,
+    std::optional<std::pair<int64_t, int64_t>> limit) {
+  if (!limit.has_value()) {
+    return {std::numeric_limits<IntT>::lowest(),
+            std::numeric_limits<IntT>::max()};
+  }
+
+  constexpr int64_t bit_width = sizeof(IntT) * 8;
+
+  // Sub-byte integers (<= 4 bits) already have tiny domains (<= 16 values).
+  if (use_large_range || bit_width <= 4) {
+    return {SafeClampInt64<IntT>(limit->first),
+            SafeClampInt64<IntT>(limit->second)};
+  }
+
+  // Calculate default B/2 bitwidth bounds and default_range_size (2^H - 1),
+  // which is the width of the domain [default_min, default_max].
+  int64_t h = bit_width / 2;
+  int64_t default_min;
+  int64_t default_max;
+  int64_t default_range_size;
+  if constexpr (std::numeric_limits<IntT>::is_signed) {
+    default_min = -(int64_t{1} << (h - 1));
+    default_max = (int64_t{1} << (h - 1)) - 1;
+    default_range_size = (int64_t{1} << h) - 1;
+  } else {
+    default_min = 0;
+    default_max = (int64_t{1} << h) - 1;
+    default_range_size = default_max;
+  }
+
+  // If no_duplicates is requested, ensure capacity >= element count.
+  int64_t num_elements = ShapeUtil::ElementsIn(shape);
+  if (no_duplicates && num_elements > default_range_size) {
+    if (limit.has_value()) {
+      return {SafeClampInt64<IntT>(limit->first),
+              SafeClampInt64<IntT>(limit->second)};
+    }
+    return {std::numeric_limits<IntT>::lowest(),
+            std::numeric_limits<IntT>::max()};
+  }
+
+  int64_t min_64 = default_min;
+  int64_t max_64 = default_max;
+
+  if (limit.has_value()) {
+    bool lower_unconstrained =
+        (limit->first == std::numeric_limits<int64_t>::min());
+    bool upper_unconstrained =
+        (limit->second == std::numeric_limits<int64_t>::max());
+
+    if (lower_unconstrained && upper_unconstrained) {
+      min_64 = default_min;
+      max_64 = default_max;
+    } else if (lower_unconstrained) {
+      max_64 = limit->second;
+      min_64 =
+          (max_64 < default_min) ? max_64 - default_range_size : default_min;
+    } else if (upper_unconstrained) {
+      min_64 = limit->first;
+      max_64 =
+          (min_64 > default_max) ? min_64 + default_range_size : default_max;
+    } else {
+      min_64 = limit->first;
+      max_64 = limit->second;
+    }
+  }
+
+  return {SafeClampInt64<IntT>(min_64), SafeClampInt64<IntT>(max_64)};
+}
+
+template <typename IntT>
+void PopulateWithRandomIntegralDataWithBounds(
+    Literal* literal, std::minstd_rand0* engine, bool no_duplicates, IntT min,
+    IntT max, std::optional<IntT> alignment,
+    std::optional<IntT> index_known_zeroes) {
+  CHECK_NOTNULL(engine);
+  CHECK_EQ(literal->shape().element_type(),
+           primitive_util::NativeToPrimitiveType<IntT>());
+  CHECK(!(no_duplicates && alignment.has_value()))
+      << "Cannot set both no_duplicates and alignment for integral types.";
+  if (no_duplicates &&
+      ShapeUtil::ElementsIn(literal->shape()) < static_cast<int64_t>(max)) {
+    int32_t start = 0;
+    if (primitive_util::IsSignedIntegralType(literal->shape().element_type())) {
+      // Generate negative numbers also.
+      auto size = literal->data<IntT>().size();
+      start = size / 2 - size;
+    }
+    std::iota(literal->data<IntT>().begin(), literal->data<IntT>().end(),
+              static_cast<IntT>(start));
+    std::shuffle(literal->data<IntT>().begin(), literal->data<IntT>().end(),
+                 *engine);
+  } else {
+    absl::uniform_int_distribution<RngT<IntT>> generator(
+        static_cast<RngT<IntT>>(min), static_cast<RngT<IntT>>(max));
+    for (IntT& value : literal->data<IntT>()) {
+      value = static_cast<IntT>(generator(*engine));
+      if (alignment.has_value()) {
+        value = (value / alignment.value()) * alignment.value();
+      }
+      if (index_known_zeroes.has_value()) {
+        value &= ~index_known_zeroes.value();
+      }
+    }
+  }
 }
 
 }  // namespace
@@ -227,6 +626,21 @@ void SetScalarAtIndexImpl(MutableLiteralBase& literal,
     PrimitiveType primitive_type, absl::Span<const int64_t> dimensions) {
   return Literal::CreateFromShape(
       ShapeUtil::MakeShape(primitive_type, dimensions));
+}
+
+/* static */ Literal LiteralUtil::ConvertF8E4M3FNToF32(
+    const LiteralSlice& f8e4m3fn_literal) {
+  return ConvertType<tsl::float8_e4m3fn, float>(f8e4m3fn_literal);
+}
+
+/* static */ Literal LiteralUtil::ConvertF8E5M2ToF32(
+    const LiteralSlice& f8e5m2_literal) {
+  return ConvertType<tsl::float8_e5m2, float>(f8e5m2_literal);
+}
+
+/* static */ Literal LiteralUtil::ConvertS8ToF32(
+    const LiteralSlice& s8_literal) {
+  return ConvertType<int8_t, float>(s8_literal);
 }
 
 /* static */ Literal LiteralUtil::ConvertBF16ToF32(
@@ -247,6 +661,16 @@ void SetScalarAtIndexImpl(MutableLiteralBase& literal,
 /* static */ Literal LiteralUtil::ConvertF32ToF8E5M2FNUZ(
     const LiteralSlice& f32_literal) {
   return ConvertType<float, tsl::float8_e5m2fnuz>(f32_literal);
+}
+
+/* static */ Literal LiteralUtil::ConvertF32ToF8E5M2(
+    const LiteralSlice& f32_literal) {
+  return ConvertType<float, tsl::float8_e5m2>(f32_literal);
+}
+
+/* static */ Literal LiteralUtil::ConvertF32ToF8E4M3FN(
+    const LiteralSlice& f32_literal) {
+  return ConvertType<float, tsl::float8_e4m3fn>(f32_literal);
 }
 
 /* static */ Literal LiteralUtil::ConvertF32ToBF16(
@@ -279,6 +703,11 @@ void SetScalarAtIndexImpl(MutableLiteralBase& literal,
   return ConvertType<int32_t, float>(s32_literal);
 }
 
+/* static */ Literal LiteralUtil::ConvertS32ToS1(
+    const LiteralSlice& s32_literal) {
+  return ConvertType<int32_t, tsl::int1>(s32_literal);
+}
+
 /* static */ Literal LiteralUtil::CreateToken() {
   return Literal(ShapeUtil::MakeTokenShape());
 }
@@ -297,6 +726,10 @@ void SetScalarAtIndexImpl(MutableLiteralBase& literal,
 
 /* static */ Literal LiteralUtil::MaxValue(PrimitiveType primitive_type) {
   return CreateScalar<MaxProvider>(primitive_type);
+}
+
+/* static */ Literal LiteralUtil::MaxFiniteValue(PrimitiveType primitive_type) {
+  return CreateScalar<MaxFiniteProvider>(primitive_type);
 }
 
 /* static */ absl::StatusOr<Literal> LiteralUtil::NanValue(
@@ -366,25 +799,25 @@ void SetScalarAtIndexImpl(MutableLiteralBase& literal,
   *shape_with_layout.mutable_layout() = LayoutUtil::MakeLayout(minor_to_major);
 
   // Copy data into new literal, element-by-element.
-  for (int64_t i = 0; i < ShapeUtil::ElementsIn(literal.shape()); ++i) {
-    auto from_multi_index =
-        IndexUtil::LinearIndexToMultidimensionalIndex(literal.shape(), i);
-    auto to_multi_index =
-        IndexUtil::LinearIndexToMultidimensionalIndex(shape_with_layout, i);
-    primitive_util::PrimitiveTypeSwitch<void>(
-        [&](auto primitive_type_constant) -> void {
-          if constexpr (primitive_util::IsArrayType(primitive_type_constant)) {
-            using NativeT = typename primitive_util::PrimitiveTypeToNative<
-                primitive_type_constant>::type;
-            new_literal.Set<NativeT>(to_multi_index,
-                                     literal.Get<NativeT>(from_multi_index));
-            return;
-          }
-          LOG(FATAL) << "Unhandled primitive element type: "
-                     << PrimitiveType_Name(literal.shape().element_type());
-        },
-        literal.shape().element_type());
-  }
+  const int64_t num_elements = ShapeUtil::ElementsIn(literal.shape());
+  primitive_util::ByteWidthTypeSwitch(
+      [&](auto primitive_type_constant) -> void {
+        using NativeT = primitive_util::NativeTypeOf<primitive_type_constant>;
+        const auto* src_data =
+            static_cast<const NativeT*>(literal.untyped_data());
+        auto* dst_data = static_cast<NativeT*>(new_literal.untyped_data());
+        for (int64_t i = 0; i < num_elements; ++i) {
+          auto from_multi_index =
+              IndexUtil::LinearIndexToMultidimensionalIndex(literal.shape(), i);
+          auto to_multi_index = IndexUtil::LinearIndexToMultidimensionalIndex(
+              shape_with_layout, i);
+          dst_data[IndexUtil::MultidimensionalIndexToLinearIndex(
+              new_literal.shape(), to_multi_index)] =
+              src_data[IndexUtil::MultidimensionalIndexToLinearIndex(
+                  literal.shape(), from_multi_index)];
+        }
+      },
+      literal.shape().element_type());
 
   return new_literal;
 }
@@ -393,28 +826,46 @@ void SetScalarAtIndexImpl(MutableLiteralBase& literal,
     const LiteralSlice& literal) {
   CHECK(literal.shape().IsArray());
   CHECK_GT(ShapeUtil::ElementsIn(literal.shape()), 0);
-  return CreateScalar<FirstElementProvider>(literal.shape().element_type(),
-                                            literal);
+  Literal scalar(ShapeUtil::MakeScalarShape(literal.shape().element_type()));
+  primitive_util::ByteWidthTypeSwitch(
+      [&](auto primitive_type_constant) -> void {
+        using NativeT = primitive_util::NativeTypeOf<primitive_type_constant>;
+        *static_cast<NativeT*>(scalar.untyped_data()) =
+            *static_cast<const NativeT*>(literal.untyped_data());
+      },
+      literal.shape().element_type());
+  return scalar;
 }
 
 /*static*/ Literal LiteralUtil::GetScalarLiteral(
     const LiteralBase& literal, absl::Span<const int64_t> multi_index) {
-  return CreateScalar<GetElementAtIndexProvider>(literal.shape().element_type(),
-                                                 &literal, multi_index);
+  CHECK(literal.shape().IsArray());
+  Literal scalar(ShapeUtil::MakeScalarShape(literal.shape().element_type()));
+  const int64_t linear_index = IndexUtil::MultidimensionalIndexToLinearIndex(
+      literal.shape(), multi_index);
+  primitive_util::ByteWidthTypeSwitch(
+      [&](auto primitive_type_constant) -> void {
+        using NativeT = primitive_util::NativeTypeOf<primitive_type_constant>;
+        *static_cast<NativeT*>(scalar.untyped_data()) =
+            static_cast<const NativeT*>(literal.untyped_data())[linear_index];
+      },
+      literal.shape().element_type());
+  return scalar;
 }
 
 /*static*/ void LiteralUtil::SetScalarLiteral(
     MutableLiteralBase& literal, absl::Span<const int64_t> multi_index,
     const LiteralBase& scalar) {
-  primitive_util::PrimitiveTypeSwitch<void>(
+  CHECK(literal.shape().IsArray());
+  CHECK(ShapeUtil::IsScalar(scalar.shape()));
+  CHECK_EQ(literal.shape().element_type(), scalar.shape().element_type());
+  const int64_t linear_index = IndexUtil::MultidimensionalIndexToLinearIndex(
+      literal.shape(), multi_index);
+  primitive_util::ByteWidthTypeSwitch(
       [&](auto primitive_type_constant) -> void {
-        if constexpr (primitive_util::IsArrayType(primitive_type_constant)) {
-          SetScalarAtIndexImpl<primitive_type_constant>(literal, multi_index,
-                                                        scalar);
-          return;
-        }
-        LOG(FATAL) << "Unsupported element type: "
-                   << literal.shape().element_type();
+        using NativeT = primitive_util::NativeTypeOf<primitive_type_constant>;
+        static_cast<NativeT*>(literal.untyped_data())[linear_index] =
+            *static_cast<const NativeT*>(scalar.untyped_data());
       },
       literal.shape().element_type());
 }
@@ -435,7 +886,7 @@ void SetScalarAtIndexImpl(MutableLiteralBase& literal,
   }
   Literal literal(ShapeUtil::MakeTupleShapeWithPtrs(element_shapes));
   for (int i = 0, end = elements.size(); i < end; ++i) {
-    TF_CHECK_OK(literal.CopyFrom(*elements[i], /*dest_shape_index=*/{i}));
+    CHECK_OK(literal.CopyFrom(*elements[i], /*dest_shape_index=*/{i}));
   }
   return literal;
 }
@@ -449,7 +900,7 @@ void SetScalarAtIndexImpl(MutableLiteralBase& literal,
   }
   Literal literal(ShapeUtil::MakeTupleShapeWithPtrs(element_shapes));
   for (int i = 0, end = elements.size(); i < end; ++i) {
-    TF_CHECK_OK(literal.CopyFrom(elements[i], /*dest_shape_index=*/{i}));
+    CHECK_OK(literal.CopyFrom(elements[i], /*dest_shape_index=*/{i}));
   }
   return literal;
 }
@@ -463,7 +914,7 @@ void SetScalarAtIndexImpl(MutableLiteralBase& literal,
   }
   Literal literal(ShapeUtil::MakeTupleShapeWithPtrs(element_shapes));
   for (int64_t i = 0, end = elements.size(); i < end; ++i) {
-    TF_CHECK_OK(
+    CHECK_OK(
         literal.MoveFrom(std::move(elements[i]), /*dest_shape_index=*/{i}));
   }
   return literal;
@@ -481,6 +932,201 @@ void SetScalarAtIndexImpl(MutableLiteralBase& literal,
     return std::nullopt;
   }
   return l.GetFirstInteger();
+}
+
+absl::StatusOr<Literal> MakeFakeLiteral(const Shape& shape, bool pseudo_random,
+                                        bool use_large_range) {
+  auto engine = pseudo_random ? std::make_unique<std::minstd_rand0>() : nullptr;
+  return MakeFakeLiteral(shape, engine.get(), /*limit=*/std::nullopt,
+                         /*is_sorted=*/false,
+                         /*no_duplicates=*/false, use_large_range,
+                         /*max_bits_of_precision=*/std::nullopt,
+                         /*index_alignment=*/std::nullopt,
+                         /*index_known_zeroes=*/std::nullopt,
+                         /*float_generator=*/nullptr,
+                         /*interval=*/std::nullopt);
+}
+
+absl::StatusOr<Literal> MakeFakeLiteral(
+    const Shape& shape, std::minstd_rand0* engine,
+    std::optional<std::pair<int64_t, int64_t>> limit, bool is_sorted,
+    bool no_duplicates, bool use_large_range,
+    std::optional<int64_t> max_bits_of_precision,
+    std::optional<int64_t> index_alignment,
+    std::optional<uint64_t> index_known_zeroes,
+    std::function<double(std::minstd_rand0*)> float_generator,
+    std::optional<ConstraintInterval> interval) {
+  if (shape.IsTuple()) {
+    std::vector<Literal> elements;
+    const auto& shape_tuple_shapes = shape.tuple_shapes();
+    elements.reserve(shape_tuple_shapes.size());
+    for (const Shape& element_shape : shape_tuple_shapes) {
+      ABSL_ASSIGN_OR_RETURN(
+          Literal element,
+          MakeFakeLiteral(element_shape, engine, limit, is_sorted,
+                          no_duplicates, use_large_range, max_bits_of_precision,
+                          index_alignment, index_known_zeroes, float_generator,
+                          interval));
+      elements.push_back(std::move(element));
+    }
+    return LiteralUtil::MakeTupleOwned(std::move(elements));
+  }
+  if (engine == nullptr) {
+    return Literal::CreateFromShape(shape);
+  }
+  // Clear tiles/element size in shape's layout before using it for creating
+  // literal.
+  Shape new_shape = shape;
+  new_shape.mutable_layout()->clear_tiles();
+  new_shape.mutable_layout()->set_tail_padding_alignment_in_elements(1);
+  new_shape.mutable_layout()->set_element_size_in_bits(0);
+  Literal literal(new_shape);
+
+  ABSL_RETURN_IF_ERROR(primitive_util::PrimitiveTypeSwitch<absl::Status>(
+      [&](auto primitive_type_constant) -> absl::Status {
+        if constexpr (primitive_util::IsArrayType(primitive_type_constant)) {
+          using NativeT = primitive_util::NativeTypeOf<primitive_type_constant>;
+          if constexpr (primitive_util::IsFloatingPointType(
+                            primitive_type_constant)) {
+            PopulateWithFloatingPointData<NativeT>(
+                &literal, engine, no_duplicates, use_large_range,
+                max_bits_of_precision, float_generator, interval);
+            return absl::OkStatus();
+          }
+          if constexpr (primitive_type_constant == PRED) {
+            absl::uniform_int_distribution<int> generator(0, 1);
+            CHECK_OK(literal.Populate<bool>(
+                [&](absl::Span<const int64_t> /*indices*/) {
+                  return generator(*engine);
+                }));
+            return absl::OkStatus();
+          }
+          if constexpr (primitive_util::IsIntegralType(
+                            primitive_type_constant)) {
+            auto [min, max] = GetIntegralBounds<NativeT>(
+                new_shape, use_large_range, no_duplicates, limit);
+            if (max_bits_of_precision.has_value()) {
+              max = std::min(max,
+                             static_cast<NativeT>(1 << *max_bits_of_precision));
+              if (primitive_util::IsSignedIntegralType(
+                      primitive_type_constant)) {
+                min = std::max(
+                    min, static_cast<NativeT>(-(1 << *max_bits_of_precision)));
+              }
+            }
+            std::optional<NativeT> alignment_native = std::nullopt;
+            if (index_alignment.has_value()) {
+              alignment_native = static_cast<NativeT>(*index_alignment);
+            }
+            std::optional<NativeT> index_known_zeroes_native = std::nullopt;
+            if (index_known_zeroes.has_value()) {
+              index_known_zeroes_native =
+                  static_cast<NativeT>(*index_known_zeroes);
+            }
+            PopulateWithRandomIntegralDataWithBounds<NativeT>(
+                &literal, engine, no_duplicates, min, max, alignment_native,
+                index_known_zeroes_native);
+            if (is_sorted) {
+              std::sort(literal.data<NativeT>().begin(),
+                        literal.data<NativeT>().end());
+            }
+            return absl::OkStatus();
+          }
+          if constexpr (primitive_util::IsComplexType(
+                            primitive_type_constant)) {
+            PopulateWithComplexData<NativeT>(&literal, engine, no_duplicates,
+                                             use_large_range, float_generator);
+            return absl::OkStatus();
+          }
+        }
+        return Unimplemented(
+            "Unsupported type for fake random literal generation with bounds: "
+            "%s",
+            ShapeUtil::HumanString(shape));
+      },
+      shape.element_type()));
+  return std::move(literal);
+}
+
+/*static*/ std::vector<const Literal*> LiteralUtil::MakePointers(
+    absl::Span<const Literal> literals) {
+  std::vector<const Literal*> pointers(literals.size());
+  for (int i = 0; i < literals.size(); i++) {
+    pointers[i] = &literals[i];
+  }
+  return pointers;
+}
+
+absl::StatusOr<Literal> MaterializeSparseOperand(
+    const LiteralSlice& values, const LiteralSlice& indices,
+    const SparsityConfig::TensorSparsityConfig& config) {
+  int64_t dim = config.dimension();
+  int64_t block_size = config.block_size();
+  TF_RET_CHECK(config.num_non_zero() == 1)
+      << "Only 1:N sparsity is currently supported.";
+  TF_RET_CHECK(config.stride() == 1)
+      << "Strided sparsity is not supported yet.";
+  TF_RET_CHECK(dim >= 0 && dim < values.shape().dimensions().size())
+      << "Invalid sparsity dimension: " << dim << ", must be in [0, "
+      << values.shape().dimensions().size() << ")";
+  TF_RET_CHECK(block_size > 0)
+      << "block_size must be strictly positive in SparsityConfig.";
+  TF_RET_CHECK(ShapeUtil::SameDimensions(values.shape(), indices.shape()))
+      << "Values shape " << ShapeUtil::HumanString(values.shape())
+      << " must have the same dimensions as indices shape "
+      << ShapeUtil::HumanString(indices.shape());
+  TF_RET_CHECK(ShapeUtil::ElementIsIntegral(indices.shape()))
+      << "Indices literal must be an integral type.";
+
+  std::vector<int64_t> dense_dims(values.shape().dimensions().begin(),
+                                  values.shape().dimensions().end());
+  TF_RET_CHECK(std::numeric_limits<int64_t>::max() / block_size >=
+               dense_dims[dim])
+      << "Dense dimension overflow triggered by large block_size.";
+  dense_dims[dim] = dense_dims[dim] * block_size;
+  Literal dense = Literal::CreateFromShape(
+      ShapeUtil::MakeShape(values.shape().element_type(), dense_dims));
+
+  return primitive_util::PrimitiveTypeSwitch<absl::StatusOr<Literal>>(
+      [&](auto primitive_type_constant) -> absl::StatusOr<Literal> {
+        if constexpr (primitive_util::IsArrayType(primitive_type_constant)) {
+          using NativeT = typename primitive_util::PrimitiveTypeToNative<
+              primitive_type_constant>::type;
+          absl::Status status = absl::OkStatus();
+          values.EachCell<NativeT>([&](absl::Span<const int64_t> sparse_index,
+                                       NativeT val) {
+            if (!status.ok()) {
+              return;
+            }
+            std::optional<int64_t> position_in_block_opt =
+                indices.GetIntegralAsS64(sparse_index);
+            if (!position_in_block_opt.has_value()) {
+              status = absl::InvalidArgumentError(
+                  absl::StrCat("Failed to get integral value for indices at ",
+                               LiteralUtil::MultiIndexAsString(sparse_index)));
+              return;
+            }
+            int64_t position_in_block = *position_in_block_opt;
+            if (position_in_block < 0 || position_in_block >= block_size) {
+              status = absl::InvalidArgumentError(
+                  absl::StrCat("Invalid position in block: ", position_in_block,
+                               ", must be in [0, ", block_size, ")"));
+              return;
+            }
+            absl::InlinedVector<int64_t, 8> out_index(sparse_index.begin(),
+                                                      sparse_index.end());
+            out_index[dim] = sparse_index[dim] * block_size + position_in_block;
+            dense.Set<NativeT>(out_index, val);
+          });
+          if (!status.ok()) {
+            return status;
+          }
+          return std::move(dense);
+        }
+        return absl::InvalidArgumentError(
+            "Unsupported type for sparse matrix materialization.");
+      },
+      values.shape().element_type());
 }
 
 }  // namespace xla

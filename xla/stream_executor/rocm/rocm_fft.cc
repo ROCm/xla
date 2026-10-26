@@ -16,72 +16,42 @@ limitations under the License.
 #include "xla/stream_executor/rocm/rocm_fft.h"
 
 #include <complex>
+#include <cstdint>
+#include <memory>
+#include <utility>
 
-#include "xla/stream_executor/device_memory.h"
-#include "xla/stream_executor/gpu/gpu_activation.h"
-#include "xla/stream_executor/gpu/gpu_executor.h"
+#include "absl/status/status.h"
+#include "rocm/include/hipfft/hipfft.h"
+#include "xla/stream_executor/activate_context.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/fft.h"
 #include "xla/stream_executor/gpu/gpu_helpers.h"
-#include "xla/stream_executor/gpu/gpu_stream.h"
-#include "xla/stream_executor/platform/dso_loader.h"
 #include "xla/stream_executor/platform/initialize.h"
-#include "xla/stream_executor/platform/port.h"
 #include "xla/stream_executor/plugin_registry.h"
+#include "xla/stream_executor/rocm/rocm_complex_converters.h"
 #include "xla/stream_executor/rocm/rocm_platform_id.h"
+#include "xla/stream_executor/scratch_allocator.h"
+#include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/logging.h"
+#include "xla/tsl/platform/logging.h"
 
 namespace stream_executor {
 namespace gpu {
 
+using rocm::ROCMComplex;
+
 namespace wrap {
 
-#ifdef PLATFORM_GOOGLE
-// This macro wraps a global identifier, given by __name, in a callable
-// structure that loads the DLL symbol out of the DSO handle in a thread-safe
-// manner on first use. This dynamic loading technique is used to avoid DSO
-// dependencies on vendor libraries which may or may not be available in the
-// deployed binary environment.
-#define STREAM_EXECUTOR_ROCFFT_WRAP(__name)                      \
-  struct WrapperShim__##__name {                                 \
-    template <typename... Args>                                  \
-    hipfftResult operator()(GpuExecutor *parent, Args... args) { \
-      gpu::ScopedActivateExecutorContext sac{parent};            \
-      return ::__name(args...);                                  \
-    }                                                            \
+namespace {
+
+#define STREAM_EXECUTOR_ROCFFT_WRAP(__name)                             \
+  struct WrapperShim__##__name {                                        \
+    template <typename... Args>                                         \
+    hipfftResult operator()(StreamExecutor* parent, Args... args) {     \
+      std::unique_ptr<ActivateContext> activation = parent->Activate(); \
+      return ::__name(args...);                                         \
+    }                                                                   \
   } __name;
-
-#else
-
-#define STREAM_EXECUTOR_ROCFFT_WRAP(__name)                        \
-  struct DynLoadShim__##__name {                                   \
-    static const char *kName;                                      \
-    using FuncPtrT = std::add_pointer<decltype(::__name)>::type;   \
-    static void *GetDsoHandle() {                                  \
-      auto s = internal::CachedDsoLoader::GetHipfftDsoHandle();    \
-      return s.value();                                            \
-    }                                                              \
-    static FuncPtrT LoadOrDie() {                                  \
-      void *f;                                                     \
-      auto s = tsl::Env::Default()                                 \
-          -> GetSymbolFromLibrary(GetDsoHandle(), kName, &f);      \
-      CHECK(s.ok()) << "could not find " << kName                  \
-                    << " in rocfft DSO; dlerror: " << s.message(); \
-      return reinterpret_cast<FuncPtrT>(f);                        \
-    }                                                              \
-    static FuncPtrT DynLoad() {                                    \
-      static FuncPtrT f = LoadOrDie();                             \
-      return f;                                                    \
-    }                                                              \
-    template <typename... Args>                                    \
-    hipfftResult operator()(GpuExecutor *parent, Args... args) {   \
-      gpu::ScopedActivateExecutorContext sac{parent};              \
-      return DynLoad()(args...);                                   \
-    }                                                              \
-  } __name;                                                        \
-  const char *DynLoadShim__##__name::kName = #__name;
-
-#endif
 
 // clang-format off
 #define ROCFFT_ROUTINE_EACH(__macro) \
@@ -94,13 +64,9 @@ namespace wrap {
   __macro(hipfftCreate)              \
   __macro(hipfftSetAutoAllocation)   \
   __macro(hipfftSetWorkArea)         \
-  __macro(hipfftGetSize1d)           \
   __macro(hipfftMakePlan1d)          \
-  __macro(hipfftGetSize2d)           \
   __macro(hipfftMakePlan2d)          \
-  __macro(hipfftGetSize3d)           \
   __macro(hipfftMakePlan3d)          \
-  __macro(hipfftGetSizeMany)         \
   __macro(hipfftMakePlanMany)        \
   __macro(hipfftExecD2Z)             \
   __macro(hipfftExecZ2D)             \
@@ -113,6 +79,7 @@ namespace wrap {
 
 ROCFFT_ROUTINE_EACH(STREAM_EXECUTOR_ROCFFT_WRAP)
 
+}  // namespace
 }  // namespace wrap
 
 namespace {
@@ -140,8 +107,10 @@ hipfftType ROCMFftType(fft::Type type) {
 }
 
 // Associates the given stream with the given rocFFT plan.
-bool SetStream(GpuExecutor *parent, hipfftHandle plan, Stream *stream) {
-  auto ret = wrap::hipfftSetStream(parent, plan, AsGpuStreamValue(stream));
+bool SetStream(StreamExecutor* parent, hipfftHandle plan, Stream* stream) {
+  auto ret = wrap::hipfftSetStream(
+      parent, plan,
+      static_cast<hipStream_t>(stream->platform_specific_handle().stream));
   if (ret != HIPFFT_SUCCESS) {
     LOG(ERROR) << "failed to run rocFFT routine hipfftSetStream: " << ret;
     return false;
@@ -152,10 +121,10 @@ bool SetStream(GpuExecutor *parent, hipfftHandle plan, Stream *stream) {
 }  // namespace
 
 absl::Status ROCMFftPlan::Initialize(
-    GpuExecutor *parent, Stream *stream, int rank, uint64_t *elem_count,
-    uint64_t *input_embed, uint64 input_stride, uint64 input_distance,
-    uint64_t *output_embed, uint64 output_stride, uint64 output_distance,
-    fft::Type type, int batch_count, ScratchAllocator *scratch_allocator) {
+    StreamExecutor* parent, Stream* stream, int rank, uint64_t* elem_count,
+    uint64_t* input_embed, uint64_t input_stride, uint64_t input_distance,
+    uint64_t* output_embed, uint64_t output_stride, uint64_t output_distance,
+    fft::Type type, int batch_count, ScratchAllocator* scratch_allocator) {
   if (IsInitialized()) {
     LOG(FATAL) << "Try to repeatedly initialize.";
   }
@@ -313,10 +282,10 @@ absl::Status ROCMFftPlan::Initialize(
   return absl::OkStatus();
 }
 
-absl::Status ROCMFftPlan::Initialize(GpuExecutor *parent, Stream *stream,
-                                     int rank, uint64_t *elem_count,
+absl::Status ROCMFftPlan::Initialize(StreamExecutor* parent, Stream* stream,
+                                     int rank, uint64_t* elem_count,
                                      fft::Type type,
-                                     ScratchAllocator *scratch_allocator) {
+                                     ScratchAllocator* scratch_allocator) {
   return Initialize(parent_, stream, rank, elem_count,
                     /*input_embed=*/nullptr, /*input_stride=*/0,
                     /*input_distance=*/0,
@@ -325,7 +294,7 @@ absl::Status ROCMFftPlan::Initialize(GpuExecutor *parent, Stream *stream,
 }
 
 absl::Status ROCMFftPlan::UpdateScratchAllocator(
-    Stream *stream, ScratchAllocator *scratch_allocator) {
+    Stream* stream, ScratchAllocator* scratch_allocator) {
   scratch_allocator_ = scratch_allocator;
   if (scratch_size_bytes_ != 0) {
     auto allocated = scratch_allocator->AllocateBytes(scratch_size_bytes_);
@@ -367,10 +336,10 @@ int ROCMFftPlan::GetFftDirection() const {
 }
 
 std::unique_ptr<fft::Plan> ROCMFft::CreateBatchedPlanWithScratchAllocator(
-    Stream *stream, int rank, uint64_t *elem_count, uint64 *input_embed,
-    uint64_t input_stride, uint64 input_distance, uint64 *output_embed,
-    uint64_t output_stride, uint64 output_distance, fft::Type type,
-    bool in_place_fft, int batch_count, ScratchAllocator *scratch_allocator) {
+    Stream* stream, int rank, uint64_t* elem_count, uint64_t* input_embed,
+    uint64_t input_stride, uint64_t input_distance, uint64_t* output_embed,
+    uint64_t output_stride, uint64_t output_distance, fft::Type type,
+    bool in_place_fft, int batch_count, ScratchAllocator* scratch_allocator) {
   std::unique_ptr<ROCMFftPlan> fft_plan_ptr{new ROCMFftPlan()};
   absl::Status status = fft_plan_ptr->Initialize(
       parent_, stream, rank, elem_count, input_embed, input_stride,
@@ -385,8 +354,8 @@ std::unique_ptr<fft::Plan> ROCMFft::CreateBatchedPlanWithScratchAllocator(
 }
 
 void ROCMFft::UpdatePlanWithScratchAllocator(
-    Stream *stream, fft::Plan *plan, ScratchAllocator *scratch_allocator) {
-  ROCMFftPlan *rocm_fft_plan = dynamic_cast<ROCMFftPlan *>(plan);
+    Stream* stream, fft::Plan* plan, ScratchAllocator* scratch_allocator) {
+  ROCMFftPlan* rocm_fft_plan = dynamic_cast<ROCMFftPlan*>(plan);
   absl::Status status =
       rocm_fft_plan->UpdateScratchAllocator(stream, scratch_allocator);
   if (!status.ok()) {
@@ -396,10 +365,10 @@ void ROCMFft::UpdatePlanWithScratchAllocator(
 }
 
 template <typename FuncT, typename InputT, typename OutputT>
-bool ROCMFft::DoFftInternal(Stream *stream, fft::Plan *plan, FuncT hipfftExec,
-                            const DeviceMemory<InputT> &input,
-                            DeviceMemory<OutputT> *output) {
-  ROCMFftPlan *rocm_fft_plan = dynamic_cast<ROCMFftPlan *>(plan);
+bool ROCMFft::DoFftInternal(Stream* stream, fft::Plan* plan, FuncT hipfftExec,
+                            const DeviceAddress<InputT>& input,
+                            DeviceAddress<OutputT>* output) {
+  ROCMFftPlan* rocm_fft_plan = dynamic_cast<ROCMFftPlan*>(plan);
   if (rocm_fft_plan == nullptr) {
     LOG(ERROR) << "the passed-in plan is not a ROCMFftPlan object.";
     return false;
@@ -418,14 +387,14 @@ bool ROCMFft::DoFftInternal(Stream *stream, fft::Plan *plan, FuncT hipfftExec,
   // see ROCm TF issue # 1150
   //
   // Hence for all those transforms, copy the input buffer
-  DeviceMemory<InputT> input_maybe_copy = input;
+  DeviceAddress<InputT> input_maybe_copy = input;
   if (input.opaque() != output->opaque() && (input.size() > 0)) {
-    auto *allocator = rocm_fft_plan->GetScratchAllocator();
+    auto* allocator = rocm_fft_plan->GetScratchAllocator();
     if (allocator) {
       auto allocated = allocator->AllocateBytes(input.size());
       if (allocated.ok()) {
         if (stream->Memcpy(&allocated.value(), input, input.size()).ok()) {
-          input_maybe_copy = DeviceMemory<InputT>(allocated.value());
+          input_maybe_copy = DeviceAddress<InputT>(allocated.value());
         } else {
           LOG(ERROR) << "failed to copy input buffer for rocFFT.";
         }
@@ -433,9 +402,9 @@ bool ROCMFft::DoFftInternal(Stream *stream, fft::Plan *plan, FuncT hipfftExec,
     }
   }
 
-  InputT *ip = const_cast<InputT *>(GpuMemory(input_maybe_copy));
-  auto ret = hipfftExec(parent_, rocm_fft_plan->GetPlan(), GpuComplex(ip),
-                        GpuComplex(GpuMemoryMutable(output)));
+  InputT* ip = const_cast<InputT*>(GpuMemory(input_maybe_copy));
+  auto ret = hipfftExec(parent_, rocm_fft_plan->GetPlan(), ROCMComplex(ip),
+                        ROCMComplex(GpuMemoryMutable(output)));
 
   if (ret != HIPFFT_SUCCESS) {
     LOG(ERROR) << "failed to run rocFFT routine: " << ret;
@@ -446,11 +415,11 @@ bool ROCMFft::DoFftInternal(Stream *stream, fft::Plan *plan, FuncT hipfftExec,
 }
 
 template <typename FuncT, typename InputT, typename OutputT>
-bool ROCMFft::DoFftWithDirectionInternal(Stream *stream, fft::Plan *plan,
+bool ROCMFft::DoFftWithDirectionInternal(Stream* stream, fft::Plan* plan,
                                          FuncT hipfftExec,
-                                         const DeviceMemory<InputT> &input,
-                                         DeviceMemory<OutputT> *output) {
-  ROCMFftPlan *rocm_fft_plan = dynamic_cast<ROCMFftPlan *>(plan);
+                                         const DeviceAddress<InputT>& input,
+                                         DeviceAddress<OutputT>* output) {
+  ROCMFftPlan* rocm_fft_plan = dynamic_cast<ROCMFftPlan*>(plan);
   if (rocm_fft_plan == nullptr) {
     LOG(ERROR) << "the passed-in plan is not a ROCMFftPlan object.";
     return false;
@@ -461,8 +430,8 @@ bool ROCMFft::DoFftWithDirectionInternal(Stream *stream, fft::Plan *plan,
   }
 
   auto ret = hipfftExec(parent_, rocm_fft_plan->GetPlan(),
-                        GpuComplex(const_cast<InputT *>(GpuMemory(input))),
-                        GpuComplex(GpuMemoryMutable(output)),
+                        ROCMComplex(const_cast<InputT*>(GpuMemory(input))),
+                        ROCMComplex(GpuMemoryMutable(output)),
                         rocm_fft_plan->GetFftDirection());
 
   if (ret != HIPFFT_SUCCESS) {
@@ -475,21 +444,21 @@ bool ROCMFft::DoFftWithDirectionInternal(Stream *stream, fft::Plan *plan,
 
 #define STREAM_EXECUTOR_ROCM_DEFINE_FFT(__type, __fft_type1, __fft_type2,    \
                                         __fft_type3)                         \
-  bool ROCMFft::DoFft(Stream *stream, fft::Plan *plan,                       \
-                      const DeviceMemory<std::complex<__type>> &input,       \
-                      DeviceMemory<std::complex<__type>> *output) {          \
+  bool ROCMFft::DoFft(Stream* stream, fft::Plan* plan,                       \
+                      const DeviceAddress<std::complex<__type>>& input,      \
+                      DeviceAddress<std::complex<__type>>* output) {         \
     return DoFftWithDirectionInternal(                                       \
         stream, plan, wrap::hipfftExec##__fft_type1, input, output);         \
   }                                                                          \
-  bool ROCMFft::DoFft(Stream *stream, fft::Plan *plan,                       \
-                      const DeviceMemory<__type> &input,                     \
-                      DeviceMemory<std::complex<__type>> *output) {          \
+  bool ROCMFft::DoFft(Stream* stream, fft::Plan* plan,                       \
+                      const DeviceAddress<__type>& input,                    \
+                      DeviceAddress<std::complex<__type>>* output) {         \
     return DoFftInternal(stream, plan, wrap::hipfftExec##__fft_type2, input, \
                          output);                                            \
   }                                                                          \
-  bool ROCMFft::DoFft(Stream *stream, fft::Plan *plan,                       \
-                      const DeviceMemory<std::complex<__type>> &input,       \
-                      DeviceMemory<__type> *output) {                        \
+  bool ROCMFft::DoFft(Stream* stream, fft::Plan* plan,                       \
+                      const DeviceAddress<std::complex<__type>>& input,      \
+                      DeviceAddress<__type>* output) {                       \
     return DoFftInternal(stream, plan, wrap::hipfftExec##__fft_type3, input, \
                          output);                                            \
   }
@@ -509,17 +478,8 @@ void initialize_rocfft() {
     absl::Status status =
         PluginRegistry::Instance()->RegisterFactory<PluginRegistry::FftFactory>(
             rocm::kROCmPlatformId, "rocFFT",
-            [](StreamExecutor *parent) -> fft::FftSupport * {
-              gpu::GpuExecutor *rocm_executor =
-                  dynamic_cast<gpu::GpuExecutor *>(parent);
-              if (rocm_executor == nullptr) {
-                LOG(ERROR)
-                    << "Attempting to initialize an instance of the rocFFT "
-                    << "support library with a non-ROCM StreamExecutor";
-                return nullptr;
-              }
-
-              return new gpu::ROCMFft(rocm_executor);
+            [](StreamExecutor* parent) -> fft::FftSupport* {
+              return new gpu::ROCMFft(parent);
             });
     if (!status.ok()) {
       LOG(ERROR) << "Unable to register rocFFT factory: " << status.message();

@@ -13,41 +13,63 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "absl/log/log.h"
+#include "absl/strings/str_cat.h"
+#include "tsl/platform/path.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/parser/hlo_parser.h"
 #include "xla/literal.h"
 #include "xla/literal_util.h"
-#include "xla/service/hlo_parser.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/path.h"
-#include "tsl/platform/statusor.h"
-#include "tsl/platform/subprocess.h"
-#include "tsl/platform/test.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/subprocess.h"
+#include "xla/tsl/platform/test.h"
 
 namespace xla {
 namespace {
 
+std::vector<std::string> make_args(
+    const std::string& run_hlo_module_bin, const std::string& file_name,
+    const std::vector<std::string>& extra_args = {},
+    std::optional<std::string> input_literals_file = std::nullopt) {
+  std::string hlo_path = file_name[0] == '/'
+                             ? file_name
+                             : tsl::io::JoinPath(tsl::testing::XlaSrcRoot(),
+                                                 "tools", "data", file_name);
+
+  std::vector<std::string> args = {run_hlo_module_bin, hlo_path,
+                                   "--platform=Host"};
+
+  args.insert(args.end(), extra_args.begin(), extra_args.end());
+
+  if (input_literals_file.has_value()) {
+    std::string input_path =
+        tsl::io::JoinPath(tsl::testing::XlaSrcRoot(), "tools", "data",
+                          input_literals_file.value());
+    args.push_back(absl::StrCat("--input_literals_file=", input_path));
+  }
+
+  return args;
+}
+
 class RunHloModuleTest : public ::testing::Test {
  protected:
   void RunHlo(const std::string& file_name,
-              std::vector<std::string> extra_args = {}) {
+              const std::vector<std::string>& extra_args = {},
+              std::optional<std::string> input_literals_file = std::nullopt) {
     std::string run_hlo_module_bin = tsl::io::JoinPath(
         tsl::testing::XlaSrcRoot(), "tools", "run_hlo_module");
 
-    std::string hlo_path = file_name[0] == '/'
-                               ? file_name
-                               : tsl::io::JoinPath(tsl::testing::XlaSrcRoot(),
-                                                   "tools", "data", file_name);
-
     tsl::SubProcess proc;
-    std::vector<std::string> args = {run_hlo_module_bin, hlo_path,
-                                     "--platform=Host"};
-    args.insert(args.end(), extra_args.begin(), extra_args.end());
+    auto args = make_args(run_hlo_module_bin, file_name, extra_args,
+                          input_literals_file);
     proc.SetProgram(run_hlo_module_bin, args);
     proc.SetChannelAction(tsl::CHAN_STDOUT, tsl::ACTION_PIPE);
     proc.SetChannelAction(tsl::CHAN_STDERR, tsl::ACTION_PIPE);
@@ -84,6 +106,30 @@ TEST_F(RunHloModuleTest, AddHlo) {
               testing::Not(testing::HasSubstr("memory allocation bug")));
 }
 
+TEST_F(RunHloModuleTest, AddMhlo) {
+  RunHlo("add_mhlo.mlir", {"--input_format=mhlo"});
+
+  EXPECT_TRUE(exited_normally_);
+  EXPECT_EQ(exit_status_, 0);
+  ASSERT_THAT(
+      stderr_output_,
+      testing::HasSubstr("Results on Host and Interpreter are close enough."));
+  EXPECT_THAT(stderr_output_,
+              testing::Not(testing::HasSubstr("memory allocation bug")));
+}
+
+TEST_F(RunHloModuleTest, AddStablehlo) {
+  RunHlo("add_stablehlo.mlir", {"--input_format=stablehlo"});
+
+  EXPECT_TRUE(exited_normally_);
+  EXPECT_EQ(exit_status_, 0);
+  ASSERT_THAT(
+      stderr_output_,
+      testing::HasSubstr("Results on Host and Interpreter are close enough."));
+  EXPECT_THAT(stderr_output_,
+              testing::Not(testing::HasSubstr("memory allocation bug")));
+}
+
 TEST_F(RunHloModuleTest, MustAlias) {
   RunHlo("must_alias.hlo");
 
@@ -102,14 +148,30 @@ TEST_F(RunHloModuleTest, MustAliasWithSharding) {
   EXPECT_TRUE(exited_normally_);
   EXPECT_EQ(exit_status_, 255);
   EXPECT_THAT(stderr_output_,
-              testing::HasSubstr("Failed to execute on Interpreter"));
+              testing::HasSubstr("Failed to execute on HloRunner"));
   EXPECT_THAT(stderr_output_,
               testing::Not(testing::HasSubstr("memory allocation bug")));
 }
 
+TEST_F(RunHloModuleTest, ReadInputLiteralsFromFile) {
+  RunHlo("add.hlo",
+         /*extra_args=*/{"--print_literals=true", "--reference_platform="},
+         /*input_literals_file=*/"input_literal_f32_2_2.pbtxt");
+
+  EXPECT_TRUE(exited_normally_);
+  EXPECT_EQ(exit_status_, 0);
+
+  ASSERT_THAT(
+      stdout_output_,
+      testing::HasSubstr("{ 0.1, 0.2 },"));  // First two values of the input
+  ASSERT_THAT(
+      stdout_output_,
+      testing::HasSubstr("{ 0.2, 0.4 },"));  // First two values of the result
+}
+
 TEST_F(RunHloModuleTest, AddSnapshot) {
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnUnverifiedModule(R"(
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnUnverifiedModule(R"(
 HloModule f
 
 ENTRY f {
@@ -125,7 +187,7 @@ ENTRY f {
   tsl::Env* env = tsl::Env::Default();
   std::string snapshot_file = testing::TempDir();
   env->CreateUniqueFileName(&snapshot_file, ".pb");
-  TF_ASSERT_OK(tsl::WriteBinaryProto(env, snapshot_file, snapshot));
+  ASSERT_OK(tsl::WriteBinaryProto(env, snapshot_file, snapshot));
 
   RunHlo(snapshot_file, {"--print_literals"});
 
@@ -136,11 +198,85 @@ ENTRY f {
       testing::HasSubstr("Results on Host and Interpreter are close enough."));
   // Test that the arguments in the HloSnapshot are used by checking output.
   ASSERT_THAT(stdout_output_, testing::HasSubstr(R"(
-** Result with test runner Host **
+** Result with test runner HloRunner **
 f32[2,2] {
   { 2, 2 },
   { 2, 2 }
 })"));
+}
+
+TEST_F(RunHloModuleTest, DumpAndParseDebugOptions) {
+  tsl::Env* env = tsl::Env::Default();
+  std::string tmp_dir;
+  EXPECT_TRUE(env->LocalTempFilename(&tmp_dir));
+  RunHlo("large_constant.hlo",
+         {"--xla_dump_to=" + tmp_dir, "--xla_dump_large_constants=true",
+          "--xla_gpu_dot_merger_threshold_mb=1234"});
+  std::string data;
+  std::vector<std::string> debug_options_files;
+  ASSERT_OK(tsl::Env::Default()->GetMatchingPaths(
+      absl::StrCat(tmp_dir, "/module*debug_options"), &debug_options_files));
+  ASSERT_EQ(debug_options_files.size(), 1);
+  ASSERT_OK(tsl::ReadFileToString(env, debug_options_files[0], &data));
+  EXPECT_THAT(data, testing::HasSubstr("xla_dump_large_constants: true"));
+  EXPECT_THAT(data,
+              testing::HasSubstr("xla_gpu_dot_merger_threshold_mb: 1234"));
+
+  std::string tmp_dir2;
+  EXPECT_TRUE(env->LocalTempFilename(&tmp_dir2));
+  EXPECT_NE(tmp_dir2, tmp_dir);
+  RunHlo("large_constant.hlo",
+         {"--xla_dump_to=" + tmp_dir2,
+          "--debug_options_file=" + debug_options_files[0],
+          "--xla_gpu_dot_merger_threshold_mb=3253"});
+
+  // Check the new debug options. They should have the dump_large_constants set
+  // to true. This comes from the debug options file.
+  std::vector<std::string> debug_options_files2;
+  ASSERT_OK(tsl::Env::Default()->GetMatchingPaths(
+      absl::StrCat(tmp_dir2, "/module*debug_options"), &debug_options_files2));
+  ASSERT_EQ(debug_options_files2.size(), 1);
+  ASSERT_OK(tsl::ReadFileToString(env, debug_options_files2[0], &data));
+  EXPECT_THAT(data, testing::HasSubstr("xla_dump_large_constants: true"));
+  // Check that the new debug options has xla_gpu_dot_merger_threshold_mb set to
+  // 3253. This comes from the command line (overriding the debug options file).
+  EXPECT_THAT(data,
+              testing::HasSubstr("xla_gpu_dot_merger_threshold_mb: 3253"));
+  EXPECT_THAT(data, testing::Not(testing::HasSubstr(
+                        "xla_gpu_dot_merger_threshold_mb: 1234")));
+  // Read the dumped module and we should see large constant.
+  std::vector<std::string> cpu_after_optimizations_files;
+  ASSERT_OK(tsl::Env::Default()->GetMatchingPaths(
+      absl::StrCat(tmp_dir2, "/module*.f.*cpu_after_optimizations.txt"),
+      &cpu_after_optimizations_files));
+  ASSERT_THAT(cpu_after_optimizations_files, testing::SizeIs(1));
+  ASSERT_OK(
+      tsl::ReadFileToString(env, cpu_after_optimizations_files[0], &data));
+  EXPECT_THAT(data, testing::HasSubstr(
+                        "constant({10, 6, 3, 2, 5, 3, 7, 4, 2, 3, 1, 0})"));
+}
+
+TEST_F(RunHloModuleTest, DumpHloAsHtml) {
+  tsl::Env* env = tsl::Env::Default();
+  std::string tmp_dir;
+  EXPECT_TRUE(env->LocalTempFilename(&tmp_dir));
+  RunHlo("add.hlo",
+         {"--xla_dump_to=" + tmp_dir, "--xla_dump_hlo_as_html=true"});
+
+  EXPECT_TRUE(exited_normally_);
+  EXPECT_EQ(exit_status_, 0);
+
+  std::vector<std::string> html_files;
+  ASSERT_OK(env->GetMatchingPaths(absl::StrCat(tmp_dir, "/module*.html"),
+                                  &html_files));
+  EXPECT_FALSE(html_files.empty());
+
+  for (const std::string& html_file : html_files) {
+    std::string html_content;
+    ASSERT_OK(tsl::ReadFileToString(env, html_file, &html_content));
+    EXPECT_THAT(html_content, testing::HasSubstr("<!DOCTYPE html>"));
+    EXPECT_THAT(html_content, testing::HasSubstr("</html>"));
+  }
 }
 
 }  // namespace

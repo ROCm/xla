@@ -21,13 +21,14 @@ limitations under the License.
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/testlib/pattern_matcher_gmock.h"
 #include "xla/literal.h"
 #include "xla/service/pattern_matcher.h"
-#include "xla/service/pattern_matcher_gmock.h"
-#include "xla/statusor.h"
-#include "xla/tests/hlo_test_base.h"
 
 namespace xla {
 namespace bisect {
@@ -35,7 +36,7 @@ namespace {
 
 namespace m = match;
 
-using HloBisectStateTest = HloTestBase;
+using HloBisectStateTest = HloHardwareIndependentTestBase;
 
 // Simple test bug checker, verifies the presence of the given instructions in
 // the entry computation.
@@ -174,7 +175,7 @@ TEST_F(HloBisectStateTest, TrimByOutputsLostBug) {
    public:
     CustomBugSearch() : TestBugSearch({HloOpcode::kConstant}) {}
     absl::StatusOr<bool> Run(const HloModule& module) override {
-      TF_ASSIGN_OR_RETURN(bool has_constants, TestBugSearch::Run(module));
+      ABSL_ASSIGN_OR_RETURN(bool has_constants, TestBugSearch::Run(module));
       int program_size = module.entry_computation()->instruction_count();
       return program_size == 5 && !has_constants;
     }

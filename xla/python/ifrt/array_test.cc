@@ -15,13 +15,13 @@ limitations under the License.
 
 #include "xla/python/ifrt/array.h"
 
-#include <memory>
-#include <vector>
-
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "llvm/Support/ExtensibleRTTI.h"
+
+#include <vector>
+
 #include "xla/python/ifrt/mock.h"
+#include "xla/tsl/concurrency/ref_count.h"
 
 namespace xla {
 namespace ifrt {
@@ -29,7 +29,7 @@ namespace {
 
 TEST(ArrayTest, MakeArrayPointerListTest) {
   const int kNumArrays = 3;
-  std::vector<tsl::RCReference<Array>> arrays;
+  std::vector<ArrayRef> arrays;
   arrays.reserve(kNumArrays);
   for (int i = 0; i < kNumArrays; ++i) {
     arrays.push_back(tsl::MakeRef<MockArray>());

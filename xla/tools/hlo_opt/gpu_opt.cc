@@ -13,67 +13,116 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "absl/base/casts.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/LLVMContext.h"
+#include "xla/backends/gpu/target_config/target_config.h"
+#include "xla/backends/gpu/transforms/collectives/all_gather_optimizer.h"
+#include "xla/backends/gpu/transforms/cudnn_custom_call_converter.h"
+#include "xla/backends/gpu/transforms/dot_algorithm_rewriter.h"
+#include "xla/backends/gpu/transforms/dot_dimension_sorter.h"
+#include "xla/backends/gpu/transforms/dot_normalizer.h"
+#include "xla/backends/gpu/transforms/dot_operand_converter.h"
+#include "xla/backends/gpu/transforms/gemm_broadcast_folding_rewriter.h"
+#include "xla/backends/gpu/transforms/gemm_fusion.h"
+#include "xla/backends/gpu/transforms/reduce_scatter_creator.h"
+#include "xla/backends/gpu/transforms/reduction_degenerate_dim_remover.h"
+#include "xla/backends/gpu/transforms/reduction_dimension_grouper.h"
+#include "xla/backends/gpu/transforms/reduction_layout_normalizer.h"
+#include "xla/backends/gpu/transforms/sanitize_constant_names.h"
+#include "xla/backends/gpu/transforms/topk_specializer.h"
+#include "xla/backends/gpu/transforms/topk_splitter.h"
+#include "xla/backends/gpu/transforms/windowed_einsum_handler.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/tools/hlo_opt/opt_lib.h"
+#include "xla/hlo/transforms/host_offloader.h"
+#include "xla/hlo/transforms/simplifiers/gemv_rewriter.h"
+#include "xla/hlo/transforms/simplifiers/hlo_memory_scheduler.h"
+#include "xla/layout.h"
+#include "xla/service/buffer_value.h"
 #include "xla/service/compiler.h"
+#include "xla/service/copy_insertion.h"
 #include "xla/service/dump.h"
 #include "xla/service/executable.h"
+#include "xla/service/gpu/alias_info.h"
 #include "xla/service/gpu/compile_module_to_llvm_ir.h"
-#include "xla/service/gpu/executable.pb.h"
 #include "xla/service/gpu/gpu_compiler.h"
+#include "xla/service/gpu/gpu_device_info_for_tests.h"
 #include "xla/service/gpu/gpu_executable.h"
-#include "xla/service/gpu/gpu_hlo_schedule.h"
+#include "xla/service/gpu/nvptx_alias_info.h"
+#include "xla/service/gpu_topology.h"
+#include "xla/service/llvm_compiler.h"
 #include "xla/service/llvm_ir/llvm_util.h"
-#include "xla/service/platform_util.h"
+#include "xla/service/spmd/schedule_aware_collective_ops_cse.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/stream_executor/cuda/cuda_compute_capability.h"
+#include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform/initialize.h"
-#include "xla/stream_executor/stream_executor.h"
-#include "xla/tools/hlo_opt/opt_lib.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/statusor.h"
+#include "xla/tools/hlo_opt/compiled_opt_lib.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
-
 namespace {
+std::string GetAlphaSmallestFunctionName(const llvm::Module& module) {
+  std::string name;
+  for (const llvm::Function& func : module.functions()) {
+    if (!func.isDeclaration() &&
+        func.getLinkage() == llvm::GlobalValue::LinkageTypes::ExternalLinkage) {
+      if (name.empty() || name > func.getName().str()) {
+        name = func.getName().str();
+      }
+    }
+  }
+  return name;
+}
 
-class GpuOptProvider : public OptProvider {
+class GpuOptProvider : public CompiledOptProvider {
  public:
+  GpuOptProvider() : CompiledOptProvider() {}
+
   absl::StatusOr<std::optional<std::string>> GenerateStage(
       std::unique_ptr<HloModule> module, absl::string_view s) override {
     if (s == "llvm-before-optimizations") {
-      TF_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> optimized_module,
-                          GetOptimizedHlo(std::move(module)));
-      TF_ASSIGN_OR_RETURN(std::string llvm_ir,
-                          LlvmIrBeforeOptimizations(optimized_module.get()));
+      ABSL_ASSIGN_OR_RETURN(std::string llvm_ir,
+                            LlvmIrFor(std::move(module), false));
       return llvm_ir;
-
-    } else if (s == "llvm" || s == "llvm-after-optimizations") {
-      TF_ASSIGN_OR_RETURN(std::unique_ptr<Executable> executable,
-                          GetExecutable(std::move(module)));
-      return static_cast<gpu::GpuExecutable*>(executable.get())
-          ->ir_module_string();
-    } else if (s == "ptx") {
-      TF_ASSIGN_OR_RETURN(std::unique_ptr<Executable> executable,
-                          GetExecutable(std::move(module)));
-      return static_cast<gpu::GpuExecutable*>(executable.get())->text();
-    } else if (s == "buffer-assignment") {
-      TF_ASSIGN_OR_RETURN(std::unique_ptr<Executable> executable,
-                          GetExecutable(std::move(module)));
-      return static_cast<gpu::GpuExecutable*>(executable.get())
-          ->buffer_assignment()
-          ->ToVerboseString(9999);
-    } else {
+    }
+    if (s == "llvm" || s == "llvm-after-optimizations") {
+      ABSL_ASSIGN_OR_RETURN(std::string llvm_ir,
+                            LlvmIrFor(std::move(module), true));
+      return llvm_ir;
+    }
+    if (s == "ptx") {
+      ABSL_ASSIGN_OR_RETURN(std::string ptx, PtxFor(std::move(module)));
+      return ptx;
+    }
+    if (s == "buffer-assignment") {
+      ABSL_ASSIGN_OR_RETURN(std::unique_ptr<Executable> executable,
+                            GetExecutable(std::move(module)));
+      auto gpu_executable = static_cast<gpu::GpuExecutable*>(executable.get());
+      return gpu_executable->buffer_allocations_debug_summary();
+    }
+    {
       // Delegate to base class.
-      TF_ASSIGN_OR_RETURN(std::optional<std::string> out,
-                          OptProvider::GenerateStage(std::move(module), s));
+      ABSL_ASSIGN_OR_RETURN(
+          std::optional<std::string> out,
+          CompiledOptProvider::GenerateStage(std::move(module), s));
       return out;
     }
   }
@@ -81,47 +130,167 @@ class GpuOptProvider : public OptProvider {
   std::string GetPlatformName() override { return "gpu"; }
 
   std::set<std::string> SupportedStages() override {
-    std::set<std::string> supported = OptProvider::SupportedStages();
+    std::set<std::string> supported = CompiledOptProvider::SupportedStages();
     supported.insert({"ptx", "llvm", "buffer-assignment",
                       "llvm-before-optimizations", "llvm-after-optimizations"});
     return supported;
   }
 
+  std::string GetRegisteredPassNames() override {
+    return GetRegisteredPassNamesHelper(pass_registry_);
+  }
+
+  //////////////////////////////////////////////////////////////////////////////
+  // Registration of GPU-specific HLO Passes                                  //
+  //////////////////////////////////////////////////////////////////////////////
+  void RegisterProviderPasses(HloModule& module) override {
+    absl::StatusOr<GpuTopology> gpu_topology = GetGpuTopology(&module);
+    auto device_description = GetDeviceDescription(&module, gpu_topology);
+    auto debug_config = module.config().debug_options();
+    se::GpuComputeCapability gpu_compute_capability;
+    se::DeviceDescription device_description_or_default;
+    if (device_description.ok()) {
+      device_description_or_default = *device_description;
+      gpu_compute_capability = device_description->gpu_compute_capability();
+      if (gpu_compute_capability.IsCuda()) {
+        alias_info_ =
+            std::make_unique<gpu::NVPTXAliasInfo>(*device_description);
+      } else {
+        alias_info_ = std::make_unique<gpu::GpuAliasInfo>(*device_description);
+      }
+    } else {
+      LOG(WARNING)
+          << "No compute capability specified, defaulting to Hopper. Use "
+             "--xla_gpu_target_config_filename= or "
+             "--xla_gpu_topology_filename= to specify a target config.";
+      device_description_or_default =
+          gpu::TestGpuDeviceInfo::H100SXMDeviceInfo();
+      gpu_compute_capability = stream_executor::CudaComputeCapability::Hopper();
+    }
+    static BufferValue::SizeFunction* const kSizeFunction =
+        new BufferValue::SizeFunction([](const BufferValue& buffer) {
+          const Shape& shape = buffer.shape();
+          if (shape.has_layout() &&
+              shape.layout().memory_space() == Layout::kHostMemorySpace) {
+            return static_cast<int64_t>(0);
+          }
+          return ShapeUtil::ByteSizeOf(shape, sizeof(void*));
+        });
+    // go/keep-sorted start
+    RegisterPass<CopyInsertion>(alias_info_.get());
+    RegisterPass<GemvRewriter>();
+    RegisterPass<HloMemoryScheduler>(alias_info_.get(), kSizeFunction);
+    RegisterPass<HostOffloader>(alias_info_.get());
+    RegisterPass<gpu::AllGatherOptimizer>();
+    RegisterPass<gpu::CuDnnCustomCallConverter>();
+    RegisterPass<gpu::DotAlgorithmRewriter>(gpu_compute_capability);
+    RegisterPass<gpu::DotDimensionSorter>();
+    RegisterPass<gpu::DotNormalizer>();
+    RegisterPass<gpu::DotOperandConverter>();
+    RegisterPass<gpu::GemmBroadcastFoldingRewriter>();
+    RegisterPass<gpu::GemmFusion>(device_description_or_default);
+    RegisterPass<gpu::ReduceScatterCreator>();
+    RegisterPass<gpu::ReductionDegenerateDimRemover>();
+    RegisterPass<gpu::ReductionDimensionGrouper>();
+    RegisterPass<gpu::ReductionLayoutNormalizer>();
+    RegisterPass<gpu::SanitizeConstantNames>();
+    RegisterPass<gpu::TopKSplitter>();
+    RegisterPass<gpu::TopkSpecializer>(gpu_compute_capability);
+    RegisterPass<gpu::WindowedEinsumHandler>();
+    // go/keep-sorted end
+    if (debug_config.xla_gpu_experimental_collective_cse_distance_threshold() >
+        0) {
+      RegisterPass<ScheduleAwareCollectiveOpsCSE>(
+          debug_config.xla_gpu_experimental_collective_cse_distance_threshold(),
+          false);
+    }
+  }
+
  private:
-  absl::StatusOr<std::string> LlvmIrBeforeOptimizations(
-      HloModule* optimized_module) {
+  absl::StatusOr<GpuTopology> GetGpuTopology(const HloModule* module) {
+    const std::string& topology_file =
+        module->config().debug_options().xla_gpu_topology_filename();
+    if (topology_file.empty()) {
+      return absl::NotFoundError("No GPU topology file specified.");
+    }
+    return ParseGpuTopology(topology_file);
+  }
+
+  absl::StatusOr<se::DeviceDescription> GetDeviceDescription(
+      const HloModule* module,
+      const absl::StatusOr<GpuTopology>& gpu_topology) {
+    const std::string& target_config_file =
+        module->config().debug_options().xla_gpu_target_config_filename();
+    if (!target_config_file.empty()) {
+      ABSL_ASSIGN_OR_RETURN(gpu::GpuTargetConfig target_config,
+                            gpu::GetTargetConfigFromFile(target_config_file));
+      return target_config.device_description;
+    }
+    if (gpu_topology.ok() && gpu_topology->has_gpu_target_config()) {
+      return gpu_topology->gpu_target_config().device_description;
+    }
+    return absl::NotFoundError(
+        "Neither --xla_gpu_target_config_filename nor "
+        "--xla_gpu_topology_filename specified a device description.");
+  }
+
+  absl::StatusOr<std::string> LlvmIrFor(std::unique_ptr<HloModule> input_module,
+                                        bool optimized) {
     Compiler::CompileOptions opts;
-    TF_ASSIGN_OR_RETURN(se::StreamExecutor * executor, GetExecutor());
-    TF_ASSIGN_OR_RETURN(
-        Compiler::TargetConfig target_config,
-        gpu::GpuCompiler::GetTargetConfig(
-            opts, optimized_module->config().debug_options(), executor));
+    ABSL_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> optimized_module,
+                          GetOptimizedHlo(std::move(input_module)));
+    ABSL_ASSIGN_OR_RETURN(se::StreamExecutor * executor, GetExecutor());
+    ABSL_ASSIGN_OR_RETURN(std::unique_ptr<Compiler> compiler, GetCompiler());
 
-    TF_ASSIGN_OR_RETURN(se::Platform * platform,
-                        PlatformUtil::GetPlatform(GetPlatformName()));
-    TF_ASSIGN_OR_RETURN(Compiler * compiler,
-                        Compiler::GetForPlatform(platform));
+    LLVMCompiler* llvm_compiler =
+        absl::down_cast<LLVMCompiler*>(compiler.get());
 
-    auto* gpu_compiler = static_cast<gpu::GpuCompiler*>(compiler);
-    if (!optimized_module->has_schedule()) {
-      TF_ASSIGN_OR_RETURN(gpu::ScheduleMetadata schedule_metadata,
-                          gpu::ScheduleGpuModule(
-                              optimized_module, gpu_compiler->GetPointerSize(),
-                              target_config.device_description));
-      TF_RETURN_IF_ERROR(gpu_compiler->RunPostSchedulingPipelines(
-          optimized_module, schedule_metadata.scheduler_mem_limit,
-          target_config.device_description));
+    llvm::LLVMContext context;
+    std::vector<std::unique_ptr<llvm::Module>> modules;
+    if (optimized) {
+      llvm_compiler->SetPostOptimizationHook([&](const llvm::Module& module) {
+        modules.push_back(gpu::CopyToContext(module, context));
+      });
+    } else {
+      llvm_compiler->SetPreOptimizationHook([&](const llvm::Module& module) {
+        modules.push_back(gpu::CopyToContext(module, context));
+      });
     }
 
-    llvm::LLVMContext llvm_context;
-    TF_ASSIGN_OR_RETURN(
-        xla::gpu::CompileModuleResults results,
-        xla::gpu::CompileModuleToLlvmIr(
-            optimized_module, &llvm_context, gpu_compiler->GetTargetTriple(),
-            gpu_compiler->GetDataLayout(), platform->Name(), platform->id(),
-            target_config.device_description, gpu_compiler->GetCanShareBuffer(),
-            gpu_compiler->BufferSizeBytesFunction()));
-    return llvm_ir::DumpToString(results.llvm_module.get());
+    ABSL_ASSIGN_OR_RETURN(
+        std::unique_ptr<Executable> executable,
+        compiler->RunBackend(std::move(optimized_module), executor, opts));
+
+    std::sort(modules.begin(), modules.end(),
+              [](const std::unique_ptr<llvm::Module>& m1,
+                 const std::unique_ptr<llvm::Module>& m2) {
+                return GetAlphaSmallestFunctionName(*m1) >
+                       GetAlphaSmallestFunctionName(*m2);
+              });
+
+    gpu::LinkLlvmModulesInPlace(modules);
+
+    return llvm_ir::DumpToString(modules[0].get());
+  }
+
+  absl::StatusOr<std::string> PtxFor(std::unique_ptr<HloModule> input_module) {
+    Compiler::CompileOptions opts;
+    ABSL_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> optimized_module,
+                          GetOptimizedHlo(std::move(input_module)));
+    ABSL_ASSIGN_OR_RETURN(se::StreamExecutor * executor, GetExecutor());
+    ABSL_ASSIGN_OR_RETURN(std::unique_ptr<Compiler> compiler, GetCompiler());
+
+    gpu::GpuCompiler* gpu_compiler =
+        absl::down_cast<gpu::GpuCompiler*>(compiler.get());
+
+    std::string ptx_str = "// GPU Executable\n";
+    gpu_compiler->SetAsmHook([&](absl::string_view ptx) { ptx_str += ptx; });
+
+    ABSL_ASSIGN_OR_RETURN(
+        std::unique_ptr<Executable> executable,
+        compiler->RunBackend(std::move(optimized_module), executor, opts));
+
+    return ptx_str;
   }
 };
 

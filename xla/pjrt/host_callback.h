@@ -24,15 +24,18 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "absl/base/attributes.h"
 #include "absl/base/thread_annotations.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
+#include "tsl/platform/logging.h"
+#include "xla/ffi/api/ffi.h"
+#include "xla/future.h"
 #include "xla/pjrt/pjrt_client.h"
 #include "xla/pjrt/pjrt_executable.h"
-#include "xla/pjrt/pjrt_future.h"
 #include "xla/shape.h"
-#include "tsl/platform/logging.h"
 
 // The following provides an API for implementing host callbacks on top of
 // PjRT's send/recv interface (see xla::SendCallback and xla::RecvCallback).
@@ -44,9 +47,17 @@ namespace xla {
 
 bool ThisThreadIsInsideHostCallback();
 
-void EnterHostCallback();
+ABSL_DEPRECATED("Use HostCallbackScope") void EnterHostCallback();
 
-void LeaveHostCallback();
+ABSL_DEPRECATED("Use HostCallbackScope") void LeaveHostCallback();
+
+class HostCallbackScope {
+ public:
+  HostCallbackScope();
+  ~HostCallbackScope();
+  HostCallbackScope(const HostCallbackScope& o) = delete;
+  HostCallbackScope& operator=(const HostCallbackScope& o) = delete;
+};
 
 // A thread-safe queue for passing PjRtChunk objects for e.g. from Send ops to
 // Recv ops.
@@ -54,26 +65,26 @@ class ThreadSafePjRtChunkQueue {
  public:
   // Push a PjRtChunk into the queue.
   void Push(PjRtChunk chunk) {
-    absl::MutexLock lock(&mu_);
+    absl::MutexLock lock(mu_);
     if (promises_.empty()) {
       queue_.push_back(std::move(chunk));
       return;
     }
-    auto pop_promise = promises_.front();
+    auto& pop_promise = promises_.front();
     pop_promise.Set(std::move(chunk));
     promises_.pop_front();
   }
 
   // Pop a PjRtChunk future from the queue.
-  PjRtFuture<PjRtChunk> Pop() {
-    absl::MutexLock lock(&mu_);
+  Future<PjRtChunk> Pop() {
+    absl::MutexLock lock(mu_);
     if (queue_.empty()) {
-      auto promise = PjRtFuture<PjRtChunk>::CreatePromise();
-      promises_.push_back(promise);
-      return PjRtFuture<PjRtChunk>(std::move(promise));
+      auto [promise, future] = MakePromise<PjRtChunk>();
+      promises_.push_back(std::move(promise));
+      return std::move(future);
     }
 
-    auto chunk = PjRtFuture<PjRtChunk>(std::move(queue_.front()));
+    auto chunk = Future<PjRtChunk>(std::move(queue_.front()));
     queue_.pop_front();
     return chunk;
   }
@@ -82,7 +93,7 @@ class ThreadSafePjRtChunkQueue {
   absl::Mutex mu_;
   std::deque<PjRtChunk> queue_ ABSL_GUARDED_BY(mu_);
   // Contains unfulfilled pop promises.
-  std::deque<PjRtFuture<PjRtChunk>::Promise> promises_ ABSL_GUARDED_BY(mu_);
+  std::deque<Promise<PjRtChunk>> promises_ ABSL_GUARDED_BY(mu_);
 };
 
 struct HostCallbackArgInfo {
@@ -153,6 +164,7 @@ struct HostCallbackStates {
   std::vector<std::vector<std::unique_ptr<HostCallbackContext>>> contexts;
   std::vector<std::vector<SendCallback>> send_callbacks;
   std::vector<std::vector<RecvCallback>> recv_callbacks;
+  std::vector<HloOutputCallback> hlo_output_callbacks;
 };
 
 // Creates the execution context for the `host_callback` for one
@@ -169,6 +181,14 @@ CreateHostCallbackStateAndAppendSendRecvCallbacks(
     std::vector<SendCallback>& send_callbacks,
     std::vector<RecvCallback>& recv_callbacks,
     bool use_major_to_minor_data_layout_for_callbacks);
+
+struct FfiLoadedHostCallbacks {
+  static ffi::TypeId id;
+  static ffi::TypeInfo info;
+
+  void** callbacks;
+  uint32_t num_callbacks;
+};
 
 }  // namespace xla
 

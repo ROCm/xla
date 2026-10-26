@@ -13,7 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "mlir/Dialect/MemRef/IR/MemRef.h"  // from @llvm-project
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 
 // clang-format erroneously puts the MemRef header above.
 #include <algorithm>  // NOLINT
@@ -24,9 +24,9 @@ limitations under the License.
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
-#include "mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Support/LLVM.h"
 #include "xla/mlir/tools/mlir_interpreter/dialects/util.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/interpreter.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/interpreter_value.h"
@@ -129,7 +129,7 @@ InterpreterValue Subview(InterpreterState& state, memref::SubViewOp subview,
     return {};
   }
 
-  if (subview.getResult().getType().getRank() == out_view.Rank()) {
+  if (subview.getResult().getType().getRank() == out_view.num_dimensions()) {
     return out;
   }
 
@@ -137,7 +137,7 @@ InterpreterValue Subview(InterpreterState& state, memref::SubViewOp subview,
   // TODO(jreiffers): Check why subview.getDroppedDims() yields the wrong shape
   // here for 1x2x2x3 (-> 1x2x1x3) -> 1x2x3 (claiming 0 is dropped).
   int64_t dim = 0;
-  while (dim < out_view.Rank() && dim < shape.size()) {
+  while (dim < out_view.num_dimensions() && dim < shape.size()) {
     if (shape[dim] != 1 && out_view.sizes[dim] == 1) {
       out_view.sizes.erase(out_view.sizes.begin() + dim);
       out_view.strides.erase(out_view.strides.begin() + dim);
@@ -147,7 +147,7 @@ InterpreterValue Subview(InterpreterState& state, memref::SubViewOp subview,
       ++dim;
     }
   }
-  while (dim < out_view.Rank()) {
+  while (dim < out_view.num_dimensions()) {
     assert(out_view.sizes.back() == 1 && "expected remaining dims to be 1");
     out_view.sizes.pop_back();
     out_view.strides.pop_back();
@@ -198,7 +198,7 @@ InterpreterValue ExpandShape(InterpreterState& state, memref::ExpandShapeOp op,
   out_view.strides.clear();
   out_view.sizes = llvm::to_vector(out_ty.getShape());
   int64_t dummy;
-  if (!getStridesAndOffset(out_ty, out_view.strides, dummy).succeeded()) {
+  if (!out_ty.getStridesAndOffset(out_view.strides, dummy).succeeded()) {
     if (input_view.strides != BufferView::GetDefaultStrides(input_view.sizes)) {
       state.AddFailure("unsupported strides");
       return {};

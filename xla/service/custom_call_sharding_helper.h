@@ -17,6 +17,7 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_sharding.h"
 
@@ -72,10 +73,10 @@ class CustomCallPartitioner : public CustomCallShardingHelper {
 
 // Fetch partitioning overrides on a per-custom_call_target basis.
 const CustomCallPartitioner* GetCustomCallPartitioner(
-    const std::string& custom_call_target);
+    absl::string_view custom_call_target);
 // Register partitioning overrides on a per-custom_call_target basis.
 void RegisterCustomCallPartitioner(
-    const std::string& custom_call_target,
+    absl::string_view custom_call_target,
     std::unique_ptr<CustomCallPartitioner> partitioner);
 
 }  // namespace xla

@@ -16,91 +16,62 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_GPU_GPU_TEST_KERNELS_H_
 #define XLA_STREAM_EXECUTOR_GPU_GPU_TEST_KERNELS_H_
 
-#include <string_view>
+#include "absl/status/statusor.h"
+#include "xla/stream_executor/gpu/gpu_test_kernel_traits.h"
+#include "xla/stream_executor/kernel_spec.h"
+#include "xla/stream_executor/platform.h"
+#include "xla/stream_executor/stream_executor.h"
 
-namespace stream_executor::gpu::internal {
+namespace stream_executor::gpu {
 
 // This is a collection of gpu kernels for writing simple StreamExecutor tests.
 //
 // Some of the kernels available as pre-compiled PTX blobs (can be loaded with
-// CUDA driver API) / HSACO modules (can be loaded with ROCM driver api), and
+// CUDA driver API), and
 // some of the kernels are written directly in CUDA C++ and can be loaded from a
 // symbol pointer (to test StreamExecutor CUDA runtime integration).
 
-#if !defined(TENSORFLOW_USE_ROCM)
-// PTX kernel compiled from:
+absl::StatusOr<internal::AddI32Kernel::KernelType> LoadAddI32TestKernel(
+    StreamExecutor* executor);
+
+absl::StatusOr<internal::MulI32Kernel::KernelType> LoadMulI32TestKernel(
+    StreamExecutor* executor);
+
+absl::StatusOr<internal::IncAndCmpKernel::KernelType> LoadCmpAndIncTestKernel(
+    StreamExecutor* executor);
+
+absl::StatusOr<internal::AddI32Ptrs3Kernel::KernelType>
+LoadAddI32Ptrs3TestKernel(StreamExecutor* executor);
+
+absl::StatusOr<internal::CopyKernel::KernelType> LoadCopyTestKernel(
+    StreamExecutor* executor);
+
+absl::StatusOr<internal::DynShmemKernel::KernelType> LoadDynShmemTestKernel(
+    StreamExecutor* executor);
+
+absl::StatusOr<KernelLoaderSpec> GetAddI32TestKernelSpec(
+    Platform::Id platform_id);
+
+// This is using a kernel with the function signature `void IncI32(int32_t a,
+// int32_t* b, int32_t* c)` under the hood and implements `c[i] = a + b[i]`.
+// It uses a custom argument packing that supplies a constant scalar value of 5
+// to the kernel for `a`, therefore it appears as if the the kernel had the
+// function signature `void IncI32(DeviceAddress<int32_t> in,
+// DeviceAddress<int32_t> out)`.
 //
-//  __global__ void add(int* a, int* b, int* c) {
-//    int index = threadIdx.x + blockIdx.x * blockDim.x;
-//    c[index] = a[index] + b[index];
-//  }
-//
-// Easiest way to get PTX from C++ is to use https://godbolt.org.
-inline constexpr std::string_view kAddI32Kernel = R"(
-.version 4.0
-.target sm_50
-.address_size 64
+// The main purpose is the testing of the custom argument packing feature.
+absl::StatusOr<KernelLoaderSpec>
+GetIncrementBy5I32TestKernelSpecWithCustomArgsPacking(Platform::Id platform_id);
 
-.visible .entry add(
-        .param .u64 add_param_0,
-        .param .u64 add_param_1,
-        .param .u64 add_param_2
-)
-{
-        .reg .b32       %r<8>;
-        .reg .b64       %rd<11>;
-        .loc    1 1 0
+// Returns a PTX kernel loader spec for the `AddI32` PTX kernel above.
+KernelLoaderSpec GetAddI32PtxKernelSpec();
 
-        ld.param.u64    %rd1, [add_param_0];
-        ld.param.u64    %rd2, [add_param_1];
-        ld.param.u64    %rd3, [add_param_2];
-        .loc    1 3 3
-        cvta.to.global.u64      %rd4, %rd3;
-        cvta.to.global.u64      %rd5, %rd2;
-        cvta.to.global.u64      %rd6, %rd1;
-        mov.u32         %r1, %tid.x;
-        mov.u32         %r2, %ctaid.x;
-        mov.u32         %r3, %ntid.x;
-        mad.lo.s32      %r4, %r2, %r3, %r1;
-        .loc    1 4 3
-        mul.wide.s32    %rd7, %r4, 4;
-        add.s64         %rd8, %rd6, %rd7;
-        ld.global.u32   %r5, [%rd8];
-        add.s64         %rd9, %rd5, %rd7;
-        ld.global.u32   %r6, [%rd9];
-        add.s32         %r7, %r6, %r5;
-        add.s64         %rd10, %rd4, %rd7;
-        st.global.u32   [%rd10], %r7;
-        .loc    1 5 1
-        ret;
+// Returns TMA test kernel loaded from PTX.
+KernelLoaderSpec GetTmaPtxKernelSpec();
 
-})";
-#else
-#include "xla/stream_executor/rocm/add_i32_kernel.h"
-#endif  // !defined(TENSORFLOW_USE_ROCM)
+// Returns a minimal cluster kernel loaded from PTX.
+KernelLoaderSpec GetMinimalClusterKernelSpec();
 
-template <typename T>
-struct Ptrs3 {
-  T* a;
-  T* b;
-  T* c;
-};
-
-// Returns a pointer to device kernel compiled from the CUDA C++ code above.
-void* GetAddI32Kernel();
-
-// Returns a pointer to device kernel doing multiplication instead of addition.
-void* GetMulI32Kernel();
-
-// Returns a pointer to device kernel doing increment and compare, intended for
-// testing on-device while loops.
-void* GetIncAndCmpKernel();
-
-// Returns a pointer to device kernel compiled from the CUDA C++ but with all
-// three pointers passed to argument as an instance of `Ptr3` template to test
-// StreamExecutor arguments packing for custom C++ types.
-void* GetAddI32Ptrs3Kernel();
-
-}  // namespace stream_executor::gpu::internal
+}  // namespace stream_executor::gpu
 
 #endif  // XLA_STREAM_EXECUTOR_GPU_GPU_TEST_KERNELS_H_

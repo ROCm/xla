@@ -13,7 +13,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <memory>
 #include <utility>
 
 #include "mhlo/IR/hlo_ops.h"
@@ -43,18 +42,13 @@ struct TestUnfuseBatchNormPass
     RewritePatternSet patterns(&getContext());
     populateUnfuseBatchNormInferencePattern(&getContext(), &patterns);
     populateUnfuseBatchNormTrainingPattern(&getContext(), &patterns);
-    if (failed(applyPatternsAndFoldGreedily(getOperation(),
-                                            std::move(patterns)))) {
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       return signalPassFailure();
     }
   }
 };
 
 }  // namespace
-
-std::unique_ptr<::mlir::Pass> createTestUnfuseBatchNormPass() {
-  return std::make_unique<TestUnfuseBatchNormPass>();
-}
 
 }  // namespace mhlo
 }  // namespace mlir

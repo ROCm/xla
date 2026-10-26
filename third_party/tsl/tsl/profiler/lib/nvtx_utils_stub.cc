@@ -12,10 +12,17 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
+#include <cstddef>
+#include <cstdint>
+#include <string>
+
 #include "tsl/profiler/lib/nvtx_utils.h"
 
 namespace tsl::profiler {
 ProfilerDomainHandle DefaultProfilerDomain() { return {}; }
+void NameCurrentThread(const std::string&) {}
+void NameDevice(int, const std::string&) {}
+void NameStream(StreamHandle, const std::string&) {}
 void RangePop(ProfilerDomainHandle) {}
 void RangePush(ProfilerDomainHandle, const char*) {}
 namespace detail {
@@ -26,4 +33,6 @@ uint64_t RegisterSchema(ProfilerDomainHandle, const void*) { return 0; }
 StringHandle RegisterString(ProfilerDomainHandle, const std::string&) {
   return {};
 }
+void MarkMemoryInitialized(void const* address, size_t size,
+                           StreamHandle stream) {}
 }  // namespace tsl::profiler

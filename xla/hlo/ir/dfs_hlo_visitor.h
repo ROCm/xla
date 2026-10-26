@@ -16,18 +16,14 @@ limitations under the License.
 #ifndef XLA_HLO_IR_DFS_HLO_VISITOR_H_
 #define XLA_HLO_IR_DFS_HLO_VISITOR_H_
 
+#include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <type_traits>
-#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
-#include "absl/strings/string_view.h"
-#include "absl/types/span.h"
-#include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/literal.h"
-#include "xla/types.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/status.h"
 
 namespace xla {
 
@@ -107,7 +103,12 @@ class DfsHloVisitorBase {
   virtual absl::Status HandleMultiply(HloInstructionPtr hlo) {
     return HandleElementwiseBinary(hlo);
   }
+  virtual absl::Status HandleMulhi(HloInstructionPtr hlo) {
+    return HandleElementwiseBinary(hlo);
+  }
   virtual absl::Status HandleDot(HloInstructionPtr hlo) = 0;
+  virtual absl::Status HandleRaggedDot(HloInstructionPtr hlo) = 0;
+  virtual absl::Status HandleScaledDot(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandlePower(HloInstructionPtr hlo) {
     return HandleElementwiseBinary(hlo);
   }
@@ -132,9 +133,11 @@ class DfsHloVisitorBase {
   virtual absl::Status HandleCollectivePermute(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleCollectivePermuteDone(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleCollectivePermuteStart(HloInstructionPtr hlo) = 0;
+  virtual absl::Status HandleCollectiveReduce(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleConvolution(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleOptimizationBarrier(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandlePartitionId(HloInstructionPtr hlo) = 0;
+  virtual absl::Status HandleRaggedAllToAll(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleReduceScatter(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleReplicaId(HloInstructionPtr hlo) = 0;
   /* go/keep-sorted end */
@@ -167,8 +170,23 @@ class DfsHloVisitorBase {
   virtual absl::Status HandleAbs(HloInstructionPtr hlo) {
     return HandleElementwiseUnary(hlo);
   }
+  virtual absl::Status HandleAcos(HloInstructionPtr hlo) {
+    return HandleElementwiseUnary(hlo);
+  }
+  virtual absl::Status HandleAcosh(HloInstructionPtr hlo) {
+    return HandleElementwiseUnary(hlo);
+  }
+  virtual absl::Status HandleAsin(HloInstructionPtr hlo) {
+    return HandleElementwiseUnary(hlo);
+  }
+  virtual absl::Status HandleAsinh(HloInstructionPtr hlo) {
+    return HandleElementwiseUnary(hlo);
+  }
   virtual absl::Status HandleAtan2(HloInstructionPtr hlo) {
     return HandleElementwiseBinary(hlo);
+  }
+  virtual absl::Status HandleAtanh(HloInstructionPtr hlo) {
+    return HandleElementwiseUnary(hlo);
   }
   virtual absl::Status HandleRound(HloInstructionPtr hlo) {
     return HandleElementwiseUnary(hlo);
@@ -191,6 +209,9 @@ class DfsHloVisitorBase {
   virtual absl::Status HandleExp(HloInstructionPtr hlo) {
     return HandleElementwiseUnary(hlo);
   }
+  virtual absl::Status HandleExp2(HloInstructionPtr hlo) {
+    return HandleElementwiseUnary(hlo);
+  }
   virtual absl::Status HandleExpm1(HloInstructionPtr hlo) {
     return HandleElementwiseUnary(hlo);
   }
@@ -209,10 +230,19 @@ class DfsHloVisitorBase {
   virtual absl::Status HandleLog1p(HloInstructionPtr hlo) {
     return HandleElementwiseUnary(hlo);
   }
+  virtual absl::Status HandleLog2(HloInstructionPtr hlo) {
+    return HandleElementwiseUnary(hlo);
+  }
   virtual absl::Status HandleCos(HloInstructionPtr hlo) {
     return HandleElementwiseUnary(hlo);
   }
+  virtual absl::Status HandleCosh(HloInstructionPtr hlo) {
+    return HandleElementwiseUnary(hlo);
+  }
   virtual absl::Status HandleSin(HloInstructionPtr hlo) {
+    return HandleElementwiseUnary(hlo);
+  }
+  virtual absl::Status HandleSinh(HloInstructionPtr hlo) {
     return HandleElementwiseUnary(hlo);
   }
   virtual absl::Status HandleTan(HloInstructionPtr hlo) {
@@ -291,8 +321,10 @@ class DfsHloVisitorBase {
   virtual absl::Status HandleRng(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleRngBitGenerator(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleRngGetAndUpdateState(HloInstructionPtr hlo) = 0;
+  virtual absl::Status HandleScan(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleScatter(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleSelectAndScatter(HloInstructionPtr hlo) = 0;
+  virtual absl::Status HandleShuffle(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleSlice(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleSort(HloInstructionPtr hlo) = 0;
   virtual absl::Status HandleTranspose(HloInstructionPtr hlo) = 0;
@@ -337,12 +369,12 @@ class DfsHloVisitorBase {
     kVisited = 2,
   };
 
-  VisitState GetVisitState(int id) {
+  VisitState GetVisitState(int64_t id) {
     auto iter = visit_state_.find(id);
-    if (iter == visit_state_.end()) {
+    if (iter == visit_state_.end() || iter->second.generation != generation_) {
       return VisitState::kNotVisited;
     }
-    return iter->second;
+    return iter->second.state;
   }
   VisitState GetVisitState(const HloInstruction& instruction);
 
@@ -353,21 +385,38 @@ class DfsHloVisitorBase {
   size_t VisitStateCapacity() const { return visit_state_.capacity(); }
 
   // Useful when we want to visit the same computation more than once with the
-  // same visitor.
+  // same visitor. Normally O(1): the generation moves on and every entry
+  // written before the reset becomes stale. The map is cleared for real once
+  // stale entries outnumber the ones written since the previous reset, which
+  // bounds it to twice the last working set, and when the generation counter
+  // is exhausted.
   void ResetVisitStates() {
-    // Clear the map, but don't resize the capacity across uses -- Calculating
-    // and reserving space could be expensive, and we always use the same
-    // module->instruction_count() as the capacity.
-    visit_state_.erase(visit_state_.begin(), visit_state_.end());
+    // The max() test is an overflow guard, not a sentinel: no generation value
+    // is special. Clearing the map lets the counter restart at 1 safely.
+    if (visit_state_.size() > 2 * current_entries_ ||
+        generation_ == std::numeric_limits<uint32_t>::max()) {
+      visit_state_.clear();
+      generation_ = 0;
+    }
+    ++generation_;
+    current_entries_ = 0;
   }
 
   // Useful when we want to free up the memory used by the visit state without
   // destroying the actual visitor subclass.
   void DestroyVisitState() {
-    visit_state_ = absl::flat_hash_map<int, VisitState>{};
+    visit_state_ = absl::flat_hash_map<int64_t, StampedVisitState>{};
+    current_entries_ = 0;
   }
 
-  void SetVisitState(int id, VisitState state) { visit_state_[id] = state; }
+  void SetVisitState(int64_t id, VisitState state) {
+    StampedVisitState& entry = visit_state_[id];
+    if (entry.generation != generation_) {
+      entry.generation = generation_;
+      ++current_entries_;
+    }
+    entry.state = state;
+  }
 
   // Sets the visitation state of the given instruction as kVisiting.
   //
@@ -415,8 +464,25 @@ class DfsHloVisitorBase {
   // own postprocessing.
   virtual absl::Status Postprocess(HloInstructionPtr hlo);
 
+  // This method should be overridden by subclasses that wish to skip some ops
+  // while traversing the HLO graph. If this method returns false, the calls to
+  // Preprocess(op), Handle/OpType/(op) and Postprocess(op) are skipped.
+  virtual bool ShouldProcessNode(HloInstructionPtr hlo) { return true; }
+
  private:
-  absl::flat_hash_map<int, VisitState> visit_state_;
+  // A visit state and the generation it was written in. An entry whose
+  // generation is not generation_ is stale and reads as kNotVisited. The 32
+  // bit generation keeps the map slot at 16 bytes.
+  struct StampedVisitState {
+    uint32_t generation = 0;
+    VisitState state = VisitState::kNotVisited;
+  };
+
+  absl::flat_hash_map<int64_t, StampedVisitState> visit_state_;
+  // Never 0, so a value initialized entry is stale.
+  uint32_t generation_ = 1;
+  // Entries stamped with generation_, i.e. written since the last reset.
+  size_t current_entries_ = 0;
 
   DfsHloVisitorBase(const DfsHloVisitorBase&) = delete;
   DfsHloVisitorBase& operator=(const DfsHloVisitorBase&) = delete;

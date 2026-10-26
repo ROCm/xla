@@ -16,12 +16,13 @@ limitations under the License.
 #ifndef XLA_SERVICE_HUMAN_READABLE_PROFILE_BUILDER_H_
 #define XLA_SERVICE_HUMAN_READABLE_PROFILE_BUILDER_H_
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
 #include "absl/strings/string_view.h"
-#include "xla/types.h"
 #include "tsl/platform/logging.h"
+#include "xla/types.h"
 
 namespace xla {
 

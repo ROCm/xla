@@ -27,9 +27,11 @@ limitations under the License.
 #include "absl/synchronization/mutex.h"
 #include "xla/literal.h"
 #include "xla/service/generic_transfer_manager.h"
+#include "xla/service/gpu/infeed_manager.h"
+#include "xla/service/gpu/outfeed_manager.h"
 #include "xla/service/shaped_buffer.h"
 #include "xla/shape.h"
-#include "xla/stream_executor/device_memory.h"
+#include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/event.h"
 #include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/platform.h"
@@ -52,6 +54,12 @@ class GpuTransferManager : public GenericTransferManager {
   absl::Status ReadDynamicShapes(se::Stream* stream,
                                  const ShapedBuffer* device_buffer,
                                  Shape* device_shape) override;
+
+  // Creates or returns a singleton InfeedManager for the given executor.
+  static InfeedManager* GetOrCreateInfeedManager(se::StreamExecutor* executor);
+  // Creates or returns a singleton OutfeedManager for the given executor.
+  static OutfeedManager* GetOrCreateOutfeedManager(
+      se::StreamExecutor* executor);
 
  private:
   // We use a fixed-size staging buffers and split transfer into multiple
@@ -81,13 +89,13 @@ class GpuTransferManager : public GenericTransferManager {
       se::StreamExecutor* executor);
 
   absl::Status TransferBufferFromDevice(se::Stream* stream,
-                                        const se::DeviceMemoryBase& source,
+                                        const se::DeviceAddressBase& source,
                                         int64_t size,
                                         void* destination) override;
 
   absl::Status TransferBufferToDevice(
       se::Stream* stream, int64_t size, const void* source,
-      se::DeviceMemoryBase* destination) override;
+      se::DeviceAddressBase* destination) override;
 
   // TODO(ezhulenev): Unify this with staged buffers for transfering literals.
 
@@ -130,10 +138,6 @@ class GpuTransferManager : public GenericTransferManager {
   static constexpr int64_t kPinnedBufferBytes = 128;
 
   absl::Mutex mu_;
-
-  // The StreamExecutor on which our pinned memory was allocated.  We use this
-  // when freeing the pinned memory.  Lazily initialized.
-  se::StreamExecutor* pinned_chunk_se_ ABSL_GUARDED_BY(mu_) = nullptr;
 
   // Chunk of pinned memory of size kPinnedChunkBytes.  The pointers in
   // pinned_buffers_ point into this chunk.  Lazily initialized.

@@ -20,10 +20,13 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "xla/executable_run_options.h"
 #include "xla/service/stream_pool.h"
-#include "xla/statusor.h"
-#include "xla/stream_executor/stream_executor.h"
+#include "xla/stream_executor/platform.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -53,11 +56,12 @@ class ServiceExecutableRunOptions {
 
   // Delegate to `ExecutableRunOptions` member.
   se::Stream* stream() const { return run_options_.stream(); }
-  se::DeviceMemoryAllocator* allocator() const {
+  se::DeviceAddressAllocator* allocator() const {
     return run_options_.allocator();
   }
   int device_ordinal() const { return run_options_.device_ordinal(); }
 
+  int local_device_count() const { return run_options_.local_device_count(); };
   // Borrows a stream and returns a smart pointer which returns the stream on
   // destruction.
   absl::StatusOr<StreamPool::Ptr> BorrowStream(
@@ -68,7 +72,7 @@ class ServiceExecutableRunOptions {
                           "No stream borrower");
     }
 
-    TF_ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         std::vector<StreamPool::Ptr> streams,
         stream_borrower_(device_ordinal, /*num_streams=*/1, priority));
     StreamPool::Ptr stream = std::move(streams.back());
@@ -83,6 +87,8 @@ class ServiceExecutableRunOptions {
                : absl::Status(absl::StatusCode::kUnimplemented,
                               "No stream borrower");
   }
+
+  bool HasStreamBorrower() const { return stream_borrower_ != nullptr; }
 
  private:
   ExecutableRunOptions run_options_;

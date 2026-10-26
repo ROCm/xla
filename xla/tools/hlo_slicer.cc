@@ -34,7 +34,6 @@ limitations under the License.
 #include "xla/shape.h"
 #include "xla/shape_util.h"
 #include "xla/tools/hlo_extractor.h"
-#include "tsl/platform/status.h"
 
 namespace xla {
 namespace {
@@ -55,7 +54,7 @@ void ReduceTupleParameterHelper(HloModule* hlo_module,
 
   VLOG(1) << "Parameter instruction to be reduced: "
           << tuple_parameter->ToString()
-          << " shape size: " << tuple_parameter->shape().tuple_shapes_size()
+          << " shape size: " << tuple_parameter->shape().tuple_shapes().size()
           << " users size: " << tuple_parameter->users().size();
 
   // Collect the shapes of the elements that have users.
@@ -144,7 +143,7 @@ void RemoveSharding(HloModule* hlo_module) {
     // Verify if the module is still valid.
     HloVerifier verifier(/*layout_sensitive=*/false,
                          /*allow_mixed_precision=*/true);
-    TF_CHECK_OK(verifier.Run(hlo_module).status());
+    CHECK_OK(verifier.Run(hlo_module).status());
   }
 }
 
@@ -532,7 +531,7 @@ std::vector<std::unique_ptr<HloModule>> SliceModuleAndExtract(
     // Verify if the extracted module (after processing) is valid or not.
     HloVerifier verifier(/*layout_sensitive=*/false,
                          /*allow_mixed_precision=*/true);
-    TF_CHECK_OK(verifier.Run(extracted_module.get()).status());
+    CHECK_OK(verifier.Run(extracted_module.get()).status());
 
     sliced_modules.emplace_back(std::move(extracted_module));
   }

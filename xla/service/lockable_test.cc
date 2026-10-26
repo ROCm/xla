@@ -15,6 +15,8 @@ limitations under the License.
 
 #include "xla/service/lockable.h"
 
+#include <gtest/gtest.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <string>

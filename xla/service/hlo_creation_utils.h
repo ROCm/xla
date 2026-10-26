@@ -21,10 +21,14 @@ limitations under the License.
 #include <optional>
 #include <vector>
 
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/types/span.h"
+#include "xla/hlo/builder/xla_computation.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/literal_util.h"
+#include "xla/primitive_util.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -82,6 +86,8 @@ absl::StatusOr<HloInstruction*> MakeConvolveHlo(
     const ConvolutionDimensionNumbers& dimension_numbers,
     const PrecisionConfig& precision_config,
     std::optional<PrimitiveType> preferred_element_type,
+    const SparsityConfig& sparsity_config,
+    const BlockScalingConfig& block_scaling_config = BlockScalingConfig(),
     const OpMetadata* metadata = nullptr,
     const FrontendAttributes* frontend_attributes = nullptr);
 
@@ -170,16 +176,42 @@ HloInstruction* MakeIotaHlo(HloComputation* computation, const Shape& shape,
 // Creates a Dot HLO instruction and adds it to the computation containing `lhs`
 // and `rhs` (both must be in the same computation). If the result shape has
 // integral element type, an optional preferred_element_type can be specified to
-// override the element type. If 'sparsity' is set, then 'sparse_meta' must also
-// be present (and have the same size).
+// override the element type.
 absl::StatusOr<HloInstruction*> MakeDotHlo(
     HloInstruction* lhs, HloInstruction* rhs,
     const DotDimensionNumbers& dim_numbers,
     const PrecisionConfig& precision_config,
     std::optional<PrimitiveType> preferred_element_type,
-    std::vector<SparsityDescriptor> sparsity = {},
-    absl::Span<HloInstruction* const> sparse_meta = {},
     const OpMetadata* metadata = nullptr);
+
+absl::StatusOr<HloInstruction*> MakeDotHlo(
+    absl::Span<HloInstruction* const> operands,
+    const DotDimensionNumbers& dim_numbers,
+    const PrecisionConfig& precision_config,
+    std::optional<PrimitiveType> preferred_element_type,
+    const SparsityConfig& sparsity_config = {},
+    const BlockScalingConfig& block_scaling_config = {},
+    const OpMetadata* metadata = nullptr);
+
+// Creates a RaggedDot HLO instruction and adds it to the computation containing
+// `lhs`, `rhs`, and `group_sizes` (all must be in the same computation). An
+// optional preferred_element_type can be specified to override the element
+// type.
+absl::StatusOr<HloInstruction*> MakeRaggedDotHlo(
+    HloInstruction* lhs, HloInstruction* rhs, HloInstruction* group_sizes,
+    const RaggedDotDimensionNumbers& dim_numbers,
+    const PrecisionConfig& precision_config,
+    std::optional<PrimitiveType> preferred_element_type);
+
+// Creates a ScaledDot HLO instruction and adds it to the computation containing
+// `lhs`, `lhs_scale`, `rhs`, and `rhs_scale` (all must be in the same
+// computation). An optional preferred_element_type can be specified to override
+// the element type.
+absl::StatusOr<HloInstruction*> MakeScaledDotHlo(
+    HloInstruction* lhs, HloInstruction* rhs, HloInstruction* lhs_scale,
+    HloInstruction* rhs_scale, const DotDimensionNumbers& dim_numbers,
+    const PrecisionConfig& precision_config,
+    std::optional<PrimitiveType> preferred_element_type);
 
 // Creates a Map HLO instruction and adds it to the computation containing the
 // operands. All operands must be in the same computation.
@@ -197,6 +229,10 @@ HloInstruction* MakeReducePrecisionHlo(HloInstruction* operand,
 absl::StatusOr<HloInstruction*> MakeReduceWindowHlo(
     HloInstruction* operand, HloInstruction* init_value, const Window& window,
     HloComputation* reduce_computation, const OpMetadata* metadata = nullptr);
+
+absl::StatusOr<HloInstruction*> MakeReduceWindowHlo(
+    HloInstruction* operand, HloInstruction* init_value, const Window& window,
+    HloOpcode binary_opcode, const OpMetadata* metadata = nullptr);
 
 // Creates a Reduce HLO instruction and adds it to the computation containing
 // the operand. This will create the sub-computation needed for the reduction in
@@ -253,6 +289,11 @@ absl::StatusOr<HloInstruction*> MakeSelectHlo(
 // instruction with all the operands. Crashes if `operands` is empty.
 HloInstruction* MaybeMakeTuple(absl::Span<HloInstruction* const> operands);
 
+// Creates a HloComputation in the destination module from a builder's
+// XlaComputation.
+absl::StatusOr<HloComputation*> XlaComputationToHloComputation(
+    XlaComputation& src_comp, HloModule* dest_module);
+
 // Creates a Sort HLO instruction and adds it to the computation containing the
 // operands. All operands must be in the same computation. Also creates a
 // default compare sub-computation which sorts the first operand into ascending
@@ -270,7 +311,7 @@ absl::StatusOr<HloInstruction*> MakeR1ConstantHlo(
     absl::Span<const NativeT> values) {
   Literal literal = LiteralUtil::CreateR1<NativeT>(values);
   if (literal.shape().element_type() != type) {
-    TF_ASSIGN_OR_RETURN(literal, literal.Convert(type));
+    ABSL_ASSIGN_OR_RETURN(literal, literal.Convert(type));
   }
   return computation->AddInstruction(
       HloInstruction::CreateConstant(std::move(literal)));
@@ -286,18 +327,15 @@ HloInstruction* MakeR0ConstantHlo(HloComputation* computation, NativeT value) {
 
 // Makes a scalar that is elementwise compatible with the shape of the base
 // instruction.
+HloInstruction* MakeScalarLikeFromLiteral(HloInstruction* base,
+                                          Literal literal);
+
 template <class NativeT>
 HloInstruction* MakeScalarLike(HloInstruction* base, NativeT value) {
-  auto scalar = base->AddInstruction(
-      HloInstruction::CreateConstant(LiteralUtil::CreateR0<NativeT>(value)
-                                         .Convert(base->shape().element_type())
-                                         .value()));
-  if (base->shape().rank() == 0) {
-    *scalar->mutable_shape() = base->shape();
-    return scalar;
-  }
-  return base->AddInstruction(HloInstruction::CreateBroadcast(
-      ShapeUtil::MakeStaticShape(base->shape()), scalar, {}));
+  return MakeScalarLikeFromLiteral(base,
+                                   LiteralUtil::CreateR0<NativeT>(value)
+                                       .Convert(base->shape().element_type())
+                                       .value());
 }
 
 // Creates a fusion instruction and fuses `fused` into the created fusion
@@ -390,9 +428,36 @@ absl::StatusOr<std::unique_ptr<HloComputation>> CreateComputationWithSignature(
 // adding and removing reshapes that changes only a single dimension.
 HloInstruction* ExpandDegenerateReshape(HloInstruction* inst);
 
-// Creates an integral constant with the given shape and integer value.
-std::unique_ptr<HloInstruction> MakeConstantWithShape(const Shape& shape,
-                                                      int64_t value);
+// Creates a scalar constant with the given shape and native value.
+template <typename NativeT>
+std::unique_ptr<HloInstruction> MakeScalarConstantWithShape(const Shape& shape,
+                                                            NativeT value) {
+  return primitive_util::PrimitiveTypeSwitch<std::unique_ptr<HloInstruction>>(
+      [&](auto literal_constant) -> std::unique_ptr<HloInstruction> {
+        if constexpr (primitive_util::IsIntegralType(literal_constant) ||
+                      primitive_util::IsFloatingPointType(literal_constant)) {
+          auto constant = HloInstruction::CreateConstant(
+              LiteralUtil::CreateR0<NativeT>(value)
+                  .Convert(shape.element_type())
+                  .value());
+          *constant->mutable_shape() = shape;
+          return std::move(constant);
+        }
+        LOG(FATAL) << "Provided shape is not a float or int type.";
+      },
+      shape.element_type());
+}
+
+// Create instructions that check if the given instruction is within the given
+// bounds (lower_bound <= inst < upper_bound).
+absl::StatusOr<HloInstruction*> MakeWithinBounds(HloInstruction* inst,
+                                                 HloInstruction* lower_bound,
+                                                 HloInstruction* upper_bound);
+
+// Creates a new module with a single computation that contains a fusion of the
+// given instruction with the given fusion kind.
+std::unique_ptr<HloModule> NewModuleWithFusion(
+    const HloInstruction* instruction, HloInstruction::FusionKind fusion_kind);
 
 }  // namespace xla
 

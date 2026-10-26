@@ -23,9 +23,9 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/literal.h"
-#include "xla/statusor.h"
 
 namespace xla {
 namespace bisect {
@@ -35,7 +35,7 @@ namespace bisect {
 // the resulting literals for the reference implementation.
 class BugCheckerInterface {
  public:
-  virtual ~BugCheckerInterface() {}
+  virtual ~BugCheckerInterface() = default;
 
   // Returns true if `module` has a bug we're interested in.
   virtual absl::StatusOr<bool> Run(const HloModule& module) = 0;

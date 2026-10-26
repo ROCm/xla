@@ -26,23 +26,27 @@ limitations under the License.
 #include <variant>
 
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
-#include "mlir/IR/Attributes.h"  // from @llvm-project
-#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "mlir/IR/Region.h"  // from @llvm-project
-#include "mlir/IR/Types.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Region.h"
+#include "mlir/IR/Types.h"
+#include "mlir/Support/LLVM.h"
 #include "xla/literal.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/interpreter_value.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/tensor_or_memref.h"
 #include "xla/mlir/tools/mlir_replay/public/execution_trace.pb.h"
-#include "tsl/platform/statusor.h"
+#include "xla/primitive_util.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/xla_data.pb.h"
 
 namespace mlir {
 namespace interpreter {
@@ -127,10 +131,6 @@ struct TraceInterpreterValueVisitor {
   static TracedValue::ElementType GetElementType(const std::complex<T>&) {
     return TracedValue::COMPLEX;
   }
-
-  static TracedValue::ElementType GetElementType(const Tuple&) {
-    return TracedValue::UNKNOWN;
-  }
 };
 
 }  // namespace
@@ -178,7 +178,7 @@ void ExecutionTraceListener::LeaveRegion(ArrayRef<InterpreterValue> yielded) {
 llvm::SmallVector<mlir::Attribute> ValueToAttribute(
     const InterpreterValue& value, mlir::Type type) {
   if (std::holds_alternative<Tuple>(value.storage)) {
-    auto types = type.cast<TupleType>().getTypes();
+    auto types = mlir::cast<TupleType>(type).getTypes();
     const auto& t = std::get<Tuple>(value.storage);
     llvm::SmallVector<mlir::Attribute> attrs;
     for (const auto& [v, ty] : llvm::zip(t.values, types)) {
@@ -197,11 +197,11 @@ llvm::SmallVector<mlir::Attribute> ValueToAttribute(
                 .getValues<mlir::Attribute>()[0]};
   }
 
-  if (!type.isa<ShapedType>()) {
+  if (!mlir::isa<ShapedType>(type)) {
     return {};
   }
 
-  auto shaped_ty = type.cast<ShapedType>();
+  auto shaped_ty = mlir::cast<ShapedType>(type);
   return {DispatchScalarType(shaped_ty, [&](auto dummy) -> mlir::Attribute {
     using T = decltype(dummy);
     auto& t = std::get<TensorOrMemref<T>>(value.storage);
@@ -243,7 +243,7 @@ absl::StatusOr<InterpreterValue> LiteralToValue(const xla::Literal& literal) {
     auto elements = literal.Clone().DecomposeTuple();
     Tuple result;
     for (auto& element : elements) {
-      TF_ASSIGN_OR_RETURN(auto converted, LiteralToValue(element));
+      ABSL_ASSIGN_OR_RETURN(auto converted, LiteralToValue(element));
       result.values.push_back(
           std::make_shared<InterpreterValue>(std::move(converted)));
     }
@@ -255,7 +255,13 @@ absl::StatusOr<InterpreterValue> LiteralToValue(const xla::Literal& literal) {
   }
 
   if (literal.shape().IsArray()) {
-    switch (literal.shape().element_type()) {
+    auto type = literal.shape().element_type();
+    if (xla::primitive_util::IsF8Type(type)) {
+      return absl::UnimplementedError(
+          absl::StrCat(xla::primitive_util::LowercasePrimitiveTypeName(type),
+                       " not implemented"));
+    }
+    switch (type) {
       case xla::PRED:
         return {{ArrayLiteralToTensor<bool>(literal)}};
       case xla::S8:
@@ -282,16 +288,6 @@ absl::StatusOr<InterpreterValue> LiteralToValue(const xla::Literal& literal) {
         return absl::UnimplementedError("BF16 not implemented");
       case xla::F64:
         return {{ArrayLiteralToTensor<double>(literal)}};
-      case xla::F8E5M2:
-        return absl::UnimplementedError("F8E5M2 not implemented");
-      case xla::F8E4M3FN:
-        return absl::UnimplementedError("F8E4M3FN not implemented");
-      case xla::F8E4M3B11FNUZ:
-        return absl::UnimplementedError("F8E4M3B11FNUZ not implemented");
-      case xla::F8E5M2FNUZ:
-        return absl::UnimplementedError("F8E5M2FNUZ not implemented");
-      case xla::F8E4M3FNUZ:
-        return absl::UnimplementedError("F8E4M3FNUZ not implemented");
       case xla::C64:
         return {{ArrayLiteralToTensor<std::complex<float>>(literal)}};
       case xla::C128:
@@ -307,14 +303,14 @@ absl::StatusOr<InterpreterValue> LiteralToValue(const xla::Literal& literal) {
 
 absl::StatusOr<InterpreterValue> LiteralToValue(
     const xla::LiteralProto& literal) {
-  TF_ASSIGN_OR_RETURN(auto deserialized,
-                      xla::Literal::CreateFromProto(literal));
+  ABSL_ASSIGN_OR_RETURN(auto deserialized,
+                        xla::Literal::CreateFromProto(literal));
   return LiteralToValue(deserialized);
 }
 
 absl::StatusOr<InterpreterValue> LiteralToValue(
     const xla::LiteralProto& literal, mlir::Type type) {
-  TF_ASSIGN_OR_RETURN(auto result, LiteralToValue(literal));
+  ABSL_ASSIGN_OR_RETURN(auto result, LiteralToValue(literal));
   return {DispatchScalarType(type, [&](auto dummy) -> InterpreterValue {
     TensorOrMemref<decltype(dummy)> cast;
     cast.view = result.View();
@@ -405,7 +401,7 @@ absl::StatusOr<InterpreterValue> TracedValueToValue(
     case TracedValue::TUPLE:
       Tuple result;
       for (const auto& elem : traced_value.tuple_elements()) {
-        TF_ASSIGN_OR_RETURN(auto converted, TracedValueToValue(elem));
+        ABSL_ASSIGN_OR_RETURN(auto converted, TracedValueToValue(elem));
         result.values.push_back(
             std::make_shared<InterpreterValue>(std::move(converted)));
       }

@@ -16,13 +16,12 @@ limitations under the License.
 #ifndef XLA_TSL_DISTRIBUTED_RUNTIME_COORDINATION_COORDINATION_SERVICE_RPC_HANDLER_H_
 #define XLA_TSL_DISTRIBUTED_RUNTIME_COORDINATION_COORDINATION_SERVICE_RPC_HANDLER_H_
 
-#include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
+#include "tsl/platform/thread_annotations.h"
 #include "xla/tsl/distributed_runtime/coordination/coordination_service.h"
 #include "xla/tsl/distributed_runtime/coordination/coordination_service_agent.h"
-#include "tsl/platform/status.h"
-#include "tsl/platform/thread_annotations.h"
-#include "tsl/protobuf/coordination_service.pb.h"
+#include "xla/tsl/platform/status.h"
+#include "xla/tsl/protobuf/coordination_service.pb.h"
 
 namespace tsl {
 class CoordinationServiceRpcHandler {
@@ -31,7 +30,7 @@ class CoordinationServiceRpcHandler {
 
   void SetAgentInstance(CoordinationServiceAgent* agent);
 
-  void SetServiceInstance(CoordinationServiceInterface* service);
+  void SetServiceInstance(CoordinationService* service);
 
   void RegisterTaskAsync(const tensorflow::RegisterTaskRequest* request,
                          tensorflow::RegisterTaskResponse* response,
@@ -65,6 +64,10 @@ class CoordinationServiceRpcHandler {
                          tensorflow::GetTaskStateResponse* response,
                          StatusCallback done);
 
+  void WatchJobStateAsync(const tensorflow::WatchJobStateRequest* request,
+                          tensorflow::WatchJobStateResponse* response,
+                          StatusCallback done);
+
   void InsertKeyValueAsync(const tensorflow::InsertKeyValueRequest* request,
                            tensorflow::InsertKeyValueResponse* response,
                            StatusCallback done);
@@ -72,6 +75,10 @@ class CoordinationServiceRpcHandler {
   void GetKeyValueAsync(const tensorflow::GetKeyValueRequest* request,
                         tensorflow::GetKeyValueResponse* response,
                         StatusCallback done);
+
+  void IncrementKeyValueAsync(
+      const tensorflow::IncrementKeyValueRequest* request,
+      tensorflow::IncrementKeyValueResponse* response, StatusCallback done);
 
   void TryGetKeyValueAsync(const tensorflow::TryGetKeyValueRequest* request,
                            tensorflow::TryGetKeyValueResponse* response,
@@ -92,10 +99,18 @@ class CoordinationServiceRpcHandler {
                           tensorflow::CancelBarrierResponse* response,
                           StatusCallback done);
 
+  void GetAliveTasksAsync(const tensorflow::GetAliveTasksRequest* request,
+                          tensorflow::GetAliveTasksResponse* response,
+                          StatusCallback done);
+
+  void PollForErrorAsync(const tensorflow::PollForErrorRequest* request,
+                         tensorflow::PollForErrorResponse* response,
+                         StatusCallback done);
+
  private:
   absl::Mutex mu_;
   CoordinationServiceAgent* agent_ TF_GUARDED_BY(mu_) = nullptr;
-  CoordinationServiceInterface* service_ TF_GUARDED_BY(mu_) = nullptr;
+  CoordinationService* service_ TF_GUARDED_BY(mu_) = nullptr;
 };
 
 }  // namespace tsl

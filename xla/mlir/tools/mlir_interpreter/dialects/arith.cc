@@ -13,17 +13,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
+#include "mlir/Dialect/Arith/IR/Arith.h"
 
 #include <variant>  // NOLINT
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "mlir/IR/Builders.h"  // from @llvm-project
-#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
-#include "mlir/IR/Types.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/IR/Types.h"
+#include "mlir/Support/LLVM.h"
 #include "xla/mlir/tools/mlir_interpreter/dialects/comparators.h"
 #include "xla/mlir/tools/mlir_interpreter/dialects/cwise_math.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/interpreter.h"
@@ -78,10 +78,10 @@ InterpreterValue Constant(InterpreterState&, arith::ConstantOp constant) {
     }
 
     auto value = constant.getValue();
-    if (auto integer = value.dyn_cast<IntegerAttr>()) {
+    if (auto integer = mlir::dyn_cast<IntegerAttr>(value)) {
       return {static_cast<T>(integer.getInt())};
     }
-    if (auto float_value = value.dyn_cast<FloatAttr>()) {
+    if (auto float_value = mlir::dyn_cast<FloatAttr>(value)) {
       return {static_cast<T>(float_value.getValueAsDouble())};
     }
 
@@ -135,7 +135,7 @@ llvm::SmallVector<InterpreterValue> UiToFP(
     MutableArrayRef<InterpreterValue> args, mlir::Operation* op,
     InterpreterState&) {
   if (args[0].IsTensor()) {
-    auto ty = op->getResultTypes()[0].cast<ShapedType>();
+    auto ty = mlir::cast<ShapedType>(op->getResultTypes()[0]);
     return {DispatchScalarType(
         ty.getElementType(), [&](auto dummy) -> InterpreterValue {
           auto result =

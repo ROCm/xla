@@ -29,6 +29,7 @@ load(
     "variable_with_value",
     "with_feature_set",
 )
+load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 
 all_compile_actions = [
     ACTION_NAMES.c_compile,
@@ -375,7 +376,6 @@ def _impl(ctx):
 
         compiler_param_file_feature = feature(
             name = "compiler_param_file",
-            enabled = True,
         )
 
         copy_dynamic_libraries_to_binary_feature = feature(

@@ -15,11 +15,14 @@ limitations under the License.
 
 #include "xla/index_util.h"
 
+#include <cstdint>
 #include <initializer_list>
 #include <vector>
 
+#include "absl/types/span.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/test.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -139,6 +142,12 @@ TEST(IndexUtilTest, LinearToMultiToLinear) {
                                   shape, multi_index));
     }
   }
+}
+
+TEST(IndexUtilTest, BumpIndicesScalar) {
+  const Shape shape = ShapeUtil::MakeShape(S32, {});
+  std::vector<int64_t> indices;
+  EXPECT_FALSE(IndexUtil::BumpIndices(shape, absl::MakeSpan(indices)));
 }
 
 TEST(IndexUtilTest, BumpIndices2x2) {

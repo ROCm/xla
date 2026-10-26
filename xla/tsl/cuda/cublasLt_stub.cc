@@ -16,7 +16,7 @@ limitations under the License.
 #include "third_party/gpus/cuda/include/cuda.h"
 #include "tsl/platform/dso_loader.h"
 #include "tsl/platform/load_library.h"
-#include "tsl/platform/logging.h"
+#include "xla/tsl/platform/logging.h"
 
 // Implements the cuBLASLt API by forwarding to cuBLASLt loaded from the DSO.
 

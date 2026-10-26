@@ -16,8 +16,8 @@ limitations under the License.
 #ifndef XLA_PYTHON_IFRT_PROGRAM_SERDES_H_
 #define XLA_PYTHON_IFRT_PROGRAM_SERDES_H_
 
-#include "llvm/Support/ExtensibleRTTI.h"
-#include "xla/python/ifrt/device.h"
+#include "xla/python/ifrt/client.h"
+#include "xla/python/ifrt/rtti.h"
 #include "xla/python/ifrt/serdes.h"
 
 namespace xla {
@@ -25,14 +25,12 @@ namespace ifrt {
 
 // Abstract options for deserializing an `Program`.
 struct DeserializeProgramOptions
-    : llvm::RTTIExtends<DeserializeProgramOptions, DeserializeOptions> {
-  explicit DeserializeProgramOptions(DeviceList::LookupDeviceFunc lookup_device)
-      : lookup_device(lookup_device) {}
+    : RTTIExtends<DeserializeProgramOptions, DeserializeOptions> {
+  explicit DeserializeProgramOptions(Client* client) : client(client) {}
 
   static char ID;  // NOLINT
 
-  // Function that converts device ids to devices.
-  DeviceList::LookupDeviceFunc lookup_device;
+  Client* client;
 };
 
 }  // namespace ifrt

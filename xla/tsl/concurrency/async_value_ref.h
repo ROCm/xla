@@ -17,38 +17,124 @@ limitations under the License.
 #define XLA_TSL_CONCURRENCY_ASYNC_VALUE_REF_H_
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
-#include <string_view>
+#include <cstdint>
+#include <memory>
+#include <new>
 #include <type_traits>
 #include <utility>
 
 #include "absl/base/attributes.h"
 #include "absl/base/optimization.h"
+#include "absl/base/thread_annotations.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
 #include "xla/tsl/concurrency/async_value.h"
+#include "xla/tsl/concurrency/executor.h"
 #include "xla/tsl/concurrency/ref_count.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/mem.h"
+#include "xla/tsl/platform/logging.h"
 
 namespace tsl {
+
+// Forward declare owning typed async value pointer.
+template <typename T>
+class AsyncValueRef;
 
 // Forward declare non-owning typed async value pointer.
 template <typename T>
 class AsyncValuePtr;
 
-// RCReference<AsyncValue> wrapper.
+// Constructs a ConcreteAsyncValue in error state with the given status.
+RCReference<ErrorAsyncValue> MakeErrorAsyncValueRef(absl::Status status);
+
+ABSL_DEPRECATED("Use the error async value constructor that takes absl::Status")
+RCReference<ErrorAsyncValue> MakeErrorAsyncValueRef(absl::string_view message);
+
+// Constructs an IndirectAsyncValue without forwarding it to anything.
+RCReference<IndirectAsyncValue> MakeIndirectAsyncValue();
+template <typename T>
+RCReference<IndirectAsyncValue> MakeIndirectAsyncValue();
+
+// Forward declare AsyncValueRef constructors.
+template <typename T>
+AsyncValueRef<T> MakeUnconstructedAsyncValueRef();
+template <typename T, typename... Args>
+AsyncValueRef<T> MakeConstructedAsyncValueRef(Args&&... args);
+template <typename T, typename... Args>
+AsyncValueRef<T> MakeAvailableAsyncValueRef(Args&&... args);
+template <typename T>
+AsyncValueRef<T> MakeAvailableAsyncValueRef(std::shared_ptr<T> value);
+
+// A collection of type traits used by AsyncValueRef and AsyncValuePtr.
+namespace internal {
+
+// Detects if a type is a specialization of an AsyncValueRef template.
+template <typename T>
+struct IsAsyncValueRef : std::false_type {};
+template <typename T>
+struct IsAsyncValueRef<AsyncValueRef<T>> : std::true_type {};
+
+template <typename T>
+inline constexpr bool is_async_value_ref_v = IsAsyncValueRef<T>::value;
+
+// Detects types that are `absl::StatusOr<R>` container.
+template <typename T>
+struct IsStatusOr : std::false_type {};
+template <typename T>
+struct IsStatusOr<absl::StatusOr<T>> : std::true_type {};
+
+// Type predicates for detecting absl::Status-like types.
+template <typename T>
+static constexpr bool is_status_v = std::is_same_v<T, absl::Status>;
+template <typename T>
+static constexpr bool is_status_or_v = IsStatusOr<T>::value;
+template <typename T>
+static constexpr bool is_status_like_v = is_status_v<T> || is_status_or_v<T>;
+
+// Deduces the result type of invoking `F` with a first compatible `Arg`.
+template <typename F, typename... Args>
+struct FirstInvokeResult {
+  template <typename Arg, bool invocable = std::is_invocable_v<F, Arg>>
+  struct is_invocable : std::false_type {
+    using type = void;
+  };
+
+  template <typename Arg>
+  struct is_invocable<Arg, true> : std::true_type {
+    using type = std::invoke_result_t<F, Arg>;
+  };
+
+  using type = typename std::disjunction<is_invocable<Args>...>::type;
+};
+
+// In contrast to `std::invoke_result_t` `Args` are not passed to `F` all
+// together, but instead they are passed one-by-one, and the first valid one
+// determines the result type.
+template <typename F, typename... Args>
+using first_invoke_result_t = typename FirstInvokeResult<F, Args...>::type;
+
+}  // namespace internal
+
+// AsyncValueRef<T> is an asynchronous container for a payload of type `T` or an
+// error of type `absl::Status`. It is similar to an `absl::StatusOr<T>`, but
+// does not require immediate value or error to be constructed. It is a promise
+// that at some point in the future it will become concrete and will hold a
+// payload of type `T` or an error of type `absl::Status`.
 //
-// AsyncValueRef<T> is an alias for RCReference<AsyncValue> that carries payload
-// type information. The user does not need to pass the payload data type to
-// get() or emplace().
+//  - Prefer `AsyncValueRef<Chain>` to `AsyncValueRef<absl::Status>`.
+//    Instead of a `Chain` it can be any other empty struct to signal that only
+//    the potential error is important.
 //
-// Like RCReference<AsyncValue>, it represents one reference on the underlying
-// AsyncValue. When a callee returns an AsyncValueRef to a caller, the callee
-// also transfers their ownership of a reference on the underlying AsyncValue.
+//  - Prefer `AsyncValueRef<T>` to `AsyncValueRef<absl::StatusOr<T>>`.
+//    Similar to the `absl::StatusOr<T>` async value will be either in error
+//    state holding an `absl::Status` error, or in concrete state holding a
+//    value of type `T`.
 template <typename T>
 class AsyncValueRef {
  public:
@@ -56,18 +142,39 @@ class AsyncValueRef {
   using value_type = T;
 
   AsyncValueRef() = default;
-  AsyncValueRef(std::nullptr_t) {}  // NOLINT
+
+  AsyncValueRef(const AsyncValueRef&) = default;
+  AsyncValueRef& operator=(const AsyncValueRef&) = default;
+
+  AsyncValueRef(AsyncValueRef&&) noexcept = default;
+  AsyncValueRef& operator=(AsyncValueRef&&) noexcept = default;
 
   explicit AsyncValueRef(RCReference<AsyncValue> value)
       : value_(std::move(value)) {}
 
-  // Support implicit conversion from AsyncValueRef<Derived> to
-  // AsyncValueRef<Base>.
-  template <typename Derived, internal::DerivedFrom<Derived, T>* = nullptr>
-  AsyncValueRef(AsyncValueRef<Derived>&& u)  // NOLINT
-      : value_(u.ReleaseRCRef()) {}
+  template <typename Derived,
+            internal::DerivedFrom<Derived, AsyncValue>* = nullptr>
+  explicit AsyncValueRef(RCReference<Derived> value)
+      : AsyncValueRef(RCReference<AsyncValue>(std::move(value))) {}
 
-  // Support implicit conversion from RCReference<ErrorAsyncValue>.
+  // Support implicit construction from nullptr to empty async value ref.
+  AsyncValueRef(std::nullptr_t) {}  // NOLINT
+
+  // Support implicit construction from immediate `Status` error convertible to
+  // `absl::Status` (only if payload type is not `absl::Status`, because
+  // otherwise it is ambiguous, is it an error or a concrete payload).
+  template <typename Status,
+            std::enable_if_t<std::is_convertible_v<Status, absl::Status> &&
+                             !std::is_same_v<T, absl::Status>>* = nullptr>
+  AsyncValueRef(Status&& status)  // NOLINT
+      : AsyncValueRef(MakeErrorAsyncValueRef(std::forward<Status>(status))) {}
+
+  // Support implicit conversion from an async value of a derived type.
+  template <typename Derived, internal::DerivedFrom<Derived, T>* = nullptr>
+  AsyncValueRef(AsyncValueRef<Derived> derived)  // NOLINT
+      : value_(derived.ReleaseRCRef()) {}
+
+  // Support implicit construction from RCReference<ErrorAsyncValue>.
   AsyncValueRef(RCReference<ErrorAsyncValue> value)  // NOLINT
       : value_(std::move(value)) {}
 
@@ -79,14 +186,10 @@ class AsyncValueRef {
   // Allow implicit conversion to type-erased RCReference<AsyncValue>
   operator RCReference<AsyncValue>() && { return std::move(value_); }  // NOLINT
 
-  // Return true if the AsyncValue is resolved to a concrete value or error.
   bool IsAvailable() const { return value_->IsAvailable(); }
   bool IsUnavailable() const { return value_->IsUnavailable(); }
-
-  // Return true if the AsyncValue contains a concrete value.
   bool IsConcrete() const { return value_->IsConcrete(); }
-
-  // Return true if state is kUnconstructed.
+  bool IsConstructed() const { return value_->IsConstructed(); }
   bool IsUnconstructed() const { return value_->IsUnconstructed(); }
 
   // Return the stored value. The AsyncValueRef must be available.
@@ -115,7 +218,7 @@ class AsyncValueRef {
     //
     //   struct A {};
     //   struct B : public A {};
-    //   struct C : public C {}
+    //   struct C : public B {}
     //
     //   AsyncValueRef<A> ref = MakeUnconstructedAsyncValueRef<C>();
     //
@@ -131,26 +234,47 @@ class AsyncValueRef {
   }
 
   template <typename Derived, internal::DerivedFrom<Derived, T>* = nullptr>
-  AsyncValueRef<Derived> Cast() const {
+  AsyncValueRef<Derived> Cast() const& {
     DCHECK(DynCast<Derived>()) << "Illegal async value cast";
     return AsyncValueRef<Derived>(value_);
   }
 
   template <typename Derived, internal::DerivedFrom<Derived, T>* = nullptr>
-  AsyncValueRef<Derived> DynCast() const {
+  AsyncValueRef<Derived> Cast() && {
+    DCHECK(Isa<Derived>()) << "Illegal async value cast";
+    return AsyncValueRef<Derived>(std::move(value_));
+  }
+
+  template <typename Derived, internal::DerivedFrom<Derived, T>* = nullptr>
+  AsyncValueRef<Derived> DynCast() const& {
     DCHECK(value_) << "Async value must be not null";
     return Isa<Derived>() ? AsyncValueRef<Derived>(value_)
                           : AsyncValueRef<Derived>(nullptr);
   }
 
   template <typename Derived, internal::DerivedFrom<Derived, T>* = nullptr>
-  AsyncValueRef<Derived> DynCastOrNull() const {
-    return value_ ? DynCast<Derived>(value_) : AsyncValueRef<Derived>(nullptr);
+  AsyncValueRef<Derived> DynCast() && {
+    DCHECK(value_) << "Async value must be not null";
+    return Isa<Derived>() ? AsyncValueRef<Derived>(std::move(value_))
+                          : AsyncValueRef<Derived>(nullptr);
+  }
+
+  template <typename Derived, internal::DerivedFrom<Derived, T>* = nullptr>
+  AsyncValueRef<Derived> DynCastOrNull() const& {
+    return value_ ? DynCast<Derived>() : AsyncValueRef<Derived>(nullptr);
+  }
+
+  template <typename Derived, internal::DerivedFrom<Derived, T>* = nullptr>
+  AsyncValueRef<Derived> DynCastOrNull() && {
+    return value_ ? std::move(*this).template DynCast<Derived>()
+                  : AsyncValueRef<Derived>(nullptr);
   }
 
   T* operator->() const { return &get(); }
 
   T& operator*() const { return get(); }
+
+  bool HasWaiter() const { return AsPtr().HasWaiter(); }
 
   template <typename Waiter>
   void AndThen(Waiter&& waiter) const {
@@ -158,7 +282,7 @@ class AsyncValueRef {
   }
 
   template <typename Waiter>
-  void AndThen(AsyncValue::Executor& executor, Waiter&& waiter) const {
+  void AndThen(Executor& executor, Waiter&& waiter) const {
     AsPtr().AndThen(executor, std::forward<Waiter>(waiter));
   }
 
@@ -168,7 +292,7 @@ class AsyncValueRef {
   }
 
   template <typename R, typename F>
-  AsyncValueRef<R> Map(AsyncValue::Executor& executor, F&& f) {
+  AsyncValueRef<R> Map(Executor& executor, F&& f) {
     return AsPtr().template Map<R>(executor, std::forward<F>(f));
   }
 
@@ -178,7 +302,7 @@ class AsyncValueRef {
   }
 
   template <typename F>
-  auto Map(AsyncValue::Executor& executor, F&& f) {
+  auto Map(Executor& executor, F&& f) {
     return AsPtr().template Map<F>(executor, std::forward<F>(f));
   }
 
@@ -188,28 +312,28 @@ class AsyncValueRef {
   }
 
   template <typename R, typename F>
-  AsyncValueRef<R> TryMap(AsyncValue::Executor& executor, F&& f) {
+  AsyncValueRef<R> TryMap(Executor& executor, F&& f) {
     return AsPtr().template TryMap<R>(executor, std::forward<F>(f));
   }
 
   template <typename F>
   auto TryMap(F&& f) {
-    return AsPtr().template TryMap(std::forward<F>(f));
+    return AsPtr().TryMap(std::forward<F>(f));
   }
 
   template <typename F>
-  auto TryMap(AsyncValue::Executor& executor, F&& f) {
-    return AsPtr().template TryMap(executor, std::forward<F>(f));
+  auto TryMap(Executor& executor, F&& f) {
+    return AsPtr().TryMap(executor, std::forward<F>(f));
   }
 
   template <typename F>
   auto FlatMap(F&& f) {
-    return AsPtr().template FlatMap(std::forward<F>(f));
+    return AsPtr().FlatMap(std::forward<F>(f));
   }
 
   template <typename F>
-  auto FlatMap(AsyncValue::Executor& executor, F&& f) {
-    return AsPtr().template FlatMap(executor, std::forward<F>(f));
+  auto FlatMap(Executor& executor, F&& f) {
+    return AsPtr().FlatMap(executor, std::forward<F>(f));
   }
 
   // Make the AsyncValueRef available.
@@ -246,11 +370,15 @@ class AsyncValueRef {
     return value_->SetError(std::move(status));
   }
 
-  void SetError(std::string_view message) const {
-    SetError(absl::InternalError(message));
+  ABSL_DEPRECATED("Use SetError with absl::Status argument")
+  void SetError(absl::string_view message) const {
+    // Converting to `absl::string_view` because implicit conversion is not
+    // supported in android builds.
+    absl::string_view message_view(message.data(), message.size());
+    SetError(absl::InternalError(message_view));
   }
 
-  explicit operator bool() const { return value_.get() != nullptr; }
+  explicit operator bool() const { return value_ != nullptr; }
   bool operator==(const AsyncValueRef& r) const { return value_ == r.value_; }
   bool operator!=(const AsyncValueRef& r) const { return value_ != r.value_; }
 
@@ -286,48 +414,12 @@ class AsyncValueRef {
   RCReference<AsyncValue> value_;
 };
 
-// Detects if a type is a specialization of an AsyncValueRef template.
-template <typename T>
-struct IsAsyncValueRef : std::false_type {};
-template <typename T>
-struct IsAsyncValueRef<AsyncValueRef<T>> : std::true_type {};
-
-template <typename T>
-inline constexpr bool is_async_value_ref_v = IsAsyncValueRef<T>::value;
-
-// Forward declare AsyncValueRef constructors.
-template <typename T>
-AsyncValueRef<T> MakeUnconstructedAsyncValueRef();
-template <typename T, typename... Args>
-AsyncValueRef<T> MakeConstructedAsyncValueRef(Args&&... args);
-template <typename T, typename... Args>
-AsyncValueRef<T> MakeAvailableAsyncValueRef(Args&&... args);
-
-// Forward declare indirect async value constructors.
-RCReference<IndirectAsyncValue> MakeIndirectAsyncValue();
-template <typename T>
-RCReference<IndirectAsyncValue> MakeIndirectAsyncValue();
-
 // Non owning typed pointer for the AsyncValue. Can be cheaply passed around
 // when the lifetime of the underlying async value is clear from the context.
 // It is the user responsibility to construct an owning AsyncValueRef to extend
 // the lifetime of the underlying value if needed.
 template <typename T>
 class AsyncValuePtr {
-  // Detect result types that are `absl::StatusOr<R>` container.
-  template <typename R>
-  struct IsStatusOr : std::false_type {};
-  template <typename R>
-  struct IsStatusOr<absl::StatusOr<R>> : std::true_type {};
-
-  // Type predicates for detecting absl::Status-like types.
-  template <class R>
-  static constexpr bool is_status_v = std::is_same_v<R, absl::Status>;
-  template <class R>
-  static constexpr bool is_status_or_v = IsStatusOr<R>::value;
-  template <class R>
-  static constexpr bool is_status_like_v = is_status_v<R> || is_status_or_v<R>;
-
   // Wait for async value availability: AndThen([] {})
   template <typename Waiter>
   using SimpleWaiter = std::enable_if_t<std::is_invocable_v<Waiter>>;
@@ -347,26 +439,25 @@ class AsyncValuePtr {
   using StatusWaiter =
       std::enable_if_t<(std::is_invocable_v<Waiter, absl::Status> &&
                         !std::is_invocable_v<Waiter, absl::StatusOr<T*>> &&
-                        !is_status_v<T>)>;
+                        !internal::is_status_v<T>)>;
 
-  // Because AsyncValue itself is a discriminated union of absl::Status and
-  // typed payload (error or value) the use of AsyncValueRef<status-like> is
-  // discouraged (work in progress to disable with static assert) and `Map`
-  // automatically folds returned status-like object into the returned async
-  // value error.
-
-  // Async value map functor: Map<R>([](T& value) -> U);
-  //   - R must be constructible from U
-  template <typename R, typename U>
+  // Map async value of type `T` to an async value of type `R`.
+  template <typename R, typename F, typename U = std::invoke_result_t<F, T&>>
   using MapFunctor = std::enable_if_t<std::is_constructible_v<R, U>>;
 
-  // Async value try map functor: TryMap<R>([](T& value) -> absl::StatusOr<U>);
-  //   - R must be constructible from U
-  template <typename R, typename U>
+  // Try map async value of type `T` to an async value of type `R`.
+  template <typename R, typename F, typename U = std::invoke_result_t<F, T&>>
   using TryMapFunctor =
-      std::enable_if_t<!is_status_like_v<R> && is_status_or_v<U> &&
-                       std::is_constructible_v<R, typename U::value_type> &&
-                       !std::is_constructible_v<R, U>>;
+      std::enable_if_t<internal::is_status_or_v<U> &&
+                       std::is_constructible_v<R, typename U::value_type>>;
+
+  // Flat map async value of type `T` to an async value `R` (`R` itself is an
+  // async value ref). Returns `R` value type (async payload type).
+  template <typename F,
+            typename R =
+                internal::first_invoke_result_t<F, T&, AsyncValuePtr<T>>>
+  using FlatMapFunctor = std::enable_if_t<internal::is_async_value_ref_v<R>,
+                                          typename R::value_type>;
 
  public:
   // AsyncValuePtr<T>::value_type
@@ -382,12 +473,16 @@ class AsyncValuePtr {
 
   AsyncValueRef<T> CopyRef() const { return AsyncValueRef<T>(FormRef(value_)); }
 
+  RCReference<AsyncValue> CopyRCRef() const { return FormRef(value_); }
+
   T& get() const { return value_->template get<T>(); }
   T* operator->() const { return &get(); }
   T& operator*() const { return get(); }
 
   explicit operator bool() const { return value_ != nullptr; }
-  bool operator!=(std::nullptr_t) const { return value_ != nullptr; }
+  bool operator==(const AsyncValuePtr& p) const { return value_ == p.value_; }
+  bool operator!=(const AsyncValuePtr& p) const { return value_ != p.value_; }
+
   AsyncValuePtr& operator=(std::nullptr_t) {
     value_ = nullptr;
     return *this;
@@ -442,6 +537,10 @@ class AsyncValuePtr {
     return value_->SetError(std::move(status));
   }
 
+  // Returns true if and only if there are any waiters waiting for this value to
+  // become available.
+  bool HasWaiter() const { return value_->HasWaiter(); }
+
   // If the AsyncValueRef is available, invokes the `waiter` immediately.
   // Otherwise, invokes the `waiter` when the AsyncValueRef becomes available.
   //
@@ -457,7 +556,7 @@ class AsyncValuePtr {
 
   // An overload that executes `waiter` on a user-provided executor.
   template <typename Waiter, SimpleWaiter<Waiter>* = nullptr>
-  void AndThen(AsyncValue::Executor& executor, Waiter&& waiter) const {
+  void AndThen(Executor& executor, Waiter&& waiter) const {
     value_->AndThen(executor, std::forward<Waiter>(waiter));
   }
 
@@ -481,24 +580,20 @@ class AsyncValuePtr {
     AndThen([waiter = std::forward<Waiter>(waiter), ptr = *this]() mutable {
       if (ABSL_PREDICT_FALSE(ptr.IsError())) {
         return waiter(ptr.GetError());
-      } else {
-        return waiter(&ptr.get());
       }
+      return waiter(&ptr.get());
     });
   }
 
   // An overload that executes `waiter` on a user-provided executor.
   template <typename Waiter, StatusOrWaiter<Waiter>* = nullptr>
-  void AndThen(AsyncValue::Executor& executor, Waiter&& waiter) const {
-    // We don't know when the executor will run the callback, so we need to
-    // copy the AsyncValueRef to keep the underlying value alive.
+  void AndThen(Executor& executor, Waiter&& waiter) const {
     AndThen(executor,
-            [waiter = std::forward<Waiter>(waiter), ref = CopyRef()]() mutable {
-              if (ABSL_PREDICT_FALSE(ref.IsError())) {
-                return waiter(ref.GetError());
-              } else {
-                return waiter(&ref.get());
+            [waiter = std::forward<Waiter>(waiter), ptr = *this]() mutable {
+              if (ABSL_PREDICT_FALSE(ptr.IsError())) {
+                return waiter(ptr.GetError());
               }
+              return waiter(&ptr.get());
             });
   }
 
@@ -524,24 +619,20 @@ class AsyncValuePtr {
     AndThen([waiter = std::forward<Waiter>(waiter), ptr = *this]() mutable {
       if (ABSL_PREDICT_FALSE(ptr.IsError())) {
         return waiter(ptr.GetError());
-      } else {
-        return waiter(absl::OkStatus());
       }
+      return waiter(absl::OkStatus());
     });
   }
 
   // An overload that executes `waiter` on a user-provided executor.
   template <typename Waiter, StatusWaiter<Waiter>* = nullptr>
-  void AndThen(AsyncValue::Executor& executor, Waiter&& waiter) const {
-    // We don't know when the executor will run the callback, so we need to
-    // copy the AsyncValueRef to keep the underlying value alive.
+  void AndThen(Executor& executor, Waiter&& waiter) const {
     AndThen(executor,
-            [waiter = std::forward<Waiter>(waiter), ref = CopyRef()]() mutable {
-              if (ABSL_PREDICT_FALSE(ref.IsError())) {
-                return waiter(ref.GetError());
-              } else {
-                return waiter(absl::OkStatus());
+            [waiter = std::forward<Waiter>(waiter), ptr = *this]() mutable {
+              if (ABSL_PREDICT_FALSE(ptr.IsError())) {
+                return waiter(ptr.GetError());
               }
+              return waiter(absl::OkStatus());
             });
   }
 
@@ -555,8 +646,7 @@ class AsyncValuePtr {
   //   return U(value); // R must be constructible from U
   // })
   //
-  template <typename R, typename F, typename U = std::invoke_result_t<F, T&>,
-            MapFunctor<R, U>* = nullptr>
+  template <typename R, typename F, MapFunctor<R, F>* = nullptr>
   AsyncValueRef<R> Map(F&& f) {
     auto result = MakeUnconstructedAsyncValueRef<R>();
     AndThen([f = std::forward<F>(f), result, ptr = *this]() mutable {
@@ -570,20 +660,16 @@ class AsyncValuePtr {
   }
 
   // An overload that executes `f` on a user-provided executor.
-  template <typename R, typename F, typename U = std::invoke_result_t<F, T&>,
-            MapFunctor<R, U>* = nullptr>
-  AsyncValueRef<R> Map(AsyncValue::Executor& executor, F&& f) {
+  template <typename R, typename F, MapFunctor<R, F>* = nullptr>
+  AsyncValueRef<R> Map(Executor& executor, F&& f) {
     auto result = MakeUnconstructedAsyncValueRef<R>();
-    // We don't know when the executor will run the callback, so we need to
-    // copy the AsyncValueRef to keep the underlying value alive.
-    AndThen(executor,
-            [f = std::forward<F>(f), result, ref = CopyRef()]() mutable {
-              if (ABSL_PREDICT_FALSE(ref.IsError())) {
-                result.SetError(ref.GetError());
-              } else {
-                result.emplace(f(*ref));
-              }
-            });
+    AndThen(executor, [f = std::forward<F>(f), result, ptr = *this]() mutable {
+      if (ABSL_PREDICT_FALSE(ptr.IsError())) {
+        result.SetError(ptr.GetError());
+      } else {
+        result.emplace(f(*ptr));
+      }
+    });
     return result;
   }
 
@@ -601,8 +687,7 @@ class AsyncValuePtr {
   //
   // If returned status container will have an error status, it will be
   // automatically converted to async value error.
-  template <typename R, typename F, typename U = std::invoke_result_t<F, T&>,
-            TryMapFunctor<R, U>* = nullptr>
+  template <typename R, typename F, TryMapFunctor<R, F>* = nullptr>
   AsyncValueRef<R> TryMap(F&& f) {
     auto result = MakeUnconstructedAsyncValueRef<R>();
     AndThen([f = std::forward<F>(f), result, ptr = *this]() mutable {
@@ -621,25 +706,21 @@ class AsyncValuePtr {
   }
 
   // An overload that executes `f` on a user-provided executor.
-  template <typename R, typename F, typename U = std::invoke_result_t<F, T&>,
-            TryMapFunctor<R, U>* = nullptr>
-  AsyncValueRef<R> TryMap(AsyncValue::Executor& executor, F&& f) {
+  template <typename R, typename F, TryMapFunctor<R, F>* = nullptr>
+  AsyncValueRef<R> TryMap(Executor& executor, F&& f) {
     auto result = MakeUnconstructedAsyncValueRef<R>();
-    // We don't know when the executor will run the callback, so we need to
-    // copy the AsyncValueRef to keep the underlying value alive.
-    AndThen(executor,
-            [f = std::forward<F>(f), result, ref = CopyRef()]() mutable {
-              if (ABSL_PREDICT_FALSE(ref.IsError())) {
-                result.SetError(ref.GetError());
-              } else {
-                auto status_or = f(*ref);
-                if (status_or.ok()) {
-                  result.emplace(std::move(status_or.value()));
-                } else {
-                  result.SetError(status_or.status());
-                }
-              }
-            });
+    AndThen(executor, [f = std::forward<F>(f), result, ptr = *this]() mutable {
+      if (ABSL_PREDICT_FALSE(ptr.IsError())) {
+        result.SetError(ptr.GetError());
+      } else {
+        auto status_or = f(*ptr);
+        if (status_or.ok()) {
+          result.emplace(std::move(status_or.value()));
+        } else {
+          result.SetError(status_or.status());
+        }
+      }
+    });
     return result;
   }
 
@@ -652,13 +733,13 @@ class AsyncValuePtr {
   // A `Map` overload that automatically infers the type of result from `f` and
   // executes `f` on user-provided executor.
   template <typename F, typename R = std::invoke_result_t<F, T&>>
-  auto Map(AsyncValue::Executor& executor, F&& f) {
+  auto Map(Executor& executor, F&& f) {
     return Map<R>(executor, std::forward<F>(f));
   }
 
   // A `TryMap` overload that automatically infers the type of result from `f`.
   template <typename F, typename R = std::invoke_result_t<F, T&>,
-            std::enable_if_t<is_status_or_v<R>>* = nullptr>
+            std::enable_if_t<internal::is_status_or_v<R>>* = nullptr>
   auto TryMap(F&& f) {
     return TryMap<typename R::value_type>(std::forward<F>(f));
   }
@@ -666,12 +747,12 @@ class AsyncValuePtr {
   // A `TryMap` overload that automatically infers the type of result from `f`
   // and executes `f` on user-provided executor.
   template <typename F, typename R = std::invoke_result_t<F, T&>,
-            std::enable_if_t<is_status_or_v<R>>* = nullptr>
-  auto TryMap(AsyncValue::Executor& executor, F&& f) {
+            std::enable_if_t<internal::is_status_or_v<R>>* = nullptr>
+  auto TryMap(Executor& executor, F&& f) {
     return TryMap<typename R::value_type>(executor, std::forward<F>(f));
   }
 
-  // Returns and AsyncValueRef<R> that will be forwarded to the AsyncValueRef
+  // Returns an AsyncValueRef<R> that will be forwarded to the AsyncValueRef
   // returned from a functor.
   //
   // Sample usage:
@@ -680,37 +761,61 @@ class AsyncValuePtr {
   //   return LaunchAsyncTask(value);
   // })
   //
-  template <typename F, typename R = std::invoke_result_t<F, T&>,
-            std::enable_if_t<is_async_value_ref_v<R>>* = nullptr>
-  AsyncValueRef<typename R::value_type> FlatMap(F&& f) {
+  // Functor argument can be a `T&` or an `AsyncValueRef<T>`, where async value
+  // pointer is guaranteed to be in concrete state. Async value pointer allows
+  // the functor to extend the lifetime of underlying async value if needed.
+  //
+  // async_value_ptr.FlatMap([](AsyncValuePtr<T> ptr) -> AsyncValueRef<R> {
+  //   return LaunchAsyncTask([ref = ptr.CopyRef()] { ... });
+  // })
+  //
+  template <typename F, typename R = FlatMapFunctor<F>>
+  AsyncValueRef<R> FlatMap(F&& f) {
+    // If async value is in concrete state, we can immediately call the functor.
+    // We don't handle errors here and prefer a generic code path below because
+    // error handling is never on a performance critical path.
+    if (ABSL_PREDICT_TRUE(IsConcrete())) {
+      if constexpr (std::is_invocable_v<F, T&>) {
+        return f(get());
+      } else {
+        return f(*this);
+      }
+    }
+
     auto promise = MakePromise<R>();
     AndThen([f = std::forward<F>(f), promise, ptr = *this]() mutable {
       if (ABSL_PREDICT_FALSE(ptr.IsError())) {
         promise->SetError(ptr.GetError());
       } else {
-        promise->ForwardTo(f(*ptr));
+        if constexpr (std::is_invocable_v<F, T&>) {
+          promise->ForwardTo(f(*ptr));
+        } else {
+          promise->ForwardTo(f(ptr));
+        }
       }
     });
-    return AsyncValueRef<typename R::value_type>(promise);
+    return AsyncValueRef<R>(promise);
   }
 
   // An overload that executes `f` on a user-provided executor.
-  template <typename F, typename R = std::invoke_result_t<F, T&>,
-            std::enable_if_t<is_async_value_ref_v<R>>* = nullptr>
-  AsyncValueRef<typename R::value_type> FlatMap(AsyncValue::Executor& executor,
-                                                F&& f) {
+  template <typename F, typename R = FlatMapFunctor<F>>
+  AsyncValueRef<R> FlatMap(Executor& executor, F&& f) {
+    // We don't have a special handling for concrete values here because
+    // we must execute user functor on a separate executor and can't call it in
+    // the caller thread.
     auto promise = MakePromise<R>();
-    // We don't know when the executor will run the callback, so we need to
-    // copy the AsyncValueRef to keep the underlying value alive.
-    AndThen(executor,
-            [f = std::forward<F>(f), promise, ref = CopyRef()]() mutable {
-              if (ABSL_PREDICT_FALSE(ref.IsError())) {
-                promise->SetError(ref.GetError());
-              } else {
-                promise->ForwardTo(f(*ref));
-              }
-            });
-    return AsyncValueRef<typename R::value_type>(promise);
+    AndThen(executor, [f = std::forward<F>(f), promise, ptr = *this]() mutable {
+      if (ABSL_PREDICT_FALSE(ptr.IsError())) {
+        promise->SetError(ptr.GetError());
+      } else {
+        if constexpr (std::is_invocable_v<F, T&>) {
+          promise->ForwardTo(f(*ptr));
+        } else {
+          promise->ForwardTo(f(ptr));
+        }
+      }
+    });
+    return AsyncValueRef<R>(promise);
   }
 
  private:
@@ -719,8 +824,8 @@ class AsyncValuePtr {
   // types and this will be a run time error.
   template <typename R>
   RCReference<IndirectAsyncValue> MakePromise() {
-    if constexpr (std::is_final_v<typename R::value_type>) {
-      return MakeIndirectAsyncValue<typename R::value_type>();
+    if constexpr (std::is_final_v<R>) {
+      return MakeIndirectAsyncValue<R>();
     } else {
       return MakeIndirectAsyncValue();
     };
@@ -729,11 +834,145 @@ class AsyncValuePtr {
   AsyncValue* value_;  // doesn't own the async value
 };
 
-// Create a ConcreteAsyncValue in error state with the given status.
-RCReference<ErrorAsyncValue> MakeErrorAsyncValueRef(absl::Status status);
+//===----------------------------------------------------------------------===//
+// Count down AsyncValueRef.
+//===----------------------------------------------------------------------===//
 
-ABSL_DEPRECATED("Use the error async value constructor that takes absl::Status")
-RCReference<ErrorAsyncValue> MakeErrorAsyncValueRef(std::string_view message);
+// Count down async value ref is used to set the async value available when the
+// count reaches zero, or to an error state if any of the count down operations
+// fails.
+//
+// Sample usage:
+//
+//   AsyncValueRef<Chain> done = MakeConstructedAsyncValueRef<Chain>();
+//   CountDownAsyncValueRef<Chain> count_down(done, num_tasks);
+//
+//   for (size_t i = 0; i < num_tasks; ++i) {
+//     thread_pool.Schedule([count_down] {
+//       count_down.CountDown();
+//     });
+//   }
+//
+//   return done;
+//
+//  When the counter reaches zero, the async value will be set to available
+//  state (or an error state if any of the count down operations got an error).
+template <typename T>
+class CountDownAsyncValueRef {
+ public:
+  CountDownAsyncValueRef() = default;
+
+  CountDownAsyncValueRef(AsyncValueRef<T> ref, int64_t cnt)
+      : state_(std::make_shared<State>(std::move(ref), cnt)) {
+    DCHECK(state_->ref.IsConstructed()) << "AsyncValue must be constructed";
+    DCHECK(state_->ref.IsUnavailable()) << "AsyncValue must be unavailable";
+    DCHECK_GE(cnt, 0) << "Count must be positive";
+    if (ABSL_PREDICT_FALSE(cnt == 0)) {
+      state_->ref.SetStateConcrete();
+    }
+  }
+
+  template <typename... Args>
+  explicit CountDownAsyncValueRef(int64_t cnt, Args&&... args)
+      : CountDownAsyncValueRef(
+            MakeConstructedAsyncValueRef<T>(std::forward<Args>(args)...), cnt) {
+  }
+
+  // Drops the count by `count` and returns true if async value became
+  // available.
+  bool CountDown(size_t count, const absl::Status& status = absl::OkStatus()) {
+    // If `count` is zero, return the current state of the count down.
+    if (ABSL_PREDICT_FALSE(count == 0)) {
+      return state_->cnt.load(std::memory_order_relaxed) == 0;
+    }
+
+    DCHECK(state_->ref.IsUnavailable()) << "AsyncValue must be unavailable";
+    DCHECK_GE(state_->cnt.load(), count) << "Invalid count down value";
+
+    if (ABSL_PREDICT_FALSE(!status.ok())) {
+      absl::MutexLock lock(state_->mutex);
+      state_->is_error.store(true, std::memory_order_release);
+      state_->status = status;
+    }
+
+    // Note on the `std::memory_order_acq_rel` barrier below:
+    //
+    // 1. It is an acquire barrier because we want to make sure that, if the
+    //    current thread sets `is_error` above, then another thread who might
+    //    set `cnt` to 0 will read an up-to-date is_error. An acquire barrier
+    //    achieves this by forcing ordering between the is_error load and the
+    //    fetch_sub. Note that there is a control dependence between the two,
+    //    not a data dependence; we therefore need an acquire ("read") barrier
+    //    to enforce ordering, otherwise the compiler or CPU might speculatively
+    //    perform the second load before the first.
+    //
+    // 2. It is also a release barrier because all prior writes in the thread
+    //    should be visible to other threads after the fetch_sub -- otherwise
+    //    other threads might not see updated values.
+    bool is_complete =
+        state_->cnt.fetch_sub(count, std::memory_order_acq_rel) == count;
+
+    // If this was the last count down, we have to decide if we set async value
+    // to concrete or error state.
+    if (ABSL_PREDICT_FALSE(is_complete)) {
+      bool is_error = state_->is_error.load(std::memory_order_acquire);
+      if (ABSL_PREDICT_FALSE(is_error)) {
+        // Ownership of the CountDownAsyncValueRef can be transferred to
+        // AsyncValueRef itself (via the `AndThen` callback), and `ref.SetError`
+        // call can destroy the `state_` and its mutex. We take the
+        // error status by copy to avoid using memory after it was freed.
+        auto take_error = [&] {
+          absl::MutexLock lock(state_->mutex);
+          return state_->status;
+        };
+        state_->ref.SetError(take_error());
+      } else {
+        state_->ref.SetStateConcrete();
+      }
+      return true;
+    }
+
+    return false;
+  }
+
+  // Drops the count by `1` and returns true if async value became available.
+  bool CountDown(absl::Status status = absl::OkStatus()) {
+    return CountDown(1, status);
+  }
+
+  AsyncValueRef<T> AsRef() && { return std::move(state_->ref); }
+  AsyncValueRef<T> AsRef() const& { return state_->ref; }
+
+  AsyncValuePtr<T> AsPtr() const { return state_->ref.AsPtr(); }
+
+  // Returns true if count down was called with an error.
+  bool is_error() const {
+    return state_->is_error.load(std::memory_order_acquire);
+  }
+
+  // Returns the number of count down operations left.
+  int64_t count() const { return state_->cnt.load(std::memory_order_acquire); }
+
+  explicit operator bool() const { return state_ != nullptr; }
+
+ private:
+  struct State {
+    State(AsyncValueRef<T> ref, int64_t cnt)
+        : ref(std::move(ref)), cnt(cnt), is_error(false) {}
+
+    AsyncValueRef<T> ref;
+
+    // Align atomic counters to a cache line boundary to avoid reloading `cnt`
+    // cache line when checking `is_error` status.
+    ABSL_CACHELINE_ALIGNED std::atomic<int64_t> cnt;
+    ABSL_CACHELINE_ALIGNED std::atomic<bool> is_error;
+
+    absl::Mutex mutex;
+    absl::Status status ABSL_GUARDED_BY(mutex);
+  };
+
+  std::shared_ptr<State> state_;
+};
 
 //===----------------------------------------------------------------------===//
 // Functions for awaiting on the async values.
@@ -781,8 +1020,8 @@ bool Isa(const AsyncValueRef<T>& ref) {
 
 template <typename Derived, typename T,
           internal::DerivedFrom<Derived, T>* = nullptr>
-AsyncValueRef<Derived> Cast(const AsyncValueRef<T>& ref) {
-  return ref.template Cast<Derived>();
+AsyncValueRef<Derived> Cast(AsyncValueRef<T> ref) {
+  return std::move(ref).template Cast<Derived>();
 }
 
 template <typename Derived, typename T,
@@ -793,8 +1032,20 @@ AsyncValueRef<Derived> DynCast(const AsyncValueRef<T>& ref) {
 
 template <typename Derived, typename T,
           internal::DerivedFrom<Derived, T>* = nullptr>
+AsyncValueRef<Derived> DynCast(AsyncValueRef<T>&& ref) {
+  return std::move(ref).template DynCast<Derived>();
+}
+
+template <typename Derived, typename T,
+          internal::DerivedFrom<Derived, T>* = nullptr>
 AsyncValueRef<Derived> DynCastOrNull(const AsyncValueRef<T>& ref) {
   return ref.template DynCastOrNull<Derived>();
+}
+
+template <typename Derived, typename T,
+          internal::DerivedFrom<Derived, T>* = nullptr>
+AsyncValueRef<Derived> DynCastOrNull(AsyncValueRef<T>&& ref) {
+  return std::move(ref).template DynCastOrNull<Derived>();
 }
 
 template <typename Derived, typename T,
@@ -834,11 +1085,17 @@ T* PlacementConstruct(void* buf, Args&&... args) {
 
 template <typename T, typename... Args>
 T* AllocateAndConstruct(Args&&... args) {
-  void* buf = port::AlignedMalloc(sizeof(T), alignof(T));
+  void* buf = ::operator new(sizeof(T), std::align_val_t{alignof(T)});
   return PlacementConstruct<T, Args...>(buf, std::forward<Args>(args)...);
 }
 
 }  // namespace internal
+
+// Construct an empty IndirectAsyncValue with a known type.
+template <typename T>
+RCReference<IndirectAsyncValue> MakeIndirectAsyncValue() {
+  return TakeRef(internal::AllocateAndConstruct<TypedIndirectAsyncValue<T>>());
+}
 
 // Allocate an unconstructed AsyncValueRef. The AsyncValueRef should be made
 // available later by invoking AsyncValueRef::emplace or
@@ -870,13 +1127,71 @@ AsyncValueRef<T> MakeAvailableAsyncValueRef(Args&&... args) {
           std::forward<Args>(args)...)));
 }
 
-// Construct an empty IndirectAsyncValue, not forwarding to anything.
-RCReference<IndirectAsyncValue> MakeIndirectAsyncValue();
-
-// Construct an empty IndirectAsyncValue with a known type.
+// Allocate and construct an available AsyncValueRef backed by a
+// std::shared_ptr.
 template <typename T>
-RCReference<IndirectAsyncValue> MakeIndirectAsyncValue() {
-  return TakeRef(internal::AllocateAndConstruct<TypedIndirectAsyncValue<T>>());
+AsyncValueRef<T> MakeAvailableAsyncValueRef(std::shared_ptr<T> value) {
+  return AsyncValueRef<T>(
+      tsl::MakeRef<internal::SharedPtrAsyncValue>(std::move(value)));
+}
+
+// Allocates an AsyncValueRef that is constructed from the result of calling an
+// `f` on a user-provided `executor`.
+//
+// Sample usage:
+//
+//   MakeAsyncValueRef<int32_t>(executor, []() -> int32_t { ... });
+//
+template <typename T, typename F, typename R = std::invoke_result_t<F>,
+          std::enable_if_t<std::is_constructible_v<T, R>>* = nullptr>
+AsyncValueRef<T> MakeAsyncValueRef(Executor& executor, F&& f) {
+  auto result = MakeUnconstructedAsyncValueRef<T>();
+  executor.Execute(
+      [result, f = std::forward<F>(f)]() mutable { result.emplace(f()); });
+  return result;
+}
+
+// A `MakeAsyncValueRef` overload that automatically infers the type of result
+// from `f`.
+template <typename F, typename R = std::invoke_result_t<F>>
+AsyncValueRef<R> MakeAsyncValueRef(Executor& executor, F&& f) {
+  return MakeAsyncValueRef<R>(executor, std::forward<F>(f));
+}
+
+// Allocates an AsyncValueRef that is constructed from the result of calling an
+// `f` on a user-provided `executor`. `F` must return an absl::StatusOr<U>, and
+// result of type `T` must be constructible from `U`.
+//
+// Sample usage:
+//
+//   TryMakeAsyncValueRef<int32_t>(executor,
+//     []() -> absl::StatusOr<int32_t> { ... });
+//
+template <typename T, typename F, typename R = std::invoke_result_t<F>,
+          std::enable_if_t<
+              internal::is_status_or_v<R> &&
+              std::is_constructible_v<T, typename R::value_type>>* = nullptr>
+AsyncValueRef<T> TryMakeAsyncValueRef(Executor& executor, F&& f) {
+  auto result = MakeUnconstructedAsyncValueRef<T>();
+  executor.Execute([result, f = std::forward<F>(f)]() mutable {
+    absl::StatusOr<typename R::value_type> status_or = f();
+    if (ABSL_PREDICT_TRUE(status_or.ok())) {
+      result.emplace(std::move(status_or).value());
+    } else {
+      result.SetError(std::move(status_or).status());
+    }
+  });
+  return result;
+}
+
+// A `TryMakeAsyncValueRef` overload that automatically infers the type of
+// result from `f`.
+template <typename F, typename R = std::invoke_result_t<F>,
+          std::enable_if_t<internal::is_status_or_v<R>>* = nullptr>
+AsyncValueRef<typename R::value_type> TryMakeAsyncValueRef(Executor& executor,
+                                                           F&& f) {
+  return TryMakeAsyncValueRef<typename R::value_type>(executor,
+                                                      std::forward<F>(f));
 }
 
 //===----------------------------------------------------------------------===//
@@ -914,13 +1229,13 @@ class AsyncValueOwningRef {
   AsyncValueOwningRef(const AsyncValueOwningRef&) = delete;
   AsyncValueOwningRef& operator=(const AsyncValueOwningRef&) = delete;
 
-  AsyncValueOwningRef& operator=(AsyncValueOwningRef&& other) {
+  AsyncValueOwningRef& operator=(AsyncValueOwningRef&& other) noexcept {
     Destroy();
     std::swap(value_, other.value_);
     return *this;
   }
 
-  AsyncValueOwningRef(AsyncValueOwningRef&& other) {
+  AsyncValueOwningRef(AsyncValueOwningRef&& other) noexcept {
     Destroy();
     std::swap(value_, other.value_);
   }
@@ -932,6 +1247,10 @@ class AsyncValueOwningRef {
   T& operator*() const { return value_->get(); }
 
  private:
+  static_assert(
+      std::is_trivially_destructible_v<internal::AsyncValueStorage<T>>,
+      "AsyncValueStorage must be trivially destructible");
+
   template <typename U, typename... Args>
   friend AsyncValueOwningRef<U> MakeConstructedAsyncValueRef(
       internal::AsyncValueStorage<U>&, Args&&...);
@@ -939,6 +1258,10 @@ class AsyncValueOwningRef {
   template <typename U, typename... Args>
   friend AsyncValueOwningRef<U> MakeAvailableAsyncValueRef(
       internal::AsyncValueStorage<U>&, Args&&...);
+
+  template <typename U>
+  friend AsyncValueOwningRef<U> MakeUnconstructedAsyncValueRef(
+      internal::AsyncValueStorage<U>&);
 
   explicit AsyncValueOwningRef(internal::ConcreteAsyncValue<T>* value)
       : value_(value) {}
@@ -968,7 +1291,8 @@ AsyncValueOwningRef<T> MakeConstructedAsyncValueRef(
   return AsyncValueOwningRef<T>(
       internal::PlacementConstruct<internal::ConcreteAsyncValue<T>>(
           storage.buf(),
-          typename internal::ConcreteAsyncValue<T>::ConstructedPayload{false},
+          typename internal::ConcreteAsyncValue<T>::ConstructedPayload{
+              /*is_refcounted=*/false},
           std::forward<Args>(args)...));
 }
 
@@ -979,9 +1303,87 @@ AsyncValueOwningRef<T> MakeAvailableAsyncValueRef(
   return AsyncValueOwningRef<T>(
       internal::PlacementConstruct<internal::ConcreteAsyncValue<T>>(
           storage.buf(),
-          typename internal::ConcreteAsyncValue<T>::ConcretePayload{false},
+          typename internal::ConcreteAsyncValue<T>::ConcretePayload{
+              /*is_refcounted=*/false},
           std::forward<Args>(args)...));
 }
+
+// Makes unavailable AsyncValueRef in the provided storage.
+template <typename T>
+AsyncValueOwningRef<T> MakeUnconstructedAsyncValueRef(
+    internal::AsyncValueStorage<T>& storage) {
+  return AsyncValueOwningRef<T>(
+      internal::PlacementConstruct<internal::ConcreteAsyncValue<T>>(
+          storage.buf(),
+          typename internal::ConcreteAsyncValue<T>::UnconstructedPayload{
+              /*is_refcounted=*/false}));
+}
+
+// A helper RAII class that bundles together AsyncValueStorage and an owning
+// ref, which is useful when AsyncValue has to be allocated as a part of a
+// parent object or on a stack.
+//
+// Example:
+//
+// 1. Allocating async value as a part of a parent object:
+//
+//   struct Buffer {
+//     void* base;
+//
+//     // Event that signals that data in 'base' is ready for consumption.
+//     ScopedAsyncValue<Event> ready;
+//   };
+//
+// 2. Allocating async value in a static storage:
+//
+//   static absl::NoDestructor<ScopedAsyncValue<Foo>> foo(...);
+//
+// 3. Allocating async value on a stack:
+//
+//   ScopedAsyncValue<Foo> foo(...);
+//   auto foo_ref = foo.AsRef();
+//
+// WARNING: ScopedAsyncValue lifetime is bound to the lifetime of the parent
+// object (or a function call stack), and derived async value pointers and
+// references will become invalid when the parent object is destroyed. Users
+// must take extra care to ensure that async value references and pointers are
+// not used after the parent object is destroyed (i.e. captured in a callback).
+template <typename T>
+class ScopedAsyncValue {
+ public:
+  ScopedAsyncValue() : ref_(MakeUnconstructedAsyncValueRef<T>(storage_)) {}
+
+  // Type tags to select the correct async value constructor.
+  struct ConstructedTag {};
+  struct AvailableTag {};
+  struct ErrorTag {};
+
+  template <typename... Args>
+  explicit ScopedAsyncValue(ConstructedTag, Args&&... args)
+      : ref_(MakeConstructedAsyncValueRef<T>(storage_,
+                                             std::forward<Args>(args)...)) {}
+
+  template <typename... Args>
+  explicit ScopedAsyncValue(AvailableTag, Args&&... args)
+      : ref_(MakeAvailableAsyncValueRef<T>(storage_,
+                                           std::forward<Args>(args)...)) {}
+
+  template <typename... Args>
+  explicit ScopedAsyncValue(ErrorTag, absl::Status status)
+      : ref_(MakeUnconstructedAsyncValueRef<T>(storage_)) {
+    ref_.AsPtr().SetError(std::move(status));
+  }
+
+  ScopedAsyncValue(ScopedAsyncValue&&) = delete;
+  ScopedAsyncValue& operator=(ScopedAsyncValue&&) = delete;
+
+  AsyncValueRef<T> AsRef() const { return ref_.AsRef(); }
+  AsyncValuePtr<T> AsPtr() const { return ref_.AsPtr(); }
+
+ private:
+  internal::AsyncValueStorage<T> storage_;
+  AsyncValueOwningRef<T> ref_;
+};
 
 }  // namespace tsl
 

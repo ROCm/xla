@@ -17,17 +17,22 @@ limitations under the License.
 #define XLA_HLO_IR_HLO_SCHEDULE_H_
 
 #include <algorithm>
+#include <cstdint>
 #include <ostream>
 #include <string>
 #include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/service/hlo.pb.h"
 
 namespace xla {
 
@@ -40,9 +45,19 @@ class HloInstructionSequence {
   HloInstructionSequence() = default;
   explicit HloInstructionSequence(
       absl::Span<HloInstruction* const> instructions) {
+    reserve(instructions.size());
     for (HloInstruction* instruction : instructions) {
       push_back(instruction);
     }
+  }
+
+  bool operator==(const HloInstructionSequence& other) const {
+    return instruction_sequence_ == other.instruction_sequence_ &&
+           id_sequence_ == other.id_sequence_;
+  }
+
+  bool operator!=(const HloInstructionSequence& other) const {
+    return !(*this == other);
   }
 
   // Adds the instruction to the end of the sequence.
@@ -51,13 +66,17 @@ class HloInstructionSequence {
     id_sequence_.push_back(instruction->unique_id());
   }
 
+  void reserve(int64_t size) {
+    instruction_sequence_.reserve(size);
+    id_sequence_.reserve(size);
+  }
+
   // Removes the instruction from the sequence.
   void remove_instruction(HloInstruction* instruction) {
-    auto instruction_it = std::find(instruction_sequence_.begin(),
-                                    instruction_sequence_.end(), instruction);
-    if (instruction_it != instruction_sequence_.end()) {
-      auto id_it = std::find(id_sequence_.begin(), id_sequence_.end(),
-                             instruction->unique_id());
+    auto instruction_it = absl::c_find(instruction_sequence_, instruction);
+    if (instruction_it != instruction_sequence_.end() &&
+        instruction->parent() != nullptr) {
+      auto id_it = absl::c_find(id_sequence_, instruction->unique_id());
       instruction_sequence_.erase(instruction_it);
       id_sequence_.erase(id_it);
     }
@@ -66,11 +85,8 @@ class HloInstructionSequence {
   // Replaces the old instruction with the new instruction in the sequence.
   void replace_instruction(HloInstruction* old_instruction,
                            HloInstruction* new_instruction) {
-    auto instruction_it =
-        std::find(instruction_sequence_.begin(), instruction_sequence_.end(),
-                  old_instruction);
-    auto id_it = std::find(id_sequence_.begin(), id_sequence_.end(),
-                           old_instruction->unique_id());
+    auto instruction_it = absl::c_find(instruction_sequence_, old_instruction);
+    auto id_it = absl::c_find(id_sequence_, old_instruction->unique_id());
     CHECK(instruction_it != instruction_sequence_.end())
         << "Do not find instruction id " << old_instruction->unique_id();
     CHECK(id_it != id_sequence_.end());
@@ -84,6 +100,11 @@ class HloInstructionSequence {
     instruction_sequence_.insert(instruction_sequence_.begin() + index,
                                  instruction);
     id_sequence_.insert(id_sequence_.begin() + index, instruction->unique_id());
+  }
+
+  bool contains(const HloInstruction* inst) const {
+    return absl::c_find(instruction_sequence_, inst) !=
+           instruction_sequence_.end();
   }
 
   // Clears the sequence of all instructions.
@@ -100,7 +121,17 @@ class HloInstructionSequence {
   }
 
   // Returns the unique IDs of the instructions in the sequence (in order).
-  const std::vector<int>& ids() const { return id_sequence_; }
+  const std::vector<int64_t>& ids() const { return id_sequence_; }
+
+  // Updates the sequence of unique IDs to match the sequence of instructions.
+  // This is required when the HLO Module calls Cleanup(), which invalidates
+  // the old unique IDs.
+  void update_id_sequence() {
+    id_sequence_.clear();
+    for (HloInstruction* instruction : instruction_sequence_) {
+      id_sequence_.push_back(instruction->unique_id());
+    }
+  }
 
  private:
   // The sequence as HloInstructions.
@@ -111,7 +142,7 @@ class HloInstructionSequence {
   // sequence may be referenced after transformations to the HLO graph and HLO
   // pointers can be invalidated or recycled in this process (see
   // HloSchedule::Update).
-  std::vector<int> id_sequence_;
+  std::vector<int64_t> id_sequence_;
 };
 
 // A class representing a sequential schedule of instructions for an HLO
@@ -121,9 +152,16 @@ class HloSchedule {
  public:
   explicit HloSchedule(const HloModule* module) : module_(module) {}
 
-  // (De)Serialize an HloSchedule to/from a HloScheduleProto.
+  // (De)Serialize an HloSchedule to/from a HloScheduleProto. If
+  // proto_id_to_instruction_id_map is provided, it will be used to map the
+  // instruction ids in the proto to the instruction ids in the HloModule. This
+  // is necessary if the HloModuleProto was created with
+  // preserve_instruction_ids=false. The map must use full instruction unique
+  // ids as keys.
   static absl::StatusOr<HloSchedule> CreateFromProto(
-      const HloModule* module, const HloScheduleProto& proto);
+      const HloModule* module, const HloScheduleProto& proto,
+      const absl::flat_hash_map<int64_t, absl::flat_hash_map<int64_t, int64_t>>*
+          computation_id_to_instruction_id_remap = nullptr);
   absl::StatusOr<HloScheduleProto> ToProto() const;
 
   // Returns a reference to the sequence for the given computation.
@@ -198,6 +236,9 @@ class HloSchedule {
   // non-fusion computations in the module and every dependency in the module is
   // satisfied in the schedule.
   absl::Status Verify() const;
+
+  // Verifies that the given schedule is valid for the given computation.
+  absl::Status Verify(const HloComputation* computation) const;
 
   std::string ToString() const;
 

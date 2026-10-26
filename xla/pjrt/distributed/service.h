@@ -19,19 +19,20 @@ limitations under the License.
 #include <memory>
 #include <string>
 
+#include "absl/base/nullability.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/synchronization/notification.h"
 #include "absl/time/time.h"
 #include "grpcpp/grpcpp.h"
 #include "grpcpp/security/server_credentials.h"
 #include "grpcpp/server_builder.h"
-#include "xla/statusor.h"
-#include "xla/tsl/distributed_runtime/coordination/coordination_service.h"
-#include "xla/tsl/distributed_runtime/rpc/async_service_interface.h"
-#include "xla/types.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/threadpool.h"
+#include "xla/pjrt/distributed/coordination/coordination_service.h"
+#include "xla/tsl/distributed_runtime/rpc/async_service_interface.h"
+#include "xla/types.h"
 
 namespace xla {
 
@@ -43,15 +44,16 @@ class CoordinationServiceImpl {
     // Number of nodes in the job. Mandatory. Must be non-negative.
     int num_nodes = -1;
 
+    // If true, a job can continue running even if some tasks have failed, and
+    // tasks are allowed to rejoin. If false, tasks share fate. As soon as one
+    // task fails, all tasks are permanently failed.
+    bool recoverable = false;
+
     tsl::Env* env = tsl::Env::Default();
 
-    // Interval at which the service should check for missed heartbeat RPCs
-    // from the clients.
-    absl::Duration heartbeat_interval = absl::Seconds(10);
-
-    // Number of heartbeats that a client may miss in a row before the
-    // coordinator concludes that a client has vanished.
-    int max_missing_heartbeats = 10;
+    // The duration after which the service concludes a client has vanished if
+    // it hasn't received any heartbeats from the client.
+    absl::Duration heartbeat_timeout = absl::Seconds(100);
 
     // How long should we wait for all clients to call Connect() before
     // giving up?
@@ -60,6 +62,12 @@ class CoordinationServiceImpl {
     // How long should we wait for all clients to call Shutdown() before giving
     // up and returning a failure?
     absl::Duration shutdown_timeout = absl::Minutes(5);
+
+    // An optional gRPC credentials to use for the server.
+    absl_nullable std::shared_ptr<::grpc::ServerCredentials> credentials;
+
+    // If true, crash if insecure credentials are used.
+    bool verify_secure_credentials = false;
   };
 
   CoordinationServiceImpl(const Options& options,
@@ -76,7 +84,7 @@ class CoordinationServiceImpl {
 
  private:
   tsl::Env* env_ = nullptr;  // Not owned.
-  std::unique_ptr<tsl::CoordinationServiceInterface> coord_service_;
+  std::unique_ptr<CoordinationService> coord_service_;
   std::unique_ptr<tsl::thread::ThreadPool> coord_compute_pool_;
   std::unique_ptr<tsl::AsyncServiceInterface> coord_rpc_service_;
   std::unique_ptr<tsl::Thread> coord_rpc_thread_;

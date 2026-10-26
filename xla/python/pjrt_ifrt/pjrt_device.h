@@ -23,27 +23,28 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "llvm/Support/ExtensibleRTTI.h"
 #include "xla/pjrt/pjrt_client.h"
 #include "xla/pjrt/pjrt_device_description.h"
+#include "xla/python/ifrt/attribute_map.h"
 #include "xla/python/ifrt/device.h"
+#include "xla/python/ifrt/rtti.h"
 #include "xla/python/pjrt_ifrt/pjrt_client.h"
 
 namespace xla {
 namespace ifrt {
 
-class PjRtCompatibleDevice : public llvm::RTTIExtends<PjRtDevice, Device> {
+class PjRtCompatibleDevice : public RTTIExtends<PjRtDevice, Device> {
  public:
   virtual xla::PjRtDevice* pjrt_device() const = 0;
 
   static char ID;  // NOLINT
 };
 
-class PjRtDevice final
-    : public llvm::RTTIExtends<PjRtDevice, PjRtCompatibleDevice> {
+class PjRtDevice final : public RTTIExtends<PjRtDevice, PjRtCompatibleDevice> {
  public:
-  PjRtDevice(PjRtClient* client, DeviceId id, std::string kind,
-             std::string to_string, std::string debug_string, int process_index,
+  PjRtDevice(PjRtClient* client, DeviceId id, std::string platform_name,
+             std::string kind, std::string to_string, std::string debug_string,
+             int process_index,
              absl::flat_hash_map<std::string, PjRtDeviceAttribute> attributes,
              xla::PjRtDevice* pjrt_device);
 
@@ -55,6 +56,8 @@ class PjRtDevice final
   PjRtClient* client() const override { return client_; }
 
   DeviceId Id() const final;
+  const AttributeMap& Attributes() const final;
+  absl::string_view PlatformName() const final;
   absl::string_view Kind() const final;
   absl::string_view ToString() const final;
   absl::string_view DebugString() const final;
@@ -62,8 +65,6 @@ class PjRtDevice final
   absl::StatusOr<Memory*> DefaultMemory() const final;
   absl::Span<Memory* const> Memories() const final;
   int ProcessIndex() const final;
-  const absl::flat_hash_map<std::string, PjRtDeviceAttribute>& Attributes()
-      const final;
 
   static char ID;  // NOLINT
 
@@ -73,13 +74,14 @@ class PjRtDevice final
   PjRtClient* client_;
 
   DeviceId id_;
+  AttributeMap attributes_;
+  std::string platform_name_;
   std::string kind_;
   std::string to_string_;
   std::string debug_string_;
   absl::StatusOr<Memory*> default_memory_;
   std::vector<Memory*> memories_;
   int process_index_;
-  absl::flat_hash_map<std::string, PjRtDeviceAttribute> attributes_;
 
   xla::PjRtDevice* pjrt_device_;
 };

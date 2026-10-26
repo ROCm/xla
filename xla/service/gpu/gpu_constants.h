@@ -18,6 +18,8 @@ limitations under the License.
 
 #include <cstdint>
 
+#include "xla/codegen/emitters/kernel_arguments.h"
+
 namespace xla {
 namespace gpu {
 
@@ -38,11 +40,23 @@ inline constexpr int64_t kEntryParameterAlignBytes = 16;
 // says that 1024-bit (128-byte) alignment "may deliver better performance".
 // https://docs.nvidia.com/deeplearning/cudnn/developer-guide/index.html#tensor-ops-guidelines-for-dl-compiler
 //
-inline constexpr int64_t kXlaAllocatedBufferAlignBytes = 128;
+// cublas requires 256-byte alignment as of v12.9.1.4.
+// https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html#cublas-release-12-9
+inline constexpr int64_t kXlaAllocatedBufferAlignBytes = 256;
 
 // Minimum alignment for constant buffers.
 inline constexpr int64_t kConstantBufferAlignBytes =
     kXlaAllocatedBufferAlignBytes;
+
+inline emitters::KernelArguments::BufferAlignment GetDefaultBufferAlignment() {
+  emitters::KernelArguments::BufferAlignment buffer_alignment;
+  buffer_alignment.entry_parameter_align_bytes = kEntryParameterAlignBytes;
+  buffer_alignment.xla_allocated_buffer_align_bytes =
+      kXlaAllocatedBufferAlignBytes;
+  buffer_alignment.constant_buffer_align_bytes = kConstantBufferAlignBytes;
+
+  return buffer_alignment;
+}
 
 }  // namespace gpu
 }  // namespace xla

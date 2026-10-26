@@ -14,10 +14,10 @@ limitations under the License.
 ==============================================================================*/
 #include <memory>
 
-#include "xla/backends/profiler/cpu/host_tracer.h"
 #include "tsl/profiler/lib/profiler_factory.h"
 #include "tsl/profiler/lib/profiler_interface.h"
 #include "tsl/profiler/protobuf/profiler_options.pb.h"
+#include "xla/backends/profiler/cpu/host_tracer.h"
 
 namespace xla {
 namespace profiler {
@@ -27,6 +27,10 @@ std::unique_ptr<tsl::profiler::ProfilerInterface> CreateHostTracer(
     const tensorflow::ProfileOptions& profile_options) {
   HostTracerOptions options;
   options.trace_level = profile_options.host_tracer_level();
+  if (profile_options.trace_options().host_traceme_filter_mask()) {
+    options.filter_mask =
+        profile_options.trace_options().host_traceme_filter_mask();
+  }
   return CreateHostTracer(options);
 }
 

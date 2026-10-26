@@ -12,27 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <gtest/gtest.h>
+
 #include <string>
 
-#include <gtest/gtest.h>
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
-#include "xla/python/ifrt/test_util.h"
+#include "xla/python/ifrt_proxy/integration_tests/scoped_pjrt_cpu_via_proxy.h"
 
 int main(int argc, char** argv) {
   const std::string disabled[] = {
-      // Executable::IsDeleted always returns false with TFRT CPU backend.
-      "LoadedExecutableImplTest.IsDeleted",
-
-      // Enable this when Serialization support for IFRT IR is available.
-      "IfrtIrExecutableImplTest.CallXla",
-      "IfrtIrExecutableImplTest.Reshard",
-      "IfrtIrExecutableImplTest.ZeroInput",
-      "IfrtIrExecutableImplTest.ZeroOutput",
-      "IfrtIrExecutableImplTest.BufferDonation",
-      "IfrtIrExecutableImplTest.LoadedExecBinding",
-      "ProgramLoadedExecutableImplTest.MultipleAtomProgramsNeedDummyInputs",
+      // Neither IFRT Proxy nor PjRt CPU does not support `GetHloModules`.
+      "*LoadedExecutableImplTest.GetHloModules*",
+      // ExecuteBundle is not implemented.
+      "*CompileAndExecuteBundle*",
+      // CPU backend does not support serialization.
+      "*SerializeAndLoad*",
   };
 
   const std::string filter = absl::StrCat("-", absl::StrJoin(disabled, ":"));
@@ -44,5 +40,6 @@ int main(int argc, char** argv) {
 #endif
 
   testing::InitGoogleTest(&argc, argv);
+  xla::ifrt::proxy::test_util::ScopedPjRtCpuViaProxy scoped_pjrt_cpu_via_proxy;
   return RUN_ALL_TESTS();
 }

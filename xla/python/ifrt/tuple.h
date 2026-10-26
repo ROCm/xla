@@ -24,7 +24,7 @@ limitations under the License.
 
 #include "absl/status/status.h"
 #include "absl/types/span.h"
-#include "llvm/Support/ExtensibleRTTI.h"
+#include "xla/python/ifrt/rtti.h"
 #include "xla/python/ifrt/value.h"
 #include "xla/tsl/concurrency/ref_count.h"
 
@@ -39,7 +39,7 @@ class Client;
 // any of its elements have been deleted.
 // The future returned by Delete() triggers with an Ok status when the tuple and
 // all of its elements have been deleted.
-class Tuple : public llvm::RTTIExtends<Tuple, Value> {
+class Tuple : public RTTIExtends<Tuple, Value> {
  public:
   Tuple() = default;
 
@@ -53,7 +53,7 @@ class Tuple : public llvm::RTTIExtends<Tuple, Value> {
   virtual int Arity() = 0;
 
   // Unpacks the tuple into its constituent pieces.
-  virtual absl::Status Unpack(absl::Span<tsl::RCReference<Value>> values) = 0;
+  virtual absl::Status Unpack(absl::Span<ValueRef> values) = 0;
 
   static char ID;  // NOLINT
 };

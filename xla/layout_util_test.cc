@@ -15,32 +15,36 @@ limitations under the License.
 
 #include "xla/layout_util.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <cstdint>
 #include <vector>
 
 #include "absl/types/span.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/testlib/test_helpers.h"
 #include "xla/layout.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/test.h"
-#include "xla/test_helpers.h"
+#include "xla/tsl/platform/logging.h"  // IWYU pragma: keep
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"  // IWYU pragma: keep
-#include "tsl/platform/status_matchers.h"
 
 namespace xla {
 namespace {
 
+using ::testing::ContainsRegex;
+using ::testing::ElementsAre;
+using ::testing::HasSubstr;
+
 class LayoutUtilTest : public ::testing::Test {
  protected:
-  Shape MakeShapeWithLayout(
-      PrimitiveType element_type, absl::Span<const int64_t> dimensions,
-      absl::Span<const int64_t> minor_to_major,
-      absl::Span<const DimLevelType> dim_level_types = {}) {
+  Shape MakeShapeWithLayout(PrimitiveType element_type,
+                            absl::Span<const int64_t> dimensions,
+                            absl::Span<const int64_t> minor_to_major,
+                            absl::Span<const Tile> tiles = {}) {
     Shape shape = ShapeUtil::MakeShape(element_type, dimensions);
-    *shape.mutable_layout() =
-        LayoutUtil::MakeLayout(minor_to_major, dim_level_types);
+    *shape.mutable_layout() = LayoutUtil::MakeLayout(minor_to_major, tiles);
     return shape;
   }
 };
@@ -94,57 +98,6 @@ TEST_F(LayoutUtilTest, CopyLayoutDenseArray) {
   EXPECT_FALSE(dst.has_layout());
 }
 
-TEST_F(LayoutUtilTest, CopyLayoutCSRArray) {
-  Shape src =
-      MakeShapeWithLayout(F32, {2, 3}, {1, 0}, {DIM_DENSE, DIM_COMPRESSED});
-  Shape dst = MakeShapeWithLayout(F32, {2, 3}, {0, 1});
-
-  EXPECT_TRUE(LayoutUtil::IsSparseArray(src));
-  EXPECT_FALSE(LayoutUtil::IsSparseArray(dst));
-
-  EXPECT_TRUE(LayoutUtil::IsCSRArray(src));
-  EXPECT_FALSE(LayoutUtil::IsCSRArray(dst));
-
-  EXPECT_FALSE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-  EXPECT_IS_OK(LayoutUtil::CopyLayoutBetweenShapes(src, &dst));
-  EXPECT_TRUE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-  EXPECT_TRUE(LayoutUtil::IsCSRArray(dst));
-
-  // Should work if destination has no layout.
-  dst.clear_layout();
-  EXPECT_FALSE(LayoutUtil::IsCSRArray(dst));
-  EXPECT_FALSE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-  EXPECT_IS_OK(LayoutUtil::CopyLayoutBetweenShapes(src, &dst));
-  EXPECT_TRUE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-  EXPECT_TRUE(LayoutUtil::IsCSRArray(dst));
-
-  // Convert dst to a CSC array with dim 0 minor layout.
-  *dst.mutable_layout()->mutable_minor_to_major() = {0, 1};
-  EXPECT_TRUE(LayoutUtil::IsCSCArray(dst));
-  EXPECT_FALSE(LayoutUtil::IsCSRArray(dst));
-
-  EXPECT_IS_OK(LayoutUtil::CopyLayoutBetweenShapes(src, &dst));
-  *src.mutable_layout()->mutable_physical_shape() = ShapeUtil::MakeTupleShape({
-      ShapeUtil::MakeShapeWithDenseLayout(U32, {2}, {0}, {Tile({100})}),
-      ShapeUtil::MakeShapeWithDenseLayout(U32, {4}, {0}, {Tile({100})}),
-      ShapeUtil::MakeShapeWithDenseLayout(F32, {4}, {0}, {Tile({100})}),
-  });
-  EXPECT_FALSE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-  dst.clear_layout();
-  EXPECT_IS_OK(LayoutUtil::CopyLayoutBetweenShapes(src, &dst));
-  EXPECT_TRUE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-
-  // If source is cleared, then destination should be cleared.
-  src.clear_layout();
-  EXPECT_FALSE(LayoutUtil::IsCSRArray(src));
-  EXPECT_FALSE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-  EXPECT_TRUE(dst.has_layout());
-  EXPECT_IS_OK(LayoutUtil::CopyLayoutBetweenShapes(src, &dst));
-  EXPECT_TRUE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-  EXPECT_FALSE(dst.has_layout());
-  EXPECT_FALSE(LayoutUtil::IsCSRArray(dst));
-}
-
 TEST_F(LayoutUtilTest, CopyLayoutTuple) {
   Shape src = ShapeUtil::MakeTupleShape(
       {MakeShapeWithLayout(F32, {2, 3}, {0, 1}),
@@ -176,8 +129,7 @@ TEST_F(LayoutUtilTest, CopyLayoutNotCompatibleDifferentRank) {
   Shape dst = MakeShapeWithLayout(F32, {2, 3}, {1, 0});
   auto status = LayoutUtil::CopyLayoutBetweenShapes(src, &dst);
   EXPECT_FALSE(status.ok());
-  EXPECT_THAT(status.message(),
-              ::testing::ContainsRegex("cannot copy layout from shape"));
+  EXPECT_THAT(status.message(), ContainsRegex("cannot copy layout from shape"));
 }
 
 TEST_F(LayoutUtilTest, CopyLayoutNotCompatibleTuple) {
@@ -195,8 +147,7 @@ TEST_F(LayoutUtilTest, CopyLayoutNotCompatibleTuple) {
 
   auto status = LayoutUtil::CopyLayoutBetweenShapes(src, &dst);
   EXPECT_FALSE(status.ok());
-  EXPECT_THAT(status.message(),
-              ::testing::ContainsRegex("cannot copy layout from shape"));
+  EXPECT_THAT(status.message(), ContainsRegex("cannot copy layout from shape"));
 }
 
 TEST_F(LayoutUtilTest, CopyLayoutBogusLayout) {
@@ -207,9 +158,9 @@ TEST_F(LayoutUtilTest, CopyLayoutBogusLayout) {
 
   auto status = LayoutUtil::CopyLayoutBetweenShapes(src, &dst);
   EXPECT_FALSE(status.ok());
-  EXPECT_THAT(status.message(), ::testing::ContainsRegex(
-                                    "layout minor_to_major field contains .* "
-                                    "elements, but shape is rank"));
+  EXPECT_THAT(status.message(),
+              ContainsRegex("layout minor_to_major field contains .* "
+                            "elements, but shape has"));
 }
 
 TEST_F(LayoutUtilTest, CopyTokenLayout) {
@@ -405,6 +356,24 @@ TEST_F(LayoutUtilTest, HumanStringWithTiling) {
             "bf16[8,2,3,1004]{3,2,1,0:T(2,*,*,128)}");
 }
 
+TEST_F(LayoutUtilTest, LinearIndexWithMatchDimension) {
+  Shape shape = ShapeUtil::MakeShapeWithDenseLayout(F32, {16, 256}, {1, 0});
+  Tile* tile = shape.mutable_layout()->add_tiles();
+  tile->add_dimensions(Tile::kMatchDimension);
+  tile->add_dimensions(128);
+
+  // Tile (d, 128) on [16, 256] means each tile has size (16, 128).
+  // (0, 0) -> 0
+  EXPECT_EQ(LayoutUtil::LinearIndex(shape, {0, 0}), 0);
+  EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape, {0, 0}), 0);
+  // (1, 0) -> row 1 of tile 0 -> 128
+  EXPECT_EQ(LayoutUtil::LinearIndex(shape, {1, 0}), 128);
+  EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape, {1, 0}), 128);
+  // (0, 128) -> row 0 of tile 1 -> 16 * 128 = 2048
+  EXPECT_EQ(LayoutUtil::LinearIndex(shape, {0, 128}), 2048);
+  EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape, {0, 128}), 2048);
+}
+
 TEST_F(LayoutUtilTest, ValidateLayout_ValidArrayLayout) {
   Shape shape = ShapeUtil::MakeShapeWithDenseLayout(F32, {2, 3}, {0, 1});
   auto status =
@@ -422,34 +391,14 @@ TEST_F(LayoutUtilTest, ValidateLayout_InvalidArrayLayout) {
       LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/false);
   EXPECT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
-              ::testing::HasSubstr("layout minor_to_major field "
-                                   "contains 3 elements, but shape is rank 2"));
+              HasSubstr("layout minor_to_major field "
+                        "contains 3 elements, but shape has 2 dimensions"));
   status =
       LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/true);
   EXPECT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
-              ::testing::HasSubstr("layout minor_to_major field "
-                                   "contains 3 elements, but shape is rank 2"));
-}
-
-TEST_F(LayoutUtilTest, ValidateLayout_InvalidDimLevelTypes) {
-  Shape shape = ShapeUtil::MakeShape(F32, {2, 3});
-  *shape.mutable_layout() = LayoutUtil::MakeLayout({0, 1});
-  shape.mutable_layout()->add_dim_level_type(DIM_DENSE);
-  shape.mutable_layout()->add_dim_level_type(DIM_DENSE);
-  shape.mutable_layout()->add_dim_level_type(DIM_DENSE);
-  auto status =
-      LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/false);
-  EXPECT_FALSE(status.ok());
-  EXPECT_THAT(status.message(),
-              ::testing::HasSubstr("layout dim_level_types field "
-                                   "contains 3 elements, but shape is rank 2"));
-  status =
-      LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/true);
-  EXPECT_FALSE(status.ok());
-  EXPECT_THAT(status.message(),
-              ::testing::HasSubstr("layout dim_level_types field "
-                                   "contains 3 elements, but shape is rank 2"));
+              HasSubstr("layout minor_to_major field "
+                        "contains 3 elements, but shape has 2 dimensions"));
 }
 
 TEST_F(LayoutUtilTest, ValidateLayout_MissingArrayLayout) {
@@ -459,51 +408,10 @@ TEST_F(LayoutUtilTest, ValidateLayout_MissingArrayLayout) {
       LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/false);
   EXPECT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
-              ::testing::HasSubstr("shape f32[2,3] does not have a layout"));
+              HasSubstr("shape f32[2,3] does not have a layout"));
   status =
       LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/true);
   EXPECT_TRUE(status.ok());
-}
-
-TEST_F(LayoutUtilTest, ValidateLayout_Sparse) {
-  Shape shape = ShapeUtil::MakeShape(F32, {2, 3});
-  *shape.mutable_layout() = LayoutUtil::MakeLayout(
-      {1, 0}, {DIM_DENSE, DIM_COMPRESSED}, {}, {}, {Tile({10, 10})});
-  EXPECT_THAT(LayoutUtil::ValidateLayoutInShape(shape),
-              tsl::testing::StatusIs(
-                  tsl::error::INVALID_ARGUMENT,
-                  ::testing::HasSubstr(
-                      "layout has tiles, but the shape is a sparse array")));
-  shape.mutable_layout()->clear_tiles();
-  EXPECT_THAT(LayoutUtil::ValidateLayoutInShape(shape), tsl::testing::IsOk());
-  *shape.mutable_layout()->mutable_physical_shape() =
-      ShapeUtil::MakeShape(F32, {6});
-  EXPECT_THAT(LayoutUtil::ValidateLayoutInShape(shape), tsl::testing::IsOk());
-  *shape.mutable_layout()
-       ->mutable_physical_shape()
-       ->mutable_layout()
-       ->mutable_physical_shape() = ShapeUtil::MakeShape(S32, {10});
-  EXPECT_THAT(
-      LayoutUtil::ValidateLayoutInShape(shape),
-      tsl::testing::StatusIs(
-          tsl::error::INVALID_ARGUMENT,
-          ::testing::HasSubstr(
-              "layout has a physical_shape, but is not a sparse array")));
-  shape.mutable_layout()->mutable_physical_shape()->clear_layout();
-  shape.mutable_layout()->clear_dim_level_types();
-  EXPECT_THAT(
-      LayoutUtil::ValidateLayoutInShape(shape),
-      tsl::testing::StatusIs(
-          tsl::error::INVALID_ARGUMENT,
-          ::testing::HasSubstr(
-              "layout has a physical_shape, but is not a sparse array")));
-  *shape.mutable_layout() =
-      LayoutUtil::MakeLayout({1, 0}, {DIM_DENSE, DIM_DENSE}, {true, false});
-  EXPECT_THAT(LayoutUtil::ValidateLayoutInShape(shape),
-              tsl::testing::StatusIs(
-                  tsl::error::INVALID_ARGUMENT,
-                  ::testing::HasSubstr("layout dimension 1 has invalid level "
-                                       "encoding DIM_DENSE, non-unique")));
 }
 
 TEST_F(LayoutUtilTest, ValidateLayout_TupleSubshapesWithMissingLayouts) {
@@ -521,7 +429,7 @@ TEST_F(LayoutUtilTest, ValidateLayout_TupleSubshapesWithMissingLayouts) {
       LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/false);
   EXPECT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
-              ::testing::HasSubstr("shape f32[1,2] does not have a layout"));
+              HasSubstr("shape f32[1,2] does not have a layout"));
   status =
       LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/true);
   EXPECT_TRUE(status.ok());
@@ -534,8 +442,104 @@ TEST_F(LayoutUtilTest, ValidateLayout_TupleSubshapesWithMissingLayouts) {
       LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/true);
   EXPECT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
-              ::testing::HasSubstr("layout minor_to_major field "
-                                   "contains 3 elements, but shape is rank 1"));
+              HasSubstr("layout minor_to_major field "
+                        "contains 3 elements, but shape has 1 dimensions"));
+}
+
+TEST_F(LayoutUtilTest, ValidateLayout_TileValidation) {
+  // Valid oversized tile: Shape rank 1, but tile has 2 dimensions.
+  // This is allowed because the shape is padded to 2D during tiling.
+  {
+    Shape shape = ShapeUtil::MakeShape(F32, {8});
+    Layout layout;
+    layout.add_minor_to_major(0);
+    *layout.add_tiles() = Tile({2, 2});
+    *shape.mutable_layout() = layout;
+    auto status = LayoutUtil::ValidateLayoutInShape(
+        shape, /*allow_missing_layouts=*/false);
+    EXPECT_TRUE(status.ok());
+
+    // Test round-trip indexing with padding
+    EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape, {5}), 9);
+    EXPECT_THAT(LayoutUtil::DelinearizeIndexForNestedTiling(shape, 9),
+                ElementsAre(5));
+  }
+
+  // Valid nested oversized tile: Shape rank 2, but nested tiles have total rank
+  // exceeding the shape rank at the step.
+  // Initially rank 2.
+  // Tile 1 (rank 2) -> no padding, rank becomes 2 + 2 = 4.
+  // Tile 2 (rank 5) -> pads rank from 4 to 5, new rank becomes 5 + 5 = 10.
+  // This is allowed because the shape is padded to rank 5 at the second step.
+  {
+    Shape shape = ShapeUtil::MakeShape(F32, {8, 8});
+    Layout layout;
+    layout.add_minor_to_major(1);
+    layout.add_minor_to_major(0);
+    *layout.add_tiles() = Tile({2, 2});
+    *layout.add_tiles() = Tile({2, 2, 2, 2, 2});
+    *shape.mutable_layout() = layout;
+    auto status = LayoutUtil::ValidateLayoutInShape(
+        shape, /*allow_missing_layouts=*/false);
+    EXPECT_TRUE(status.ok());
+  }
+
+  // Invalid: Tile with dimension <= 0 (excluding kCombineDimension)
+  {
+    Shape shape = ShapeUtil::MakeShape(F32, {8, 8});
+    Layout layout;
+    layout.add_minor_to_major(1);
+    layout.add_minor_to_major(0);
+    *layout.add_tiles() = Tile({2, -2});
+    *shape.mutable_layout() = layout;
+    auto status = LayoutUtil::ValidateLayoutInShape(
+        shape, /*allow_missing_layouts=*/false);
+    EXPECT_FALSE(status.ok());
+    EXPECT_THAT(status.message(), HasSubstr("layout has invalid tiles"));
+  }
+
+  // Invalid: Tile with dimension == 0
+  {
+    Shape shape = ShapeUtil::MakeShape(F32, {8, 8});
+    Layout layout;
+    layout.add_minor_to_major(1);
+    layout.add_minor_to_major(0);
+    *layout.add_tiles() = Tile({2, 0});
+    *shape.mutable_layout() = layout;
+    auto status = LayoutUtil::ValidateLayoutInShape(
+        shape, /*allow_missing_layouts=*/false);
+    EXPECT_FALSE(status.ok());
+    EXPECT_THAT(status.message(), HasSubstr("layout has invalid tiles"));
+  }
+
+  // Valid scalar tiling (allowed for backward compatibility / TPU vector
+  // padding)
+  {
+    Shape shape = ShapeUtil::MakeShape(U32, {});
+    Layout layout;
+    *layout.add_tiles() = Tile({128});
+    *shape.mutable_layout() = layout;
+    auto status = LayoutUtil::ValidateLayoutInShape(
+        shape, /*allow_missing_layouts=*/false);
+    EXPECT_TRUE(status.ok());
+  }
+
+  // Valid 1D shape with 2D tile (allowed due to padding logic)
+  {
+    Shape shape = ShapeUtil::MakeShape(F32, {3});
+    Layout layout;
+    layout.add_minor_to_major(0);
+    *layout.add_tiles() = Tile({8, 128});
+    *shape.mutable_layout() = layout;
+    auto status = LayoutUtil::ValidateLayoutInShape(
+        shape, /*allow_missing_layouts=*/false);
+    EXPECT_TRUE(status.ok());
+
+    // Test round-trip indexing
+    EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape, {2}), 2);
+    EXPECT_THAT(LayoutUtil::DelinearizeIndexForNestedTiling(shape, 2),
+                ElementsAre(2));
+  }
 }
 
 TEST_F(LayoutUtilTest, MoveDimToMajor) {
@@ -545,6 +549,13 @@ TEST_F(LayoutUtilTest, MoveDimToMajor) {
 
   new_layout = LayoutUtil::MoveDimToMajor(layout, 1);
   EXPECT_EQ(new_layout, LayoutUtil::MakeLayout({2, 0, 1}));
+}
+
+TEST_F(LayoutUtilTest, MoveDimToMinor) {
+  const Layout layout = LayoutUtil::MakeLayout({2, 0, 3, 1});
+  EXPECT_EQ(LayoutUtil::MoveDimToMinor(layout, 2), layout);
+  EXPECT_EQ(LayoutUtil::MoveDimToMinor(layout, 3),
+            LayoutUtil::MakeLayout({3, 2, 0, 1}));
 }
 
 TEST_F(LayoutUtilTest, StridesIsMajorToMinor) {
@@ -614,6 +625,144 @@ TEST_F(LayoutUtilTest, MaxElementsInPerSplit) {
                                 .add_split_configs(SplitConfig(1, {40, 130}));
   EXPECT_EQ(LayoutUtil::MaxElementsInPerSplit(shape), 150 * 90 * 70);
 }
+
+TEST_F(LayoutUtilTest, LinearIndexForNestedTilingRoundTrip1D) {
+  // bf16[2048]{0:T(1024)(128)(2,1)}
+  Shape shape_1D =
+      MakeShapeWithLayout(BF16,
+                          /*dimensions=*/{2048}, /*minor_to_major=*/{0},
+                          /*tiles=*/{Tile({1024}), Tile({128}), Tile({2, 1})});
+  EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape_1D, {0}), 0);
+
+  EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape_1D, {128}), 1);
+  EXPECT_THAT(LayoutUtil::DelinearizeIndexForNestedTiling(shape_1D, 1),
+              ElementsAre(128));
+
+  EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape_1D, {1}), 2);
+  EXPECT_THAT(LayoutUtil::DelinearizeIndexForNestedTiling(shape_1D, 2),
+              ElementsAre(1));
+}
+
+TEST_F(LayoutUtilTest, LinearIndexForNestedTilingRoundTrip2D) {
+  // bf16[2,8,128]{2,1,0:T(8,128)(2,1)}
+  Shape shape_2D = MakeShapeWithLayout(
+      BF16, /*dimensions=*/{2, 8, 128}, /*minor_to_major=*/{2, 1, 0},
+      /*tiles=*/{Tile({8, 128}), Tile({2, 1})});
+
+  EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape_2D, {0, 0, 0}), 0);
+  EXPECT_THAT(LayoutUtil::DelinearizeIndexForNestedTiling(shape_2D, 0),
+              ElementsAre(0, 0, 0));
+
+  EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape_2D, {0, 2, 0}), 256);
+  EXPECT_THAT(LayoutUtil::DelinearizeIndexForNestedTiling(shape_2D, 256),
+              ElementsAre(0, 2, 0));
+}
+
+TEST_F(LayoutUtilTest, LinearIndexWithAndWithoutTiles) {
+  // | 0 1 | 2 3 |
+  // | 4 5 | 6 7 |
+  // |-----|-----|
+  // | 8 9 |10 11|
+  // |12 13|14 15|
+  // |-----|-----|
+  // |16 17|18 19|
+  // |20 21|22 23|
+  // |-----|-----|
+  // |24 25|26 27|
+  // |28 29|30 31|
+  //
+  // Memory layout (untiled):
+  // 0 1 2 3 4 5 6 7 8 9 10 11 12 13 ...
+  constexpr int linear_index_of_element_13_untiled = 13;
+  // Memory layout (tiled):
+  // 0 1 4 5 2 3 6 7 8 9 12 13 ...
+  constexpr int linear_index_of_element_13_tiled = 11;
+  Shape shape_2D =
+      MakeShapeWithLayout(F32, /*dimensions=*/{8, 4}, /*minor_to_major=*/{1, 0},
+                          /*tiles=*/{Tile({2, 2})});
+  EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape_2D, {3, 1}),
+            linear_index_of_element_13_tiled);
+  shape_2D.mutable_layout()->clear_tiles();
+  EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape_2D, {3, 1}),
+            linear_index_of_element_13_untiled);
+}
+
+TEST_F(LayoutUtilTest, LinearIndexForNestedTiling_OversizedTilesPadding) {
+  // Rank 0 (scalar) tiled with rank 1 tile: u32[]{:T(128)}
+  {
+    Shape shape = ShapeUtil::MakeShape(U32, {});
+    Layout layout;
+    *layout.add_tiles() = Tile({128});
+    *shape.mutable_layout() = layout;
+
+    EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape, {}), 0);
+    EXPECT_THAT(LayoutUtil::DelinearizeIndexForNestedTiling(shape, 0),
+                ElementsAre());
+  }
+
+  // Rank 1 shape with rank 2 tile: f32[3]{:T(8, 128)}
+  // Padded to [1, 3]. Tile T(8, 128) splits it:
+  // - Outer: [Ceil(1, 8), Ceil(3, 128)] = [1, 1]
+  // - Inner: [8, 128]
+  // Tiled space size = 1 * 1 * 8 * 128 = 1024.
+  // For logical index {2}, padded to {0, 2}.
+  // Outer indices: {0 / 8, 2 / 128} = {0, 0}.
+  // Inner indices: {0 % 8, 2 % 128} = {0, 2}.
+  // Linear index: 0 * (1 * 8 * 128) + 0 * (8 * 128) + 0 * 128 + 2 = 2.
+  {
+    Shape shape = ShapeUtil::MakeShape(F32, {3});
+    Layout layout;
+    layout.add_minor_to_major(0);
+    *layout.add_tiles() = Tile({8, 128});
+    *shape.mutable_layout() = layout;
+
+    EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape, {2}), 2);
+    EXPECT_THAT(LayoutUtil::DelinearizeIndexForNestedTiling(shape, 2),
+                ElementsAre(2));
+  }
+
+  // Rank 1 shape with rank 2 tile: f32[8]{:T(2, 2)}
+  // Padded to [1, 8]. Tile T(2, 2) splits it:
+  // - Outer: [Ceil(1, 2), Ceil(8, 2)] = [1, 4]
+  // - Inner: [2, 2]
+  // Tiled space size = 1 * 4 * 2 * 2 = 16.
+  // For logical index {5}, padded to {0, 5}.
+  // Outer indices: {0 / 2, 5 / 2} = {0, 2}.
+  // Inner indices: {0 % 2, 5 % 2} = {0, 1}.
+  // Linear index in 16-element space:
+  // 0 * (4 * 2 * 2) + 2 * (2 * 2) + 0 * 2 + 1 = 8 + 1 = 9.
+  {
+    Shape shape = ShapeUtil::MakeShape(F32, {8});
+    Layout layout;
+    layout.add_minor_to_major(0);
+    *layout.add_tiles() = Tile({2, 2});
+    *shape.mutable_layout() = layout;
+
+    EXPECT_EQ(LayoutUtil::LinearIndexForNestedTiling(shape, {5}), 9);
+    EXPECT_THAT(LayoutUtil::DelinearizeIndexForNestedTiling(shape, 9),
+                ElementsAre(5));
+  }
+}
+
+struct IsUntiledLayoutTestCase {
+  std::vector<int64_t> shape;
+  std::vector<Tile> tiles;
+  bool expected_result;
+};
+
+using IsUntiledLayoutTest = ::testing::TestWithParam<IsUntiledLayoutTestCase>;
+
+TEST_P(IsUntiledLayoutTest, IsUntiledLayout) {
+  IsUntiledLayoutTestCase params = GetParam();
+  EXPECT_EQ(LayoutUtil::IsUntiledLayout(params.tiles, params.shape),
+            params.expected_result);
+}
+
+INSTANTIATE_TEST_SUITE_P(IsUntiledLayoutTests, IsUntiledLayoutTest,
+                         ::testing::ValuesIn<IsUntiledLayoutTestCase>(
+                             {{{24, 128}, {Tile({8, 128})}, true},
+                              {{4, 256}, {Tile({1, 128})}, true},
+                              {{2, 3, 4}, {Tile({8, 128})}, false}}));
 
 }  // namespace
 }  // namespace xla

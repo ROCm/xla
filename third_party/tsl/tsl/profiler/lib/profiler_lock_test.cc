@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors All Rights Reserved.
+/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ limitations under the License.
 #include <utility>
 
 #include "absl/status/statusor.h"
-#include "tsl/platform/test.h"
+#include "xla/tsl/platform/test.h"
 
 namespace tsl {
 namespace profiler {

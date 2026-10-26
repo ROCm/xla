@@ -15,6 +15,8 @@ limitations under the License.
 
 #include "xla/service/slow_operation_alarm.h"
 
+#include <atomic>
+#include <cstdint>
 #include <functional>
 #include <iterator>
 #include <list>
@@ -24,12 +26,18 @@ limitations under the License.
 
 #include "absl/algorithm/container.h"
 #include "absl/base/call_once.h"
+#include "absl/base/const_init.h"
 #include "absl/base/thread_annotations.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/numeric/bits.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "tsl/platform/env.h"
+#include "tsl/platform/platform.h"
 
 namespace xla {
 namespace {
@@ -44,7 +52,7 @@ std::list<SlowOperationAlarm*>* outstanding_alarms ABSL_PT_GUARDED_BY(mu) =
 
 void SlowOperationAlarm::AlarmLoop() {
   while (true) {
-    absl::MutexLock lock(&mu);
+    absl::MutexLock lock(mu);
 
     // Fire any alarms which are ready.
     absl::Time now = absl::Now();
@@ -62,7 +70,8 @@ void SlowOperationAlarm::AlarmLoop() {
           alarm->fired_.store(true);
           // We fire alarms with LOG(ERROR) because otherwise it might not show
           // up without --logtostderr.
-          LOG(ERROR) << alarm->msg();
+          alarm->msg_ = alarm->msg_fn_();
+          LOG(ERROR) << alarm->msg_;
         }
       }
       it = next;
@@ -89,13 +98,13 @@ void SlowOperationAlarm::ScheduleAlarm(SlowOperationAlarm* alarm) {
         tsl::ThreadOptions(), "SlowOperationAlarm", [] { AlarmLoop(); });
   });
 
-  absl::MutexLock lock(&mu);
+  absl::MutexLock lock(mu);
   outstanding_alarms->push_back(alarm);
   ready->Signal();
 }
 
 void SlowOperationAlarm::UnscheduleAlarm(const SlowOperationAlarm* alarm) {
-  absl::MutexLock lock(&mu);
+  absl::MutexLock lock(mu);
   CHECK(outstanding_alarms != nullptr);
   auto it = absl::c_find(*outstanding_alarms, alarm);
   if (it != outstanding_alarms->end()) {
@@ -126,17 +135,16 @@ SlowOperationAlarm::SlowOperationAlarm(
 SlowOperationAlarm::~SlowOperationAlarm() {
   UnscheduleAlarm(this);
 
-  absl::Time now = absl::Now();
-  if (deadline() <= now) {
-    absl::Duration duration = now - start_;
+  if (fired()) {
+    absl::Duration duration = absl::Now() - start_;
     if (context_.empty()) {
       LOG(ERROR) << "The operation took " << absl::FormatDuration(duration)
                  << "\n"
-                 << msg_fn_();
+                 << msg_;
     } else {
       LOG(ERROR) << "[" << context_ << "] The operation took "
                  << absl::FormatDuration(duration) << "\n"
-                 << msg_fn_();
+                 << msg_;
     }
   }
 }
@@ -154,25 +162,25 @@ std::unique_ptr<SlowOperationAlarm> SlowCompilationAlarm(
     context_msg = absl::StrCat("[", context, "] ");
   }
 
-#if NDEBUG
-  return std::make_unique<SlowOperationAlarm>(
-      absl::Duration(absl::Minutes(2)),
-      absl::StrCat(
-          separator, "\n", context_msg,
-          "Very slow compile? If you want to file a bug, run with envvar "
-          "XLA_FLAGS=--xla_dump_to=/tmp/foo and attach the results.",
-          separator),
-      counter);
-#else
-  return std::make_unique<SlowOperationAlarm>(
-      absl::Duration(absl::Seconds(10)),
-      absl::StrCat(
-          separator, "\n", context_msg,
-          "Slow compile? XLA was built without compiler optimizations, which "
-          "can be slow. Try rebuilding with -c opt.",
-          separator),
-      counter);
-#endif
+  if constexpr (tsl::kIsDebugBuild) {
+    return std::make_unique<SlowOperationAlarm>(
+        absl::Duration(absl::Seconds(10)),
+        absl::StrCat(
+            separator, "\n", context_msg,
+            "Slow compile? XLA was built without compiler optimizations, which "
+            "can be slow. Try rebuilding with -c opt.",
+            separator),
+        counter);
+  } else {
+    return std::make_unique<SlowOperationAlarm>(
+        absl::Duration(absl::Minutes(2)),
+        absl::StrCat(
+            separator, "\n", context_msg,
+            "Very slow compile? If you want to file a bug, run with envvar "
+            "XLA_FLAGS=--xla_dump_to=/tmp/foo and attach the results.",
+            separator),
+        counter);
+  }
 }
 
 }  // namespace xla

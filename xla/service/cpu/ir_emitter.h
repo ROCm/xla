@@ -18,29 +18,39 @@ limitations under the License.
 
 #include <stddef.h>
 
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <ostream>
+#include <stack>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "llvm/IR/Attributes.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
 #include "llvm/TargetParser/Triple.h"
-#include "mlir/IR/MLIRContext.h"  // from @llvm-project
+#include "mlir/IR/MLIRContext.h"
+#include "xla/backends/cpu/codegen/target_machine_features.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_computation.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/literal.h"
 #include "xla/service/buffer_assignment.h"
+#include "xla/service/cpu/elemental_ir_emitter.h"
 #include "xla/service/cpu/ir_function.h"
-#include "xla/service/cpu/target_machine_features.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/service/llvm_ir/alias_analysis.h"
 #include "xla/service/llvm_ir/fused_ir_emitter.h"
@@ -48,17 +58,25 @@ limitations under the License.
 #include "xla/service/llvm_ir/ir_builder_mixin.h"
 #include "xla/service/llvm_ir/loop_emitter.h"
 #include "xla/service/name_uniquer.h"
-#include "xla/statusor.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace cpu {
+
+// Forward declare emitter for XLA:CPU thunks.
+class IrEmitter2;
+
+bool IsNativeConvertSupportedOnTargetCPU(std::string feature_string);
+
 // This class is the top-level API for the XLA HLO --> LLVM IR compiler.  It
 // implements the DfsHloVisitor interface and emits HLO computations as LLVM IR
 // functions.
+// NOTE: A lot of functionality in this class (e.g. ElementTypesSameAndSupported
+// helper function) is duplicated by ThunkEmitter and IrEmitter2. These two
+// classes are part of the new runtime and will eventually replace IrEmitter.
 class IrEmitter : public DfsHloVisitorWithDefault,
                   public IrBuilderMixin<IrEmitter> {
-  class CpuElementalIrEmitter;
+  class ElementalIrEmitter;
 
  public:
   using GeneratorForOperandIrArrays =
@@ -90,8 +108,11 @@ class IrEmitter : public DfsHloVisitorWithDefault,
             absl::flat_hash_map<const HloComputation*, bool>
                 computation_transitively_contains_custom_call,
             const TargetMachineFeatures* target_machine,
-            bool emit_code_for_msan);
-  ~IrEmitter() override = default;
+            bool emit_code_for_msan,
+            absl::flat_hash_map<BufferAllocation::Slice, int64_t>
+                slice_to_buffer_table_index = {},
+            bool allow_runtime_calls = true);
+  ~IrEmitter() override;
 
   // Emit and return the given HLO computation as an LLVM IR
   // function.
@@ -114,19 +135,49 @@ class IrEmitter : public DfsHloVisitorWithDefault,
   // If 'allow_reassociation' is true, the fast-math reassociation flag will
   // be enabled in the function's body. This is used when emitting reducers.
   absl::StatusOr<llvm::Function*> EmitComputation(
-      HloComputation* computation, absl::string_view function_name_prefix,
+      const HloComputation* computation, absl::string_view function_name_prefix,
       bool is_top_level_computation,
       absl::Span<HloInstruction* const> instruction_order,
       bool allow_reassociation,
       absl::Span<const llvm::Attribute::AttrKind> function_attributes = {});
 
-  llvm::IRBuilder<>* b() { return &b_; }
-
+  llvm::IRBuilderBase* b() { return current_builder_; }
+  const llvm::IRBuilderBase* b() const { return current_builder_; }
   // builder() is for IrBuilderMixin.
-  llvm::IRBuilder<>* builder() { return &b_; }
+  llvm::IRBuilderBase* builder() { return current_builder_; }
+  const llvm::IRBuilderBase* builder() const { return current_builder_; }
 
-  // Emit an LLVM global variable for every constant buffer allocation.
-  absl::Status EmitConstantGlobals();
+  IrFunction* compute_function() { return &compute_function_.top(); }
+
+  // Used by IrEmitter
+  void PushComputeFunction(const std::string& function_name,
+                           llvm::Function::LinkageTypes linkage,
+                           const HloModuleConfig& module_config,
+                           llvm::Module* llvm_module) {
+    compute_function_.emplace(function_name, linkage, module_config,
+                              llvm_module, b());
+  }
+
+  // Used by IrEmitter2
+  void PushComputeFunction(llvm::IRBuilderBase* b, llvm::Module* llvm_module,
+                           llvm::Function* function,
+                           llvm::BasicBlock* return_block) {
+    function->getEntryBlock().getTerminator()->eraseFromParent();
+    b->SetInsertPoint(&function->getEntryBlock());
+    compute_function_.emplace(b, llvm_module, function, return_block);
+  }
+
+  void PopComputeFunction() {
+    // At this point, the compute function destructor adds a branch to the
+    // return block.
+    compute_function_.pop();
+  }
+
+  // Emit LLVM global variable for a small constant buffer allocation.
+  absl::Status EmitSmallConstantGlobals();
+
+  // Emit LLVM global variables for all constant buffer allocations.
+  absl::Status EmitAllConstantGlobals();
 
   // Emits a call to a thread local function (e.g. to the computation nested
   // within a reduce or a map).  Thread local callees (by definition) only write
@@ -152,7 +203,52 @@ class IrEmitter : public DfsHloVisitorWithDefault,
     return emitted_functions_.contains({&callee, allow_reassociation});
   }
 
+  const TargetMachineFeatures& target_machine_features() const {
+    return target_machine_features_;
+  }
+
+  const BufferAssignment& assignment() const { return assignment_; }
+
+  // IRBuilderGuard is a RAII class that temporarily replaces the IRBuilder.
+  // This is convenient for reusing the same logic with a different builder.
+  class IRBuilderGuard {
+   public:
+    IRBuilderGuard() = default;
+    explicit IRBuilderGuard(IrEmitter* ir_emitter, llvm::IRBuilderBase* builder)
+        : ir_emitter_(ir_emitter),
+          original_builder_(ir_emitter->current_builder_) {
+      ir_emitter_->current_builder_ = builder;
+    }
+
+    IRBuilderGuard(IRBuilderGuard&& other) = delete;
+    IRBuilderGuard& operator=(IRBuilderGuard&& other) = delete;
+
+    ~IRBuilderGuard() {
+      if (ir_emitter_ != nullptr) {
+        ir_emitter_->current_builder_ = original_builder_;
+      }
+    }
+
+   private:
+    IrEmitter* ir_emitter_ = nullptr;
+    llvm::IRBuilderBase* original_builder_ = nullptr;
+  };
+
+  // WithBuilder is a convenience function that creates and returns a
+  // IRBuilderGuard for the current IrEmitter.
+  [[nodiscard]] IRBuilderGuard WithBuilder(llvm::IRBuilderBase& builder) {
+    return IRBuilderGuard(this, &builder);
+  }
+
+  absl::StatusOr<llvm::Function*> EmitNestedComputation(
+      const HloComputation& callee, absl::string_view name, bool is_reducer);
+
  protected:
+  friend class IrEmitter2;
+
+  // Emit an LLVM global variable for every constant buffer allocation.
+  absl::Status EmitConstantGlobals(std::optional<size_t> max_size_bytes);
+
   //
   // The following methods implement the DfsHloVisitor interface.
   //
@@ -180,8 +276,6 @@ class IrEmitter : public DfsHloVisitorWithDefault,
   absl::Status HandleParameter(HloInstruction* parameter) override;
   absl::Status HandleReduce(HloInstruction* reduce) override;
   absl::Status HandleReduceWindow(HloInstruction* reduce_window) override;
-  absl::Status HandleSelectAndScatter(
-      HloInstruction* select_and_scatter) override;
   absl::Status HandleSend(HloInstruction* send) override;
   absl::Status HandleSendDone(HloInstruction* send_done) override;
   absl::Status HandleSlice(HloInstruction* slice) override;
@@ -200,15 +294,27 @@ class IrEmitter : public DfsHloVisitorWithDefault,
   absl::Status HandleConditional(HloInstruction* conditional) override;
   absl::Status HandleScatter(HloInstruction* scatter) override;
   absl::Status HandleAfterAll(HloInstruction* after_all) override;
+  absl::Status HandleGetDimensionSize(HloInstruction* get_size) override;
+  absl::Status HandleSetDimensionSize(HloInstruction* set_size) override;
   absl::Status HandleAddDependency(HloInstruction* add_dependency) override;
   absl::Status HandlePartitionId(HloInstruction* hlo) override;
   absl::Status HandleReplicaId(HloInstruction* hlo) override;
   absl::Status HandleRng(HloInstruction* rng) override;
+  absl::Status HandleRngBitGenerator(HloInstruction* rng) override;
   absl::Status HandleRngGetAndUpdateState(HloInstruction* rng_state) override;
+  absl::Status HandleBatchNormGrad(HloInstruction* batch_norm_grad) override;
+  absl::Status HandleBatchNormTraining(
+      HloInstruction* batch_norm_training) override;
+  absl::Status HandleStochasticConvert(HloInstruction* instruction) override;
   absl::Status FinishVisit(HloInstruction* root) override;
 
   absl::Status Preprocess(HloInstruction* hlo) override;
   absl::Status Postprocess(HloInstruction* hlo) override;
+
+  absl::Status HandlePad(HloInstruction* pad,
+                         const llvm_ir::IrArray& operand_array,
+                         const llvm_ir::IrArray& padding_value_array,
+                         const llvm_ir::IrArray& output_array);
 
   // A convenient helper for calling BufferAssignment::GetUniqueSlice.
   BufferAllocation::Slice GetAllocationSlice(
@@ -219,15 +325,9 @@ class IrEmitter : public DfsHloVisitorWithDefault,
  private:
   absl::Status HandleSliceToDynamic(HloInstruction* hlo);
   absl::Status HandlePadToStatic(HloInstruction* hlo);
-  absl::Status HandleTopK(HloInstruction* hlo);
+  absl::Status HandleTopK(HloInstruction* hlo) override;
   absl::Status HandleAllReduceSingleReplica(HloInstruction* crs);
   absl::Status HandleAllReduceMultipleReplica(HloInstruction* crs);
-#if defined(INTEL_MKL) && defined(ENABLE_ONEDNN_V3)
-  absl::Status HandleOneDnnMatMulCalls(HloInstruction* hlo,
-                                       std::string runtime_symbol_name);
-  absl::Status HandleOneDnnSoftmax(HloInstruction* hlo);
-  absl::Status HandleOneDnnLayerNorm(HloInstruction* hlo);
-#endif  // INTEL_MKL && ENABLE_ONEDNN_V3
   // Private helper to initialize an IR function for the computation.
   void InitializeIrFunction(const std::string& function_name);
 
@@ -237,7 +337,7 @@ class IrEmitter : public DfsHloVisitorWithDefault,
   // Note that since the call graph is flattened, if the same function is
   // called in both thread-local and non-thread-local it would be codegen'd
   // twice, and we would know whether it's thread-local at codegen time.
-  void EmitThreadLocalFunctionEpilogue(HloComputation* computation);
+  void EmitThreadLocalFunctionEpilogue(const HloComputation* computation);
 
   // Convenience functions to generate a GEP into the profile counter parameter
   // which would correspond to the index for a given HLO instruction or
@@ -327,6 +427,10 @@ class IrEmitter : public DfsHloVisitorWithDefault,
   // to explicitly pass parameters or return results.
   void EmitGlobalCall(const HloComputation& callee, absl::string_view name);
 
+  // Returns an error if `callee` is not a global computation, i.e. if it is
+  // called from an embedded computation such as a sort comparator.
+  absl::Status CheckGlobalCallee(const HloComputation& callee);
+
   // Returns the buffer to which a global call to `callee` would have written
   // its result.
   llvm::Value* GetBufferForGlobalCallReturnValue(const HloComputation& callee);
@@ -346,14 +450,10 @@ class IrEmitter : public DfsHloVisitorWithDefault,
   // desc is an optional human-readable string that's added to the loop name in
   // IR.  Regardless of whether desc is provided, target_op->name() is included
   // in the loop name.
-  //
-  // TODO(jingyue): target_op should be a `const HloInstruction*`.
   absl::Status EmitTargetElementLoop(
-      HloInstruction* target_op,
-      const llvm_ir::ElementGenerator& element_generator);
-  absl::Status EmitTargetElementLoop(
-      HloInstruction* target_op, absl::string_view desc,
-      const llvm_ir::ElementGenerator& element_generator);
+      const HloInstruction* target_op, absl::string_view desc,
+      const llvm_ir::ElementGenerator& element_generator,
+      std::optional<llvm_ir::IrArray> result_array_opt);
 
   // Emits a memcpy from the source instruction's result value to the
   // destination's.  Both source and destination must have an entry in the
@@ -420,8 +520,8 @@ class IrEmitter : public DfsHloVisitorWithDefault,
                               llvm::Align alignment,
                               const llvm_ir::IrArray& containing_array);
 
-  using ReductionGenerator = std ::function<llvm::Value*(
-      llvm::IRBuilder<>*, llvm::Value*, llvm::Value*)>;
+  using ReductionGenerator = std::function<llvm::Value*(
+      llvm::IRBuilderBase*, llvm::Value*, llvm::Value*)>;
 
   // Tries to match the reduction function "function" to a known reduction
   // pattern.  Returns a non-null ReductionGenerator on a successful match,
@@ -439,12 +539,16 @@ class IrEmitter : public DfsHloVisitorWithDefault,
       HloInstruction* arg, absl::Span<const int64_t> dimensions,
       llvm::Align element_alignment);
 
-  // Tries to emit a fast concatenate operation using memcpy.  Returns true if
-  // successful, and false on failure.  On failure, sets "failure_reason" to a
-  // string describing why it could not emit a fast concatenate.
-  absl::StatusOr<bool> EmitFastConcatenate(
-      HloInstruction* concatenate, absl::Span<HloInstruction* const> operands,
-      std::string* failure_reason);
+  // Checks if the given concatenate instruction can use a fast (memcpy)
+  // implementation.
+  absl::Status CanDoFastConcatenate(const HloInstruction* instr) const;
+
+  // Emits a fast concatenate operation using memcpy. Assumes all preconditions
+  // are met prior to calling this function (see CanDoFastConcatenate).
+  absl::Status EmitFastConcatenate(
+      const HloInstruction* instr,
+      absl::Span<const llvm_ir::IrArray> source_arrays,
+      const llvm_ir::IrArray& target_array);
 
   // Emits LLVM IR to transfer "element_count" elements of type "primitive_type"
   // from the address "source" to the address "target".
@@ -452,6 +556,12 @@ class IrEmitter : public DfsHloVisitorWithDefault,
                             int64_t element_count, PrimitiveType primitive_type,
                             const llvm_ir::IrArray& target_array,
                             const llvm_ir::IrArray& source_array);
+
+  // Emit slice-to-dynamic.
+  absl::Status EmitSliceToDynamic(
+      const HloInstruction* hlo,
+      absl::Span<const llvm_ir::IrArray> source_arrays,
+      const llvm_ir::IrArray& target_array);
 
   // Emits printing during the execution.
   llvm::Value* EmitPrintf(absl::string_view fmt,
@@ -462,19 +572,14 @@ class IrEmitter : public DfsHloVisitorWithDefault,
   // Emits a call to a non-variadic function `func_name` with arguments
   // `arguments` assuming C calling convention.
   llvm::Value* EmitCallToFunc(
-      std::string func_name, const std::vector<llvm::Value*>& arguments,
+      absl::string_view func_name, const std::vector<llvm::Value*>& arguments,
       llvm::Type* return_type, bool does_not_throw = true,
       bool only_accesses_arg_memory = false,
       bool only_accesses_inaccessible_mem_or_arg_mem = false);
 
-  template <typename T>
-  llvm::AllocaInst* StoreTypes(std::string_view alloca_name, T&& args);
-  template <typename T>
-  llvm::Value* StoreShapes(std::string_view alloca_name, T&& args);
-
   // Emits a call to a proxy that builds an FFI call frame for `custom_call`
   llvm::Value* EmitCallToFfi(HloCustomCallInstruction* custom_call,
-                             llvm::Value* output_address,
+                             llvm::AllocaInst* results_alloca,
                              llvm::AllocaInst* operands_alloca);
 
   // Assignment of the buffers needed by the computation and their shape
@@ -520,13 +625,19 @@ class IrEmitter : public DfsHloVisitorWithDefault,
   // management rules, their memory is owned by the module (Note that IrFunction
   // creates the encapsulated llvm::Function s.t. it is added to the llvm
   // module's function list).
-  // N.B. `b_` must be ordered before `compute_function_` as
-  // `IrFunction::~IrFunction` references `b_`. This will ensure that the
-  // destructor for `compute_function_` will run before the destructor for `b_`.
-  llvm::IRBuilder<> b_;
-  std::unique_ptr<IrFunction> compute_function_;
+  // N.B. `main_builder_` must be ordered before `compute_function_` as
+  // `IrFunction::~IrFunction` references `main_builder_`. This will ensure that
+  // the destructor for `compute_function_` will run before the destructor for
+  // `main_builder_`.
+  llvm::IRBuilder<> main_builder_;
+  // The current builder to use for IR emission. This is either `main_builder_`
+  // or a temporary builder that replaces it.
+  llvm::IRBuilderBase* current_builder_;
+  std::stack<IrFunction> compute_function_;
   mlir::MLIRContext* mlir_context_;
-  bool allow_reassociation_;
+  // The state of allow_reassociation_ is required so that that it is
+  // transitive to all nested computations.
+  bool allow_reassociation_ = false;
 
   // The buffer allocation slice for the root of the computation being compiled.
   // Only relevant for thread local computations.
@@ -568,19 +679,6 @@ class IrEmitter : public DfsHloVisitorWithDefault,
 
   llvm_ir::AliasAnalysis alias_analysis_;
 
-  // The number of outer dimensions of the root instruction's shape that
-  // will be partitioned when emitting parallel loops. (See
-  // ParallelLoopEmitter).
-  int64_t num_dynamic_loop_bounds_ = 0;
-
-  // Returns whether the given instruction should be emitted as a parallel loop.
-  bool ShouldEmitParallelLoopFor(const HloInstruction& op) const {
-    // Emit parallel loop for root instruction if dynamic outer-dimension loop
-    // bounds were specified.
-    return num_dynamic_loop_bounds_ > 0 &&
-           op.parent()->root_instruction() == &op;
-  }
-
   // This struct contains all the state needed to emit instructions for
   // profiling a computation.
   class ProfilingState {
@@ -589,21 +687,21 @@ class IrEmitter : public DfsHloVisitorWithDefault,
     explicit ProfilingState(bool use_rdtscp) : use_rdtscp_(use_rdtscp) {}
 
     // Record the cycle counter before an HLO executes.
-    void RecordCycleStart(llvm::IRBuilder<>* b, HloInstruction* hlo);
+    void RecordCycleStart(llvm::IRBuilderBase* b, HloInstruction* hlo);
     // Record the number of cycles it took for an HLO to execute.
-    void RecordCycleDelta(llvm::IRBuilder<>* b, HloInstruction* hlo,
+    void RecordCycleDelta(llvm::IRBuilderBase* b, HloInstruction* hlo,
                           llvm::Value* prof_counter);
     // Record the number of cycles it took for the entire computation to
     // execute.
-    void RecordCompleteComputation(llvm::IRBuilder<>* b,
+    void RecordCompleteComputation(llvm::IRBuilderBase* b,
                                    llvm::Value* prof_counter);
 
     // Convenience function to generate a call to an intrinsic which reads the
     // CPU cycle counter.
-    llvm::Value* ReadCycleCounter(llvm::IRBuilder<>* b);
+    llvm::Value* ReadCycleCounter(llvm::IRBuilderBase* b);
 
     // Store the cycle counter delta to the per-HLO profile counter.
-    void UpdateProfileCounter(llvm::IRBuilder<>* b, llvm::Value* prof_counter,
+    void UpdateProfileCounter(llvm::IRBuilderBase* b, llvm::Value* prof_counter,
                               llvm::Value* cycle_end, llvm::Value* cycle_start);
 
    private:
@@ -628,9 +726,9 @@ class IrEmitter : public DfsHloVisitorWithDefault,
    public:
     TracingState() : enabled_(false) {}
     void set_enabled(bool value) { enabled_ = value; }
-    void EmitTracingStart(llvm::IRBuilder<>* b, HloInstruction* hlo,
+    void EmitTracingStart(llvm::IRBuilderBase* b, HloInstruction* hlo,
                           llvm::Value* run_options);
-    void EmitTracingEnd(llvm::IRBuilder<>* b, HloInstruction* hlo,
+    void EmitTracingEnd(llvm::IRBuilderBase* b, HloInstruction* hlo,
                         llvm::Value* run_options);
 
    private:
@@ -650,8 +748,14 @@ class IrEmitter : public DfsHloVisitorWithDefault,
   // result with the dereferenceable bytes required by the shape / buffer size.
   void AttachDereferenceableMetadataForLoad(llvm::LoadInst* load,
                                             const Shape& shape);
-  void AttachDereferenceableMetadataForLoad(llvm::LoadInst* load,
-                                            int64_t buffer_size);
+  static void AttachDereferenceableMetadataForLoad(llvm::LoadInst* load,
+                                                   int64_t buffer_size);
+
+  // Given a load instruction, annotate the load's result with the invariant
+  // load metadata.
+  void AttachInvariantLoadMetadataForLoad(llvm::LoadInst* load) const;
+  static void AttachInvariantLoadMetadataForLoad(llvm::LoadInst* load,
+                                                 const HloModuleConfig& config);
 
   // Calculate the alignment of a buffer allocated for a given shape.
   int MinimumAlignmentForShape(const Shape& shape);
@@ -675,26 +779,36 @@ class IrEmitter : public DfsHloVisitorWithDefault,
   // Returns a ConstExpr bitcast.
   llvm::Constant* EmitGlobalForLiteral(const Literal& literal);
 
+  CpuElementalIrEmitter ElementalIrEmmiterFactory();
+
+  const HloModule& hlo_module_;
   const HloModuleConfig& hlo_module_config_;
 
   bool is_top_level_computation_;
 
   const TargetMachineFeatures& target_machine_features_;
 
-  struct LiteralPtrHashFunctor {
-    size_t operator()(const Literal* literal) const {
-      return absl::HashOf(*literal);
+  struct LayoutSensitiveLiteralWrapper {
+    const Literal& literal;
+
+    template <typename H>
+    friend H AbslHashValue(H h, const LayoutSensitiveLiteralWrapper& wrapper) {
+      return Literal::Hash<H, /*layout_sensitive=*/true>(std::move(h),
+                                                         wrapper.literal);
+    }
+
+    bool operator==(const LayoutSensitiveLiteralWrapper& other) const {
+      return literal.Equal(other.literal, /*layout_sensitive=*/true);
+    }
+
+    // This is needed for InsertOrDie to work.
+    friend std::ostream& operator<<(
+        std::ostream& out, const LayoutSensitiveLiteralWrapper& wrapper) {
+      return out << wrapper.literal;
     }
   };
 
-  struct LiteralPtrEqualityFunctor {
-    bool operator()(const Literal* lhs, const Literal* rhs) const {
-      return *lhs == *rhs && lhs->shape().layout() == rhs->shape().layout();
-    }
-  };
-
-  absl::flat_hash_map<const Literal*, llvm::Constant*, LiteralPtrHashFunctor,
-                      LiteralPtrEqualityFunctor>
+  absl::flat_hash_map<LayoutSensitiveLiteralWrapper, llvm::Constant*>
       emitted_literals_;
 
   absl::flat_hash_map<BufferAllocation::Index, llvm::Constant*>
@@ -705,9 +819,35 @@ class IrEmitter : public DfsHloVisitorWithDefault,
 
   bool emit_code_for_msan_;
 
+  absl::flat_hash_map<BufferAllocation::Slice, int64_t>
+      slice_to_buffer_table_index_;
+
+  bool allow_runtime_calls_;
+
   IrEmitter(const IrEmitter&) = delete;
   IrEmitter& operator=(const IrEmitter&) = delete;
 };
+
+// Decoupled implementation of IrEmitter::EmitTransferElements.
+void EmitTransferElements(llvm::Value* target, llvm::Value* source,
+                          int64_t element_count, PrimitiveType primitive_type,
+                          const llvm_ir::IrArray& target_array,
+                          const llvm_ir::IrArray& source_array,
+                          llvm::Module* module, llvm::IRBuilderBase& b);
+
+// Decoupled implementation of IrEmitter::EmitFastConcatenate.
+// Returns true if the concatenate was parallelized.
+absl::StatusOr<bool> EmitFastConcatenate(
+    const HloInstruction* instr,
+    absl::Span<const llvm_ir::IrArray> source_arrays,
+    const llvm_ir::IrArray& target_array, llvm::Module* module,
+    llvm::IRBuilderBase& b, llvm::Value* workgroup_id = nullptr,
+    int64_t num_workgroups = -1);
+
+// For each called computation called by the instruction, determines if that
+// computation calls a custom-call function, either directly or transitively.
+absl::flat_hash_map<const HloComputation*, bool>
+ComputationsTransitivelyContainCustomCall(const HloInstruction* instr);
 
 }  // namespace cpu
 }  // namespace xla

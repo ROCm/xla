@@ -1,11 +1,27 @@
-load("@tsl//tsl/platform:rules_cc.bzl", "cc_library")
-load("//xla:xla.bzl", "xla_cc_test")
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+load("//xla:xla.default.bzl", "xla_cc_test")
 load("//xla/tsl:tsl.bzl", "internal_visibility")
 load("//xla/tsl:tsl.default.bzl", "get_compatible_with_portable")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = internal_visibility([
+        "//learning/brain/mlir:stablehlo_friends",
         "//third_party/golang/github_com/gomlx/gomlx:__subpackages__",
         "//xla:internal",
     ]),
@@ -18,25 +34,31 @@ cc_library(
     hdrs = ["error_util.h"],
     compatible_with = get_compatible_with_portable(),
     deps = [
+        "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
-        "@tsl//tsl/platform:errors",
+        "@llvm-project//mlir:Support",
     ],
 )
 
-cc_test(
+xla_cc_test(
     name = "error_util_test",
     srcs = ["error_util_test.cc"],
+    # -supports_dynamic_linker: Forces static linking even with --dynamic_mode=fully
+    features = ["-supports_dynamic_linker"],
+    linkstatic = 1,
     deps = [
         ":error_util",
+        "//xla/tsl/lib/core:status_test_util",
+        "//xla/tsl/platform:test_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/strings",
-        "@llvm-project//llvm:Support",
+        "@com_google_googletest//:gtest",
         "@llvm-project//mlir:IR",
-        "@tsl//tsl/lib/core:status_test_util",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:test_main",
     ],
 )
 
@@ -49,10 +71,12 @@ cc_library(
         "//xla:shape_util",
         "//xla:util",
         "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
-        "@tsl//tsl/platform:statusor",
     ],
 )
 
@@ -63,11 +87,11 @@ xla_cc_test(
         ":type_util",
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test_main",
         "@com_google_absl//absl/functional:function_ref",
         "@com_google_googletest//:gtest",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/platform:test_main",
     ],
 )

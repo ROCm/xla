@@ -20,9 +20,10 @@ limitations under the License.
 #include <map>
 #include <memory>
 
-#include "tsl/platform/logging.h"
-#include "tsl/platform/mutex.h"
+#include "absl/base/nullability.h"
+#include "absl/synchronization/mutex.h"
 #include "tsl/platform/thread_annotations.h"
+#include "xla/tsl/platform/logging.h"
 
 namespace tsl {
 namespace core {
@@ -87,7 +88,7 @@ class RefCountPtr;
 
 // Adds a new reference to a RefCounted pointer.
 template <typename T>
-ABSL_MUST_USE_RESULT RefCountPtr<T> GetNewRef(T* ptr) {
+[[nodiscard]] RefCountPtr<T> GetNewRef(T* ptr) {
   static_assert(std::is_base_of<RefCounted, T>::value);
 
   if (ptr == nullptr) return RefCountPtr<T>();
@@ -98,10 +99,11 @@ ABSL_MUST_USE_RESULT RefCountPtr<T> GetNewRef(T* ptr) {
 
 // A unique_ptr that unrefs the owned object on destruction.
 template <typename T>
-class RefCountPtr : public std::unique_ptr<T, RefCountDeleter> {
+class ABSL_NULLABILITY_COMPATIBLE RefCountPtr
+    : public std::unique_ptr<T, RefCountDeleter> {
  public:
   using std::unique_ptr<T, RefCountDeleter>::unique_ptr;
-  ABSL_MUST_USE_RESULT RefCountPtr GetNewRef() const {
+  [[nodiscard]] RefCountPtr GetNewRef() const {
     if (this->get() == nullptr) return RefCountPtr<T>();
     this->get()->Ref();
     return RefCountPtr<T>(this->get());
@@ -155,14 +157,14 @@ class WeakRefCounted : public RefCounted {
   struct WeakRefData : public RefCounted {
     explicit WeakRefData(WeakRefCounted* ptr) : ptr(ptr), next_notifier_id(1) {}
 
-    mutable mutex mu;
+    mutable absl::Mutex mu;
     WeakRefCounted* ptr TF_GUARDED_BY(mu);
     std::map<int, WeakNotifyFn> notifiers;
     int next_notifier_id;
 
     // Notifies WeakPtr instances that this object is being destructed.
     void Notify() {
-      mutex_lock ml(mu);
+      absl::MutexLock ml(mu);
 
       while (!notifiers.empty()) {
         auto iter = notifiers.begin();
@@ -177,7 +179,7 @@ class WeakRefCounted : public RefCounted {
     }
 
     WeakRefCounted* GetNewRef() {
-      mutex_lock ml(mu);
+      absl::MutexLock ml(mu);
       if (ptr != nullptr && ptr->TryRef()) {
         return ptr;
       }
@@ -188,7 +190,7 @@ class WeakRefCounted : public RefCounted {
     // Returns 0 if insertion fails due to the object is being destroyed.
     // 0 is also used by WeakPtr to represent "no notify_fn".
     int AddNotifier(WeakNotifyFn notify_fn) {
-      mutex_lock ml(mu);
+      absl::MutexLock ml(mu);
       if (ptr == nullptr) {
         return 0;
       }
@@ -198,7 +200,7 @@ class WeakRefCounted : public RefCounted {
     }
 
     int DupNotifier(int notifier_id) {
-      mutex_lock ml(mu);
+      absl::MutexLock ml(mu);
       auto iter = notifiers.find(notifier_id);
       if (iter != notifiers.end()) {
         int notifier_id = next_notifier_id++;
@@ -209,7 +211,7 @@ class WeakRefCounted : public RefCounted {
     }
 
     void RemoveNotifier(int notifier_id) {
-      mutex_lock ml(mu);
+      absl::MutexLock ml(mu);
       notifiers.erase(notifier_id);
     }
   };

@@ -1,4 +1,3 @@
-#include "tsl/lib/core/status_test_util.h"
 /* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,21 +16,29 @@ limitations under the License.
 #ifndef XLA_PYTHON_IFRT_TEST_UTIL_H_
 #define XLA_PYTHON_IFRT_TEST_UTIL_H_
 
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/python/ifrt/array.h"
 #include "xla/python/ifrt/client.h"
 #include "xla/python/ifrt/device.h"
+#include "xla/python/ifrt/device_list.h"
 #include "xla/python/ifrt/dtype.h"
 #include "xla/python/ifrt/shape.h"
+#include "xla/python/ifrt/sharding.h"
+#include "xla/python/ifrt/user_context.h"
 #include "xla/tsl/concurrency/ref_count.h"
-#include "tsl/platform/statusor.h"
-#include "tsl/platform/test.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
 
 namespace xla {
 namespace ifrt {
@@ -54,20 +61,20 @@ void SetTestFilterIfNotUserSpecified(absl::string_view custom_filter);
 // This will blocking copy the data to host buffer.
 template <typename ElementT>
 void AssertPerShardData(
-    tsl::RCReference<Array> actual, DType expected_dtype,
-    Shape expected_per_shard_shape,
+    ArrayRef actual, DType expected_dtype, Shape expected_per_shard_shape,
     absl::Span<const absl::Span<const ElementT>> expected_per_shard_data,
-    DeviceList expected_device_list) {
+    DeviceListRef expected_device_list) {
   ASSERT_EQ(actual->dtype(), expected_dtype);
   EXPECT_THAT(GetDeviceIds(actual->sharding().devices()),
               testing::ElementsAreArray(GetDeviceIds(expected_device_list)));
   TF_ASSERT_OK_AND_ASSIGN(auto actual_per_shard_arrays,
                           actual->DisassembleIntoSingleDeviceArrays(
-                              ArrayCopySemantics::kAlwaysCopy));
+                              ArrayCopySemantics::kReuseInput,
+                              SingleDeviceShardSemantics::kAddressableShards));
   ASSERT_EQ(actual_per_shard_arrays.size(), expected_per_shard_data.size());
   for (int i = 0; i < actual_per_shard_arrays.size(); ++i) {
     SCOPED_TRACE(absl::StrCat("Shard ", i));
-    tsl::RCReference<Array> array = actual_per_shard_arrays[i];
+    const ArrayRef& array = actual_per_shard_arrays[i];
     ASSERT_EQ(array->shape(), expected_per_shard_shape);
     std::vector<ElementT> actual_data(expected_per_shard_shape.num_elements());
     TF_ASSERT_OK(array
@@ -82,8 +89,20 @@ void AssertPerShardData(
 
 // Helper function that makes `DeviceList` containing devices at given
 // indexes (not ids) within `client.devices()`.
-absl::StatusOr<DeviceList> GetDevices(Client* client,
-                                      absl::Span<const int> device_indices);
+absl::StatusOr<DeviceListRef> GetDevices(Client* client,
+                                         absl::Span<const int> device_indices);
+
+// Helper function that makes `DeviceList` containing devices at given
+// indexes (not ids) within `client.addressable_devices()`.
+absl::StatusOr<DeviceListRef> GetAddressableDevices(
+    Client* client, absl::Span<const int> device_indices);
+
+// Returns a new `UserContext` for testing. The created `UserContext` has an
+// ID equal to `id`. `debug_string` defaults to `TestUserContext(id)`. This can
+// be overridden with a custom debug string for the tests that must use
+// multiple `UserContext`s with the same debug string.
+UserContextRef MakeUserContext(
+    uint64_t id, std::optional<std::string> debug_string = std::nullopt);
 
 }  // namespace test_util
 }  // namespace ifrt

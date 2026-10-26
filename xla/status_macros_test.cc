@@ -15,15 +15,23 @@ limitations under the License.
 
 #include "xla/status_macros.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <functional>
+#include <string>
 #include <utility>
 
+#include "absl/base/log_severity.h"
+#include "absl/log/scoped_mock_log.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
-#include "xla/test.h"
-#include "xla/test_helpers.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/statusor.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/testlib/test_helpers.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/logging.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -37,8 +45,36 @@ absl::Status RetCheckFailWithExtraMessage() {
   return absl::OkStatus();
 }
 
+absl::Status RetCheckFailWithLogSeverity(absl::LogSeverity severity) {
+  TF_RET_CHECK(1 == 2).with_log_severity(severity) << "extra message";
+  return absl::OkStatus();
+}
+
 absl::Status RetCheckSuccess() {
   TF_RET_CHECK(3 > 2);
+  return absl::OkStatus();
+}
+
+absl::Status XlaRetCheckFailLogWarning() {
+  XLA_RET_CHECK_FAIL().with_log_severity(absl::LogSeverity::kWarning)
+      << "xla ret check fail message";
+}
+
+// A type that has `AbslStringify` but not `operator<<`.
+struct HasOnlyAbslStringify {
+  int i;
+
+  bool operator==(const HasOnlyAbslStringify& h) const { return i == h.i; }
+
+  template <typename Sink>
+  friend void AbslStringify(Sink& sink, const HasOnlyAbslStringify& h) {
+    absl::Format(&sink, "Stringify-%v", h.i);
+  }
+};
+
+absl::Status RetCheckPrintAbslStringify() {
+  HasOnlyAbslStringify h = {123};
+  TF_RET_CHECK(false) << h;
   return absl::OkStatus();
 }
 
@@ -56,6 +92,29 @@ TEST(StatusMacros, RetCheckFailingWithExtraMessage) {
               ::testing::ContainsRegex("RET_CHECK.*2 > 3 extra message"));
 }
 
+TEST(StatusMacros, RetCheckLogWarning) {
+  absl::ScopedMockLog mock_log(absl::MockLogDefault::kIgnoreUnexpected);
+  const std::string kExpectedRegex = "RET_CHECK.*1 == 2 extra message";
+  EXPECT_CALL(mock_log, Log(absl::LogSeverity::kWarning, ::testing::_,
+                            ::testing::ContainsRegex(kExpectedRegex)));
+  mock_log.StartCapturingLogs();
+  absl::Status status =
+      RetCheckFailWithLogSeverity(absl::LogSeverity::kWarning);
+  EXPECT_EQ(status.code(), tsl::error::INTERNAL);
+  EXPECT_THAT(status.message(), ::testing::ContainsRegex(kExpectedRegex));
+}
+
+TEST(StatusMacros, RetCheckLogInfo) {
+  absl::ScopedMockLog mock_log(absl::MockLogDefault::kIgnoreUnexpected);
+  const std::string kExpectedRegex = "RET_CHECK.*1 == 2 extra message";
+  EXPECT_CALL(mock_log, Log(absl::LogSeverity::kInfo, ::testing::_,
+                            ::testing::ContainsRegex(kExpectedRegex)));
+  mock_log.StartCapturingLogs();
+  absl::Status status = RetCheckFailWithLogSeverity(absl::LogSeverity::kInfo);
+  EXPECT_EQ(status.code(), tsl::error::INTERNAL);
+  EXPECT_THAT(status.message(), ::testing::ContainsRegex(kExpectedRegex));
+}
+
 TEST(StatusMacros, RetCheckSucceeding) {
   absl::Status status = RetCheckSuccess();
   EXPECT_IS_OK(status);
@@ -64,7 +123,7 @@ TEST(StatusMacros, RetCheckSucceeding) {
 absl::StatusOr<int> CreateIntSuccessfully() { return 42; }
 
 absl::StatusOr<int> CreateIntUnsuccessfully() {
-  return tsl::errors::Internal("foobar");
+  return absl::InternalError("foobar");
 }
 
 TEST(StatusMacros, AssignOrAssertOnOK) {
@@ -74,13 +133,13 @@ TEST(StatusMacros, AssignOrAssertOnOK) {
 
 absl::Status ReturnStatusOK() { return absl::OkStatus(); }
 
-absl::Status ReturnStatusError() { return (tsl::errors::Internal("foobar")); }
+absl::Status ReturnStatusError() { return (absl::InternalError("foobar")); }
 
 using StatusReturningFunction = std::function<absl::Status()>;
 
 absl::StatusOr<int> CallStatusReturningFunction(
     const StatusReturningFunction& func) {
-  TF_RETURN_IF_ERROR(func());
+  ABSL_RETURN_IF_ERROR(func());
   return 42;
 }
 
@@ -98,7 +157,7 @@ TEST(StatusMacros, ReturnIfErrorOnError) {
 
 TEST(StatusMacros, AssignOrReturnSuccessfully) {
   absl::Status status = []() {
-    TF_ASSIGN_OR_RETURN(int value, CreateIntSuccessfully());
+    ABSL_ASSIGN_OR_RETURN(int value, CreateIntSuccessfully());
     EXPECT_EQ(value, 42);
     return absl::OkStatus();
   }();
@@ -107,12 +166,30 @@ TEST(StatusMacros, AssignOrReturnSuccessfully) {
 
 TEST(StatusMacros, AssignOrReturnUnsuccessfully) {
   absl::Status status = []() {
-    TF_ASSIGN_OR_RETURN(int value, CreateIntUnsuccessfully());
+    ABSL_ASSIGN_OR_RETURN(int value, CreateIntUnsuccessfully());
     (void)value;
     return absl::OkStatus();
   }();
   EXPECT_FALSE(status.ok());
   EXPECT_EQ(status.code(), tsl::error::INTERNAL);
+}
+
+TEST(StatusMacros, XlaRetCheckFailLogWarning) {
+  absl::ScopedMockLog mock_log(absl::MockLogDefault::kIgnoreUnexpected);
+  const std::string kExpectedLog = "xla ret check fail message";
+  EXPECT_CALL(mock_log, Log(absl::LogSeverity::kWarning, ::testing::_,
+                            ::testing::HasSubstr(kExpectedLog)));
+  mock_log.StartCapturingLogs();
+  absl::Status status = XlaRetCheckFailLogWarning();
+  EXPECT_EQ(status.code(), tsl::error::INTERNAL);
+  EXPECT_THAT(status.message(), ::testing::HasSubstr(kExpectedLog));
+}
+
+TEST(StatusMacros, RetCheckPrintAbslStringify) {
+  absl::Status status = RetCheckPrintAbslStringify();
+  EXPECT_EQ(status.code(), tsl::error::INTERNAL);
+  EXPECT_THAT(status.message(),
+              ::testing::ContainsRegex("RET_CHECK.*Stringify-123"));
 }
 
 }  // namespace xla

@@ -13,12 +13,13 @@
 # limitations under the License.
 # ============================================================================
 name: Buildifier
+permissions:
+  contents: read
 on:
   pull_request:
-
-env:
-  # Have `go install` place binaries in $PATH
-  GOBIN: "/usr/local/bin"
+  push:
+    branches:
+      - main
 
 jobs:
   buildifier-lint:
@@ -26,11 +27,11 @@ jobs:
     defaults:
       run:
         shell: bash
-    timeout-minutes: 1
+    timeout-minutes: 6
     steps:
       - name: "Checking out repository"
-        uses: actions/checkout@e2f20e631ae6d7dd3b768f56a5d2af784dd54791 # v2.5.0
-      - name: "Install buildifier"
-        run: go install github.com/bazelbuild/buildtools/buildifier@433ea85 # 6.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: "Run buildifier"
-        run: buildifier --lint=warn --warnings=-out-of-order-load -r xla/
+        run: ./build_tools/ci/run_buildifier.sh

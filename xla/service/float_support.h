@@ -17,14 +17,14 @@ limitations under the License.
 #define XLA_SERVICE_FLOAT_SUPPORT_H_
 
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
 
-// This class has methods to query if a certain low-precision floating-point
-// type, such as bfloat16, is supported in certain instructions on a given
-// backend.
+// This class has methods to query if a certain low-precision types, such as
+// bfloat16, is supported in certain instructions on a given backend.
+// TODO(reedwm): Rename this to NumberSupport, as it supports int4 in additional
+// to float types
 class FloatSupport {
  public:
   explicit FloatSupport(PrimitiveType low_precision_type,
@@ -65,13 +65,35 @@ class FloatSupport {
   // high-precision type will not change the output. This typically includes
   // HLOs that pass elements from the operand to the output without arithmetic
   // operations.
-  static bool EffectiveOperandPrecisionIsOutputPrecision(
-      const HloInstruction& hlo, int64_t operand_index);
+  bool EffectiveOperandPrecisionIsOutputPrecision(const HloInstruction& hlo,
+                                                  int64_t operand_index) const;
 
   // Returns if the backend only uses low precision for the operand at the
   // specified index, even if the operand is in the high-precision type.
   virtual bool EffectiveOperandPrecisionIsLowPrecision(
       const HloInstruction& hlo, int64_t operand_index) const;
+
+  // Returns whether the operand at the given index can be converted to the
+  // low-precision type without changing the result of an HLO whose output is
+  // low-precision: the operand is already low-precision, or the HLO
+  // effectively uses low precision for it anyway
+  // (EffectiveOperandPrecisionIsLowPrecision or
+  // EffectiveOperandPrecisionIsOutputPrecision) and supports a low-precision
+  // operand at that index. FloatNormalization only changes an HLO without
+  // mixed precision support entirely to low precision if this holds for every
+  // operand; BFloat16Propagation relies on the same check.
+  bool CanConvertOperandToLowPrecision(const HloInstruction& hlo,
+                                       int64_t operand_index) const;
+
+  // Returns whether FloatNormalization should skip analyzing the instruction.
+  virtual bool ShouldSkipInstruction(const HloInstruction& hlo) const {
+    return false;
+  }
+
+  // Returns whether FloatNormalization should skip custom fusion computations.
+  virtual bool ShouldSkipComputationsOf(const HloInstruction& hlo) const {
+    return false;
+  }
 
  private:
   PrimitiveType low_precision_type_;

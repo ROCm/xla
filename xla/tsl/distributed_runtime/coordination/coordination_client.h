@@ -20,8 +20,8 @@ limitations under the License.
 #include <string>
 
 #include "xla/tsl/distributed_runtime/call_options.h"
-#include "tsl/platform/status.h"
-#include "tsl/protobuf/coordination_service.pb.h"
+#include "xla/tsl/platform/status.h"
+#include "xla/tsl/protobuf/coordination_service.pb.h"
 
 namespace tsl {
 using tensorflow::BarrierRequest;
@@ -30,6 +30,8 @@ using tensorflow::CancelBarrierRequest;
 using tensorflow::CancelBarrierResponse;
 using tensorflow::DeleteKeyValueRequest;
 using tensorflow::DeleteKeyValueResponse;
+using tensorflow::GetAliveTasksRequest;
+using tensorflow::GetAliveTasksResponse;
 using tensorflow::GetKeyValueDirRequest;
 using tensorflow::GetKeyValueDirResponse;
 using tensorflow::GetKeyValueRequest;
@@ -38,8 +40,12 @@ using tensorflow::GetTaskStateRequest;
 using tensorflow::GetTaskStateResponse;
 using tensorflow::HeartbeatRequest;
 using tensorflow::HeartbeatResponse;
+using tensorflow::IncrementKeyValueRequest;
+using tensorflow::IncrementKeyValueResponse;
 using tensorflow::InsertKeyValueRequest;
 using tensorflow::InsertKeyValueResponse;
+using tensorflow::PollForErrorRequest;
+using tensorflow::PollForErrorResponse;
 using tensorflow::RegisterTaskRequest;
 using tensorflow::RegisterTaskResponse;
 using tensorflow::ReportErrorToServiceRequest;
@@ -54,6 +60,8 @@ using tensorflow::TryGetKeyValueRequest;
 using tensorflow::TryGetKeyValueResponse;
 using tensorflow::WaitForAllTasksRequest;
 using tensorflow::WaitForAllTasksResponse;
+using tensorflow::WatchJobStateRequest;
+using tensorflow::WatchJobStateResponse;
 
 // Base class of client interface for communicating with coordination service.
 // Can be implemented by a variety of transports such as gRPC.
@@ -97,6 +105,11 @@ class CoordinationClient {
                                  GetTaskStateResponse* response,
                                  StatusCallback done) = 0;
 
+  virtual void WatchJobStateAsync(CallOptions* call_opts,
+                                  const WatchJobStateRequest* request,
+                                  WatchJobStateResponse* response,
+                                  StatusCallback done) = 0;
+
   virtual void InsertKeyValueAsync(const InsertKeyValueRequest* request,
                                    InsertKeyValueResponse* response,
                                    StatusCallback done) = 0;
@@ -114,16 +127,30 @@ class CoordinationClient {
                                    GetKeyValueDirResponse* response,
                                    StatusCallback done) = 0;
 
+  virtual void IncrementKeyValueAsync(const IncrementKeyValueRequest* request,
+                                      IncrementKeyValueResponse* response,
+                                      StatusCallback done) = 0;
+
   virtual void DeleteKeyValueAsync(const DeleteKeyValueRequest* request,
                                    DeleteKeyValueResponse* response,
                                    StatusCallback done) = 0;
 
-  virtual void BarrierAsync(const BarrierRequest* request,
+  virtual void BarrierAsync(CallOptions* call_opts,
+                            const BarrierRequest* request,
                             BarrierResponse* response, StatusCallback done) = 0;
 
   virtual void CancelBarrierAsync(const CancelBarrierRequest* request,
                                   CancelBarrierResponse* response,
                                   StatusCallback done) = 0;
+
+  virtual void GetAliveTasksAsync(const GetAliveTasksRequest* request,
+                                  GetAliveTasksResponse* response,
+                                  StatusCallback done) = 0;
+
+  virtual void PollForErrorAsync(CallOptions* call_opts,
+                                 const PollForErrorRequest* request,
+                                 PollForErrorResponse* response,
+                                 StatusCallback done) = 0;
 };
 
 // Simple wrapper class that can be used to retrieve CoordinationClients.

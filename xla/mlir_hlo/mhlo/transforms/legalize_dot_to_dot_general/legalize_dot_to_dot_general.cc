@@ -13,7 +13,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <memory>
 #include <utility>
 
 #include "mhlo/IR/hlo_ops.h"
@@ -40,7 +39,7 @@ struct DotToDotGeneralPattern : public OpRewritePattern<DotOp> {
   using OpRewritePattern<DotOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(DotOp dotOp,
-                                PatternRewriter &rewriter) const override {
+                                PatternRewriter& rewriter) const override {
     auto lhs = dotOp.getLhs();
     auto rhs = dotOp.getRhs();
 
@@ -55,9 +54,9 @@ struct DotToDotGeneralPattern : public OpRewritePattern<DotOp> {
         /*lhsContractingDimensions=*/{lhs.getType().getRank() - 1},
         /*rhsContractingDimensions=*/{0});
 
-    rewriter.replaceOpWithNewOp<DotGeneralOp>(dotOp, dotOp.getType(), lhs, rhs,
-                                              dotDimensionNumbers,
-                                              dotOp.getPrecisionConfigAttr());
+    rewriter.replaceOpWithNewOp<DotGeneralOp>(
+        dotOp, dotOp.getType(), lhs, rhs, dotDimensionNumbers,
+        dotOp.getPrecisionConfigAttr(), DotAlgorithmAttr{});
     return success();
   }
 };
@@ -68,8 +67,7 @@ struct LegalizeDotToDotGeneralPass
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
     populateDotToDotGeneralPatterns(&getContext(), &patterns);
-    if (failed(applyPatternsAndFoldGreedily(getOperation(),
-                                            std::move(patterns)))) {
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       return signalPassFailure();
     }
   }
@@ -77,14 +75,9 @@ struct LegalizeDotToDotGeneralPass
 
 }  // namespace
 
-void populateDotToDotGeneralPatterns(mlir::MLIRContext *context,
-                                     RewritePatternSet *patterns) {
+void populateDotToDotGeneralPatterns(mlir::MLIRContext* context,
+                                     RewritePatternSet* patterns) {
   patterns->add<DotToDotGeneralPattern>(context);
-}
-
-std::unique_ptr<OperationPass<func::FuncOp>>
-createLegalizeDotToDotGeneralPass() {
-  return std::make_unique<LegalizeDotToDotGeneralPass>();
 }
 
 }  // namespace mhlo

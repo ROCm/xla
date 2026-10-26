@@ -19,36 +19,43 @@ limitations under the License.
 #define XLA_HLO_IR_HLO_INSTRUCTIONS_H_
 
 #include <cstdint>
-#include <list>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/base/attributes.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/functional/function_ref.h"
+#include "absl/hash/hash.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
 #include "xla/comparison_util.h"
-#include "xla/hlo/ir/collective_device_list.h"
+#include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_clone_context.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_domain_metadata.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/iterator_util.h"
+#include "xla/hlo/ir/hlo_print_options.h"
+#include "xla/hlo/ir/replica_group.h"
 #include "xla/layout.h"
 #include "xla/literal.h"
+#include "xla/literal_pool.h"
+#include "xla/primitive_util.h"
 #include "xla/printer.h"
+#include "xla/protobuf_util.h"
 #include "xla/service/hlo.pb.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
+#include "xla/tsl/lib/gtl/iterator_range.h"
+#include "xla/tsl/platform/logging.h"  // IWYU pragma: keep
+#include "xla/window_util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/lib/gtl/iterator_range.h"
-#include "tsl/platform/logging.h"  // IWYU pragma: keep
-#include "tsl/platform/status.h"
 
 namespace xla {
 
@@ -59,7 +66,7 @@ class HloDimensionsInstruction : public HloInstruction {
 
   std::vector<int64_t>* mutable_dimensions() override { return &dimensions_; }
 
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     switch (hlo->opcode()) {
@@ -67,12 +74,17 @@ class HloDimensionsInstruction : public HloInstruction {
       case HloOpcode::kConcatenate:
       case HloOpcode::kReduce:
       case HloOpcode::kReverse:
+      case HloOpcode::kShuffle:
       case HloOpcode::kSort:
       case HloOpcode::kTranspose:
         return true;
       default:
         return false;
     }
+  }
+
+  void HashAdditionalAttributes(absl::HashState h) const override {
+    absl::HashState::combine(std::move(h), dimensions());
   }
 
  protected:
@@ -101,8 +113,7 @@ class HloBatchNormInstruction : public HloInstruction {
   // number added to the variance to avoid divide-by-zero error.
   float epsilon() const { return epsilon_; }
 
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     switch (hlo->opcode()) {
@@ -197,8 +208,7 @@ class HloFftInstruction : public HloInstruction {
 
   const std::vector<int64_t>& fft_length() const { return fft_length_; }
 
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kFft;
@@ -224,12 +234,34 @@ class HloFftInstruction : public HloInstruction {
   std::vector<int64_t> fft_length_;
 };
 
-class HloAsyncInstruction : public HloInstruction {
+class HloAliasible {
  public:
-  // Constructs async-{update,done}.
-  HloAsyncInstruction(HloOpcode opcode, const Shape& shape,
-                      HloInstruction* operand);
+  // Gets a list of output/operand buffer pairs that alias each other, where the
+  // output buffer is represented as a ShapeIndex, and the operand buffer is
+  // represented as the operand index and the ShapeIndex. By default this list
+  // is empty.
+  const std::vector<std::pair<ShapeIndex, std::pair<int64_t, ShapeIndex>>>&
+  output_to_operand_aliasing() const {
+    return output_to_operand_aliasing_;
+  }
+  // Sets the list of output/operand buffer pairs that alias each other.
+  void set_output_to_operand_aliasing(
+      std::vector<std::pair<ShapeIndex, std::pair<int64_t, ShapeIndex>>>
+          aliasing) {
+    output_to_operand_aliasing_ = std::move(aliasing);
+  }
 
+ private:
+  // A list of output/operand buffer pairs that alias each other. See comment of
+  // output_to_operand_aliasing().
+  std::vector<std::pair<ShapeIndex, std::pair<int64_t, ShapeIndex>>>
+      output_to_operand_aliasing_;
+};
+
+class HloAsyncInstruction : public HloInstruction {
+  friend class HloInstruction;
+
+ public:
   HloComputation* async_wrapped_computation() const;
   HloInstruction* async_wrapped_instruction() const;
   HloOpcode async_wrapped_opcode() const;
@@ -240,8 +272,8 @@ class HloAsyncInstruction : public HloInstruction {
   virtual absl::string_view async_execution_thread() const;
   virtual void set_async_execution_thread(
       absl::string_view async_execution_thread) {}
-  HloInstructionProto ToProto() const override {
-    return HloInstruction::ToProto();
+  void ToProto(HloInstructionProto* proto) const override {
+    HloInstruction::ToProto(proto);
   }
 
   static bool ClassOf(const HloInstruction* hlo) {
@@ -259,20 +291,28 @@ class HloAsyncInstruction : public HloInstruction {
   HloAsyncInstruction* async_chain_start() const;
   // Returns async-done instruction of the async chain.
   HloAsyncInstruction* async_chain_done() const;
+  // Returns the next async instruction in the async chain, or nullptr if this
+  // is async-done.
+  HloAsyncInstruction* async_chain_next() const;
   // Returns the chain of async op referencing this computation,
-  // where *begin(GetAsyncChain()) is the async-start op and
-  // *end(GetAsyncChain()) is the async-done op.
+  // where GetAsyncChain().front() is the async-start op and
+  // GetAsyncChain().back() is the async-done op.
   std::vector<HloAsyncInstruction*> GetAsyncChain() const;
 
   bool HasSideEffect() const override {
     return async_wrapped_instruction()->HasSideEffect();
   }
 
+  // Updates all future instructions in the async chain to match the shape of
+  // the current instruction.
+  void UpdateChainShapes();
+
  protected:
   // Helper to constructs async-{start,update,done}.
-  HloAsyncInstruction(HloOpcode opcode, const Shape& shape,
-                      absl::Span<HloInstruction* const> operands,
-                      HloOpcode async_wrapped_opcode);
+  HloAsyncInstruction(
+      HloOpcode opcode, const Shape& shape,
+      absl::Span<HloInstruction* const> operands,
+      std::optional<HloOpcode> async_wrapped_opcode = std::nullopt);
 
  private:
   // async-{update,done} inherit all their attributes from async-start,
@@ -291,26 +331,32 @@ class HloAsyncInstruction : public HloInstruction {
 };
 
 // Creates async-start.
-class HloAsyncStartInstruction : public HloAsyncInstruction {
+class HloAsyncStartInstruction : public HloAsyncInstruction,
+                                 public HloAliasible {
  public:
+  using HloAliasible::output_to_operand_aliasing;
+  using HloAliasible::set_output_to_operand_aliasing;
   HloAsyncStartInstruction(
       HloOpcode opcode, const Shape& shape,
       absl::Span<HloInstruction* const> operands,
       HloComputation* async_computation,
       absl::string_view async_execution_thread = kMainExecutionThread);
 
-  ~HloAsyncStartInstruction() override;
-  void ClearCalledComputations() override;
-  // When an async instruction is being destructed, remove it from the vector of
-  // pointers of its called computation, to avoid referencing freed memory.
-  void ClearAsyncComputationInstruction();
+  // Adds a new operand to the async-start instruction.
+  HloInstruction* AddCallOperand(HloInstruction* new_operand);
+
+  // Clones the async-start instruction with new operands and a new computation.
+  std::unique_ptr<HloInstruction> CloneWithNewOperandsAndComputation(
+      const Shape& shape, absl::Span<HloInstruction* const> new_operands,
+      HloComputation* new_computation,
+      HloCloneContext* context = nullptr) const;
 
   absl::string_view async_execution_thread() const override {
     return async_execution_thread_;
   };
   void set_async_execution_thread(
       absl::string_view async_execution_thread) override;
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     switch (hlo->opcode()) {
@@ -324,11 +370,51 @@ class HloAsyncStartInstruction : public HloAsyncInstruction {
  private:
   void PrintExtraAttributesImpl(AttributePrinter& printer,
                                 const HloPrintOptions& options) const override;
+  bool IdenticalSlowPath(
+      const HloInstruction& other,
+      absl::FunctionRef<bool(const HloComputation*, const HloComputation*)>
+          eq_computations) const override;
+  std::unique_ptr<HloInstruction> CloneWithNewOperandsImpl(
+      const Shape& shape, absl::Span<HloInstruction* const> new_operands,
+      HloComputation* new_computation, HloCloneContext* context) const;
   std::unique_ptr<HloInstruction> CloneWithNewOperandsImpl(
       const Shape& shape, absl::Span<HloInstruction* const> new_operands,
       HloCloneContext* context) const override;
 
   std::string async_execution_thread_ = kMainExecutionThread;
+};
+
+// Creates async-update.
+class HloAsyncUpdateInstruction : public HloAsyncInstruction,
+                                  public HloAliasible {
+ public:
+  using HloAliasible::output_to_operand_aliasing;
+  using HloAliasible::set_output_to_operand_aliasing;
+  HloAsyncUpdateInstruction(
+      const Shape& shape, absl::Span<HloInstruction* const> operands,
+      std::optional<HloOpcode> async_wrapped_opcode = std::nullopt);
+
+  void ToProto(HloInstructionProto* proto) const override;
+
+  static bool ClassOf(const HloInstruction* hlo) {
+    switch (hlo->opcode()) {
+      case HloOpcode::kAsyncUpdate:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+ private:
+  void PrintExtraAttributesImpl(AttributePrinter& printer,
+                                const HloPrintOptions& options) const override;
+  bool IdenticalSlowPath(
+      const HloInstruction& other,
+      absl::FunctionRef<bool(const HloComputation*, const HloComputation*)>
+          eq_computations) const override;
+  std::unique_ptr<HloInstruction> CloneWithNewOperandsImpl(
+      const Shape& shape, absl::Span<HloInstruction* const> new_operands,
+      HloCloneContext* context) const override;
 };
 
 class HloCopyStartInstruction : public HloInstruction {
@@ -340,7 +426,7 @@ class HloCopyStartInstruction : public HloInstruction {
   std::optional<int> cross_program_prefetch_index() const {
     return cross_program_prefetch_index_;
   }
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kCopyStart;
@@ -369,17 +455,21 @@ class HloCopyStartInstruction : public HloInstruction {
 
 class HloCompareInstruction : public HloInstruction {
  public:
-  explicit HloCompareInstruction(const Shape& shape, HloInstruction* lhs,
-                                 HloInstruction* rhs,
-                                 ComparisonDirection direction,
-                                 std::optional<Comparison::Type> type);
+  explicit HloCompareInstruction(
+      const Shape& shape, HloInstruction* lhs, HloInstruction* rhs,
+      ComparisonDirection direction,
+      std::optional<ComparisonOrder> order = std::nullopt);
   ComparisonDirection direction() const { return compare_.GetDirection(); }
   ComparisonOrder order() const { return compare_.GetOrder(); }
-  Comparison::Type type() const { return compare_.GetType(); }
-  HloInstructionProto ToProto() const override;
+  const Comparison& comparison() const { return compare_; }
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kCompare;
+  }
+
+  void HashAdditionalAttributes(absl::HashState h) const override {
+    absl::HashState::combine(std::move(h), direction(), order());
   }
 
  private:
@@ -405,8 +495,7 @@ class HloTriangularSolveInstruction : public HloInstruction {
     return triangular_solve_options_;
   }
 
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kTriangularSolve;
@@ -434,8 +523,7 @@ class HloCholeskyInstruction : public HloInstruction {
                                   const CholeskyOptions& options);
   const CholeskyOptions& cholesky_options() const { return cholesky_options_; }
 
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kCholesky;
@@ -485,7 +573,7 @@ class HloChannelInstruction : public HloInstruction {
   explicit HloChannelInstruction(HloOpcode opcode, const Shape& shape,
                                  const std::optional<int64_t>& channel_id);
 
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   void PrintExtraAttributesImpl(AttributePrinter& printer,
                                 const HloPrintOptions& options) const override;
@@ -504,9 +592,9 @@ class HloChannelInstruction : public HloInstruction {
 class HloTopKInstruction : public HloInstruction {
  public:
   HloTopKInstruction(const Shape& shape, HloInstruction* input, int64_t k,
-                     bool largest);
+                     bool largest, bool is_stable);
 
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kTopK;
@@ -517,6 +605,8 @@ class HloTopKInstruction : public HloInstruction {
 
   // Returns whether the largest or smallest K values should be computed.
   bool largest() const { return largest_; }
+
+  bool is_stable() const { return is_stable_; }
 
   void PrintExtraAttributesImpl(AttributePrinter& printer,
                                 const HloPrintOptions& options) const override;
@@ -532,6 +622,7 @@ class HloTopKInstruction : public HloInstruction {
 
   int64_t k_;
   bool largest_;
+  bool is_stable_;
 };
 
 class HloSendRecvInstruction : public HloChannelInstruction {
@@ -539,8 +630,7 @@ class HloSendRecvInstruction : public HloChannelInstruction {
   // Returns whether this send/recv instruction sends data to/from the host.
   bool is_host_transfer() const { return is_host_transfer_; }
 
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     switch (hlo->opcode()) {
@@ -556,7 +646,8 @@ class HloSendRecvInstruction : public HloChannelInstruction {
 
  protected:
   explicit HloSendRecvInstruction(HloOpcode opcode, const Shape& shape,
-                                  int64_t channel_id, bool is_host_transfer);
+                                  std::optional<int64_t> channel_id,
+                                  bool is_host_transfer);
 
  private:
   void PrintExtraAttributesImpl(AttributePrinter& printer,
@@ -572,7 +663,8 @@ class HloSendRecvInstruction : public HloChannelInstruction {
 class HloSendInstruction : public HloSendRecvInstruction {
  public:
   explicit HloSendInstruction(HloInstruction* operand, HloInstruction* token,
-                              int64_t channel_id, bool is_host_transfer);
+                              std::optional<int64_t> channel_id,
+                              bool is_host_transfer);
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kSend;
@@ -589,7 +681,8 @@ class HloSendDoneInstruction : public HloSendRecvInstruction {
  public:
   explicit HloSendDoneInstruction(HloSendInstruction* operand,
                                   bool is_host_transfer);
-  explicit HloSendDoneInstruction(HloInstruction* operand, int64_t channel_id,
+  explicit HloSendDoneInstruction(HloInstruction* operand,
+                                  std::optional<int64_t> channel_id,
                                   bool is_host_transfer);
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kSendDone;
@@ -605,7 +698,8 @@ class HloSendDoneInstruction : public HloSendRecvInstruction {
 class HloRecvInstruction : public HloSendRecvInstruction {
  public:
   explicit HloRecvInstruction(const Shape& shape, HloInstruction* token,
-                              int64_t channel_id, bool is_host_transfer);
+                              std::optional<int64_t> channel_id,
+                              bool is_host_transfer);
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kRecv;
@@ -622,7 +716,8 @@ class HloRecvDoneInstruction : public HloSendRecvInstruction {
  public:
   explicit HloRecvDoneInstruction(HloRecvInstruction* operand,
                                   bool is_host_transfer);
-  explicit HloRecvDoneInstruction(HloInstruction* operand, int64_t channel_id,
+  explicit HloRecvDoneInstruction(HloInstruction* operand,
+                                  std::optional<int64_t> channel_id,
                                   bool is_host_transfer);
 
   static bool ClassOf(const HloInstruction* hlo) {
@@ -638,13 +733,14 @@ class HloRecvDoneInstruction : public HloSendRecvInstruction {
 
 class HloCollectiveInstruction : public HloChannelInstruction {
  public:
-  // TODO(b/316622399): Remove usages of this method and replace with
-  // device_list()->replica_groups().
   const std::vector<ReplicaGroup>& replica_groups() const {
-    return device_list_.replica_groups();
+    return device_list_->replica_groups();
   }
 
-  const CollectiveDeviceList& device_list() const { return device_list_; }
+  const std::shared_ptr<CollectiveDeviceListBase>& device_list() const {
+    return device_list_;
+  }
+  void set_device_list(std::shared_ptr<CollectiveDeviceListBase> device_list);
 
   // Returns true if the layout of the AllReduce is enforced by XLA client (as
   // the layout set in the shape). The only reason for the client to set the
@@ -663,21 +759,24 @@ class HloCollectiveInstruction : public HloChannelInstruction {
 
   static bool ClassOf(const HloInstruction* hlo);
 
+  // TODO(b/462498901): We are trending towards removing channel IDs for
+  // collectives - or, rather, turning it into a boolean field indicating
+  // whether the collective is cross-replica or cross-partition. This method is
+  // a temporary crutch to be consistent without generating unique channel IDs
+  // whenever a new collective is created.
+  static int64_t GetDefaultChannelId() {
+    constexpr int64_t kDefaultCollectiveChannelId = 1;
+    return kDefaultCollectiveChannelId;
+  }
+
  protected:
   explicit HloCollectiveInstruction(
       HloOpcode opcode, const Shape& shape,
       absl::Span<HloInstruction* const> operands,
-      const CollectiveDeviceList& collective_device_list, bool constrain_layout,
-      const std::optional<int64_t>& channel_id);
+      std::shared_ptr<CollectiveDeviceListBase> device_list,
+      bool constrain_layout, const std::optional<int64_t>& channel_id);
 
-  ABSL_DEPRECATED("Use CollectiveDeviceList instead of list of ReplicaGroup.")
-  explicit HloCollectiveInstruction(
-      HloOpcode opcode, const Shape& shape,
-      absl::Span<HloInstruction* const> operands,
-      absl::Span<const ReplicaGroup> replica_groups, bool constrain_layout,
-      const std::optional<int64_t>& channel_id);
-
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   void PrintExtraAttributesImpl(AttributePrinter& printer,
                                 const HloPrintOptions& options) const override;
@@ -686,19 +785,18 @@ class HloCollectiveInstruction : public HloChannelInstruction {
       absl::FunctionRef<bool(const HloComputation*, const HloComputation*)>
           eq_computations) const override;
 
-  CollectiveDeviceList device_list_;
+  std::shared_ptr<CollectiveDeviceListBase> device_list_;
   bool constrain_layout_;
 };
 
 class HloAllGatherInstruction : public HloCollectiveInstruction {
  public:
-  explicit HloAllGatherInstruction(HloOpcode opcode, const Shape& shape,
-                                   absl::Span<HloInstruction* const> operands,
-                                   int64_t all_gather_dimension,
-                                   const CollectiveDeviceList& device_list,
-                                   bool constrain_layout,
-                                   const std::optional<int64_t>& channel_id,
-                                   bool use_global_device_ids);
+  explicit HloAllGatherInstruction(
+      HloOpcode opcode, const Shape& shape,
+      absl::Span<HloInstruction* const> operands, int64_t all_gather_dimension,
+      std::shared_ptr<CollectiveDeviceListBase> device_list,
+      bool constrain_layout, const std::optional<int64_t>& channel_id,
+      bool use_global_device_ids);
 
   ABSL_DEPRECATED("Use CollectiveDeviceList instead of list of ReplicaGroup.")
   explicit HloAllGatherInstruction(
@@ -709,6 +807,7 @@ class HloAllGatherInstruction : public HloCollectiveInstruction {
 
   // Same as HloAllReduceInstruction::use_global_device_ids.
   bool use_global_device_ids() const { return use_global_device_ids_; }
+  void set_use_global_device_ids(bool value) { use_global_device_ids_ = value; }
 
   // The dimension on which data from different participants are concatenated.
   int64_t all_gather_dimension() const { return all_gather_dimension_; }
@@ -726,7 +825,7 @@ class HloAllGatherInstruction : public HloCollectiveInstruction {
  protected:
   void PrintExtraAttributesImpl(AttributePrinter& printer,
                                 const HloPrintOptions& options) const override;
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
  private:
   bool IdenticalSlowPathIgnoringChannelIdValues(
@@ -750,16 +849,9 @@ class HloAllReduceInstructionBase : public HloCollectiveInstruction {
       HloOpcode opcode, const Shape& shape,
       absl::Span<HloInstruction* const> operands,
       HloComputation* reduce_computation,
-      const CollectiveDeviceList& device_list, bool constrain_layout,
-      const std::optional<int64_t>& channel_id, bool use_global_device_ids);
-
-  ABSL_DEPRECATED("Use CollectiveDeviceList instead of list of ReplicaGroup.")
-  explicit HloAllReduceInstructionBase(
-      HloOpcode opcode, const Shape& shape,
-      absl::Span<HloInstruction* const> operands,
-      HloComputation* reduce_computation,
-      absl::Span<const ReplicaGroup> replica_groups, bool constrain_layout,
-      const std::optional<int64_t>& channel_id, bool use_global_device_ids);
+      std::shared_ptr<CollectiveDeviceListBase> device_list,
+      bool constrain_layout, const std::optional<int64_t>& channel_id,
+      bool use_global_device_ids);
 
   // Returns true if the ids in the ReplicaGroup config represent a global id of
   // (replica_id * partition_count + partition_id) instead of a replica id.
@@ -779,7 +871,7 @@ class HloAllReduceInstructionBase : public HloCollectiveInstruction {
  protected:
   void PrintExtraAttributesImpl(AttributePrinter& printer,
                                 const HloPrintOptions& options) const override;
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   bool IdenticalSlowPathIgnoringChannelIdValues(
       const HloInstruction& other,
@@ -815,9 +907,9 @@ class HloReduceScatterInstruction : public HloAllReduceInstructionBase {
   explicit HloReduceScatterInstruction(
       const Shape& shape, absl::Span<HloInstruction* const> operands,
       HloComputation* reduce_computation,
-      const CollectiveDeviceList& device_list, bool constrain_layout,
-      const std::optional<int64_t>& channel_id, bool use_global_device_ids,
-      int64_t scatter_dimension);
+      std::shared_ptr<CollectiveDeviceListBase> device_list,
+      bool constrain_layout, const std::optional<int64_t>& channel_id,
+      bool use_global_device_ids, int64_t scatter_dimension);
 
   ABSL_DEPRECATED("Use CollectiveDeviceList instead of list of ReplicaGroup.")
   explicit HloReduceScatterInstruction(
@@ -840,7 +932,7 @@ class HloReduceScatterInstruction : public HloAllReduceInstructionBase {
  protected:
   void PrintExtraAttributesImpl(AttributePrinter& printer,
                                 const HloPrintOptions& options) const override;
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
  private:
   bool IdenticalSlowPathIgnoringChannelIdValues(
@@ -860,8 +952,8 @@ class HloAllToAllInstruction : public HloCollectiveInstruction {
  public:
   explicit HloAllToAllInstruction(
       const Shape& shape, absl::Span<HloInstruction* const> operands,
-      const CollectiveDeviceList& device_list, bool constrain_layout,
-      const std::optional<int64_t>& channel_id,
+      std::shared_ptr<CollectiveDeviceListBase> device_list,
+      bool constrain_layout, const std::optional<int64_t>& channel_id,
       const std::optional<int64_t>& split_dimension);
 
   ABSL_DEPRECATED("Use CollectiveDeviceList instead of list of ReplicaGroup.")
@@ -888,7 +980,7 @@ class HloAllToAllInstruction : public HloCollectiveInstruction {
  protected:
   void PrintExtraAttributesImpl(AttributePrinter& printer,
                                 const HloPrintOptions& options) const override;
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
  private:
   bool IdenticalSlowPathIgnoringChannelIdValues(
@@ -904,27 +996,28 @@ class HloAllToAllInstruction : public HloCollectiveInstruction {
   std::optional<int64_t> split_dimension_;
 };
 
-class HloCollectiveBroadcastInstruction : public HloCollectiveInstruction {
+class HloRaggedAllToAllInstruction : public HloCollectiveInstruction {
  public:
-  explicit HloCollectiveBroadcastInstruction(
-      HloOpcode opcode, const Shape& shape,
-      absl::Span<HloInstruction* const> operands,
-      const CollectiveDeviceList& device_list, bool constrain_layout,
+  explicit HloRaggedAllToAllInstruction(
+      const Shape& shape, absl::Span<HloInstruction* const> operands,
+      std::shared_ptr<CollectiveDeviceListBase> device_list,
       const std::optional<int64_t>& channel_id);
 
   ABSL_DEPRECATED("Use CollectiveDeviceList instead of list of ReplicaGroup.")
-  explicit HloCollectiveBroadcastInstruction(
+  explicit HloRaggedAllToAllInstruction(
       HloOpcode opcode, const Shape& shape,
       absl::Span<HloInstruction* const> operands,
-      absl::Span<const ReplicaGroup> replica_groups, bool constrain_layout,
+      absl::Span<const ReplicaGroup> replica_groups,
       const std::optional<int64_t>& channel_id);
 
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
-
   static bool ClassOf(const HloInstruction* hlo) {
-    return hlo->opcode() == HloOpcode::kCollectiveBroadcast;
+    return hlo->opcode() == HloOpcode::kRaggedAllToAll;
   }
+
+ protected:
+  void PrintExtraAttributesImpl(AttributePrinter& printer,
+                                const HloPrintOptions& options) const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
  private:
   // Implementation for non-common logic of CloneWithNewOperands.
@@ -933,10 +1026,45 @@ class HloCollectiveBroadcastInstruction : public HloCollectiveInstruction {
       HloCloneContext* context) const override;
 };
 
+class HloCollectiveBroadcastInstruction : public HloCollectiveInstruction {
+ public:
+  explicit HloCollectiveBroadcastInstruction(
+      HloOpcode opcode, const Shape& shape,
+      absl::Span<HloInstruction* const> operands,
+      std::shared_ptr<CollectiveDeviceListBase> device_list,
+      bool constrain_layout, const std::optional<int64_t>& channel_id,
+      bool has_dynamic_root = false);
+
+  ABSL_DEPRECATED("Use CollectiveDeviceList instead of list of ReplicaGroup.")
+  explicit HloCollectiveBroadcastInstruction(
+      HloOpcode opcode, const Shape& shape,
+      absl::Span<HloInstruction* const> operands,
+      absl::Span<const ReplicaGroup> replica_groups, bool constrain_layout,
+      const std::optional<int64_t>& channel_id, bool has_dynamic_root = false);
+
+  void ToProto(HloInstructionProto* proto) const override;
+
+  static bool ClassOf(const HloInstruction* hlo) {
+    return hlo->opcode() == HloOpcode::kCollectiveBroadcast;
+  }
+  bool has_dynamic_root() const { return has_dynamic_root_; }
+
+ private:
+  // Implementation for non-common logic of CloneWithNewOperands.
+  std::unique_ptr<HloInstruction> CloneWithNewOperandsImpl(
+      const Shape& shape, absl::Span<HloInstruction* const> new_operands,
+      HloCloneContext* context) const override;
+  void PrintExtraAttributesImpl(AttributePrinter& printer,
+                                const HloPrintOptions& options) const override;
+
+  bool has_dynamic_root_;
+};
+
 class HloCollectivePermuteInstruction : public HloChannelInstruction {
  public:
   explicit HloCollectivePermuteInstruction(
-      HloOpcode opcode, const Shape& shape, HloInstruction* operand,
+      HloOpcode opcode, const Shape& shape,
+      absl::Span<HloInstruction* const> operands,
       const std::vector<std::pair<int64_t, int64_t>>& source_target_pairs,
       const std::optional<int64_t>& channel_id);
 
@@ -956,13 +1084,20 @@ class HloCollectivePermuteInstruction : public HloChannelInstruction {
     return slice_sizes_;
   }
 
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kCollectivePermute ||
            hlo->opcode() == HloOpcode::kCollectivePermuteStart;
   }
+
+  void HashAdditionalAttributes(absl::HashState h) const override {
+    absl::HashState::combine(std::move(h), source_target_pairs());
+  }
+
+  // Whether this is an in-place collective permute (with dynamic slice
+  // operands). Derived from the presence of slice_sizes.
+  bool inplace() const { return !slice_sizes_.empty(); }
 
  private:
   void PrintExtraAttributesImpl(AttributePrinter& printer,
@@ -981,16 +1116,59 @@ class HloCollectivePermuteInstruction : public HloChannelInstruction {
   const std::vector<std::vector<int64_t>> slice_sizes_;
 };
 
+class HloCollectiveReduceInstruction : public HloAllReduceInstructionBase {
+ public:
+  explicit HloCollectiveReduceInstruction(
+      const Shape& shape, absl::Span<HloInstruction* const> operands,
+      HloComputation* reduce_computation,
+      std::shared_ptr<CollectiveDeviceListBase> device_list,
+      bool constrain_layout, const std::optional<int64_t>& channel_id,
+      bool use_global_device_ids, bool has_dynamic_root);
+
+  ABSL_DEPRECATED("Use CollectiveDeviceList instead of list of ReplicaGroup.")
+  explicit HloCollectiveReduceInstruction(
+      const Shape& shape, absl::Span<HloInstruction* const> operands,
+      HloComputation* reduce_computation,
+      absl::Span<const ReplicaGroup> replica_groups, bool constrain_layout,
+      const std::optional<int64_t>& channel_id, bool use_global_device_ids,
+      bool has_dynamic_root);
+
+  bool has_dynamic_root() const { return has_dynamic_root_; }
+
+  static bool ClassOf(const HloInstruction* hlo) {
+    return hlo->opcode() == HloOpcode::kCollectiveReduce;
+  }
+
+ protected:
+  void PrintExtraAttributesImpl(AttributePrinter& printer,
+                                const HloPrintOptions& options) const override;
+  void ToProto(HloInstructionProto* proto) const override;
+
+ private:
+  bool IdenticalSlowPathIgnoringChannelIdValues(
+      const HloInstruction& other,
+      absl::FunctionRef<bool(const HloComputation*, const HloComputation*)>
+          eq_computations) const override;
+
+  std::unique_ptr<HloInstruction> CloneWithNewOperandsImpl(
+      const Shape& shape, absl::Span<HloInstruction* const> new_operands,
+      HloCloneContext* context) const override;
+
+  bool has_dynamic_root_;
+};
+
 inline bool HloAllReduceInstructionBase::ClassOf(const HloInstruction* hlo) {
   return HloAllReduceInstruction::ClassOf(hlo) ||
-         hlo->opcode() == HloOpcode::kReduceScatter;
+         hlo->opcode() == HloOpcode::kReduceScatter ||
+         HloCollectiveReduceInstruction::ClassOf(hlo);
 }
 
 inline bool HloCollectiveInstruction::ClassOf(const HloInstruction* hlo) {
   return HloAllReduceInstructionBase::ClassOf(hlo) ||
          HloCollectiveBroadcastInstruction::ClassOf(hlo) ||
          HloAllGatherInstruction::ClassOf(hlo) ||
-         HloAllToAllInstruction::ClassOf(hlo);
+         HloAllToAllInstruction::ClassOf(hlo) ||
+         HloRaggedAllToAllInstruction::ClassOf(hlo);
 }
 
 inline bool HloChannelInstruction::ClassOf(const HloInstruction* hlo) {
@@ -1013,6 +1191,47 @@ class HloReverseInstruction : public HloDimensionsInstruction {
   std::unique_ptr<HloInstruction> CloneWithNewOperandsImpl(
       const Shape& shape, absl::Span<HloInstruction* const> new_operands,
       HloCloneContext* context) const override;
+};
+
+class HloShuffleInstruction : public HloDimensionsInstruction {
+ public:
+  explicit HloShuffleInstruction(const Shape& shape, HloInstruction* operand,
+                                 absl::Span<const int64_t> dimensions,
+                                 const ShuffleMode& mode);
+
+  static bool ClassOf(const HloInstruction* hlo) {
+    return hlo->opcode() == HloOpcode::kShuffle;
+  }
+
+  const ShuffleMode& shuffle_mode() const { return mode_; }
+  ShuffleMode* mutable_shuffle_mode() { return &mode_; }
+  ShuffleMode::ModeCase mode() const { return mode_.mode_case(); }
+  void ToProto(HloInstructionProto* proto) const override;
+
+  // Accessors for the inner attributes of each mode.
+  const ShuffleMode::Rotate& rotate() const {
+    CHECK(mode_.has_rotate());
+    return mode_.rotate();
+  }
+  ShuffleMode::Rotate* mutable_rotate() {
+    CHECK(mode_.has_rotate());
+    return mode_.mutable_rotate();
+  }
+
+ private:
+  std::unique_ptr<HloInstruction> CloneWithNewOperandsImpl(
+      const Shape& shape, absl::Span<HloInstruction* const> new_operands,
+      HloCloneContext* context) const override;
+
+  bool IdenticalSlowPath(
+      const HloInstruction& other,
+      absl::FunctionRef<bool(const HloComputation*, const HloComputation*)>
+          eq_computations) const override;
+
+  void PrintExtraAttributesImpl(AttributePrinter& printer,
+                                const HloPrintOptions& options) const override;
+
+  ShuffleMode mode_;
 };
 
 class HloConcatenateInstruction : public HloDimensionsInstruction {
@@ -1072,6 +1291,63 @@ class HloReduceInstruction : public HloDimensionsInstruction {
       HloCloneContext* context) const override;
 };
 
+class HloScanInstruction : public HloDimensionsInstruction {
+ public:
+  explicit HloScanInstruction(const Shape& shape,
+                              absl::Span<HloInstruction* const> inputs,
+                              absl::Span<HloInstruction* const> inits,
+                              HloComputation* to_apply, int64_t scan_dimension,
+                              bool is_reverse, TriState is_associative);
+
+  // Returns the dimension along which to scan.
+  int64_t scan_dimension() const { return HloInstruction::dimensions(0); }
+
+  // Returns the size of the dimension along which to scan.
+  absl::StatusOr<int64_t> GetScanDimSize() const;
+
+  // Returns whether the scan is in reverse order.
+  bool is_reverse() const { return is_reverse_; }
+
+  // Returns whether the scan is associative.
+  TriState is_associative() const { return is_associative_; }
+
+  // Returns the number of initial values (and, consequentially, the number of
+  // input arrays) this scan has.
+  int64_t num_carries() const { return num_carries_; }
+
+  absl::Span<HloInstruction* const> inputs() const {
+    return absl::MakeSpan(operands())
+        .subspan(0, operand_count() - num_carries());
+  }
+
+  absl::Span<HloInstruction* const> inits() const {
+    return absl::MakeSpan(operands())
+        .subspan(operand_count() - num_carries(), num_carries());
+  }
+
+  void ToProto(HloInstructionProto* proto) const override;
+
+  static bool ClassOf(const HloInstruction* hlo) {
+    return hlo->opcode() == HloOpcode::kScan;
+  }
+
+ private:
+  void PrintExtraAttributesImpl(AttributePrinter& printer,
+                                const HloPrintOptions& options) const override;
+  bool IdenticalSlowPath(
+      const HloInstruction& other,
+      absl::FunctionRef<bool(const HloComputation*, const HloComputation*)>
+          eq_computations) const override;
+  // Implementation for non-common logic of CloneWithNewOperands.
+  std::unique_ptr<HloInstruction> CloneWithNewOperandsImpl(
+      const Shape& shape, absl::Span<HloInstruction* const> new_operands,
+      HloCloneContext* context) const override;
+
+  bool is_reverse_;
+  TriState is_associative_;
+  int64_t num_carries_;
+};
+
 class HloSortInstruction : public HloDimensionsInstruction {
  public:
   explicit HloSortInstruction(const Shape& shape, int64_t dimension,
@@ -1079,14 +1355,14 @@ class HloSortInstruction : public HloDimensionsInstruction {
                               HloComputation* compare, bool is_stable);
   // Returns the sort dimension for this instruction
   int64_t sort_dimension() const { return HloInstruction::dimensions(0); }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
   // Returns the key operand to this instruction.
   const HloInstruction* keys() const { return operand(0); }
   HloInstruction* mutable_keys() { return mutable_operand(0); }
   // Returns the number of value operands.
   int64_t values_count() const { return operand_count() - 1; }
   bool is_stable() const { return is_stable_; }
+  void set_is_stable(bool is_stable) { is_stable_ = is_stable; }
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kSort;
@@ -1111,8 +1387,6 @@ class HloTransposeInstruction : public HloDimensionsInstruction {
  public:
   explicit HloTransposeInstruction(const Shape& shape, HloInstruction* operand,
                                    absl::Span<const int64_t> dimensions);
-  // Returns whether this instruction does a rank-2 transposition.
-  bool IsRank2Transpose() const;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kTranspose;
@@ -1170,7 +1444,7 @@ class HloReshapeInstruction : public HloInstruction {
   explicit HloReshapeInstruction(const Shape& shape, HloInstruction* operand,
                                  int64_t inferred_dimension);
   int64_t inferred_dimension() const { return inferred_dimension_; }
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kReshape;
@@ -1199,8 +1473,7 @@ class HloMapInstruction : public HloInstruction {
   absl::Span<const int64_t> dimensions() const override { return dimensions_; }
 
   std::vector<int64_t>* mutable_dimensions() override { return &dimensions_; }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kMap;
@@ -1230,7 +1503,7 @@ class HloSliceInstruction : public HloInstruction {
                                absl::Span<const int64_t> limit_indices,
                                absl::Span<const int64_t> strides);
 
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   // Returns the start index in the given dimension for a slice node.
   int64_t slice_starts(int64_t dimension) const {
@@ -1256,6 +1529,11 @@ class HloSliceInstruction : public HloInstruction {
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kSlice;
+  }
+
+  void HashAdditionalAttributes(absl::HashState h) const override {
+    absl::HashState::combine(std::move(h), slice_starts(), slice_limits(),
+                             slice_strides());
   }
 
  private:
@@ -1295,8 +1573,8 @@ class HloConstantInstruction : public HloInstruction {
   }
   // Returns whether there is literal associated with this instruction.
   bool HasLiteral() const { return static_cast<bool>(literal_); }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void DropLiteral() { literal_ = nullptr; }
+  void ToProto(HloInstructionProto* proto) const override;
 
   // Change the layout for an Constant Hlo instruction to match new_layout.  For
   // tuple shaped constants shape_index is the path to the internal array
@@ -1306,6 +1584,34 @@ class HloConstantInstruction : public HloInstruction {
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kConstant;
+  }
+
+  // Canonicalize constant literal using the given literal pool.
+  bool Canonicalize(LiteralPool* literal_pool) {
+    if (literal_pool && literal_) {
+      auto canonical = literal_pool->GetCanonicalLiteral(literal_);
+      if (canonical != literal_) {
+        literal_ = std::move(canonical);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Hashes the literal the way Identical compares it: by value, ignoring the
+  // literal's layout, over at most 64 bytes. Literal equality compares sub
+  // byte types under a bit mask and dynamic arrays only up to their dynamic
+  // sizes, so their bytes stay out.
+  void HashAdditionalAttributes(absl::HashState h) const override {
+    if (!HasLiteral()) {
+      return;
+    }
+    const Shape& shape = literal().shape();
+    if (shape.IsArray() && shape.is_static() &&
+        !primitive_util::IsSubByteNonPredType(shape.element_type())) {
+      LiteralBase::Hash<absl::HashState, /*kIsLayoutSensitive=*/false,
+                        /*kByteLimit=*/64>(std::move(h), literal());
+    }
   }
 
  private:
@@ -1327,8 +1633,10 @@ class HloConstantInstruction : public HloInstruction {
 
 // Abstract class that represents an HLO instruction that "calls" a computation.
 // Fusion and Call HLOs inherit from this class.
-class HloCallableInstruction : public HloInstruction {
+class HloCallableInstruction : public HloInstruction, public HloAliasible {
  public:
+  using HloAliasible::output_to_operand_aliasing;
+  using HloAliasible::set_output_to_operand_aliasing;
   HloCallableInstruction(HloOpcode opcode, const Shape& shape);
 
   HloCallableInstruction(HloOpcode opcode, const Shape& shape,
@@ -1342,6 +1650,15 @@ class HloCallableInstruction : public HloInstruction {
   HloCallableInstruction(HloOpcode opcode, const Shape& shape,
                          absl::Span<HloInstruction* const> operands,
                          absl::Span<HloComputation* const> called_computations);
+
+  HloCallableInstruction(HloOpcode opcode, const Shape& shape,
+                         const std::string& name, const std::string& attributes,
+                         int64_t version);
+
+  HloCallableInstruction(HloOpcode opcode, const Shape& shape,
+                         absl::Span<HloInstruction* const> operands,
+                         HloComputation* decomposition, const std::string& name,
+                         const std::string& attributes, int64_t version);
 
   ~HloCallableInstruction() override;
 
@@ -1374,12 +1691,10 @@ class HloCallableInstruction : public HloInstruction {
   HloInstruction* called_computation_root() const;
 
   // Recursively sets all nested called computation to have thread name as
-  // `execution_thread`. if `skip_async_execution_thread_overwrite` is true,
-  // skip overwrite async instruction and its comptuations thread name
-  // overwriting.
-  void RecursivelySetComputationsThreadName(
-      absl::string_view execution_thread,
-      bool skip_async_execution_thread_overwrite);
+  // `execution_thread`. Embedded computation (as opposed to ControlFlow)
+  // computations thread name overwriting is skipped since callsite decides the
+  // thread name.
+  void RecursivelySetComputationsThreadName(absl::string_view execution_thread);
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kFusion ||
@@ -1387,49 +1702,36 @@ class HloCallableInstruction : public HloInstruction {
            hlo->opcode() == HloOpcode::kCustomCall;
   }
 
-  // Gets a list of output/operand buffer pairs that alias each other, where the
-  // output buffer is represented as a ShapeIndex, and the operand buffer is
-  // represented as the operand index and the ShapeIndex. By default this list
-  // is empty.
-  const std::vector<std::pair<ShapeIndex, std::pair<int64_t, ShapeIndex>>>&
-  output_to_operand_aliasing() const {
-    return output_to_operand_aliasing_;
-  }
-  // Sets the list of output/operand buffer pairs that alias each other.
-  void set_output_to_operand_aliasing(
-      std::vector<std::pair<ShapeIndex, std::pair<int64_t, ShapeIndex>>>
-          aliasing) {
-    output_to_operand_aliasing_ = std::move(aliasing);
+  FrontendAttributes BuildFrontendAttributesForComposite(
+      const std::string& name,
+      std::optional<absl::string_view> attributes = std::nullopt,
+      std::optional<int64_t> version = std::nullopt) {
+    FrontendAttributes frontend_attributes;
+    frontend_attributes.mutable_map()->insert({"composite.name", name});
+    frontend_attributes.mutable_map()->insert(
+        {"composite.attributes",
+         attributes.has_value() ? std::string(*attributes) : "{}"});
+    frontend_attributes.mutable_map()->insert(
+        {"composite.version",
+         version.has_value() ? std::to_string(*version) : "0"});
+    return frontend_attributes;
   }
 
  protected:
   // Returns the default called computation name.
   virtual std::string default_called_computation_name() const = 0;
-
- private:
-  // A list of output/operand buffer pairs that alias each other. See comment of
-  // output_to_operand_aliasing().
-  std::vector<std::pair<ShapeIndex, std::pair<int64_t, ShapeIndex>>>
-      output_to_operand_aliasing_;
 };
 
 class HloFusionInstruction : public HloCallableInstruction {
  public:
   explicit HloFusionInstruction(const Shape& shape, FusionKind fusion_kind,
-                                HloInstruction* fused_root);
+                                HloInstruction* fused_root,
+                                absl::string_view prefix = "");
 
   explicit HloFusionInstruction(const Shape& shape, FusionKind fusion_kind,
                                 absl::Span<HloInstruction* const> operands,
                                 HloComputation* fusion_computation,
                                 absl::string_view prefix = "");
-
-  ~HloFusionInstruction() override;
-
-  void ClearCalledComputations() override;
-
-  // When a fusion instruction is being destructed, clear the back pointer of
-  // its fusion computation, to avoid referencing freed memory.
-  void ClearFusionComputationInstruction();
 
   // Clones the given instruction_to_append and inserts the clone into this
   // callable instruction.
@@ -1437,8 +1739,7 @@ class HloFusionInstruction : public HloCallableInstruction {
       HloInstruction* instruction_to_append, bool add_output = false);
 
   std::string ToCategory() const override;
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   // Adds a new operand the fusion instruction.
   HloInstruction* AddFusionOperand(HloInstruction* new_operand);
@@ -1447,15 +1748,23 @@ class HloFusionInstruction : public HloCallableInstruction {
   // fused instruction set of 'this', updating operands as necessary.
   //
   // Precondition: 'instruction_to_merge' must be an operand of 'this'.
-  void MergeFusionInstruction(HloFusionInstruction* instruction_to_merge);
+  //
+  // remove_computation: when false, allows to defer the call to
+  // RemoveEmbeddedComputation to a later time.
+  void MergeFusionInstruction(HloFusionInstruction* instruction_to_merge,
+                              bool remove_computation = true);
 
   // Merges the fused instructions from instruction_to_merge into the fused
-  // instruction set of 'this' and generates multioutput fusion instructions.
+  // instruction set of 'this' and generates multi-output fusion instructions.
   // All the users of instruction_to_merge will be redirected to 'this'
   // instruction. instruction_to_merge will be removed from its parent
   // computation.
+  //
+  // remove_computation: when false, allows to defer the call to
+  // RemoveEmbeddedComputation to a later time.
   void MergeFusionInstructionIntoMultiOutput(
-      HloFusionInstruction* instruction_to_merge);
+      HloFusionInstruction* instruction_to_merge,
+      bool remove_computation = true);
 
   // Fuses the given instruction in this fusion instruction. instruction_to_fuse
   // is cloned and the clone is placed in the fusion
@@ -1518,8 +1827,19 @@ class HloFusionInstruction : public HloCallableInstruction {
   // If multiple operands are the same instruction, keeps only one of them.
   absl::Status DeduplicateFusionOperands();
 
+  // Permutes the operands computation according to the provided permutation.
+  // The fusion computation is also adjusted accordingly.
+  absl::Status PermuteFusionOperands(absl::Span<const int64_t> permutation);
+
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kFusion;
+  }
+
+  // Add various fusion parameters to the hash.
+  void HashAdditionalAttributes(absl::HashState h) const override {
+    absl::HashState::combine(std::move(h), *fused_expression_root(),
+                             fusion_kind(), fused_instruction_count(),
+                             fused_parameters().size());
   }
 
  protected:
@@ -1555,6 +1875,15 @@ class HloCallInstruction : public HloCallableInstruction {
                      absl::Span<HloInstruction* const> operands,
                      HloComputation* called_computation);
 
+  HloCallInstruction(const Shape& shape, HloInstruction* decomposition_root,
+                     const std::string& name, const std::string& attributes,
+                     int64_t version);
+
+  HloCallInstruction(const Shape& shape,
+                     absl::Span<HloInstruction* const> operands,
+                     HloComputation* decomposition, const std::string& name,
+                     const std::string& attributes, int64_t version);
+
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kCall;
   }
@@ -1572,8 +1901,7 @@ class HloRngInstruction : public HloInstruction {
                              absl::Span<HloInstruction* const> parameters);
   // Returns the random distribution for this rng node.
   RandomDistribution random_distribution() const { return distribution_; }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kRng;
@@ -1625,11 +1953,15 @@ class HloParameterInstruction : public HloInstruction {
     return parameter_replicated_at_leaf_buffers_;
   }
 
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kParameter;
+  }
+
+  // Add parameter number to the hash.
+  void HashAdditionalAttributes(absl::HashState h) const override {
+    absl::HashState::combine(std::move(h), parameter_number());
   }
 
  private:
@@ -1665,11 +1997,14 @@ class HloGetTupleElementInstruction : public HloInstruction {
   void set_tuple_index(int64_t new_tuple_index) {
     tuple_index_ = new_tuple_index;
   }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kGetTupleElement;
+  }
+
+  void HashAdditionalAttributes(absl::HashState h) const override {
+    absl::HashState::combine(std::move(h), tuple_index());
   }
 
  private:
@@ -1696,8 +2031,7 @@ class HloReducePrecisionInstruction : public HloInstruction {
   int32_t exponent_bits() const { return exponent_bits_; }
   // Returns the number of mantissa bits for a reduce-precision node.
   int32_t mantissa_bits() const { return mantissa_bits_; }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kReducePrecision;
@@ -1734,11 +2068,10 @@ class HloInfeedInstruction : public HloInstruction {
   // as the shape of the infeed instruction which produces a tuple containing
   // the infeed data shape and a TOKEN.
   const Shape& infeed_shape() const {
-    TF_DCHECK_OK(ShapeUtil::ValidateShapeWithOptionalLayout(shape()));
+    DCHECK_OK(ShapeUtil::ValidateShapeWithOptionalLayout(shape()));
     return ShapeUtil::GetSubshape(shape(), {0});
   }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kInfeed;
@@ -1775,8 +2108,7 @@ class HloOutfeedInstruction : public HloInstruction {
   void set_outfeed_config(const std::string& config) {
     outfeed_config_ = config;
   }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kOutfeed;
@@ -1803,11 +2135,14 @@ class HloOutfeedInstruction : public HloInstruction {
 class HloConvolutionInstruction : public HloInstruction {
  public:
   explicit HloConvolutionInstruction(
-      const Shape& shape, HloInstruction* lhs, HloInstruction* rhs,
+      const Shape& shape, absl::Span<HloInstruction* const> operands,
       int64_t feature_group_count, int64_t batch_group_count,
       const Window& window,
       const ConvolutionDimensionNumbers& dimension_numbers,
-      const PrecisionConfig& precision_config);
+      const PrecisionConfig& precision_config,
+      const SparsityConfig& sparsity_config,
+      const BlockScalingConfig& block_scaling_config,
+      ConvolutionKind convolution_kind = CONVOLUTION_KIND_UNSET);
   const Window& window() const override { return window_; }
   void set_window(const Window& window) override { window_ = window; }
   const ConvolutionDimensionNumbers& convolution_dimension_numbers() const {
@@ -1829,6 +2164,11 @@ class HloConvolutionInstruction : public HloInstruction {
     batch_group_count_ = num_batch_groups;
   }
 
+  ConvolutionKind convolution_kind() const { return convolution_kind_; }
+  void set_convolution_kind(ConvolutionKind convolution_kind) {
+    convolution_kind_ = convolution_kind;
+  }
+
   // Returns the information used to tell the implementation information about
   // what sort of precision is requested. The meaning of the field is backend
   // specific. At the moment, it is only supported for kConvolution and kDot.
@@ -1839,12 +2179,28 @@ class HloConvolutionInstruction : public HloInstruction {
   const PrecisionConfig& precision_config() const { return precision_config_; }
   PrecisionConfig* mutable_precision_config() { return &precision_config_; }
 
+  const SparsityConfig& sparsity_config() const { return sparsity_config_; }
+  void set_sparsity_config(const SparsityConfig& sparsity_config) {
+    sparsity_config_ = sparsity_config;
+  }
+
+  const BlockScalingConfig& block_scaling_config() const {
+    return block_scaling_config_;
+  }
+  void set_block_scaling_config(const BlockScalingConfig& config) {
+    block_scaling_config_ = config;
+  }
+
   std::string ToCategory() const override;
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kConvolution;
+  }
+
+  void HashAdditionalAttributes(absl::HashState h) const override {
+    absl::HashState::combine(
+        std::move(h), protobuf_util::ProtobufHashBySerialization(window()));
   }
 
  private:
@@ -1870,6 +2226,12 @@ class HloConvolutionInstruction : public HloInstruction {
   // Information used to communicate to the implementation about the algorithm
   // used to produce results. See the documentation on precision_config().
   PrecisionConfig precision_config_;
+  // The sparsity configuration used for the convolution.
+  SparsityConfig sparsity_config_;
+  // Convolution block scaling config.
+  BlockScalingConfig block_scaling_config_;
+  // Conv type (fprop, dgrad, wgrad)
+  ConvolutionKind convolution_kind_ = CONVOLUTION_KIND_UNSET;
 };
 
 class HloReduceWindowInstruction : public HloInstruction {
@@ -1885,8 +2247,7 @@ class HloReduceWindowInstruction : public HloInstruction {
       HloComputation* reduce_computation);
   const Window& window() const override { return window_; }
   void set_window(const Window& window) override { window_ = window; }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
   // Returns the number of input arrays (and, consequentially, the number of
   // init values) this reduce has.
   int64_t input_count() const { return operand_count() / 2; }
@@ -1926,9 +2287,28 @@ class HloReduceWindowInstruction : public HloInstruction {
     }
     return shapes;
   }
+  // Returns the indices of the non-trivial dimensions in the window.
+  std::vector<int64_t> non_trivial_window_dimensions() const {
+    std::vector<int64_t> non_trivial_dimensions;
+    const Shape& operand_shape = inputs().front()->shape();
+
+    int64_t rank = operand_shape.dimensions().size();
+    for (int dimension_index = 0; dimension_index < rank; ++dimension_index) {
+      const WindowDimension& window_dim = window_.dimensions(dimension_index);
+      if (!window_util::IsTrivialWindowDimension(window_dim)) {
+        non_trivial_dimensions.push_back(dimension_index);
+      }
+    }
+    return non_trivial_dimensions;
+  }
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kReduceWindow;
+  }
+
+  void HashAdditionalAttributes(absl::HashState h) const override {
+    absl::HashState::combine(
+        std::move(h), protobuf_util::ProtobufHashBySerialization(window()));
   }
 
  private:
@@ -1971,8 +2351,7 @@ class HloSelectAndScatterInstruction : public HloInstruction {
   void set_scatter(HloComputation* computation) {
     set_called_computation(kScatterComputationIndex, computation);
   }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kSelectAndScatter;
@@ -2004,6 +2383,16 @@ class HloCustomCallInstruction : public HloCallableInstruction {
   // 'operands_with_layout' must all have layouts.
   HloCustomCallInstruction(const Shape& shape,
                            absl::Span<HloInstruction* const> operands,
+                           absl::string_view custom_call_target,
+                           std::string opaque,
+                           absl::Span<const Shape> operand_shapes_with_layout,
+                           CustomCallApiVersion api_version);
+
+  // Constructor for a custom call with constrained layout and a to_apply
+  // computation. 'shape' and 'operands_with_layout' must all have layouts.
+  HloCustomCallInstruction(const Shape& shape,
+                           absl::Span<HloInstruction* const> operands,
+                           HloComputation* to_apply,
                            absl::string_view custom_call_target,
                            std::string opaque,
                            absl::Span<const Shape> operand_shapes_with_layout,
@@ -2082,8 +2471,7 @@ class HloCustomCallInstruction : public HloCallableInstruction {
   const PrecisionConfig& precision_config() const { return precision_config_; }
   PrecisionConfig* mutable_precision_config() { return &precision_config_; }
 
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   // Returns whether the result and operand layouts are constrained.
   bool layout_constrained() const { return layout_constrained_; }
@@ -2112,6 +2500,30 @@ class HloCustomCallInstruction : public HloCallableInstruction {
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kCustomCall;
+  }
+
+  void HashAdditionalAttributes(absl::HashState h) const override {
+    absl::HashState::combine(std::move(h), custom_call_target());
+  }
+
+  class PerInstructionStorage {
+    // Abstract class for per-instruction storage.
+   public:
+    virtual ~PerInstructionStorage() = default;
+  };
+
+  void SetPerInstructionStorage(
+      std::unique_ptr<PerInstructionStorage> per_instruction_storage) {
+    absl::MutexLock lock(per_instruction_storage_mutex_);
+    if (per_instruction_storage_ != nullptr) {
+      LOG(WARNING) << "Not Overwriting existing per-instruction storage.";
+      return;
+    }
+    per_instruction_storage_ = std::move(per_instruction_storage);
+  }
+
+  const PerInstructionStorage* GetPerInstructionStorage() const {
+    return per_instruction_storage_.get();
   }
 
  protected:
@@ -2158,6 +2570,9 @@ class HloCustomCallInstruction : public HloCallableInstruction {
   // TODO(b/189822916): Remove this field when all clients are migrated to the
   // status-returning API.
   CustomCallApiVersion api_version_;
+
+  absl::Mutex per_instruction_storage_mutex_;
+  std::unique_ptr<PerInstructionStorage> per_instruction_storage_ = nullptr;
 };
 
 class HloPadInstruction : public HloInstruction {
@@ -2174,11 +2589,16 @@ class HloPadInstruction : public HloInstruction {
   // Returns the padding value.
   const HloInstruction* padding_value() const { return operand(1); }
   HloInstruction* mutable_padding_value() { return mutable_operand(1); }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kPad;
+  }
+
+  void HashAdditionalAttributes(absl::HashState h) const override {
+    absl::HashState::combine(
+        std::move(h),
+        protobuf_util::ProtobufHashBySerialization(padding_config()));
   }
 
  private:
@@ -2244,8 +2664,7 @@ class HloDynamicSliceInstruction : public HloDynamicIndexInstruction {
   const std::vector<int64_t>& dynamic_slice_sizes() const {
     return dynamic_slice_sizes_;
   }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   int64_t first_index_operand_number() const override { return 1; }
   static bool ClassOf(const HloInstruction* hlo) {
@@ -2306,14 +2725,15 @@ class HloGatherInstruction : public HloInstruction {
   void set_indices_are_sorted(bool indices_are_sorted) {
     indices_are_sorted_ = indices_are_sorted;
   }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   // Creates an instance of GatherDimensionNumbers.
   static GatherDimensionNumbers MakeGatherDimNumbers(
       absl::Span<const int64_t> offset_dims,
       absl::Span<const int64_t> collapsed_slice_dims,
-      absl::Span<const int64_t> start_index_map, int64_t index_vector_dim);
+      absl::Span<const int64_t> start_index_map, int64_t index_vector_dim,
+      absl::Span<const int64_t> operand_batching_dims = {},
+      absl::Span<const int64_t> start_indices_batching_dims = {});
   // Returns the dump string of the given gather dimension numbers.
   static std::string GatherDimensionNumbersToString(
       const GatherDimensionNumbers& dim_numbers);
@@ -2357,8 +2777,7 @@ class HloScatterInstruction : public HloInstruction {
     indices_are_sorted_ = indices_are_sorted;
   }
   bool unique_indices() const override { return unique_indices_; }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
   int64_t scatter_operand_count() const { return operand_count() / 2; }
   absl::Span<HloInstruction* const> scatter_operands() const {
     return absl::MakeConstSpan(operands()).first(scatter_operand_count());
@@ -2378,7 +2797,9 @@ class HloScatterInstruction : public HloInstruction {
       absl::Span<const int64_t> update_window_dims,
       absl::Span<const int64_t> inserted_window_dims,
       absl::Span<const int64_t> scatter_dims_to_operand_dims,
-      int64_t index_vector_dim);
+      int64_t index_vector_dim,
+      absl::Span<const int64_t> input_batching_dims = {},
+      absl::Span<const int64_t> scatter_indices_batching_dims = {});
   // Returns the dump string of the given scatter dimension numbers.
   static std::string ScatterDimensionNumbersToString(
       const ScatterDimensionNumbers& dim_numbers);
@@ -2416,11 +2837,14 @@ class HloIotaInstruction : public HloInstruction {
   absl::Span<const int64_t> dimensions() const override {
     return absl::MakeConstSpan(&iota_dimension_, 1);
   }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kIota;
+  }
+
+  void HashAdditionalAttributes(absl::HashState h) const override {
+    absl::HashState::combine(std::move(h), iota_dimension());
   }
 
  private:
@@ -2440,17 +2864,31 @@ class HloIotaInstruction : public HloInstruction {
 
 class HloDotInstruction : public HloInstruction {
  public:
-  static const int kOperands = 2;
-
   // Creates a dot op with operands 'lhs' and 'rhs' with contracting and batch
-  // dimensions specified in 'dimension_numbers'. If 'sparsity' is set, then
-  // 'sparse_meta' must also be present (and have the same size).
-  explicit HloDotInstruction(
-      const Shape& shape, HloInstruction* lhs, HloInstruction* rhs,
-      const DotDimensionNumbers& dimension_numbers,
-      const PrecisionConfig& precision_config,
-      std::vector<SparsityDescriptor> sparsity = {},
-      absl::Span<HloInstruction* const> sparse_meta = {});
+  // dimensions specified in 'dimension_numbers'.
+  explicit HloDotInstruction(const Shape& shape, HloInstruction* lhs,
+                             HloInstruction* rhs,
+                             const DotDimensionNumbers& dimension_numbers,
+                             const PrecisionConfig& precision_config);
+
+  explicit HloDotInstruction(const Shape& shape,
+                             absl::Span<HloInstruction* const> operands,
+                             const DotDimensionNumbers& dimension_numbers,
+                             const PrecisionConfig& precision_config,
+                             const SparsityConfig& sparsity_config,
+                             const BlockScalingConfig& block_scaling_config);
+
+  const SparsityConfig& sparsity_config() const { return sparsity_config_; }
+  void set_sparsity_config(const SparsityConfig& sparsity_config) {
+    sparsity_config_ = sparsity_config;
+  }
+
+  const BlockScalingConfig& block_scaling_config() const {
+    return block_scaling_config_;
+  }
+  void set_block_scaling_config(const BlockScalingConfig& config) {
+    block_scaling_config_ = config;
+  }
 
   // Returns data on the dimension numbers used for a dot operation.
   const DotDimensionNumbers& dot_dimension_numbers() const {
@@ -2464,26 +2902,25 @@ class HloDotInstruction : public HloInstruction {
 
   // Returns the information used to tell the implementation information about
   // what sort of precision is requested. The meaning of the field is backend
-  // specific. At the moment, it is only supported for kConvolution and kDot.
-  // Transformations on one kDot or kConvolution to another will preserve this
-  // information. Transformations to other HLOs will not preserve this
-  // information but it is presumed that the alternate lowering is strictly
-  // superior.
+  // specific. At the moment, it is only supported for kConvolution, kDot, and
+  // kRaggedDot. Transformations on one k(Ragged)Dot or kConvolution to another
+  // will preserve this information. Transformations to other HLOs will not
+  // preserve this information but it is presumed that the alternate lowering is
+  // strictly superior.
   const PrecisionConfig& precision_config() const { return precision_config_; }
   PrecisionConfig* mutable_precision_config() { return &precision_config_; }
 
-  // Sparsity descriptors are optional. If present, additional operands define
-  // how the data is read for the dot inputs.
-  int sparse_operands() const { return sparsity_.size(); }
-  absl::Span<const SparsityDescriptor> sparsity() const {
-    return absl::MakeSpan(sparsity_);
-  }
-
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kDot;
+  }
+
+  void HashAdditionalAttributes(absl::HashState h) const override {
+    absl::HashState::combine(
+        std::move(h),
+        protobuf_util::ProtobufHashBySerialization(dot_dimension_numbers()),
+        protobuf_util::ProtobufHashBySerialization(precision_config()));
   }
 
  private:
@@ -2505,10 +2942,141 @@ class HloDotInstruction : public HloInstruction {
   // used to produce results. See the documentation on precision_config().
   PrecisionConfig precision_config_;
 
-  // Sparsity descriptors are set if some operands are sparse. In this case, the
-  // additional metadata operands contain the information that defines how
-  // the data is read.
-  std::vector<SparsityDescriptor> sparsity_;
+  // The sparsity configuration used for the dot.
+  SparsityConfig sparsity_config_;
+
+  // Dot block scaling config.
+  BlockScalingConfig block_scaling_config_;
+};
+
+class HloRaggedDotInstruction : public HloInstruction {
+ public:
+  static const int kOperands = 3;
+
+  // Creates a ragged dot op with operands 'lhs', 'rhs', and 'group_sizes'.
+  // The `dimension_numbers` are for specifying:
+  //   - batch and contracting dims for 'lhs'/'rhs' (as in HloDotInstruction),
+  //   - exactly one 'lhs' ragged dimension,
+  //   - up to one 'rhs' group dimension.
+  // The op takes on one of three modes, based on the kind of the ragged dim:
+  // 1. [b,m,k], [g,b,k,n], [b,g] -> [b,m,n], where the ragged dimension is the
+  //    non-contracting dimension (m) of the 'lhs'.
+  // 2. [b,m,k], [b,k,n], [b,g] -> [g,b,m,n], where the ragged dimension is the
+  //    contracting dimension (k) of the 'lhs' and 'rhs'.
+  // 3. [b,m,k], [b,k,n], [g] -> [b,m,n], where the ragged dimension is the
+  //    batch dimension (b) of the 'lhs' and 'rhs'.
+  explicit HloRaggedDotInstruction(
+      const Shape& shape, HloInstruction* lhs, HloInstruction* rhs,
+      HloInstruction* group_sizes,
+      const RaggedDotDimensionNumbers& dimension_numbers,
+      const PrecisionConfig& precision_config);
+
+  // Returns data on the dimension numbers used for a ragged dot operation.
+  const RaggedDotDimensionNumbers& ragged_dot_dimension_numbers() const {
+    return ragged_dot_dimension_numbers_;
+  }
+
+  // Sets dimension numbers used for a ragged dot operation.
+  RaggedDotDimensionNumbers* mutable_ragged_dot_dimension_numbers() {
+    return &ragged_dot_dimension_numbers_;
+  }
+
+  // Returns the information used to tell the implementation information about
+  // what sort of precision is requested. The meaning of the field is backend
+  // specific. At the moment, it is only supported for kConvolution, kDot, and
+  // kRaggedDot. Transformations on one k(Ragged)Dot or kConvolution to another
+  // will preserve this information. Transformations to other HLOs will not
+  // preserve this information but it is presumed that the alternate lowering is
+  // strictly superior.
+  const PrecisionConfig& precision_config() const { return precision_config_; }
+  PrecisionConfig* mutable_precision_config() { return &precision_config_; }
+
+  void ToProto(HloInstructionProto* proto) const override;
+
+  static bool ClassOf(const HloInstruction* hlo) {
+    return hlo->opcode() == HloOpcode::kRaggedDot;
+  }
+
+ private:
+  void PrintExtraAttributesImpl(AttributePrinter& printer,
+                                const HloPrintOptions& options) const override;
+  bool IdenticalSlowPath(
+      const HloInstruction& other,
+      absl::FunctionRef<bool(const HloComputation*, const HloComputation*)>
+          eq_computations) const override;
+  // Implementation for non-common logic of CloneWithNewOperands.
+  std::unique_ptr<HloInstruction> CloneWithNewOperandsImpl(
+      const Shape& shape, absl::Span<HloInstruction* const> new_operands,
+      HloCloneContext* context) const override;
+
+  // Describes the dimension numbers used for a ragged dot.
+  RaggedDotDimensionNumbers ragged_dot_dimension_numbers_;
+
+  // Information used to communicate to the implementation about the algorithm
+  // used to produce results. See the documentation on precision_config().
+  PrecisionConfig precision_config_;
+};
+
+class HloScaledDotInstruction : public HloInstruction {
+ public:
+  static const int kOperands = 4;
+
+  // Creates a dot op with operands 'lhs' and 'rhs' with contracting and batch
+  // dimensions specified in 'dimension_numbers' and with 'lhs_scale' and
+  // 'rhs_scale' as the scale factors. Dimensions of the scale factors should
+  // have the same order as the dimensions of the dot operation.
+  explicit HloScaledDotInstruction(const Shape& shape, HloInstruction* lhs,
+                                   HloInstruction* rhs,
+                                   HloInstruction* lhs_scale,
+                                   HloInstruction* rhs_scale,
+                                   const DotDimensionNumbers& dimension_numbers,
+                                   const PrecisionConfig& precision_config);
+
+  // Returns data on the dimension numbers used for a dot operation.
+  const DotDimensionNumbers& dot_dimension_numbers() const {
+    return dot_dimension_numbers_;
+  }
+
+  // Sets dimension numbers used for a dot operation.
+  DotDimensionNumbers* mutable_dot_dimension_numbers() {
+    return &dot_dimension_numbers_;
+  }
+
+  // Returns the information used to tell the implementation information about
+  // what sort of precision is requested. The meaning of the field is backend
+  // specific. At the moment, it is only supported for kConvolution, kDot, and
+  // kRaggedDot. Transformations on one k(Ragged)Dot or kConvolution to another
+  // will preserve this information. Transformations to other HLOs will not
+  // preserve this information but it is presumed that the alternate lowering is
+  // strictly superior.
+  const PrecisionConfig& precision_config() const { return precision_config_; }
+  PrecisionConfig* mutable_precision_config() { return &precision_config_; }
+
+  void ToProto(HloInstructionProto* proto) const override;
+
+  static bool ClassOf(const HloInstruction* hlo) {
+    return hlo->opcode() == HloOpcode::kScaledDot;
+  }
+
+ private:
+  void PrintExtraAttributesImpl(AttributePrinter& printer,
+                                const HloPrintOptions& options) const override;
+
+  bool IdenticalSlowPath(
+      const HloInstruction& other,
+      absl::FunctionRef<bool(const HloComputation*, const HloComputation*)>
+          eq_computations) const override;
+  // Implementation for non-common logic of CloneWithNewOperands.
+  std::unique_ptr<HloInstruction> CloneWithNewOperandsImpl(
+      const Shape& shape, absl::Span<HloInstruction* const> new_operands,
+      HloCloneContext* context) const override;
+
+  // Describes the dimension numbers used for a dot.
+  DotDimensionNumbers dot_dimension_numbers_;
+
+  // Information used to communicate to the implementation about the algorithm
+  // used to produce results. See the documentation on precision_config().
+  PrecisionConfig precision_config_;
 };
 
 class HloDomainInstruction : public HloInstruction {
@@ -2518,8 +3086,7 @@ class HloDomainInstruction : public HloInstruction {
       std::unique_ptr<DomainMetadata> operand_side_metadata,
       std::unique_ptr<DomainMetadata> user_side_metadata);
 
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   // Retrieves the operand side metadata of a kDomain instruction.
   const DomainMetadata& operand_side_metadata() const {
@@ -2558,8 +3125,7 @@ class HloGetDimensionSizeInstruction : public HloInstruction {
 
   // Returns the dimension sizes or numbers associated with this instruction.
   int64_t dimension() const { return dimension_; }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kGetDimensionSize;
@@ -2589,8 +3155,7 @@ class HloSetDimensionSizeInstruction : public HloInstruction {
 
   // Returns the dimension sizes or numbers associated with this instruction.
   int64_t dimension() const { return dimension_; }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kSetDimensionSize;
@@ -2619,8 +3184,7 @@ class HloRngGetAndUpdateStateInstruction : public HloInstruction {
   // Returns the delta value.
   int64_t delta() const { return delta_; }
   void set_delta(int64_t delta) { delta_ = delta; }
-  // Returns a serialized representation of this instruction.
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kRngGetAndUpdateState;
@@ -2647,7 +3211,7 @@ class HloRngBitGeneratorInstruction : public HloInstruction {
                                 RandomAlgorithm algorithm);
 
   RandomAlgorithm algorithm() const { return algorithm_; }
-  HloInstructionProto ToProto() const override;
+  void ToProto(HloInstructionProto* proto) const override;
 
   static bool ClassOf(const HloInstruction* hlo) {
     return hlo->opcode() == HloOpcode::kRngBitGenerator;
@@ -2666,6 +3230,35 @@ class HloRngBitGeneratorInstruction : public HloInstruction {
 
   RandomAlgorithm algorithm_;
 };
+
+inline constexpr absl::string_view kPinCustomCallTarget = "Pin";
+inline constexpr absl::string_view kUnpinCustomCallTarget = "Unpin";
+// Target name of the custom call that fans out a buffer into concurrent stream
+// views.
+inline constexpr absl::string_view kFanOutCustomCallTarget = "FanOut";
+// Target name of the custom call that fans in / joins concurrent stream views.
+inline constexpr absl::string_view kFanInCustomCallTarget = "FanIn";
+inline constexpr absl::string_view kCreateBufferCustomCallTarget =
+    "CreateBuffer";
+
+// The target name of the custom call marking the beginning of an outlinable
+// block.
+inline constexpr absl::string_view kCallMarkerBeforeTarget =
+    "__xla_internal_call_marker_before";
+
+// The target name of the custom call marking the end of an outlinable block.
+inline constexpr absl::string_view kCallMarkerAfterTarget =
+    "__xla_internal_call_marker_after";
+
+// The key used in the frontend attributes of the call markers to store the name
+// of the computation that is being marked for outlining.
+inline constexpr absl::string_view kCallMarkedComputationAttribute =
+    "xla_call_marked_computation";
+
+// The key used in the frontend attributes of the call markers to store the name
+// of the call instruction that is being marked for outlining.
+inline constexpr absl::string_view kCallMarkedInstructionNameAttribute =
+    "xla_call_marked_instruction_name";
 
 }  // namespace xla
 

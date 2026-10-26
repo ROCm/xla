@@ -16,12 +16,15 @@ limitations under the License.
 #ifndef XLA_PJRT_DISTRIBUTED_KEY_VALUE_STORE_INTERFACE_H_
 #define XLA_PJRT_DISTRIBUTED_KEY_VALUE_STORE_INTERFACE_H_
 
+#include <memory>
 #include <string>
-#include <string_view>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "absl/time/time.h"
+#include "xla/tsl/distributed_runtime/call_options.h"
+#include "xla/tsl/distributed_runtime/coordination/coordination_service_agent.h"
 
 namespace xla {
 
@@ -37,12 +40,39 @@ class KeyValueStoreInterface {
   virtual ~KeyValueStoreInterface() = default;
 
   // Blocking Get().
+  // Useful for listening for a key-value pair that may be set later on.
   // There are no concurrency guarantees. To avoid a race / impose an ordering
   // on potentially concurrent ops (e.g. set, delete), use WaitAtBarrier().
-  virtual absl::StatusOr<std::string> Get(std::string_view key,
+  virtual absl::StatusOr<std::string> Get(absl::string_view key,
                                           absl::Duration timeout) = 0;
 
-  virtual absl::Status Set(std::string_view key, std::string_view value) = 0;
+  // Returns `NotFoundError` immediately if the key is not found.
+  // Useful for checking key existence.
+  // There are no concurrency guarantees. To avoid a race / impose an ordering
+  // on potentially concurrent ops (e.g. set, delete), use WaitAtBarrier().
+  virtual absl::StatusOr<std::string> TryGet(absl::string_view key) = 0;
+
+  virtual absl::Status Set(absl::string_view key, absl::string_view value) = 0;
+
+  // Deletes the key-value pair associated with the provided key. If the key is
+  // a directory, recursively cleans up all key-values under the directory.
+  // There are no concurrency guarantees. To avoid a race / impose an ordering
+  // on potentially concurrent ops (e.g. set, delete), use WaitAtBarrier().
+  virtual absl::Status Delete(absl::string_view key) = 0;
+
+  // Async version of `Get`. The `done` callback is invoked when the key-value
+  // becomes available.
+  // The caller can cancel the underlying RPC call with the `StartCancel()` and
+  // `ClearCancelCallback()` methods on the returned `CallOptions`.
+  virtual std::shared_ptr<tsl::CallOptions> AsyncGet(
+      absl::string_view key,
+      tsl::CoordinationServiceAgent::StatusOrValueCallback done) = 0;
+};
+
+struct MultiProcessKeyValueStore {
+  std::shared_ptr<KeyValueStoreInterface> key_value_store;
+  int process_index = 0;
+  int process_count = 1;
 };
 
 }  // namespace xla

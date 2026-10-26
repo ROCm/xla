@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/service/gpu/model/fusion_analysis_cache.h"
 
+#include <cstdint>
 #include <utility>
 
 #include "absl/synchronization/mutex.h"
@@ -26,32 +27,28 @@ namespace xla::gpu {
 const HloFusionAnalysis& HloFusionAnalysisCache::Get(
     const HloInstruction& instruction) {
   {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(mutex_);
     auto it = analyses_.find(instruction.unique_id());
     if (it != analyses_.end()) {
       return it->second;
     }
   }
 
-  HloFusionAnalysis analysis = AnalyzeFusion(instruction, device_info_);
-  absl::MutexLock lock(&mutex_);
+  HloFusionAnalysis analysis =
+      HloFusionAnalysis::Create(instruction, device_info_);
+  absl::MutexLock lock(mutex_);
 
   // If some other thread created an entry for this key concurrently, return
   // that instead (the other thread is likely using the instance).
-  auto it = analyses_.find(instruction.unique_id());
-  if (it != analyses_.end()) {
-    return it->second;
-  }
-
   return analyses_.emplace(instruction.unique_id(), std::move(analysis))
       .first->second;
 }
 
 const HloFusionAnalysis& HloFusionAnalysisCache::Get(
     const HloInstruction& producer, const HloInstruction& consumer) {
-  std::pair<int, int> key{producer.unique_id(), consumer.unique_id()};
+  std::pair<int64_t, int64_t> key{producer.unique_id(), consumer.unique_id()};
   {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(mutex_);
     auto it = producer_consumer_analyses_.find(key);
     if (it != producer_consumer_analyses_.end()) {
       return it->second;
@@ -59,8 +56,8 @@ const HloFusionAnalysis& HloFusionAnalysisCache::Get(
   }
 
   HloFusionAnalysis analysis =
-      AnalyzeProducerConsumerFusion(producer, consumer, device_info_);
-  absl::MutexLock lock(&mutex_);
+      HloFusionAnalysis::Create(producer, consumer, device_info_);
+  absl::MutexLock lock(mutex_);
 
   // If some other thread created an entry for this key concurrently, return
   // that instead (the other thread is likely using the instance).
@@ -78,26 +75,25 @@ const HloFusionAnalysis& HloFusionAnalysisCache::Get(
 }
 
 void HloFusionAnalysisCache::Invalidate(const HloInstruction& instruction) {
-  absl::MutexLock lock(&mutex_);
-  analyses_.erase(instruction.unique_id());
+  Invalidate(instruction.unique_id());
+}
 
-  if (auto consumers =
-          consumers_for_producers_.extract(instruction.unique_id())) {
+void HloFusionAnalysisCache::Invalidate(const int64_t instruction_id) {
+  analyses_.erase(instruction_id);
+
+  if (auto consumers = consumers_for_producers_.extract(instruction_id)) {
     for (const auto consumer : consumers.mapped()) {
-      producer_consumer_analyses_.erase({instruction.unique_id(), consumer});
+      producer_consumer_analyses_.erase({instruction_id, consumer});
     }
   }
-  if (auto producers =
-          producers_for_consumers_.extract(instruction.unique_id())) {
+  if (auto producers = producers_for_consumers_.extract(instruction_id)) {
     for (const auto producer : producers.mapped()) {
-      producer_consumer_analyses_.erase({producer, instruction.unique_id()});
+      producer_consumer_analyses_.erase({producer, instruction_id});
     }
   }
 }
 
 void HloFusionAnalysisCache::Clear() {
-  absl::MutexLock lock(&mutex_);
-
   analyses_.clear();
   producer_consumer_analyses_.clear();
   consumers_for_producers_.clear();

@@ -16,15 +16,17 @@ limitations under the License.
 #ifndef XLA_SERVICE_HLO_GRAPH_DUMPER_H_
 #define XLA_SERVICE_HLO_GRAPH_DUMPER_H_
 
+#include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/statusor.h"
 #include "xla/xla.pb.h"
 
 // This file contains routines for rendering HLO computations into a
@@ -139,6 +141,14 @@ void RegisterGraphToURLRenderer(
 // fusion_visualizer_state.
 absl::StatusOr<std::string> WrapFusionExplorer(
     const HloComputation& computation);
+
+// Wraps an already-rendered dot graph in the interactive HTML viewer page;
+// kHtml rendering is exactly WrapDotInHtml(kDot dot, GraphRenderingTitle).
+absl::StatusOr<std::string> WrapDotInHtml(absl::string_view dot,
+                                          absl::string_view title);
+
+// Returns the title RenderGraph uses for a computation's graph rendering.
+std::string GraphRenderingTitle(const HloComputation& computation);
 
 }  // namespace xla
 

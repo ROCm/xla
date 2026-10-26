@@ -16,95 +16,83 @@ limitations under the License.
 #ifndef XLA_PJRT_PJRT_LAYOUT_H_
 #define XLA_PJRT_PJRT_LAYOUT_H_
 
+#include <cstdint>
 #include <memory>
+#include <ostream>
 #include <string>
 #include <utility>
 
-#include "absl/hash/hash.h"
+#include "absl/algorithm/container.h"
 #include "absl/log/check.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
-#include "xla/layout.h"
-#include "xla/service/hlo_parser.h"
-#include "xla/statusor.h"
-#include "tsl/platform/casts.h"
 #include "tsl/platform/statusor.h"
+#include "xla/hlo/parser/hlo_parser.h"
+#include "xla/layout.h"
 
 namespace xla {
 
-// Abstract class representing the memory layout of a PjRtBuffer.
+// Represents the memory layout of a PjRtBuffer.
 class PjRtLayout {
  public:
-  virtual ~PjRtLayout() = default;
-
-  // Returns the serialized layout as a string.
-  // TODO(b/328671718): add generic deserialize method to PjRtClient and/or
-  // PjRtCompiler.
-  virtual std::string Serialize() const = 0;
-
-  // Human-readable string for error messages, user introspection, etc.
-  virtual std::string ToString() const = 0;
-
-  virtual bool operator==(const PjRtLayout& other) const = 0;
-
-  template <typename H>
-  friend H AbslHashValue(H state, const PjRtLayout& layout) {
-    layout.Hash(absl::HashState::Create(&state));
-    return std::move(state);
-  }
-
- protected:
-  virtual void Hash(absl::HashState state) const = 0;
-};
-
-// PjRtLayout backed by an xla::Layout. This is a convenience class for PJRT
-// implementations that use XLA. PJRT users should use the PjRtLayout interface
-// to be compatible with all implementations, e.g. PjRtCApiClient which doesn't
-// have access to full xla::Layouts.
-class PjRtXlaLayout : public PjRtLayout {
- public:
-  explicit PjRtXlaLayout(Layout layout) : xla_layout_(std::move(layout)) {
+  explicit PjRtLayout(Layout layout) : xla_layout_(std::move(layout)) {
     // Strip memory space and set it to the default. PJRT tracks memory space
     // separately from layout.
     xla_layout_.set_memory_space(xla::Layout::kDefaultMemorySpace);
-  }
 
-  std::string Serialize() const override { return xla_layout_.ToString(); }
-
-  static absl::StatusOr<PjRtXlaLayout> Deserialize(
-      absl::string_view serialized) {
-    TF_ASSIGN_OR_RETURN(Layout xla_layout, ParseLayout(serialized));
-    return PjRtXlaLayout(std::move(xla_layout));
-  }
-
-  std::string ToString() const override { return xla_layout_.ToString(); }
-
-  bool operator==(const PjRtLayout& other) const override {
-    auto xla_other = dynamic_cast<const PjRtXlaLayout*>(&other);
-    if (xla_other == nullptr) {
-      return false;
+    for (const auto& tile : xla_layout_.tiles()) {
+      CHECK(absl::c_none_of(tile.dimensions(),
+                            [](int64_t d) {
+                              return d == xla::Tile::kCombineDimension ||
+                                     d == xla::Tile::kMatchDimension;
+                            }))
+          << "Runtime buffers must not have layouts with `kCombineDimension` "
+             "or `kMatchDimension` in tile dimensions, but got "
+          << xla_layout_;
     }
-    return xla_layout_ == xla_other->xla_layout_;
-  };
+  }
+
+  PjRtLayout(PjRtLayout& other) = delete;
+  PjRtLayout& operator=(const PjRtLayout& other) = delete;
+
+  static absl::StatusOr<std::shared_ptr<const PjRtLayout>> Deserialize(
+      absl::string_view serialized) {
+    ABSL_ASSIGN_OR_RETURN(Layout xla_layout, ParseLayout(serialized));
+    return std::make_shared<PjRtLayout>(std::move(xla_layout));
+  }
 
   const Layout& xla_layout() const { return xla_layout_; }
 
- protected:
-  void Hash(absl::HashState state) const override {
-    absl::HashState::combine(std::move(state), xla_layout_);
+  // Returns the serialized layout as a string.
+  std::string Serialize() const { return xla_layout_.ToString(); }
+
+  // Human-readable string for error messages, user introspection, etc.
+  std::string ToString() const { return xla_layout_.ToString(); }
+
+  bool operator==(const PjRtLayout& other) const {
+    return this == &other || xla_layout_ == other.xla_layout_;
+  }
+
+  bool operator!=(const PjRtLayout& other) const { return !(*this == other); }
+
+  template <typename H>
+  friend H AbslHashValue(H state, const PjRtLayout& layout) {
+    return H::combine(std::move(state), layout.xla_layout_);
+  }
+
+  template <typename Sink>
+  friend void AbslStringify(Sink& sink, const PjRtLayout& layout) {
+    absl::Format(&sink, "%s", layout.ToString());
   }
 
  private:
   Layout xla_layout_;
 };
 
-// TODO(b/327524065): make callers use PjRtLayout directly instead of assuming
-// an xla::Layout and get rid of this function.
-inline Layout GetXlaLayoutUnsafe(
-    const std::unique_ptr<PjRtLayout>& pjrt_layout) {
-  PjRtXlaLayout* xla_layout =
-      tensorflow::down_cast<PjRtXlaLayout*>(pjrt_layout.get());
-  CHECK(xla_layout != nullptr) << "Got unexpected layout type";
-  return xla_layout->xla_layout();
+inline std::ostream& operator<<(std::ostream& out, const PjRtLayout& layout) {
+  return out << layout.ToString();
 }
 
 }  // namespace xla

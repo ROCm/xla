@@ -1,0 +1,116 @@
+/* Copyright 2025 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include "xla/backends/cpu/codegen/target_machine_features.h"
+
+#include <gtest/gtest.h>
+
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "absl/strings/string_view.h"
+#include "xla/backends/cpu/codegen/target_machine_test_base.h"
+
+namespace xla::cpu {
+namespace {
+
+struct Avx512Bf16Fp16TestSpec {
+  std::string cpu_name;
+  std::string features;
+  bool has_avx512bf16;
+  bool has_avx512fp16;
+};
+
+class Avx512Bf16Fp16Test
+    : public TargetMachineTestBase,
+      public ::testing::WithParamInterface<Avx512Bf16Fp16TestSpec> {
+ public:
+  static std::string Name(
+      const ::testing::TestParamInfo<Avx512Bf16Fp16TestSpec>& info) {
+    return info.param.cpu_name;
+  }
+};
+
+TEST_P(Avx512Bf16Fp16Test, CheckAvailability) {
+  Avx512Bf16Fp16TestSpec spec = GetParam();
+  const char* triple_string = "x86_64-unknown-linux-gnu";
+  std::unique_ptr<TargetMachineFeatures> features =
+      CreateTargetMachineFeatures(triple_string, spec.cpu_name, spec.features);
+  EXPECT_EQ(features->has_avx512bf16(), spec.has_avx512bf16);
+  EXPECT_EQ(features->has_avx512fp16(), spec.has_avx512fp16);
+}
+
+std::vector<Avx512Bf16Fp16TestSpec> GetAvx512Bf16Fp16TestSpecs() {
+  return std::vector<Avx512Bf16Fp16TestSpec>{
+      Avx512Bf16Fp16TestSpec{"znver3", "+avx,+avx2", false, false},
+      Avx512Bf16Fp16TestSpec{"sapphirerapids",
+                             "+avx512vnni,+avx512bf16,+avx512fp16,+amx-bf16,"
+                             "+amx-int8,+amx-tile,+amx-transpose",
+                             true, true}};
+}
+
+INSTANTIATE_TEST_SUITE_P(Avx512Bf16Fp16Suite, Avx512Bf16Fp16Test,
+                         ::testing::ValuesIn(GetAvx512Bf16Fp16TestSpecs()),
+                         Avx512Bf16Fp16Test::Name);
+
+struct AmxFp16Fp8TestSpec {
+  std::string cpu_name;
+  std::string features;
+  bool has_amx_fp16;
+  bool has_amx_fp8;
+};
+
+class AmxFp16Fp8Test
+    : public TargetMachineTestBase,
+      public ::testing::WithParamInterface<AmxFp16Fp8TestSpec> {
+ public:
+  static std::string Name(
+      const ::testing::TestParamInfo<AmxFp16Fp8TestSpec>& info) {
+    return info.param.cpu_name;
+  }
+};
+
+TEST_P(AmxFp16Fp8Test, CheckAvailability) {
+  AmxFp16Fp8TestSpec spec = GetParam();
+  const char* triple_string = "x86_64-unknown-linux-gnu";
+  std::unique_ptr<TargetMachineFeatures> features =
+      CreateTargetMachineFeatures(triple_string, spec.cpu_name, spec.features);
+  EXPECT_EQ(features->has_amx_fp16(), spec.has_amx_fp16);
+  EXPECT_EQ(features->has_amx_fp8(), spec.has_amx_fp8);
+}
+
+std::vector<AmxFp16Fp8TestSpec> GetAmxFp16Fp8TestSpecs() {
+  return std::vector<AmxFp16Fp8TestSpec>{
+      // SPR-class: neither AMX_FP16 nor AMX_FP8.
+      AmxFp16Fp8TestSpec{"sapphirerapids", "+amx-bf16,+amx-int8,+amx-tile",
+                         false, false},
+      // GNR-class: AMX_FP16 only -> emulation path for FP8.
+      AmxFp16Fp8TestSpec{"graniterapids",
+                         "+amx-bf16,+amx-int8,+amx-tile,+amx-fp16", true,
+                         false},
+      // DMR-class: native AMX_FP8 (and AMX_FP16).
+      AmxFp16Fp8TestSpec{"diamondrapids",
+                         "+amx-bf16,+amx-int8,+amx-tile,+amx-fp16,+amx-fp8",
+                         true, true},
+  };
+}
+
+INSTANTIATE_TEST_SUITE_P(AmxFp16Fp8Suite, AmxFp16Fp8Test,
+                         ::testing::ValuesIn(GetAmxFp16Fp8TestSpecs()),
+                         AmxFp16Fp8Test::Name);
+
+}  // namespace
+}  // namespace xla::cpu

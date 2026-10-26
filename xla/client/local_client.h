@@ -16,25 +16,34 @@ limitations under the License.
 #ifndef XLA_CLIENT_LOCAL_CLIENT_H_
 #define XLA_CLIENT_LOCAL_CLIENT_H_
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/types/span.h"
 #include "xla/client/client.h"
 #include "xla/client/executable_build_options.h"
-#include "xla/client/xla_computation.h"
 #include "xla/executable_run_options.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/literal.h"
+#include "xla/service/backend.h"
 #include "xla/service/compiler.h"
 #include "xla/service/executable.h"
 #include "xla/service/local_service.h"
-#include "xla/service/maybe_owning_device_memory.h"
+#include "xla/service/maybe_owning_device_address.h"
+#include "xla/service/service_executable_run_options.h"
 #include "xla/service/shaped_buffer.h"
+#include "xla/service/stream_pool.h"
 #include "xla/shape_tree.h"
-#include "xla/statusor.h"
-#include "xla/stream_executor/device_memory_allocator.h"
+#include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -74,6 +83,20 @@ class LocalExecutable {
   // Return the built executable.
   Executable* executable() const { return executable_.get(); }
 
+  // Verifies that the a device is compatible with the executable's
+  // build device.
+  absl::Status VerifyRunDeviceCompatible(int run_device_ordinal) const;
+
+  absl::StatusOr<std::pair<ServiceExecutableRunOptions, StreamPool::Ptr>>
+  RunHelper(absl::Span<const Shape* const> argument_shapes,
+            ExecutableRunOptions run_options);
+
+  // Validates execution options and prepares the service options and stream.
+  // The caller is responsible for validating argument shapes. Any returned
+  // stream owner must remain alive while the service options are in use.
+  absl::StatusOr<std::pair<ServiceExecutableRunOptions, StreamPool::Ptr>>
+  PrepareRunOptions(ExecutableRunOptions run_options);
+
  private:
   absl::StatusOr<ExecutionOutput> RunAsync(
       absl::Span<Shape const* const> argument_host_shapes,
@@ -91,28 +114,23 @@ class LocalExecutable {
   absl::StatusOr<Literal> LiteralFromShapedBuffer(
       const ShapedBuffer& shaped_buffer);
 
-  absl::StatusOr<std::pair<ServiceExecutableRunOptions, StreamPool::Ptr>>
-  RunHelper(absl::Span<const Shape* const> argument_shapes,
-            ExecutableRunOptions run_options);
-
   // The ordinal of the device which this executable was compiled for. The
   // executable can run on all equivalent devices (as determined by
   // Backend::devices_equivalent).
   int build_device_ordinal() const { return build_options_.device_ordinal(); }
 
-  template <typename T>
+  template <typename T, typename AsyncCallback>
   absl::StatusOr<T> AsyncCallAndBlockHostUntilDone(
       absl::Span<Shape const* const> argument_shapes,
-      const ExecutableRunOptions& run_options,
-      std::function<StatusOr<T>(const ExecutableRunOptions&)> async_callback) {
-    TF_ASSIGN_OR_RETURN(auto options_and_stream,
-                        RunHelper(argument_shapes, run_options));
+      const ExecutableRunOptions& run_options, AsyncCallback&& async_callback) {
+    ABSL_ASSIGN_OR_RETURN(auto options_and_stream,
+                          RunHelper(argument_shapes, run_options));
     ExecutableRunOptions options = options_and_stream.first.run_options();
     options.set_device_ordinal(-1);
     absl::StatusOr<T> result = async_callback(options);
     absl::Status block_status = options.stream()->BlockHostUntilDone();
-    TF_RETURN_IF_ERROR(result.status());
-    TF_RETURN_IF_ERROR(block_status);
+    ABSL_RETURN_IF_ERROR(result.status());
+    ABSL_RETURN_IF_ERROR(block_status);
     return result;
   }
 
@@ -150,7 +168,7 @@ class LocalClient : public Client {
   // Same as Compile() above, but return AotCompilationResult objects (instead
   // of LocalExecutable objects), which can be persisted to later load
   // LocalExecutable(s) using the Load() method below.
-  absl::StatusOr<std::vector<std::unique_ptr<AotCompilationResult>>>
+  absl::StatusOr<std::vector<std::unique_ptr<CompiledModule>>>
   CompileAheadOfTime(const XlaComputation& computation,
                      absl::Span<const Shape* const> argument_layouts,
                      const ExecutableBuildOptions& options);
@@ -161,16 +179,21 @@ class LocalClient : public Client {
       const std::string& serialized_aot_result,
       const ExecutableBuildOptions& options);
 
+  // Variant of `Load()` that accepts an AotCompilationResult.
+  absl::StatusOr<std::unique_ptr<LocalExecutable>> Load(
+      std::unique_ptr<CompiledModule> aot_result,
+      const ExecutableBuildOptions& options);
+
   // Copy the literal data to the device with the given ordinal and return as a
   // ScopedShapedBuffer. If non-null the given memory allocator is used for
   // device memory allocation. If null, the default memory allocator for the
   // device is used.
   absl::StatusOr<ScopedShapedBuffer> LiteralToShapedBuffer(
       const LiteralSlice& literal, int device_ordinal,
-      se::DeviceMemoryAllocator* allocator = nullptr);
+      se::DeviceAddressAllocator* allocator = nullptr);
 
   // Transfer the BorrowingLiteral to the device with the given ordinal.
-  absl::StatusOr<TransferToServerResponse> TransferToLocalServer(
+  absl::StatusOr<GlobalDataHandle> TransferToLocalServer(
       const ::xla::BorrowingLiteral& literal, int device_ordinal);
 
   // Copy the data from the device contained in the given ShapedBuffer and
@@ -231,6 +254,10 @@ class LocalClient : public Client {
 
  private:
   LocalService* local_service_;
+
+  absl::StatusOr<std::unique_ptr<LocalExecutable>> LoadInternal(
+      std::unique_ptr<CompiledModule> aot_result,
+      const ExecutableBuildOptions& options);
 };
 
 }  // namespace xla

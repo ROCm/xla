@@ -17,10 +17,13 @@ limitations under the License.
 
 #include "utils/convert_op_folder.h"
 
+#include <cstddef>
 #include <utility>
 
 #include "llvm/ADT/APSInt.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
@@ -30,6 +33,10 @@ namespace hlo {
 
 mlir::ElementsAttr convertElementsAttr(const mlir::ElementsAttr& elements,
                                        mlir::Type newType) {
+  if (!mlir::isa<DenseTypedElementsAttr>(elements)) {
+    return {};
+  }
+
   auto oldType = getElementTypeOrSelf(elements);
   // TODO(kramerb): Add support when MLIR can represent const complex tensors.
   if (!mlir::isa<mlir::IntegerType, mlir::FloatType>(oldType) ||
@@ -41,11 +48,12 @@ mlir::ElementsAttr convertElementsAttr(const mlir::ElementsAttr& elements,
   // Treat signless integers except i1 as signed.
   bool isOldTypeUnsigned = oldType.isInteger(1) || oldType.isUnsignedInteger();
   bool isNewTypeUnsigned = newType.isInteger(1) || newType.isUnsignedInteger();
+  bool isNewTypeBoolean = newType.isSignlessInteger(1);
 
   if (mlir::isa<mlir::FloatType>(oldType)) {
     if (auto newFloatType = mlir::dyn_cast<mlir::FloatType>(newType)) {
       // Float -> Float
-      return mlir::cast<DenseIntOrFPElementsAttr>(elements).mapValues(
+      return mlir::cast<DenseTypedElementsAttr>(elements).mapValues(
           newType, [&](const APFloat& floatVal) -> APInt {
             APFloat convertedFloat = floatVal;
             bool losesInfo = false;
@@ -54,11 +62,19 @@ mlir::ElementsAttr convertElementsAttr(const mlir::ElementsAttr& elements,
             return convertedFloat.bitcastToAPInt();
           });
     }
+    // Float -> Boolean
+    if (isNewTypeBoolean) {
+      return mlir::cast<DenseTypedElementsAttr>(elements).mapValues(
+          newType, [&](const APFloat& floatVal) -> APInt {
+            APInt resVal(1, floatVal.isZero() ? 0 : 1);
+            return resVal.sextOrTrunc(bitWidth);
+          });
+    }
     // Float -> Int
-    return mlir::cast<DenseIntOrFPElementsAttr>(elements).mapValues(
+    return mlir::cast<DenseTypedElementsAttr>(elements).mapValues(
         newType, [&](const APFloat& floatVal) -> APInt {
           bool ignored;
-          APSInt intVal(bitWidth, isNewTypeUnsigned);
+          llvm::APSInt intVal(bitWidth, isNewTypeUnsigned);
           floatVal.convertToInteger(intVal, APFloat::rmTowardZero, &ignored);
           return std::move(intVal);
         });
@@ -67,7 +83,7 @@ mlir::ElementsAttr convertElementsAttr(const mlir::ElementsAttr& elements,
   // old_type is Integer
   if (auto newFloatType = mlir::dyn_cast<mlir::FloatType>(newType)) {
     // Int -> Float
-    return mlir::cast<DenseIntOrFPElementsAttr>(elements).mapValues(
+    return mlir::cast<DenseTypedElementsAttr>(elements).mapValues(
         newType, [&](const APInt& intVal) -> APInt {
           APFloat floatVal(newFloatType.getFloatSemantics(),
                            APInt::getZero(newFloatType.getWidth()));
@@ -77,11 +93,21 @@ mlir::ElementsAttr convertElementsAttr(const mlir::ElementsAttr& elements,
           return floatVal.bitcastToAPInt();
         });
   }
+
+  // Int -> Boolean
+  if (isNewTypeBoolean) {
+    return mlir::cast<DenseTypedElementsAttr>(elements).mapValues(
+        newType, [&](const APInt& intVal) -> APInt {
+          APInt resVal(1, intVal.isZero() ? 0 : 1);
+          return resVal.sextOrTrunc(bitWidth);
+        });
+  }
+
   // new_type is Integer
   // Int -> Int
-  return mlir::cast<DenseIntOrFPElementsAttr>(elements).mapValues(
+  return mlir::cast<DenseTypedElementsAttr>(elements).mapValues(
       newType, [&](const APInt& intVal) -> APInt {
-        return APSInt(intVal, isOldTypeUnsigned).extOrTrunc(bitWidth);
+        return llvm::APSInt(intVal, isOldTypeUnsigned).extOrTrunc(bitWidth);
       });
 }
 

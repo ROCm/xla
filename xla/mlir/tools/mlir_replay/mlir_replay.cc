@@ -23,9 +23,13 @@ limitations under the License.
 #include "absl/strings/str_split.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/IR/DialectRegistry.h"  // from @llvm-project
-#include "mlir/IR/MLIRContext.h"  // from @llvm-project
-#include "mlir/InitAllDialects.h"  // from @llvm-project
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/InitAllDialects.h"
+#include "tsl/platform/env.h"
+#include "tsl/platform/init_main.h"
+#include "tsl/platform/path.h"
+#include "tsl/platform/status.h"
 #include "xla/debug_options_flags.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/interpreter_value.h"
 #include "xla/mlir/tools/mlir_replay/mlir_replay_lib.h"
@@ -35,10 +39,6 @@ limitations under the License.
 #include "xla/mlir_hlo/mhlo/IR/register.h"
 #include "xla/service/hlo.pb.h"
 #include "xla/tsl/util/command_line_flags.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/init_main.h"
-#include "tsl/platform/path.h"
-#include "tsl/platform/status.h"
 
 struct ReplayOptions {
   std::string hlo_snapshot;
@@ -57,7 +57,7 @@ bool ResultsMatch(const xla::HloSnapshot& snapshot,
                   std::vector<std::string>& failures,
                   const ReplayOptions& opts) {
   auto actual = mlir::interpreter::LiteralToValue(snapshot.result());
-  TF_CHECK_OK(actual.status());
+  CHECK_OK(actual.status());
 
   // We assume this is MHLO, so multiple results will be in a tuple.
   if (first_pass_results.size() != 1) {
@@ -79,26 +79,26 @@ bool ResultsMatch(const xla::HloSnapshot& snapshot,
 
 void TestAll(mlir::MLIRContext& context, const ReplayOptions& opts) {
   std::vector<std::string> traces;
-  TF_CHECK_OK(tsl::Env::Default()->GetMatchingPaths(
+  CHECK_OK(tsl::Env::Default()->GetMatchingPaths(
       opts.mlir_compilation_trace_dir + "/*.mlir-trace.pb", &traces));
 
   for (const auto& trace_path : traces) {
     mlir::interpreter::MlirCompilationTrace trace;
-    TF_CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(), trace_path, &trace))
+    CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(), trace_path, &trace))
         << "Failed to load " << trace_path;
 
     std::vector<std::string> snapshots;
     std::string prefix =
         trace_path.substr(0, trace_path.length() - strlen(".mlir-trace.pb"));
-    TF_CHECK_OK(tsl::Env::Default()->GetMatchingPaths(prefix + "*.snapshot.*",
-                                                      &snapshots));
+    CHECK_OK(tsl::Env::Default()->GetMatchingPaths(prefix + "*.snapshot.*",
+                                                   &snapshots));
     CHECK_NE(snapshots.size(), 0)
         << "No snapshots found for module " << trace_path << ".";
 
     std::vector<std::string> failures;
     for (const auto& snapshot_path : snapshots) {
       xla::HloSnapshot snapshot;
-      TF_CHECK_OK(
+      CHECK_OK(
           tsl::ReadBinaryProto(tsl::Env::Default(), snapshot_path, &snapshot));
 
       auto results =
@@ -185,12 +185,12 @@ int main(int argc, char* argv[]) {
 
   xla::HloSnapshot snapshot;
   if (!opts.hlo_snapshot.empty()) {
-    TF_CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(), opts.hlo_snapshot,
-                                     &snapshot));
+    CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(), opts.hlo_snapshot,
+                                  &snapshot));
   }
   mlir::interpreter::MlirCompilationTrace trace;
-  TF_CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(),
-                                   opts.mlir_compilation_trace, &trace));
+  CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(),
+                                opts.mlir_compilation_trace, &trace));
 
   llvm::SmallVector<mlir::interpreter::InterpreterValue> previous_results;
   int pass_id = 0;
@@ -219,19 +219,19 @@ int main(int argc, char* argv[]) {
     }
 
     if (!opts.execution_trace_dir.empty()) {
-      TF_CHECK_OK(
+      CHECK_OK(
           tsl::Env::Default()->RecursivelyCreateDir(opts.execution_trace_dir));
       std::string filename = tsl::io::JoinPath(
           opts.execution_trace_dir,
           absl::StrFormat("%.4d.%s.mlir", pass_id, state.after_pass()));
-      TF_CHECK_OK(tsl::WriteStringToFile(tsl::Env::Default(), filename,
-                                         execution_trace.ir()));
+      CHECK_OK(tsl::WriteStringToFile(tsl::Env::Default(), filename,
+                                      execution_trace.ir()));
 
       filename = tsl::io::JoinPath(
           opts.execution_trace_dir,
           absl::StrFormat("%.4d.%s.trace.pb", pass_id, state.after_pass()));
-      TF_CHECK_OK(tsl::WriteBinaryProto(tsl::Env::Default(), filename,
-                                        execution_trace));
+      CHECK_OK(tsl::WriteBinaryProto(tsl::Env::Default(), filename,
+                                     execution_trace));
     }
     ++pass_id;
   }

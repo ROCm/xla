@@ -1,0 +1,591 @@
+/* Copyright 2025 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include "xla/stream_executor/cuda/cuda_command_buffer.h"
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <thread>  // NOLINT
+#include <vector>
+
+#include "absl/base/casts.h"
+#include "absl/log/log_entry.h"
+#include "absl/log/log_sink.h"
+#include "absl/log/log_sink_registry.h"
+#include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/match.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "third_party/cudnn_frontend/include/cudnn_frontend.h"  // IWYU pragma: keep - cudnn frontend headers are not hermetic
+#include "third_party/cudnn_frontend/include/cudnn_frontend/graph_interface.h"
+#include "third_party/cudnn_frontend/include/cudnn_frontend/graph_properties.h"
+#include "third_party/cudnn_frontend/include/cudnn_frontend_utils.h"
+#include "third_party/gpus/cuda/include/cuda.h"
+#include "xla/service/platform_util.h"
+#include "xla/stream_executor/command_buffer.h"
+#include "xla/stream_executor/cuda/cuda_compute_capability.h"
+#include "xla/stream_executor/cuda/cuda_dnn.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/dnn.h"
+#include "xla/stream_executor/engine_options.h"
+#include "xla/stream_executor/gpu/gpu_command_buffer.h"
+#include "xla/stream_executor/gpu/gpu_test_kernels.h"
+#include "xla/stream_executor/kernel.h"
+#include "xla/stream_executor/kernel_args.h"
+#include "xla/stream_executor/launch_dim.h"
+#include "xla/stream_executor/platform.h"
+#include "xla/stream_executor/platform_manager.h"
+#include "xla/stream_executor/semantic_version.h"
+#include "xla/stream_executor/stream.h"
+#include "xla/stream_executor/stream_executor.h"
+#include "xla/stream_executor/trace_command_buffer_factory.h"
+#include "xla/tsl/platform/statusor.h"
+
+namespace stream_executor::cuda {
+namespace {
+
+using ::absl_testing::IsOkAndHolds;
+using ::absl_testing::StatusIs;
+using ::testing::Each;
+
+static Platform* CudaPlatform() {
+  auto name = absl::AsciiStrToUpper(
+      xla::PlatformUtil::CanonicalPlatformName("cuda").value());
+  return PlatformManager::PlatformWithName(name).value();
+}
+
+static constexpr auto primary = CommandBuffer::Mode::kPrimary;  // NOLINT
+
+// CUDA command buffers are built with graph APIs that require CUDA 12.3.
+class CudaCommandBufferTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    StreamExecutor* executor = CudaPlatform()->ExecutorForDevice(0).value();
+    if (executor->GetDeviceDescription().driver_version() <
+        SemanticVersion{12, 3, 0}) {
+      GTEST_SKIP() << "CUDA command buffers require CUDA driver >= 12.3";
+    }
+  }
+};
+
+TEST_F(CudaCommandBufferTest, CuDnnExplicitConstructionAndUpdateWork) {
+  Platform* platform = CudaPlatform();
+  StreamExecutor* executor = platform->ExecutorForDevice(0).value();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Stream> stream,
+                       executor->CreateStream());
+  dnn::DnnSupport& dnn_support = *executor->AsDnn();
+
+  if (dnn_support.GetVersion().value_or(dnn::VersionInfo{0, 0, 0}) <
+      dnn::VersionInfo(9, 7, 0)) {
+    GTEST_SKIP() << "Requires cuDNN 9.7.0 or later.";
+  }
+
+  if (!executor->GetDeviceDescription()
+           .cuda_compute_capability()
+           .IsAtLeastAmpere()) {
+    GTEST_SKIP() << "Requires at least an Ampere GPU.";
+  }
+
+  constexpr int kDimSize = 32;
+  constexpr int kTotalElements = kDimSize * kDimSize;
+
+  stream_executor::gpu::CudnnGraph graph([]() {
+    cudnn_frontend::graph::Graph graph;
+    graph.set_compute_data_type(cudnn_frontend::DataType_t::INT32);
+    std::shared_ptr<cudnn_frontend::graph::Tensor_attributes> lhs =
+        graph.tensor(cudnn_frontend::graph::Tensor_attributes()
+                         .set_dim({1, kDimSize, kDimSize})
+                         .set_stride({kDimSize * kDimSize, kDimSize, 1})
+                         .set_data_type(cudnn_frontend::DataType_t::INT8)
+                         .set_uid(1));
+    std::shared_ptr<cudnn_frontend::graph::Tensor_attributes> rhs =
+        graph.tensor_like(lhs);
+    rhs->set_uid(2);
+    graph.matmul(lhs, rhs, cudnn_frontend::graph::Matmul_attributes())
+        ->set_output(true)
+        .set_data_type(cudnn_frontend::DataType_t::INT32)
+        .set_uid(3);
+    return graph;
+  }());
+  ASSERT_OK(graph.Prepare(&dnn_support, executor->GetDeviceDescription(),
+                          EngineOptions{/*require_determinism=*/false,
+                                        /*allow_tf32=*/true,
+                                        /*require_command_buffer=*/true}));
+  ASSERT_OK(graph.Build(&dnn_support, executor->GetDeviceDescription(),
+                        /*plan_id=*/std::nullopt));
+  EXPECT_THAT(graph.SupportsExplicitCommandBufferConstruction(),
+              IsOkAndHolds(true));
+
+  DeviceAddress<int8_t> input = executor->AllocateArray<int8_t>(kTotalElements);
+  ASSERT_OK(stream->MemZero(&input, input.size()));
+  DeviceAddress<int32_t> output0 =
+      executor->AllocateArray<int32_t>(kTotalElements);
+  DeviceAddressBase workspace;
+  std::vector<DeviceAddressBase> operands;
+  operands.reserve(4);
+  operands.push_back(input);  // multiplying the input by itself
+  operands.push_back(input);
+  operands.push_back(output0);
+  if (graph.Graph().get_workspace_size() > 0) {
+    workspace = executor->Allocate(graph.Graph().get_workspace_size());
+    operands.push_back(workspace);
+  }
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<CommandBuffer> cmd_buffer,
+                       executor->CreateCommandBuffer(primary));
+  ASSERT_OK_AND_ASSIGN(
+      auto* dnn_command,
+      cmd_buffer->CreateDnnGraphCommand(
+          graph, *stream, absl::Span<DeviceAddressBase>(operands), {}));
+  ASSERT_OK(cmd_buffer->Finalize());
+
+  std::vector<int32_t> host_buffer(output0.ElementCount());
+
+  // Initialize and check the output before execution.
+  ASSERT_OK(stream->Memset32(&output0, 123, output0.size()));
+  ASSERT_OK(stream->Memcpy(host_buffer.data(), output0, output0.size()));
+  ASSERT_OK(stream->BlockHostUntilDone());
+  EXPECT_THAT(host_buffer, Each(123));
+
+  // Run the computation.
+  ASSERT_OK(cmd_buffer->Submit(stream.get()));
+
+  // Check the output after execution.
+  ASSERT_OK(stream->Memcpy(host_buffer.data(), output0, output0.size()));
+  ASSERT_OK(stream->BlockHostUntilDone());
+  EXPECT_THAT(host_buffer, Each(0));
+
+  // Swap the output buffer.
+  DeviceAddress<int32_t> output1 =
+      executor->AllocateArray<int32_t>(kTotalElements);
+  operands[2] = output1;
+  executor->Deallocate(&output0);
+
+  // Initialize and check the output before execution.
+  ASSERT_OK(stream->Memset32(&output1, 456, output1.size()));
+  ASSERT_OK(stream->Memcpy(host_buffer.data(), output1, output1.size()));
+  ASSERT_OK(stream->BlockHostUntilDone());
+  EXPECT_THAT(host_buffer, Each(456));
+
+  // Update the command buffer to write into the new output buffer.
+  ASSERT_OK(cmd_buffer->Update());
+  ASSERT_OK(cmd_buffer->UpdateDnnGraphCommand(
+      dnn_command, graph, *stream, absl::Span<DeviceAddressBase>(operands)));
+  ASSERT_OK(cmd_buffer->Finalize());
+
+  // Run the computation.
+  ASSERT_OK(cmd_buffer->Submit(stream.get()));
+
+  // Check the output after execution.
+  ASSERT_OK(stream->Memcpy(host_buffer.data(), output1, output1.size()));
+  ASSERT_OK(stream->BlockHostUntilDone());
+  EXPECT_THAT(host_buffer, Each(0));
+}
+
+TEST_F(CudaCommandBufferTest, PdlKernelEdgeUsesProgrammaticDependency) {
+  Platform* platform = CudaPlatform();
+  StreamExecutor* executor = platform->ExecutorForDevice(0).value();
+  if (!executor->GetDeviceDescription()
+           .cuda_compute_capability()
+           .IsAtLeastHopper()) {
+    GTEST_SKIP() << "Requires at least a Hopper GPU.";
+  }
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Stream> stream,
+                       executor->CreateStream());
+  KernelLoaderSpec add_spec = ::stream_executor::gpu::GetAddI32TestKernelSpec(
+                                  executor->GetPlatform()->id())
+                                  .value();
+  std::unique_ptr<Kernel> kernel = executor->LoadKernel(add_spec).value();
+  kernel->set_use_pdl(true);
+
+  DeviceAddress<int32_t> a = executor->AllocateArray<int32_t>(4);
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<CommandBuffer> cmd_buffer,
+                       executor->CreateCommandBuffer(primary));
+
+  ASSERT_OK_AND_ASSIGN(
+      const CommandBuffer::Command* first,
+      cmd_buffer->CreateLaunch(
+          ThreadDim(4, 1, 1), BlockDim(1, 1, 1), std::nullopt, *kernel,
+          *stream_executor::PackKernelArgs(0, a, a, a), {}));
+  std::array<const CommandBuffer::Command*, 1> dependencies = {first};
+  ASSERT_OK_AND_ASSIGN(
+      const CommandBuffer::Command* second,
+      cmd_buffer->CreateLaunch(
+          ThreadDim(4, 1, 1), BlockDim(1, 1, 1), std::nullopt, *kernel,
+          *stream_executor::PackKernelArgs(0, a, a, a),
+          absl::Span<const CommandBuffer::Command* const>(dependencies)));
+
+  auto* first_kernel =
+      dynamic_cast<const gpu::GpuCommandBuffer::GpuCommand*>(first);
+  auto* second_kernel =
+      dynamic_cast<const gpu::GpuCommandBuffer::GpuCommand*>(second);
+  ASSERT_NE(first_kernel, nullptr);
+  ASSERT_NE(second_kernel, nullptr);
+
+  const CUgraphNode first_node =
+      absl::bit_cast<CUgraphNode>(first_kernel->handle);
+  const CUgraphNode second_node =
+      absl::bit_cast<CUgraphNode>(second_kernel->handle);
+
+  size_t num_dependencies = 0;
+  ASSERT_EQ(cuGraphNodeGetDependencies_v2(second_node, nullptr, nullptr,
+                                          &num_dependencies),
+            CUDA_SUCCESS);
+  ASSERT_EQ(num_dependencies, 1);
+
+  CUgraphNode dep_node;
+  CUgraphEdgeData edge_data;
+  ASSERT_EQ(cuGraphNodeGetDependencies_v2(second_node, &dep_node, &edge_data,
+                                          &num_dependencies),
+            CUDA_SUCCESS);
+
+  EXPECT_EQ(dep_node, first_node);
+  EXPECT_EQ(edge_data.from_port, CU_GRAPH_KERNEL_NODE_PORT_PROGRAMMATIC);
+  EXPECT_EQ(edge_data.type, CU_GRAPH_DEPENDENCY_TYPE_PROGRAMMATIC);
+}
+
+TEST_F(CudaCommandBufferTest, TraceDisallowsForbiddenOpsOnCaptureStream) {
+  Platform* platform = CudaPlatform();
+  ASSERT_OK_AND_ASSIGN(StreamExecutor * executor,
+                       platform->ExecutorForDevice(0));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Stream> stream,
+                       executor->CreateStream());
+
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<CommandBuffer> cmd_buffer,
+      TraceCommandBufferFactory::Create(
+          executor,
+          [&](Stream* capture_stream) -> absl::Status {
+            EXPECT_THAT(capture_stream->BlockHostUntilDone(),
+                        StatusIs(absl::StatusCode::kFailedPrecondition));
+            EXPECT_THAT(capture_stream->RefreshStatus(),
+                        StatusIs(absl::StatusCode::kFailedPrecondition));
+            EXPECT_THAT(capture_stream->DoHostCallbackWithStatus(
+                            []() { return absl::OkStatus(); }),
+                        StatusIs(absl::StatusCode::kFailedPrecondition));
+            return absl::OkStatus();
+          },
+          CommandBuffer::Mode::kPrimary));
+}
+
+TEST_F(CudaCommandBufferTest, LaunchClusterKernelWithClusterDimsSucceeds) {
+  Platform* platform = CudaPlatform();
+  ASSERT_OK_AND_ASSIGN(StreamExecutor * executor,
+                       platform->ExecutorForDevice(0));
+  if (!executor->GetDeviceDescription()
+           .cuda_compute_capability()
+           .IsAtLeastHopper()) {
+    GTEST_SKIP() << "Requires at least a Hopper GPU.";
+  }
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Stream> stream,
+                       executor->CreateStream());
+  KernelLoaderSpec spec = stream_executor::gpu::GetMinimalClusterKernelSpec();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Kernel> kernel,
+                       executor->LoadKernel(spec));
+  DeviceAddress<uint8_t> dummy = executor->AllocateArray<uint8_t>(256);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<CommandBuffer> cmd_buffer,
+                       executor->CreateCommandBuffer(primary));
+  ClusterDim cluster_dims{2, 1, 1};
+  ASSERT_OK_AND_ASSIGN(
+      const CommandBuffer::Command* cmd,
+      cmd_buffer->CreateLaunch(ThreadDim(128, 1, 1), BlockDim(2, 1, 1),
+                               cluster_dims, *kernel,
+                               *stream_executor::PackKernelArgs(
+                                   /*shmem_bytes=*/0, dummy),
+                               {}));
+  ASSERT_NE(cmd, nullptr);
+  ASSERT_OK(cmd_buffer->Finalize());
+  ASSERT_OK(cmd_buffer->Submit(stream.get()));
+  ASSERT_OK(stream->BlockHostUntilDone());
+}
+
+TEST_F(CudaCommandBufferTest, LaunchHostCallback) {
+  Platform* platform = CudaPlatform();
+  ASSERT_OK_AND_ASSIGN(StreamExecutor * executor,
+                       platform->ExecutorForDevice(0));
+  if (!executor->GetDeviceDescription()
+           .cuda_compute_capability()
+           .IsAtLeastVolta()) {
+    GTEST_SKIP() << "Requires at least a Volta GPU.";
+  }
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Stream> stream,
+                       executor->CreateStream());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<CommandBuffer> cmd_buffer,
+                       executor->CreateCommandBuffer(primary));
+
+  int counter = 0;
+  ASSERT_OK_AND_ASSIGN(const CommandBuffer::Command* cmd,
+                       cmd_buffer->CreateHost([&]() { counter++; }, {}));
+  ASSERT_NE(cmd, nullptr);
+
+  ASSERT_OK(cmd_buffer->Finalize());
+  ASSERT_OK(cmd_buffer->Submit(stream.get()));
+  ASSERT_OK(stream->BlockHostUntilDone());
+  EXPECT_EQ(counter, 1);
+
+  ASSERT_OK(cmd_buffer->Submit(stream.get()));
+  ASSERT_OK(stream->BlockHostUntilDone());
+  EXPECT_EQ(counter, 2);
+}
+
+TEST_F(CudaCommandBufferTest, MemcpyH2D2H) {
+  Platform* platform = CudaPlatform();
+  ASSERT_OK_AND_ASSIGN(StreamExecutor * executor,
+                       platform->ExecutorForDevice(0));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Stream> stream,
+                       executor->CreateStream());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<CommandBuffer> cmd_buffer,
+                       executor->CreateCommandBuffer(primary));
+  DeviceAddress<int32_t> device_buf = executor->AllocateArray<int32_t>(1);
+
+  int32_t src = 123;
+  ASSERT_OK_AND_ASSIGN(
+      const CommandBuffer::Command* h2d_cmd,
+      cmd_buffer->CreateMemcpyH2D(&device_buf, &src, sizeof(int32_t), {}));
+  ASSERT_NE(h2d_cmd, nullptr);
+
+  int32_t dst = 0;
+  ASSERT_OK_AND_ASSIGN(const CommandBuffer::Command* d2h_cmd,
+                       cmd_buffer->CreateMemcpyD2H(&dst, device_buf,
+                                                   sizeof(int32_t), {h2d_cmd}));
+  ASSERT_NE(d2h_cmd, nullptr);
+
+  ASSERT_OK(cmd_buffer->Finalize());
+  ASSERT_OK(cmd_buffer->Submit(stream.get()));
+  ASSERT_OK(stream->BlockHostUntilDone());
+  EXPECT_EQ(dst, 123);
+
+  int32_t src2 = 456;
+  int32_t dst2 = 0;
+  ASSERT_OK(cmd_buffer->Update());
+  ASSERT_OK(cmd_buffer->UpdateMemcpyH2D(h2d_cmd, &device_buf, &src2,
+                                        sizeof(int32_t)));
+  ASSERT_OK(
+      cmd_buffer->UpdateMemcpyD2H(d2h_cmd, &dst2, device_buf, sizeof(int32_t)));
+  ASSERT_OK(cmd_buffer->Finalize());
+  ASSERT_OK(cmd_buffer->Submit(stream.get()));
+  ASSERT_OK(stream->BlockHostUntilDone());
+  EXPECT_EQ(dst, 123);
+  EXPECT_EQ(dst2, 456);
+
+  DeviceAddress<int32_t> device_buf2 = executor->AllocateArray<int32_t>(1);
+  int32_t src3 = 789;
+  int32_t dst3 = 0;
+  ASSERT_OK(cmd_buffer->Update());
+  ASSERT_OK(cmd_buffer->UpdateMemcpyH2D(h2d_cmd, &device_buf2, &src3,
+                                        sizeof(int32_t)));
+  ASSERT_OK(cmd_buffer->UpdateMemcpyD2H(d2h_cmd, &dst3, device_buf2,
+                                        sizeof(int32_t)));
+  ASSERT_OK(cmd_buffer->Finalize());
+  ASSERT_OK(cmd_buffer->Submit(stream.get()));
+  ASSERT_OK(stream->BlockHostUntilDone());
+  EXPECT_EQ(dst2, 456);
+  EXPECT_EQ(dst3, 789);
+}
+
+TEST_F(CudaCommandBufferTest,
+       GraphInstantiateUsesLaunchStreamPriorityByDefault) {
+  Platform* platform = CudaPlatform();
+  ASSERT_OK_AND_ASSIGN(StreamExecutor * executor,
+                       platform->ExecutorForDevice(0));
+  ASSERT_OK_AND_ASSIGN(
+      KernelLoaderSpec add_spec,
+      ::stream_executor::gpu::GetAddI32TestKernelSpec(platform->id()));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Kernel> kernel,
+                       executor->LoadKernel(add_spec));
+
+  DeviceAddress<int32_t> a = executor->AllocateArray<int32_t>(4);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<CommandBuffer> cmd_buffer,
+                       executor->CreateCommandBuffer(primary));
+  ASSERT_OK_AND_ASSIGN(
+      const CommandBuffer::Command* cmd,
+      cmd_buffer->CreateLaunch(ThreadDim(4, 1, 1), BlockDim(1, 1, 1),
+                               std::nullopt, *kernel,
+                               *stream_executor::PackKernelArgs(0, a, a, a), {},
+                               StreamPriority::Default));
+  ASSERT_NE(cmd, nullptr);
+  ASSERT_OK(cmd_buffer->Finalize());
+
+  auto* cuda_cmd_buffer =
+      dynamic_cast<gpu::CudaCommandBuffer*>(cmd_buffer.get());
+  ASSERT_NE(cuda_cmd_buffer, nullptr);
+  EXPECT_FALSE(cuda_cmd_buffer->has_node_priority());
+
+  auto* gpu_cmd = dynamic_cast<const gpu::GpuCommandBuffer::GpuCommand*>(cmd);
+  ASSERT_NE(gpu_cmd, nullptr);
+  CUlaunchAttributeValue value{};
+  ASSERT_EQ(cuGraphKernelNodeGetAttribute(
+                absl::bit_cast<CUgraphNode>(gpu_cmd->handle),
+                CU_LAUNCH_ATTRIBUTE_PRIORITY, &value),
+            CUDA_SUCCESS);
+  EXPECT_EQ(value.priority, 0);
+}
+
+TEST_F(CudaCommandBufferTest,
+       GraphInstantiateUsesNodePriorityWhenExplicitlySet) {
+  Platform* platform = CudaPlatform();
+  ASSERT_OK_AND_ASSIGN(StreamExecutor * executor,
+                       platform->ExecutorForDevice(0));
+  ASSERT_OK_AND_ASSIGN(
+      KernelLoaderSpec add_spec,
+      ::stream_executor::gpu::GetAddI32TestKernelSpec(platform->id()));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Kernel> kernel,
+                       executor->LoadKernel(add_spec));
+
+  DeviceAddress<int32_t> a = executor->AllocateArray<int32_t>(4);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<CommandBuffer> cmd_buffer,
+                       executor->CreateCommandBuffer(primary));
+  ASSERT_OK_AND_ASSIGN(
+      const CommandBuffer::Command* cmd,
+      cmd_buffer->CreateLaunch(ThreadDim(4, 1, 1), BlockDim(1, 1, 1),
+                               std::nullopt, *kernel,
+                               *stream_executor::PackKernelArgs(0, a, a, a), {},
+                               StreamPriority::Highest));
+  ASSERT_NE(cmd, nullptr);
+  ASSERT_OK(cmd_buffer->Finalize());
+
+  auto* cuda_cmd_buffer =
+      dynamic_cast<gpu::CudaCommandBuffer*>(cmd_buffer.get());
+  ASSERT_NE(cuda_cmd_buffer, nullptr);
+  EXPECT_TRUE(cuda_cmd_buffer->has_node_priority());
+
+  auto* gpu_cmd = dynamic_cast<const gpu::GpuCommandBuffer::GpuCommand*>(cmd);
+  ASSERT_NE(gpu_cmd, nullptr);
+  CUlaunchAttributeValue value{};
+  ASSERT_EQ(cuGraphKernelNodeGetAttribute(
+                absl::bit_cast<CUgraphNode>(gpu_cmd->handle),
+                CU_LAUNCH_ATTRIBUTE_PRIORITY, &value),
+            CUDA_SUCCESS);
+  EXPECT_EQ(value.priority,
+            executor->GetGpuStreamPriority(StreamPriority::Highest));
+}
+
+TEST_F(CudaCommandBufferTest,
+       NestedChildCommandPropagatesNodePriorityToParent) {
+  Platform* platform = CudaPlatform();
+  ASSERT_OK_AND_ASSIGN(StreamExecutor * executor,
+                       platform->ExecutorForDevice(0));
+  ASSERT_OK_AND_ASSIGN(
+      KernelLoaderSpec add_spec,
+      ::stream_executor::gpu::GetAddI32TestKernelSpec(platform->id()));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Kernel> kernel,
+                       executor->LoadKernel(add_spec));
+
+  DeviceAddress<int32_t> a = executor->AllocateArray<int32_t>(4);
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<CommandBuffer> nested_cmd,
+      executor->CreateCommandBuffer(CommandBuffer::Mode::kNested));
+  ASSERT_OK(nested_cmd
+                ->CreateLaunch(ThreadDim(4, 1, 1), BlockDim(1, 1, 1),
+                               std::nullopt, *kernel,
+                               *stream_executor::PackKernelArgs(0, a, a, a), {},
+                               StreamPriority::Default)
+                .status());
+  ASSERT_OK(nested_cmd->SetPriority(StreamPriority::Highest));
+  ASSERT_OK(nested_cmd->Finalize());
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<CommandBuffer> cmd_buffer,
+                       executor->CreateCommandBuffer(primary));
+  ASSERT_OK(cmd_buffer->CreateChildCommand(*nested_cmd, {}).status());
+  ASSERT_OK(cmd_buffer->Finalize());
+
+  auto* cuda_cmd_buffer =
+      dynamic_cast<gpu::CudaCommandBuffer*>(cmd_buffer.get());
+  ASSERT_NE(cuda_cmd_buffer, nullptr);
+  EXPECT_TRUE(cuda_cmd_buffer->has_node_priority());
+}
+
+TEST_F(CudaCommandBufferTest,
+       ConcurrentVmmDeallocationDuringGetConvolveRunners) {
+  Platform* platform = CudaPlatform();
+  ASSERT_OK_AND_ASSIGN(StreamExecutor * executor,
+                       platform->ExecutorForDevice(0));
+  dnn::DnnSupport* dnn = executor->AsDnn();
+  ASSERT_NE(dnn, nullptr);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Stream> stream,
+                       executor->CreateStream());
+
+  class CaptureErrorSink : public absl::LogSink {
+   public:
+    void Send(const absl::LogEntry& entry) override {
+      if (absl::StrContains(entry.text_message(),
+                            "CUDA_ERROR_STREAM_CAPTURE_UNSUPPORTED")) {
+        capture_errors.fetch_add(1, std::memory_order_relaxed);
+      }
+    }
+    std::atomic<int> capture_errors{0};
+  } sink;
+  absl::AddLogSink(&sink);
+
+  std::atomic<bool> stop{false};
+  std::thread dealloc_thread([&]() {
+    while (!stop.load(std::memory_order_relaxed)) {
+      DeviceAddressBase buf = executor->Allocate(4096);
+      ASSERT_FALSE(buf.is_null());
+      executor->Deallocate(&buf);
+    }
+  });
+
+  for (int iter = 0; iter < 5; ++iter) {
+    dnn::BatchDescriptor input_desc;
+    input_desc.set_count(2)
+        .set_feature_map_count(3)
+        .set_height(9 + iter)
+        .set_width(10 + iter)
+        .set_layout(dnn::DataLayout::kBatchDepthYX);
+    dnn::FilterDescriptor filter_desc;
+    filter_desc.set_input_feature_map_count(3)
+        .set_output_feature_map_count(4)
+        .set_input_filter_height(3)
+        .set_input_filter_width(3)
+        .set_layout(dnn::FilterLayout::kOutputInputYX);
+    dnn::ConvolutionDescriptor conv_desc;
+    conv_desc.set_vertical_filter_stride(1)
+        .set_horizontal_filter_stride(1)
+        .set_zero_padding_height(1)
+        .set_zero_padding_width(1);
+    dnn::BatchDescriptor output_desc;
+    output_desc.set_count(2)
+        .set_feature_map_count(4)
+        .set_height(9 + iter)
+        .set_width(10 + iter)
+        .set_layout(dnn::DataLayout::kBatchDepthYX);
+
+    std::vector<std::unique_ptr<const dnn::ConvRunner>> runners;
+    EXPECT_OK(dnn->GetConvolveRunners(
+        dnn::ConvolutionKind::FORWARD, dnn::DataType::kHalf,
+        dnn::DataType::kHalf, stream.get(), input_desc,
+        DeviceAddressBase(nullptr, 0), filter_desc,
+        DeviceAddressBase(nullptr, 0), output_desc,
+        DeviceAddressBase(nullptr, 0), conv_desc, /*use_fallback=*/false,
+        /*scratch_allocator=*/nullptr, EngineOptions{}, &runners));
+  }
+
+  stop.store(true, std::memory_order_relaxed);
+  dealloc_thread.join();
+  absl::RemoveLogSink(&sink);
+  EXPECT_EQ(sink.capture_errors.load(), 0);
+}
+}  // namespace
+}  // namespace stream_executor::cuda

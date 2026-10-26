@@ -13,7 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "mlir/Dialect/Tensor/IR/Tensor.h"  // from @llvm-project
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 
 #include <cassert>   // NOLINT
 #include <cstdint>   // NOLINT
@@ -21,8 +21,8 @@ limitations under the License.
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/Support/LLVM.h"
 #include "xla/mlir/tools/mlir_interpreter/dialects/util.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/interpreter.h"
 #include "xla/mlir/tools/mlir_interpreter/framework/interpreter_value.h"
@@ -40,7 +40,7 @@ int64_t Dim(InterpreterState& state, tensor::DimOp,
 
 InterpreterValue Empty(InterpreterState&, tensor::EmptyOp op,
                        ArrayRef<int64_t> dynamic_sizes) {
-  auto ty = op->getResultTypes().front().cast<mlir::ShapedType>();
+  auto ty = mlir::cast<mlir::ShapedType>(op->getResultTypes().front());
   auto shape = ReplaceDynamicVals(ty.getShape(), dynamic_sizes);
   return InterpreterValue::MakeTensor(ty.getElementType(), shape);
 }
@@ -56,7 +56,7 @@ InterpreterValue Extract(InterpreterState& state, tensor::ExtractOp,
 
 InterpreterValue FromElements(InterpreterState&, tensor::FromElementsOp op,
                               MutableArrayRef<InterpreterValue> elements) {
-  auto ty = op->getResultTypes().front().cast<mlir::ShapedType>();
+  auto ty = mlir::cast<mlir::ShapedType>(op->getResultTypes().front());
   auto result = InterpreterValue::MakeTensor(ty.getElementType(),
                                              llvm::to_vector(ty.getShape()));
   for (auto [index, element] : llvm::zip(result.View().Indices(), elements)) {
@@ -126,7 +126,7 @@ llvm::SmallVector<InterpreterValue> ExtractSlice(
   int64_t dim = 0;
   const auto& result_sizes = extract.getResultType().getShape();
   const auto& static_sizes = extract.getStaticSizes();
-  while (dim < out_view.Rank()) {
+  while (dim < out_view.num_dimensions()) {
     if (static_sizes[num_dropped + dim] == 1 &&
         (dim >= result_sizes.size() || result_sizes[dim] != 1)) {
       out_view.sizes.erase(out_view.sizes.begin() + dim);
@@ -186,7 +186,7 @@ llvm::SmallVector<InterpreterValue> InsertSlice(
 
 InterpreterValue Generate(InterpreterState& state, tensor::GenerateOp generate,
                           ArrayRef<int64_t> dynamic_sizes) {
-  auto ty = generate->getResultTypes().front().cast<ShapedType>();
+  auto ty = mlir::cast<ShapedType>(generate->getResultTypes().front());
   auto sizes = ReplaceDynamicVals(ty.getShape(), dynamic_sizes);
 
   auto result = InterpreterValue::MakeTensor(ty.getElementType(), sizes);

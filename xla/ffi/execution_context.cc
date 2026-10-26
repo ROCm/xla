@@ -15,87 +15,54 @@ limitations under the License.
 
 #include "xla/ffi/execution_context.h"
 
-#include <atomic>
-#include <cstdint>
-#include <memory>
-#include <string>
-#include <string_view>
 #include <utility>
 
-#include "absl/base/attributes.h"
-#include "absl/base/const_init.h"
-#include "absl/container/flat_hash_map.h"
+#include "absl/functional/function_ref.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/str_cat.h"
-#include "absl/synchronization/mutex.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/util.h"
 
 namespace xla::ffi {
 
-ABSL_CONST_INIT absl::Mutex type_registry_mutex(absl::kConstInit);
-
-using TypeRegistry = absl::flat_hash_map<std::string, ExecutionContext::TypeId>;
-static TypeRegistry& StaticTypeRegistry() {
-  static auto* registry = new TypeRegistry();
-  return *registry;
+absl::Status ExecutionContext::Insert(TypeId type_id, void* data) {
+  return InsertUserData(type_id, UserData(data, /*deleter=*/[](void*) {}));
 }
 
-ExecutionContext::TypeId ExecutionContext::GetNextTypeId() {
-  static auto* counter = new std::atomic<int64_t>(1);
-  return TypeId(counter->fetch_add(1));
-}
-
-ExecutionContext::UserData::UserData(void* data, Deleter<void> deleter)
-    : data_(data), deleter_(std::move(deleter)) {}
-
-ExecutionContext::UserData::~UserData() {
-  if (deleter_) deleter_(data_);
-}
-
-absl::StatusOr<ExecutionContext::TypeId>
-ExecutionContext::RegisterExternalTypeId(std::string_view name) {
-  absl::MutexLock lock(&type_registry_mutex);
-  auto& registry = StaticTypeRegistry();
-
-  // Try to emplace with type id zero and fill it with real type id only if we
-  // successfully acquired an entry for a given name.
-  auto emplaced = registry.emplace(name, TypeId(0));
-  if (!emplaced.second) {
-    return absl::AlreadyExistsError(
-        absl::StrCat("Type id ", emplaced.first->second.value(),
-                     " already registered for type name ", name));
-  }
-  return emplaced.first->second = GetNextTypeId();
-}
-
-absl::Status ExecutionContext::Insert(TypeId type_id, void* data,
-                                      Deleter<void> deleter) {
-  return InsertUserData(type_id,
-                        std::make_unique<UserData>(data, std::move(deleter)));
-}
-
-absl::Status ExecutionContext::InsertUserData(TypeId type_id,
-                                              std::unique_ptr<UserData> data) {
-  if (!data) return absl::InvalidArgumentError("User data must be not null");
-
+absl::Status ExecutionContext::InsertUserData(TypeId type_id, UserData data) {
   auto emplaced = user_data_.emplace(type_id, std::move(data));
   if (!emplaced.second) {
-    return absl::AlreadyExistsError(
-        absl::StrCat("User data with type id ", type_id.value(),
-                     " already exists in execution context"));
+    return Internal(
+        "User data with type id %d already exists in execution context",
+        type_id.value());
   }
   return absl::OkStatus();
 }
 
-absl::StatusOr<ExecutionContext::UserData*> ExecutionContext::LookupUserData(
-    TypeId type_id) const {
+absl::StatusOr<const ExecutionContext::UserData*>
+ExecutionContext::LookupUserData(TypeId type_id) const {
   auto it = user_data_.find(type_id);
   if (it == user_data_.end()) {
-    return absl::NotFoundError(absl::StrCat("User data with type id ",
-                                            type_id.value(),
-                                            " not found in execution context"));
+    return NotFound("User data with type id %d not found in execution context",
+                    type_id.value());
   }
-  return it->second.get();
+  return &it->second;
+}
+
+void ExecutionContext::ForEach(
+    absl::FunctionRef<void(TypeId type_id, void* data)> fn) const {
+  for (auto& [type_id, user_data] : user_data_) {
+    fn(type_id, user_data.get());
+  }
+}
+
+absl::Status ExecutionContext::ForEachWithStatus(
+    absl::FunctionRef<absl::Status(TypeId type_id, void* data)> fn) const {
+  for (auto& [type_id, user_data] : user_data_) {
+    ABSL_RETURN_IF_ERROR(fn(type_id, user_data.get()));
+  }
+  return absl::OkStatus();
 }
 
 }  // namespace xla::ffi

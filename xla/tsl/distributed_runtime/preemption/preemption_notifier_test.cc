@@ -15,40 +15,20 @@ limitations under the License.
 #include "xla/tsl/distributed_runtime/preemption/preemption_notifier.h"
 
 #include <csignal>
-#include <functional>
 #include <memory>
-#include <utility>
 
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/synchronization/notification.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/status.h"
-#include "tsl/platform/statusor.h"
-#include "tsl/platform/test.h"
-#if defined(PLATFORM_GOOGLE)
-#include "thread/executor.h"
-#include "thread/signal.h"
-#endif
-
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/test.h"
 namespace tsl {
 namespace {
 
-class PreemptNotifierTest : public ::testing::Test {
- public:
-  PreemptNotifierTest() {
-#if defined(PLATFORM_GOOGLE)
-    // Override default test SIGTERM handler so that test does not exit
-    // prematurely.
-    thread::signal::Token unused_token;
-
-    thread::signal::AddHandler(
-        SIGTERM, thread::Executor::DefaultExecutor(), []() {},
-        thread::signal::kOverrideDefault, &unused_token);
-#endif
-  }
-};
+class PreemptNotifierTest : public ::testing::Test {};
 
 TEST_F(PreemptNotifierTest, WillBePreemptedAt) {
   auto env = Env::Default();
@@ -60,7 +40,7 @@ TEST_F(PreemptNotifierTest, WillBePreemptedAt) {
 
   // Preempt time should be current timestamp.
   absl::StatusOr<absl::Time> result = preempt_notifier->WillBePreemptedAt();
-  TF_CHECK_OK(result.status());
+  CHECK_OK(result.status());
   absl::Time preempt_time = result.value();
 
   // Make sure that preempt time is approximately correct.
@@ -85,7 +65,7 @@ TEST_F(PreemptNotifierTest,
 
   // Preempt time should be current timestamp.
   absl::StatusOr<absl::Time> result = preempt_notifier->WillBePreemptedAt();
-  TF_CHECK_OK(result.status());
+  CHECK_OK(result.status());
   absl::Time preempt_time = result.value();
 
   // Make sure that preempt time is approximately correct.
@@ -122,8 +102,8 @@ TEST_F(PreemptNotifierTest, WillBePreemptedAtAsync_SameResultForAllCallbacks) {
   n.WaitForNotification();
   n_2.WaitForNotification();
 
-  TF_CHECK_OK(preempt_time.status());
-  TF_CHECK_OK(preempt_time_2.status());
+  CHECK_OK(preempt_time.status());
+  CHECK_OK(preempt_time_2.status());
   // Make sure that the same preempt time is returned for both calls.
   EXPECT_EQ(preempt_time.value(), preempt_time_2.value());
 }
@@ -136,7 +116,7 @@ TEST_F(PreemptNotifierTest, Reset_TwoDifferentPreemptTimesRecorded) {
   // Raise first signal.
   std::raise(SIGTERM);
   absl::StatusOr<absl::Time> result = preempt_notifier->WillBePreemptedAt();
-  TF_CHECK_OK(result.status());
+  CHECK_OK(result.status());
   absl::Time preempt_time = result.value();
 
   preempt_notifier =
@@ -144,7 +124,9 @@ TEST_F(PreemptNotifierTest, Reset_TwoDifferentPreemptTimesRecorded) {
 
   // Raise second signal.
   std::raise(SIGTERM);
-  absl::Time preempt_time_2 = preempt_notifier->WillBePreemptedAt().value();
+  absl::StatusOr<absl::Time> result_2 = preempt_notifier->WillBePreemptedAt();
+  CHECK_OK(result_2.status());
+  absl::Time preempt_time_2 = result_2.value();
 
   // Verify that two different preempt times are recorded.
   EXPECT_NE(preempt_time, preempt_time_2);
@@ -167,7 +149,7 @@ TEST_F(PreemptNotifierTest, DestructorCancelsPendingCalls) {
   n.WaitForNotification();
 
   // Verify that pending callbacks are cancelled.
-  EXPECT_TRUE(errors::IsCancelled(result.status()));
+  EXPECT_TRUE(absl::IsCancelled(result.status()));
 }
 }  // namespace
 }  // namespace tsl

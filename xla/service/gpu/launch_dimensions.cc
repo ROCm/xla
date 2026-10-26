@@ -16,13 +16,17 @@ limitations under the License.
 #include "xla/service/gpu/launch_dimensions.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
-#include <ostream>
 
 #include "absl/log/check.h"
-#include "absl/log/log.h"
-#include "absl/strings/str_format.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "xla/runtime/work_cluster.h"
+#include "xla/runtime/work_dimensions.h"
+#include "xla/runtime/work_group.h"
+#include "xla/runtime/work_item.h"
+#include "xla/service/gpu/launch_dimensions.pb.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
 #include "xla/stream_executor/device_description.h"
@@ -32,164 +36,68 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
-std::ostream& operator<<(std::ostream& out,
-                         const LaunchDimensions& launch_dims) {
-  se::BlockDim block_counts = launch_dims.block_counts();
-  se::ThreadDim thread_counts = launch_dims.thread_counts_per_block();
-  out << absl::StrFormat("[block: {%d, %d, %d}, thread: {%d, %d, %d}]",
-                         block_counts.x, block_counts.y, block_counts.z,
-                         thread_counts.x, thread_counts.y, thread_counts.z);
-  return out;
+absl::StatusOr<LaunchDimensions> LaunchDimensions::FromWorkDimensions(
+    const WorkDimensions& work_dimensions) {
+  if (work_dimensions.num_work_clusters != NumWorkClusters{}) {
+    return absl::InvalidArgumentError(
+        "Provided work_dimensions can't be represented as LaunchDimensions.");
+  }
+  return LaunchDimensions{
+      se::BlockDim{work_dimensions.num_work_groups.x,
+                   work_dimensions.num_work_groups.y,
+                   work_dimensions.num_work_groups.z},
+      se::ThreadDim{work_dimensions.num_work_items.x,
+                    work_dimensions.num_work_items.y,
+                    work_dimensions.num_work_items.z},
+  };
 }
 
-static int64_t ThreadsPerBlockLimit(
-    const se::DeviceDescription& gpu_device_info) {
-  int64_t threads_per_block = gpu_device_info.threads_per_block_limit();
-  if (threads_per_block <= 0) {
-    static std::atomic<int64_t> log_count{0};
-    if (log_count.fetch_add(1) < 8) {
-      LOG(WARNING) << "Attempting to calculate launch dimensions for GPU "
-                      "without full information about its capabilities.  "
-                      "StreamExecutor's PopulateDeviceDescription should be "
-                      "updated for this device.";
-    }
-    threads_per_block = gpu_device_info.threads_per_warp();
-    if (threads_per_block == 0) {
-      // Fall back to *something* if we can't even get num threads per warp.
-      threads_per_block = 32;
-    }
-  }
-  return threads_per_block;
+WorkDimensions LaunchDimensions::AsWorkDimensions() const {
+  return WorkDimensions{
+      NumWorkClusters{},
+      NumWorkGroups{block_counts_.x, block_counts_.y, block_counts_.z},
+      NumWorkItems{thread_counts_per_block_.x, thread_counts_per_block_.y,
+                   thread_counts_per_block_.z}};
 }
-
-int64_t ThreadsPerBlockRowVectorized(
-    const Shape& shape, const se::DeviceDescription& gpu_device_info,
-    LaunchDimensionsConfig dim_config) {
-  if (shape.dimensions().empty()) {
-    return -1;
-  }
-  int64_t threads_per_block_row_vectorized =
-      shape.dimensions().back() / dim_config.unroll_factor;
-  if (dim_config.row_vectorized &&
-      shape.dimensions().back() % dim_config.unroll_factor == 0 &&
-      // If the row size is a multiple of 256, then use the old code
-      // path that use a block size of 256. This give small speed up on V100.
-      // Vectorization of the row load was already happening.
-      (shape.dimensions().back() % 256) != 0 &&
-      // We do not support row that do not fit in one block.
-      threads_per_block_row_vectorized <=
-          gpu_device_info.threads_per_block_limit()) {
-    return threads_per_block_row_vectorized;
-  }
-  return -1;
-}
-
-namespace {
-
-struct BlockSizes {
-  int64_t threads_per_block_x;
-  int64_t threads_per_block_y;
-  int64_t block_count;
-};
-
-BlockSizes GetBlockSizes(LaunchDimensionsConfig dim_config,
-                         const se::DeviceDescription& gpu_device_info,
-                         const Shape& shape, int64_t num_elements) {
-  if (!dim_config.row_vectorized && !dim_config.few_waves) {
-    BlockSizes result;
-    const int kWarpSchedulers = 4;
-    result.threads_per_block_x = std::min<int64_t>(
-        gpu_device_info.threads_per_warp() * kWarpSchedulers, num_elements);
-    result.threads_per_block_y = 1;
-    result.block_count = CeilOfRatio(
-        num_elements, result.threads_per_block_x * result.threads_per_block_y);
-    return result;
-  }
-
-  int64_t threads_per_block_row_vectorized =
-      ThreadsPerBlockRowVectorized(shape, gpu_device_info, dim_config);
-  // If row vectorized, threads_per_block_x is the vectorized size.
-  // Otherwise, we unroll kernels to make use of vectorized
-  // loads/stores. This means we need more registers to hold
-  // intermediate values. Reduce the number of threads per block to
-  // increase the number of registers available to ptxas.  Make sure
-  // we still have a multiple of 32.
-  BlockSizes result;
-  int64_t max_threads_per_block_x =
-      threads_per_block_row_vectorized > 0
-          ? threads_per_block_row_vectorized
-          : RoundUpTo(ThreadsPerBlockLimit(gpu_device_info) /
-                          dim_config.unroll_factor,
-                      int64_t{32});
-  result.threads_per_block_x = std::min(num_elements, max_threads_per_block_x);
-  // threads_per_block_y > 1 when we row vectorize and have small row size.
-  result.threads_per_block_y =
-      threads_per_block_row_vectorized > 0 &&
-              threads_per_block_row_vectorized < 128 && num_elements > 128
-          ? CeilOfRatio(static_cast<int64_t>(128),
-                        threads_per_block_row_vectorized)
-          : 1;
-  VLOG(2) << "Set # of threads per block to (.x=" << result.threads_per_block_x
-          << ", .y=" << result.threads_per_block_y << ")";
-
-  result.block_count = CeilOfRatio(
-      num_elements, result.threads_per_block_x * result.threads_per_block_y);
-  if (dim_config.few_waves) {
-    if (dim_config.row_vectorized) {
-      // This multiple of 32 was tuned to not cause regression on multiple
-      // benchmarks. It isn't a value that is optimal for all kernels. Maybe
-      // looking at the arithmetic intensity of the kernels can specialize the
-      // multiple per kernel.
-      int64_t max_block_count =
-          32 * gpu_device_info.core_count() *
-          (gpu_device_info.threads_per_core_limit() /
-           (result.threads_per_block_x * result.threads_per_block_y));
-      int64_t capped_block_count = result.block_count;
-      while (capped_block_count > max_block_count) {
-        capped_block_count /= 2;
-      }
-      if (capped_block_count < result.block_count) {
-        result.block_count = capped_block_count;
-        VLOG(2) << "Update # of blocks to " << result.block_count
-                << " as few_waves is enabled.";
-      }
-    } else {
-      int64_t capped_threads_per_block_x =
-          std::min<int64_t>(result.threads_per_block_x, 128);
-      int64_t capped_block_count =
-          gpu_device_info.core_count() *
-          (gpu_device_info.threads_per_core_limit() /
-           (capped_threads_per_block_x * result.threads_per_block_y));
-      if (capped_block_count < result.block_count) {
-        result.threads_per_block_x = capped_threads_per_block_x;
-        result.block_count = capped_block_count;
-        VLOG(2) << "Update the # of blocks to " << result.block_count
-                << " and the # of threads per blocks to "
-                << result.threads_per_block_x
-                << " as the few_waves mode is enabled.";
-      }
-    }
-  }
-  return result;
-}
-
-}  // namespace
 
 LaunchDimensions CalculateLaunchDimensions(
     const Shape& shape, const se::DeviceDescription& gpu_device_info,
-    LaunchDimensionsConfig dim_config) {
+    int unroll_factor) {
   int64_t num_elements = ShapeUtil::ElementsIn(shape);
   if (num_elements <= 1) {
     return LaunchDimensions();
   }
-  num_elements = CeilOfRatio(num_elements, int64_t{dim_config.unroll_factor});
-  BlockSizes sizes =
-      GetBlockSizes(dim_config, gpu_device_info, shape, num_elements);
+  num_elements = CeilOfRatio(num_elements, int64_t{unroll_factor});
+  const int kWarpSchedulers = 4;
 
-  return LaunchDimensions(
-      se::BlockDim(sizes.block_count, 1, 1),
-      se::ThreadDim(sizes.threads_per_block_x, sizes.threads_per_block_y, 1));
+  int64_t threads_per_block = std::min<int64_t>(
+      gpu_device_info.threads_per_warp() * kWarpSchedulers, num_elements);
+
+  int64_t num_blocks_total = CeilOfRatio(num_elements, threads_per_block);
+  int64_t num_blocks_y = CeilOfRatio<uint64_t>(
+      num_blocks_total, gpu_device_info.block_dim_limit().x);
+  int64_t num_blocks_x = CeilOfRatio(num_blocks_total, num_blocks_y);
+
+  return LaunchDimensions(se::BlockDim(num_blocks_x, num_blocks_y, 1),
+                          se::ThreadDim(threads_per_block, 1, 1));
 }
 
+LaunchDimensionsProto LaunchDimensions::ToProto() const {
+  LaunchDimensionsProto proto;
+  *proto.mutable_block_counts() = block_counts_.ToProto();
+  *proto.mutable_thread_counts_per_block() = thread_counts_per_block_.ToProto();
+  return proto;
+}
+
+absl::StatusOr<LaunchDimensions> LaunchDimensions::FromProto(
+    const LaunchDimensionsProto& proto) {
+  ABSL_ASSIGN_OR_RETURN(
+      stream_executor::BlockDim block_counts,
+      stream_executor::BlockDim::FromProto(proto.block_counts()));
+  ABSL_ASSIGN_OR_RETURN(
+      stream_executor::ThreadDim thread_counts_per_block,
+      stream_executor::ThreadDim::FromProto(proto.thread_counts_per_block()));
+  return LaunchDimensions{block_counts, thread_counts_per_block};
+}
 }  // namespace gpu
 }  // namespace xla

@@ -76,6 +76,11 @@ def _tf_http_archive_impl(ctx):
             type = ctx.attr.type,
             stripPrefix = ctx.attr.strip_prefix,
         )
+        if hasattr(ctx.attr, "patch_cmds") and ctx.attr.patch_cmds:
+            for cmd in ctx.attr.patch_cmds:
+                res = ctx.execute(["bash", "-c", cmd])
+                if res.return_code != 0:
+                    fail("patch_cmd failed: %s\n%s" % (cmd, res.stderr))
         if patch_files:
             for patch_file in patch_files:
                 patch_file = ctx.path(Label(patch_file)) if patch_file else None
@@ -94,6 +99,7 @@ _tf_http_archive = repository_rule(
         "strip_prefix": attr.string(),
         "type": attr.string(),
         "patch_file": attr.string_list(),
+        "patch_cmds": attr.string_list(),
         "build_file": attr.string(),
         "system_build_file": attr.string(),
         "link_files": attr.string_dict(),
@@ -129,8 +135,6 @@ def tf_http_archive(name, sha256, urls, **kwargs):
              "along shortly thereafter and mirror the file.")
 
     if native.existing_rule(name):
-        print("\n\033[1;33mWarning:\033[0m skipping import of repository '" +
-              name + "' because it already exists.\n")
         return
 
     _tf_http_archive(
@@ -140,21 +144,16 @@ def tf_http_archive(name, sha256, urls, **kwargs):
         **kwargs
     )
 
-def _tf_vendored_impl(repository_ctx):
-    parent_path = repository_ctx.path(repository_ctx.attr.parent).dirname
-
-    # get_child doesn't allow slashes. Yes this is silly. bazel_skylib paths
-    # doesn't work with path objects.
-    relpath_parts = repository_ctx.attr.relpath.split("/")
-    vendored_path = parent_path
-    for part in relpath_parts:
-        vendored_path = vendored_path.get_child(part)
-    repository_ctx.symlink(vendored_path, ".")
+def _tf_vendored_impl(ctx):
+    ctx.symlink(ctx.path(ctx.attr._root).dirname.get_child(ctx.attr.path), ".")
 
 tf_vendored = repository_rule(
     implementation = _tf_vendored_impl,
+    doc = "Similar to local_repository, but path is relative to the root of the " +
+          "repository, not the root of the workspace.",
     attrs = {
-        "parent": attr.label(default = "//:WORKSPACE"),
-        "relpath": attr.string(),
+        "_root": attr.label(default = "//:unused"),
+        "path": attr.string(),
     },
+    local = True,
 )

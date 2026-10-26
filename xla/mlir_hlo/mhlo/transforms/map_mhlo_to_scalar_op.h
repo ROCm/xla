@@ -16,12 +16,14 @@ limitations under the License.
 #ifndef MLIR_HLO_MHLO_TRANSFORMS_MAP_MHLO_TO_SCALAR_OP_H
 #define MLIR_HLO_MHLO_TRANSFORMS_MAP_MHLO_TO_SCALAR_OP_H
 
+#include <cstdint>
 #include <optional>
 #include <type_traits>
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "mhlo/IR/hlo_ops.h"
+#include "mhlo/transforms/transformation_helpers.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Complex/IR/Complex.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -45,6 +47,23 @@ struct MhloToScalarOp {
   using COp = void;
 };
 
+template <>
+struct MhloToScalarOp<mhlo::AcosOp> {
+  using FOp = ::mlir::math::AcosOp;
+};
+
+template <>
+struct MhloToScalarOp<mhlo::AcoshOp> {
+  using FOp = ::mlir::math::AcoshOp;
+};
+template <>
+struct MhloToScalarOp<mhlo::AsinOp> {
+  using FOp = ::mlir::math::AsinOp;
+};
+template <>
+struct MhloToScalarOp<mhlo::AsinhOp> {
+  using FOp = ::mlir::math::AsinhOp;
+};
 template <>
 struct MhloToScalarOp<mhlo::AddOp> {
   using FOp = ::mlir::arith::AddFOp;
@@ -77,6 +96,10 @@ struct MhloToScalarOp<mhlo::ClzOp> {
   using UOp = ::mlir::math::CountLeadingZerosOp;
 };
 template <>
+struct MhloToScalarOp<mhlo::CoshOp> {
+  using FOp = ::mlir::math::CoshOp;
+};
+template <>
 struct MhloToScalarOp<mhlo::CosineOp> {
   using FOp = ::mlir::math::CosOp;
   using COp = ::mlir::complex::CosOp;
@@ -89,6 +112,10 @@ template <>
 struct MhloToScalarOp<mhlo::ExpOp> {
   using FOp = ::mlir::math::ExpOp;
   using COp = ::mlir::complex::ExpOp;
+};
+template <>
+struct MhloToScalarOp<mhlo::Exp2Op> {
+  using FOp = ::mlir::math::Exp2Op;
 };
 template <>
 struct MhloToScalarOp<mhlo::Expm1Op> {
@@ -108,6 +135,10 @@ template <>
 struct MhloToScalarOp<mhlo::Log1pOp> {
   using FOp = ::mlir::math::Log1pOp;
   using COp = ::mlir::complex::Log1pOp;
+};
+template <>
+struct MhloToScalarOp<mhlo::Log2Op> {
+  using FOp = ::mlir::math::Log2Op;
 };
 template <>
 struct MhloToScalarOp<mhlo::MulOp> {
@@ -157,6 +188,10 @@ struct MhloToScalarOp<mhlo::SineOp> {
   using COp = ::mlir::complex::SinOp;
 };
 template <>
+struct MhloToScalarOp<mhlo::SinhOp> {
+  using FOp = ::mlir::math::SinhOp;
+};
+template <>
 struct MhloToScalarOp<mhlo::TanOp> {
   using FOp = ::mlir::math::TanOp;
   using COp = ::mlir::complex::TanOp;
@@ -165,6 +200,10 @@ template <>
 struct MhloToScalarOp<mhlo::Atan2Op> {
   using FOp = ::mlir::math::Atan2Op;
   using COp = ::mlir::complex::Atan2Op;
+};
+template <>
+struct MhloToScalarOp<mhlo::AtanhOp> {
+  using FOp = ::mlir::math::AtanhOp;
 };
 template <>
 struct MhloToScalarOp<mhlo::TanhOp> {
@@ -194,7 +233,7 @@ template <typename... Args>
 struct MapMhloOpToScalarOpImpl {
   Value operator()(Location /*loc*/, ArrayRef<Type> /*ResultTypes*/,
                    ArrayRef<Type> /*argTypes*/, ValueRange /*args*/,
-                   OpBuilder* /*b*/) {
+                   ArrayRef<NamedAttribute> /*attributes*/, OpBuilder* /*b*/) {
     return nullptr;
   }
 };
@@ -202,32 +241,33 @@ struct MapMhloOpToScalarOpImpl {
 template <typename StdScalarOp>
 struct MapMhloOpToScalarOpImpl<StdScalarOp> {
   Value operator()(Location loc, ArrayRef<Type> resultTypes,
-                   ArrayRef<Type> /*argTypes*/, ValueRange args, OpBuilder* b) {
-    return b->template create<StdScalarOp>(loc, resultTypes, args,
-                                           std::nullopt);
+                   ArrayRef<Type> /*argTypes*/, ValueRange args,
+                   ArrayRef<NamedAttribute> attributes, OpBuilder* b) {
+    return StdScalarOp::create(*b, loc, resultTypes, args, attributes);
   }
 };
 
 template <typename SupportedType, typename StdScalarOp, typename... Args>
 struct MapMhloOpToScalarOpImpl<SupportedType, StdScalarOp, Args...> {
   Value operator()(Location loc, ArrayRef<Type> resultTypes,
-                   ArrayRef<Type> argTypes, ValueRange args, OpBuilder* b) {
+                   ArrayRef<Type> argTypes, ValueRange args,
+                   ArrayRef<NamedAttribute> attributes, OpBuilder* b) {
     Type elementType = getElementTypeOrSelf(argTypes.front());
     if (SupportedType{}(elementType)) {
-      return b->template create<StdScalarOp>(loc, resultTypes, args,
-                                             std::nullopt);
+      return StdScalarOp::create(*b, loc, resultTypes, args, attributes);
     }
     return MapMhloOpToScalarOpImpl<Args...>{}(loc, resultTypes, argTypes, args,
-                                              b);
+                                              attributes, b);
   }
 };
 
 template <typename SupportedType, typename... Args>
 struct MapMhloOpToScalarOpImpl<SupportedType, void, Args...> {
   Value operator()(Location loc, ArrayRef<Type> resultTypes,
-                   ArrayRef<Type> argTypes, ValueRange args, OpBuilder* b) {
+                   ArrayRef<Type> argTypes, ValueRange args,
+                   ArrayRef<NamedAttribute> attributes, OpBuilder* b) {
     return MapMhloOpToScalarOpImpl<Args...>{}(loc, resultTypes, argTypes, args,
-                                              b);
+                                              attributes, b);
   }
 };
 
@@ -273,6 +313,7 @@ template <typename MhloOpTy>
 inline Value mapMhloOpToStdScalarOp(Location loc, ArrayRef<Type> resultTypes,
                                     ArrayRef<Type> argTypes,
                                     typename MhloOpTy::Adaptor adaptor,
+                                    ArrayRef<NamedAttribute> attributes,
                                     OpBuilder* b) {
   using ScalarIOpOrVoid = typename MapableIf<ScalarIOp, MhloOpTy>::type;
   using ScalarUOpOrVoid = typename MapableIf<ScalarUOp, MhloOpTy>::type;
@@ -281,34 +322,33 @@ inline Value mapMhloOpToStdScalarOp(Location loc, ArrayRef<Type> resultTypes,
   return MapMhloOpToScalarOpImpl<IsSignedIntegerType, ScalarIOpOrVoid,
                                  IsUnsignedIntegerType, ScalarUOpOrVoid,
                                  IsFloatType, ScalarFOpOrVoid, IsComplexType,
-                                 ScalarCOpOrVoid>{}(loc, resultTypes, argTypes,
-                                                    adaptor.getOperands(), b);
+                                 ScalarCOpOrVoid>{}(
+      loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
 }
 
 template <>
-inline Value mapMhloOpToStdScalarOp<mhlo::AbsOp>(Location loc,
-                                                 ArrayRef<Type> resultTypes,
-                                                 ArrayRef<Type> argTypes,
-                                                 mhlo::AbsOp::Adaptor adaptor,
-                                                 OpBuilder* b) {
+inline Value mapMhloOpToStdScalarOp<mhlo::AbsOp>(
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
+    mhlo::AbsOp::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
   Type elementType = getElementTypeOrSelf(argTypes.front());
   if (mlir::isa<FloatType>(elementType)) {
     return MapMhloOpToScalarOpImpl<IsFloatType, ::mlir::math::AbsFOp>{}(
-        loc, resultTypes, argTypes, adaptor.getOperands(), b);
+        loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
   }
   if (mlir::isa<ComplexType>(elementType)) {
     return MapMhloOpToScalarOpImpl<IsComplexType, ::mlir::complex::AbsOp>{}(
-        loc, resultTypes, argTypes, adaptor.getOperands(), b);
+        loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
   }
   if (elementType.isSignlessInteger() || elementType.isSignedInteger()) {
     // lmhlo.abs(x, result) ->  result = select((x > 0), x, sub(0, x))
     Value lhs = adaptor.getOperand();
     Value zeroIntval =
-        b->create<arith::ConstantOp>(loc, b->getZeroAttr(lhs.getType()));
-    auto lhsGtZero = b->create<ScalarIOp<CompareOp>>(
-        loc, arith::CmpIPredicate::sge, lhs, zeroIntval);
-    auto negVal = b->create<ScalarIOp<mhlo::SubtractOp>>(loc, zeroIntval, lhs);
-    return b->create<::mlir::arith::SelectOp>(loc, lhsGtZero, lhs, negVal);
+        arith::ConstantOp::create(*b, loc, b->getZeroAttr(lhs.getType()));
+    auto lhsGtZero = ScalarIOp<CompareOp>::create(
+        *b, loc, arith::CmpIPredicate::sge, lhs, zeroIntval);
+    auto negVal = ScalarIOp<mhlo::SubtractOp>::create(*b, loc, zeroIntval, lhs);
+    return ::mlir::arith::SelectOp::create(*b, loc, lhsGtZero, lhs, negVal);
   }
   return nullptr;
 }
@@ -316,10 +356,10 @@ inline Value mapMhloOpToStdScalarOp<mhlo::AbsOp>(Location loc,
 // Return a constant for v of type t, splat if t is a vector type.
 inline Value getConstantOrSplat(OpBuilder* b, Location loc, Type t,
                                 Attribute v) {
-  if (VectorType vecType = mlir::dyn_cast<VectorType>(t)) {
-    v = SplatElementsAttr::get(vecType, v);
+  if (ShapedType shapedType = mlir::dyn_cast<ShapedType>(t)) {
+    v = SplatElementsAttr::get(shapedType, v);
   }
-  return b->create<arith::ConstantOp>(loc, t, cast<TypedAttr>(v));
+  return arith::ConstantOp::create(*b, loc, t, cast<TypedAttr>(v));
 }
 
 template <typename PredicateType>
@@ -368,20 +408,20 @@ inline Value cmpComplex(Location loc, Value lhs, Value rhs,
   auto complexType = mlir::cast<ComplexType>(lhs.getType());
   if (mlir::isa<FloatType>(complexType.getElementType())) {
     if (comparisonDirection == ComparisonDirection::EQ) {
-      return b->create<complex::EqualOp>(loc, lhs, rhs);
+      return complex::EqualOp::create(*b, loc, lhs, rhs);
     }
     if (comparisonDirection == ComparisonDirection::NE) {
-      return b->create<complex::NotEqualOp>(loc, lhs, rhs);
+      return complex::NotEqualOp::create(*b, loc, lhs, rhs);
     }
 
     // Perform a lexicographical comparison for the (real, imaginary) pair.
     Type complexFloatTy = complexType.getElementType();
 
-    Value lhsReal = b->create<complex::ReOp>(loc, complexFloatTy, lhs);
-    Value rhsReal = b->create<complex::ReOp>(loc, complexFloatTy, rhs);
+    Value lhsReal = complex::ReOp::create(*b, loc, complexFloatTy, lhs);
+    Value rhsReal = complex::ReOp::create(*b, loc, complexFloatTy, rhs);
 
-    Value lhsImag = b->create<complex::ImOp>(loc, complexFloatTy, lhs);
-    Value rhsImag = b->create<complex::ImOp>(loc, complexFloatTy, rhs);
+    Value lhsImag = complex::ImOp::create(*b, loc, complexFloatTy, lhs);
+    Value rhsImag = complex::ImOp::create(*b, loc, complexFloatTy, rhs);
 
     auto predicate = getCmpPredicate<arith::CmpFPredicate>(comparisonDirection,
                                                            /*is_signed=*/true);
@@ -389,15 +429,15 @@ inline Value cmpComplex(Location loc, Value lhs, Value rhs,
 
     //   if (lhsReal == rhsReal && lhsImag `predicate` rhsImag ||
     //       lhsReal `predicate` rhsReal)
-    Value realsAreEq = b->create<arith::CmpFOp>(loc, arith::CmpFPredicate::OEQ,
-                                                lhsReal, rhsReal);
+    Value realsAreEq = arith::CmpFOp::create(*b, loc, arith::CmpFPredicate::OEQ,
+                                             lhsReal, rhsReal);
     Value imagsAreOrdered =
-        b->create<arith::CmpFOp>(loc, *predicate, lhsImag, rhsImag);
+        arith::CmpFOp::create(*b, loc, *predicate, lhsImag, rhsImag);
     Value realsAreOrdered =
-        b->create<arith::CmpFOp>(loc, *predicate, lhsReal, rhsReal);
+        arith::CmpFOp::create(*b, loc, *predicate, lhsReal, rhsReal);
 
-    Value orLhs = b->create<arith::AndIOp>(loc, realsAreEq, imagsAreOrdered);
-    return b->create<arith::OrIOp>(loc, orLhs, realsAreOrdered);
+    Value orLhs = arith::AndIOp::create(*b, loc, realsAreEq, imagsAreOrdered);
+    return arith::OrIOp::create(*b, loc, orLhs, realsAreOrdered);
   }
   return nullptr;
 }
@@ -405,7 +445,8 @@ inline Value cmpComplex(Location loc, Value lhs, Value rhs,
 template <>
 inline Value mapMhloOpToStdScalarOp<mhlo::CompareOp>(
     Location loc, ArrayRef<Type> /*resultTypes*/, ArrayRef<Type> argTypes,
-    mhlo::CompareOp::Adaptor adaptor, OpBuilder* b) {
+    mhlo::CompareOp::Adaptor adaptor, ArrayRef<NamedAttribute> /*attributes*/,
+    OpBuilder* b) {
   ComparisonDirection comparisonDirection = adaptor.getComparisonDirection();
   const auto& lhs = adaptor.getLhs();
   const auto& rhs = adaptor.getRhs();
@@ -415,8 +456,8 @@ inline Value mapMhloOpToStdScalarOp<mhlo::CompareOp>(
     std::optional<arith::CmpIPredicate> predicate =
         getCmpPredicate<arith::CmpIPredicate>(comparisonDirection, !isUnsigned);
     assert(predicate.has_value() && "expected valid comparison direction");
-    return b->create<ScalarIOp<mhlo::CompareOp>>(loc, predicate.value(), lhs,
-                                                 rhs);
+    return ScalarIOp<mhlo::CompareOp>::create(*b, loc, predicate.value(), lhs,
+                                              rhs);
   }
   if (auto floatType = mlir::dyn_cast<FloatType>(elementType)) {
     if (adaptor.getCompareType() &&
@@ -425,9 +466,9 @@ inline Value mapMhloOpToStdScalarOp<mhlo::CompareOp>(
       // -NaN < -Inf < -Finite < -0 < +0 < +Finite < +Inf < +NaN
       auto intType = b->getIntegerType(floatType.getWidth());
       auto zero =
-          b->create<arith::ConstantOp>(loc, intType, b->getZeroAttr(intType));
-      auto max = b->create<arith::ConstantOp>(
-          loc, intType,
+          arith::ConstantOp::create(*b, loc, intType, b->getZeroAttr(intType));
+      auto max = arith::ConstantOp::create(
+          *b, loc, intType,
           b->getIntegerAttr(intType,
                             APInt::getSignedMaxValue(floatType.getWidth())));
       // Switch from a floating point value to a integer value in such a way
@@ -441,11 +482,11 @@ inline Value mapMhloOpToStdScalarOp<mhlo::CompareOp>(
       // obvious order, -0 is ordered before 0, and -NaN and NaN appear at the
       // beginning and end of the ordering.
       auto toIntegral = [&](Value v) {
-        auto x = b->create<arith::BitcastOp>(loc, intType, v);
+        auto x = arith::BitcastOp::create(*b, loc, intType, v);
         auto cmp =
-            b->create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, x, zero);
-        auto sub = b->create<arith::SubIOp>(loc, max, x);
-        return b->create<arith::SelectOp>(loc, cmp, sub, x);
+            arith::CmpIOp::create(*b, loc, arith::CmpIPredicate::slt, x, zero);
+        auto sub = arith::SubIOp::create(*b, loc, max, x);
+        return arith::SelectOp::create(*b, loc, cmp, sub, x);
       };
       auto lhsInt = toIntegral(lhs);
       auto rhsInt = toIntegral(rhs);
@@ -453,157 +494,130 @@ inline Value mapMhloOpToStdScalarOp<mhlo::CompareOp>(
           getCmpPredicate<arith::CmpIPredicate>(comparisonDirection,
                                                 /*is_signed=*/true);
       assert(predicate.has_value() && "expected valid comparison direction");
-      return b->create<arith::CmpIOp>(loc, *predicate, lhsInt, rhsInt);
+      return arith::CmpIOp::create(*b, loc, *predicate, lhsInt, rhsInt);
+    }
+    if (adaptor.getCompareType() &&
+        *adaptor.getCompareType() == mhlo::ComparisonType::WEAKORDER) {
+      // Weak order treats -0.0 == +0.0 and orders all NaNs equal and > +Inf.
+      switch (comparisonDirection) {
+        case mhlo::ComparisonDirection::LE: {
+          Value ole = arith::CmpFOp::create(*b, loc, arith::CmpFPredicate::OLE,
+                                            lhs, rhs);
+          Value rhsNan = arith::CmpFOp::create(
+              *b, loc, arith::CmpFPredicate::UNO, rhs, rhs);
+          return arith::OrIOp::create(*b, loc, ole, rhsNan);
+        }
+        case mhlo::ComparisonDirection::GE: {
+          Value oge = arith::CmpFOp::create(*b, loc, arith::CmpFPredicate::OGE,
+                                            lhs, rhs);
+          Value lhsNan = arith::CmpFOp::create(
+              *b, loc, arith::CmpFPredicate::UNO, lhs, lhs);
+          return arith::OrIOp::create(*b, loc, oge, lhsNan);
+        }
+        case mhlo::ComparisonDirection::LT: {
+          Value ult = arith::CmpFOp::create(*b, loc, arith::CmpFPredicate::ULT,
+                                            lhs, rhs);
+          Value lhsOrd = arith::CmpFOp::create(
+              *b, loc, arith::CmpFPredicate::ORD, lhs, lhs);
+          return arith::AndIOp::create(*b, loc, ult, lhsOrd);
+        }
+        case mhlo::ComparisonDirection::GT: {
+          Value ugt = arith::CmpFOp::create(*b, loc, arith::CmpFPredicate::UGT,
+                                            lhs, rhs);
+          Value rhsOrd = arith::CmpFOp::create(
+              *b, loc, arith::CmpFPredicate::ORD, rhs, rhs);
+          return arith::AndIOp::create(*b, loc, ugt, rhsOrd);
+        }
+        case mhlo::ComparisonDirection::EQ: {
+          Value oeq = arith::CmpFOp::create(*b, loc, arith::CmpFPredicate::OEQ,
+                                            lhs, rhs);
+          Value lhsNan = arith::CmpFOp::create(
+              *b, loc, arith::CmpFPredicate::UNO, lhs, lhs);
+          Value rhsNan = arith::CmpFOp::create(
+              *b, loc, arith::CmpFPredicate::UNO, rhs, rhs);
+          Value bothNan = arith::AndIOp::create(*b, loc, lhsNan, rhsNan);
+          return arith::OrIOp::create(*b, loc, oeq, bothNan);
+        }
+        case mhlo::ComparisonDirection::NE: {
+          Value une = arith::CmpFOp::create(*b, loc, arith::CmpFPredicate::UNE,
+                                            lhs, rhs);
+          Value lhsOrd = arith::CmpFOp::create(
+              *b, loc, arith::CmpFPredicate::ORD, lhs, lhs);
+          Value rhsOrd = arith::CmpFOp::create(
+              *b, loc, arith::CmpFPredicate::ORD, rhs, rhs);
+          Value anyOrd = arith::OrIOp::create(*b, loc, lhsOrd, rhsOrd);
+          return arith::AndIOp::create(*b, loc, une, anyOrd);
+        }
+      }
     }
     std::optional<arith::CmpFPredicate> predicate =
         getCmpPredicate<arith::CmpFPredicate>(comparisonDirection,
                                               /*is_signed=*/true);
     assert(predicate.has_value() && "expected valid comparison direction");
-    return b->create<ScalarFOp<mhlo::CompareOp>>(loc, predicate.value(), lhs,
-                                                 rhs);
+    return ScalarFOp<mhlo::CompareOp>::create(*b, loc, predicate.value(), lhs,
+                                              rhs);
   }
   if (auto complexType = mlir::dyn_cast<ComplexType>(elementType))
     return cmpComplex(loc, lhs, rhs, comparisonDirection, b);
   return nullptr;
 }
 
+static bool HasDefaultMantissaBits(Type type, uint32_t mantissa_bits) {
+  if (auto float_ty = mlir::dyn_cast<FloatType>(type)) {
+    return float_ty.getFPMantissaWidth() == mantissa_bits;
+  }
+  return false;
+}
+
+static bool HasDefaultExponentBits(Type type, uint32_t exponent_bits) {
+  if (auto float_ty = mlir::dyn_cast<FloatType>(type)) {
+    return float_ty.getWidth() - float_ty.getFPMantissaWidth() - 1 ==
+           exponent_bits;
+  }
+  return false;
+}
+
 template <>
 inline Value mapMhloOpToStdScalarOp<mhlo::ReducePrecisionOp>(
-    Location loc, ArrayRef<Type> /*resultTypes*/, ArrayRef<Type> argTypes,
-    mhlo::ReducePrecisionOp::Adaptor adaptor, OpBuilder* builder) {
-  using llvm::APInt;
-  mlir::ImplicitLocOpBuilder b(loc, *builder);
-
-  // Integer and float types for casting and constant generation.
-  auto floatType =
-      mlir::cast<FloatType>(getElementTypeOrSelf(argTypes.front()));
-  int64_t nbits = floatType.getWidth();
-  auto intType = mlir::IntegerType::get(loc.getContext(), nbits);
-
-  Value xAsInt = b.create<arith::BitcastOp>(intType, adaptor.getOperand());
-
-  // SignificandWidth includes the implicit extra bit.
-  auto srcMantissaBits = floatType.getFPMantissaWidth() - 1;
-  int srcExponentBits = nbits - 1 - srcMantissaBits;
-
-  // Clear the sign bit, it does not participate in rounding and we will restore
-  // it later.
-  APInt signBitMask(nbits, 1);
-  signBitMask <<= nbits - 1;
-
-  APInt expBitsMask(nbits, 1);
-  expBitsMask = ((expBitsMask << srcExponentBits) - 1) << srcMantissaBits;
-
-  auto createConstant = [&](const APInt& v) {
-    return b.create<arith::ConstantIntOp>(v.getZExtValue(), intType)
-        .getResult();
-  };
-
-  Value xAbsBits =
-      b.create<arith::AndIOp>(xAsInt, createConstant(~signBitMask));
-  Value xIsNan = b.create<arith::CmpIOp>(arith::CmpIPredicate::ugt, xAbsBits,
-                                         createConstant(expBitsMask));
-
-  int destMantissaBits = adaptor.getMantissaBits();
-  if (destMantissaBits < static_cast<int>(srcMantissaBits)) {
-    // Last remaining mantissa bit.
-    APInt lastMantissaBitMask(nbits, 1);
-    lastMantissaBitMask <<= srcMantissaBits - destMantissaBits;
-
-    // Compute rounding bias for round-to-nearest with ties to even.  This is
-    // equal to a base value of 0111... plus one bit if the last remaining
-    // mantissa bit is 1.
-    APInt baseRoundingBias = lastMantissaBitMask.lshr(1) - 1;
-
-    Value mantissaDiff = b.create<arith::ConstantIntOp>(
-        srcMantissaBits - destMantissaBits, intType);
-    Value highestMantissaMaskVal = createConstant(lastMantissaBitMask);
-    Value baseRoundingBiasVal = createConstant(baseRoundingBias);
-    Value xLastMantissaBit = b.create<arith::ShRUIOp>(
-        b.create<arith::AndIOp>(xAsInt, highestMantissaMaskVal), mantissaDiff);
-    Value xRoundingBias =
-        b.create<arith::AddIOp>(xLastMantissaBit, baseRoundingBiasVal);
-
-    // Add rounding bias, and mask out truncated bits.  Note that the case
-    // where adding the rounding bias overflows into the exponent bits is
-    // correct; the non-masked mantissa bits will all be zero, and the
-    // exponent will be incremented by one.
-    APInt truncationMask = ~(lastMantissaBitMask - 1);
-    Value xRounded = b.create<arith::AddIOp>(xAsInt, xRoundingBias);
-    xAsInt = b.create<arith::AndIOp>(xRounded, createConstant(truncationMask));
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> /*argTypes*/,
+    mhlo::ReducePrecisionOp::Adaptor adaptor,
+    ArrayRef<NamedAttribute> /*attributes*/, OpBuilder* builder) {
+  // TODO(b/373787166): This should actually be a folder, but JAX is adding
+  // no-op ReducePrecision ops to workaround an issue with some simplifications
+  // allowed with the xla_allow_excess_precision flag. We would already fold
+  // these ops away before they reach HLO. Folding them away at emission time
+  // keeps the workaround intact.
+  if (HasDefaultExponentBits(resultTypes[0], adaptor.getExponentBits()) &&
+      HasDefaultMantissaBits(resultTypes[0], adaptor.getMantissaBits())) {
+    return adaptor.getOperand();
   }
-
-  int destExponentBits = adaptor.getExponentBits();
-  if (destExponentBits < srcExponentBits) {
-    // An exponent of 2^(n-1)-1 -- that is, 0111... with the zero in the most-
-    // significant bit -- is equal to 1.0f for all exponent sizes.  Adding
-    // 2^(n-1)-1 to this gives us the highest non-infinite exponent for a bit-
-    // size of n, and subtracting 2^(n-1)-1 from this gives us the lowest'
-    // exponent (corresponding to 0.0f).
-    //
-    // Thus, the f32 exponent corresponding to the highest non-infinite
-    // exponent for a bit size of n is (2^7-1) + 2^(n-1)-1, and the f32
-    // exponent corresponding to the lowest exponent for a bit size of n is
-    // (2^7-1) - 2^(n-1)-1.
-    //
-    // Note that we have already checked that exponents_bits >= 1.
-    APInt exponentBias(nbits, 1);
-    exponentBias = (exponentBias << (srcExponentBits - 1)) - 1;
-
-    APInt reducedExponentBias(nbits, 1);
-    reducedExponentBias = (reducedExponentBias << (destExponentBits - 1)) - 1;
-
-    APInt reducedMaxExponent = exponentBias + reducedExponentBias;
-    APInt reducedMinExponent = exponentBias - reducedExponentBias;
-
-    // Do we overflow or underflow?
-    Value xExponent =
-        b.create<arith::AndIOp>(xAsInt, createConstant(expBitsMask));
-    Value xOverflows = b.create<arith::CmpIOp>(
-        arith::CmpIPredicate::ugt, xExponent,
-        createConstant(reducedMaxExponent << srcMantissaBits));
-    Value xUnderflows = b.create<arith::CmpIOp>(
-        arith::CmpIPredicate::ule, xExponent,
-        createConstant(reducedMinExponent << srcMantissaBits));
-
-    // Compute appropriately-signed values of zero and infinity.
-    Value xSignedZero =
-        b.create<arith::AndIOp>(xAsInt, createConstant(signBitMask));
-    Value xSignedInf =
-        b.create<arith::OrIOp>(xSignedZero, createConstant(expBitsMask));
-
-    // Force to zero or infinity if overflow or underflow.  (Note that this
-    // truncates all denormal values to zero, rather than rounding them.)
-    xAsInt = b.create<arith::SelectOp>(xOverflows, xSignedInf, xAsInt);
-    xAsInt = b.create<arith::SelectOp>(xUnderflows, xSignedZero, xAsInt);
-  }
-
-  Value result = b.create<arith::BitcastOp>(floatType, xAsInt);
-  return b.create<arith::SelectOp>(xIsNan, adaptor.getOperand(), result);
+  return reducePrecision<arith::BitcastOp>(loc, adaptor.getOperand(),
+                                           adaptor.getExponentBits(),
+                                           adaptor.getMantissaBits(), builder);
 }
 
 template <>
 inline Value mapMhloOpToStdScalarOp<mhlo::CopyOp>(
     Location /*loc*/, ArrayRef<Type> /*ResultTypes*/,
     ArrayRef<Type> /*argTypes*/, mhlo::CopyOp::Adaptor adaptor,
-    OpBuilder* /*b*/) {
+    ArrayRef<NamedAttribute> /*attributes*/, OpBuilder* /*b*/) {
   return adaptor.getOperands().front();
 }
 
 template <>
 inline Value mapMhloOpToStdScalarOp<mhlo::ComplexOp>(
     Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
-    mhlo::ComplexOp::Adaptor adaptor, OpBuilder* b) {
+    mhlo::ComplexOp::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
   return MapMhloOpToScalarOpImpl<complex::CreateOp>{}(
-      loc, resultTypes, argTypes, adaptor.getOperands(), b);
+      loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
 }
 
 template <>
-inline Value mapMhloOpToStdScalarOp<mhlo::MaxOp>(Location loc,
-                                                 ArrayRef<Type> resultTypes,
-                                                 ArrayRef<Type> argTypes,
-                                                 mhlo::MaxOp::Adaptor adaptor,
-                                                 OpBuilder* b) {
+inline Value mapMhloOpToStdScalarOp<mhlo::MaxOp>(
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
+    mhlo::MaxOp::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
   ValueRange operands = adaptor.getOperands();
   Value lhs = operands.front();
   Type complexTy = lhs.getType();
@@ -612,7 +626,7 @@ inline Value mapMhloOpToStdScalarOp<mhlo::MaxOp>(Location loc,
     return MapMhloOpToScalarOpImpl<IsFloatType, arith::MaximumFOp,
                                    IsSignedIntegerType, arith::MaxSIOp,
                                    IsUnsignedIntegerType, arith::MaxUIOp>{}(
-        loc, resultTypes, argTypes, adaptor.getOperands(), b);
+        loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
 
   assert(resultTypes.size() == 1 && "MaxOp should return a single result");
   assert(operands.size() == 2 && "MaxOp should take exactly two arguments");
@@ -621,15 +635,14 @@ inline Value mapMhloOpToStdScalarOp<mhlo::MaxOp>(Location loc,
   // 'max' performs a lexicographical comparison for the (real, imaginary) pair.
   Value cond = cmpComplex(loc, lhs, rhs, ComparisonDirection::GE, b);
 
-  return b->create<arith::SelectOp>(loc, cond, lhs, rhs).getResult();
+  return arith::SelectOp::create(*b, loc, cond, lhs, rhs).getResult();
 }
 
 template <>
-inline Value mapMhloOpToStdScalarOp<mhlo::MinOp>(Location loc,
-                                                 ArrayRef<Type> resultTypes,
-                                                 ArrayRef<Type> argTypes,
-                                                 mhlo::MinOp::Adaptor adaptor,
-                                                 OpBuilder* b) {
+inline Value mapMhloOpToStdScalarOp<mhlo::MinOp>(
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
+    mhlo::MinOp::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
   ValueRange operands = adaptor.getOperands();
   Value lhs = operands.front();
   Type complexTy = lhs.getType();
@@ -638,7 +651,7 @@ inline Value mapMhloOpToStdScalarOp<mhlo::MinOp>(Location loc,
     return MapMhloOpToScalarOpImpl<IsFloatType, arith::MinimumFOp,
                                    IsSignedIntegerType, arith::MinSIOp,
                                    IsUnsignedIntegerType, arith::MinUIOp>{}(
-        loc, resultTypes, argTypes, adaptor.getOperands(), b);
+        loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
 
   assert(resultTypes.size() == 1 && "MinOp should return a single result");
   assert(operands.size() == 2 && "MinOp should take exactly two arguments");
@@ -647,32 +660,74 @@ inline Value mapMhloOpToStdScalarOp<mhlo::MinOp>(Location loc,
   // 'min' performs a lexicographical comparison for the (real, imaginary) pair.
   Value cond = cmpComplex(loc, lhs, rhs, ComparisonDirection::LE, b);
 
-  return b->create<arith::SelectOp>(loc, cond, lhs, rhs).getResult();
+  return arith::SelectOp::create(*b, loc, cond, lhs, rhs).getResult();
 }
 
 template <>
-inline Value mapMhloOpToStdScalarOp<mhlo::RealOp>(Location loc,
-                                                  ArrayRef<Type> resultTypes,
-                                                  ArrayRef<Type> argTypes,
-                                                  mhlo::RealOp::Adaptor adaptor,
-                                                  OpBuilder* b) {
+inline Value mapMhloOpToStdScalarOp<mhlo::RealOp>(
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
+    mhlo::RealOp::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
   if (!mlir::isa<ComplexType>(adaptor.getOperand().getType()))
     return adaptor.getOperand();
-  return MapMhloOpToScalarOpImpl<complex::ReOp>{}(loc, resultTypes, argTypes,
-                                                  adaptor.getOperands(), b);
+  return MapMhloOpToScalarOpImpl<complex::ReOp>{}(
+      loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
 }
 
 template <>
-inline Value mapMhloOpToStdScalarOp<mhlo::ImagOp>(Location loc,
-                                                  ArrayRef<Type> resultTypes,
-                                                  ArrayRef<Type> argTypes,
-                                                  mhlo::ImagOp::Adaptor adaptor,
-                                                  OpBuilder* b) {
+inline Value mapMhloOpToStdScalarOp<mhlo::ImagOp>(
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
+    mhlo::ImagOp::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
   if (!mlir::isa<ComplexType>(adaptor.getOperand().getType()))
-    return b->create<arith::ConstantOp>(
-        loc, b->getZeroAttr(adaptor.getOperand().getType()));
-  return MapMhloOpToScalarOpImpl<complex::ImOp>{}(loc, resultTypes, argTypes,
-                                                  adaptor.getOperands(), b);
+    return arith::ConstantOp::create(
+        *b, loc, b->getZeroAttr(adaptor.getOperand().getType()));
+  return MapMhloOpToScalarOpImpl<complex::ImOp>{}(
+      loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
+}
+
+template <>
+inline Value mapMhloOpToStdScalarOp<mhlo::Exp2Op>(
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
+    mhlo::Exp2Op::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
+  Type type = adaptor.getOperand().getType();
+  if (!mlir::isa<ComplexType>(type)) {
+    return MapMhloOpToScalarOpImpl<IsFloatType, math::Exp2Op>{}(
+        loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
+  }
+  auto complexTy = mlir::cast<ComplexType>(type);
+  auto floatTy = complexTy.getElementType();
+  Value ln2 =
+      arith::ConstantOp::create(*b, loc, b->getFloatAttr(floatTy, M_LN2));
+  Value re = complex::ReOp::create(*b, loc, floatTy, adaptor.getOperand());
+  Value im = complex::ImOp::create(*b, loc, floatTy, adaptor.getOperand());
+  Value scaled = complex::CreateOp::create(
+      *b, loc, complexTy, arith::MulFOp::create(*b, loc, re, ln2),
+      arith::MulFOp::create(*b, loc, im, ln2));
+  return complex::ExpOp::create(*b, loc, scaled);
+}
+
+template <>
+inline Value mapMhloOpToStdScalarOp<mhlo::Log2Op>(
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
+    mhlo::Log2Op::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
+  Type type = adaptor.getOperand().getType();
+  if (!mlir::isa<ComplexType>(type)) {
+    return MapMhloOpToScalarOpImpl<IsFloatType, math::Log2Op>{}(
+        loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
+  }
+  auto complexTy = mlir::cast<ComplexType>(type);
+  auto floatTy = complexTy.getElementType();
+  Value logZ = complex::LogOp::create(*b, loc, adaptor.getOperand());
+  Value oneOverLn2 =
+      arith::ConstantOp::create(*b, loc, b->getFloatAttr(floatTy, M_LOG2E));
+  Value re = complex::ReOp::create(*b, loc, floatTy, logZ);
+  Value im = complex::ImOp::create(*b, loc, floatTy, logZ);
+  return complex::CreateOp::create(
+      *b, loc, complexTy, arith::MulFOp::create(*b, loc, re, oneOverLn2),
+      arith::MulFOp::create(*b, loc, im, oneOverLn2));
 }
 
 // 'target_types' is the unconverted type (signed or unsigned if integer),
@@ -680,6 +735,7 @@ inline Value mapMhloOpToStdScalarOp<mhlo::ImagOp>(Location loc,
 inline Value mapConvertOpToStdScalarOp(Location loc, ArrayRef<Type> targetTypes,
                                        ArrayRef<Type> resultTypes,
                                        ArrayRef<Type> argTypes, ValueRange args,
+                                       ArrayRef<NamedAttribute> attributes,
                                        OpBuilder* b) {
   assert(targetTypes.size() == 1 && "ConvertOp should return a single result");
   assert(resultTypes.size() == 1 && "ConvertOp should return a single result");
@@ -695,12 +751,12 @@ inline Value mapConvertOpToStdScalarOp(Location loc, ArrayRef<Type> targetTypes,
   if (IsUnsignedIntegerType{}(sourceType) &&
       mlir::arith::UIToFPOp::areCastCompatible(convertedSourceType,
                                                targetType)) {
-    return b->create<mlir::arith::UIToFPOp>(loc, resultTypes, args,
-                                            std::nullopt);
+    return mlir::arith::UIToFPOp::create(*b, loc, resultTypes, args,
+                                         attributes);
   }
   if (mlir::arith::SIToFPOp::areCastCompatible(sourceType, targetType)) {
-    return b->create<mlir::arith::SIToFPOp>(loc, resultTypes, args,
-                                            std::nullopt);
+    return mlir::arith::SIToFPOp::create(*b, loc, resultTypes, args,
+                                         attributes);
   }
   if (mlir::isa<FloatType>(sourceType) && mlir::isa<FloatType>(targetType)) {
     if (sourceType == targetType) {
@@ -713,30 +769,35 @@ inline Value mapConvertOpToStdScalarOp(Location loc, ArrayRef<Type> targetTypes,
       // There are no ops for conversions between floats of equal width, so we
       // go through the next-larger standard type.
       sourceType = dst.getWidth() == 8 ? b->getF16Type() : b->getF32Type();
-      src = b->create<mlir::arith::ExtFOp>(loc, sourceType, src).getResult();
+      mlir::Type extType = sourceType;
+      if (mlir::ShapedType shapedType =
+              mlir::dyn_cast<mlir::ShapedType>(src.getType())) {
+        extType = shapedType.clone(extType);
+      }
+      src = mlir::arith::ExtFOp::create(*b, loc, extType, src).getResult();
     }
     assert(sourceType.getIntOrFloatBitWidth() != dst.getWidth());
 
     if (sourceType.getIntOrFloatBitWidth() > dst.getWidth()) {
-      return b->create<mlir::arith::TruncFOp>(loc, resultTypes, src,
-                                              std::nullopt);
+      return mlir::arith::TruncFOp::create(*b, loc, resultTypes, src,
+                                           attributes);
     }
-    return b->create<mlir::arith::ExtFOp>(loc, resultTypes, src, std::nullopt);
+    return mlir::arith::ExtFOp::create(*b, loc, resultTypes, src, attributes);
   }
   if (targetType.isInteger(/*width=*/1)) {
     // When casting to bool, we need to compare whether the value is equal to
     // zero.
     if (sourceType.isSignlessInteger() || sourceType.isUnsignedInteger()) {
-      Value zeroIntval = b->create<arith::ConstantOp>(
-          loc, b->getZeroAttr(args.front().getType()));
-      return b->create<mlir::arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
-                                            args.front(), zeroIntval);
+      Value zeroIntval = arith::ConstantOp::create(
+          *b, loc, b->getZeroAttr(args.front().getType()));
+      return mlir::arith::CmpIOp::create(*b, loc, arith::CmpIPredicate::ne,
+                                         args.front(), zeroIntval);
     }
     if (mlir::isa<FloatType>(sourceType)) {
-      Value zero = b->create<arith::ConstantOp>(
-          loc, b->getZeroAttr(args.front().getType()));
-      return b->create<mlir::arith::CmpFOp>(loc, arith::CmpFPredicate::UNE,
-                                            args.front(), zero);
+      Value zero = arith::ConstantOp::create(
+          *b, loc, b->getZeroAttr(args.front().getType()));
+      return mlir::arith::CmpFOp::create(*b, loc, arith::CmpFPredicate::UNE,
+                                         args.front(), zero);
     }
   }
   if (mlir::isa<IntegerType>(sourceType) &&
@@ -744,17 +805,17 @@ inline Value mapConvertOpToStdScalarOp(Location loc, ArrayRef<Type> targetTypes,
     auto src = mlir::cast<IntegerType>(sourceType);
     auto res = mlir::cast<IntegerType>(targetType);
     if (src.getWidth() > res.getWidth()) {
-      return b->create<mlir::arith::TruncIOp>(loc, resultTypes, args,
-                                              std::nullopt);
+      return mlir::arith::TruncIOp::create(*b, loc, resultTypes, args,
+                                           attributes);
     }
     if (src.getWidth() < res.getWidth()) {
       // Special case boolean values, so they get casted to `1` instead of `-1`.
       if (IsUnsignedIntegerType{}(src)) {
-        return b->create<mlir::arith::ExtUIOp>(loc, resultTypes, args,
-                                               std::nullopt);
+        return mlir::arith::ExtUIOp::create(*b, loc, resultTypes, args,
+                                            attributes);
       }
-      return b->create<mlir::arith::ExtSIOp>(loc, resultTypes, args,
-                                             std::nullopt);
+      return mlir::arith::ExtSIOp::create(*b, loc, resultTypes, args,
+                                          attributes);
     }
     // No conversion is needed for the same width integers
     return args.front();
@@ -762,13 +823,13 @@ inline Value mapConvertOpToStdScalarOp(Location loc, ArrayRef<Type> targetTypes,
   if (targetType.isUnsignedInteger() &&
       mlir::arith::FPToUIOp::areCastCompatible(convertedSourceType,
                                                targetType)) {
-    return b->create<mlir::arith::FPToUIOp>(loc, resultTypes, args,
-                                            std::nullopt);
+    return mlir::arith::FPToUIOp::create(*b, loc, resultTypes, args,
+                                         attributes);
   }
   if (mlir::arith::FPToSIOp::areCastCompatible(convertedSourceType,
                                                targetType)) {
-    return b->create<mlir::arith::FPToSIOp>(loc, resultTypes, args,
-                                            std::nullopt);
+    return mlir::arith::FPToSIOp::create(*b, loc, resultTypes, args,
+                                         attributes);
   }
   if (mlir::isa<ComplexType>(targetType)) {
     Type targetElementType =
@@ -785,34 +846,36 @@ inline Value mapConvertOpToStdScalarOp(Location loc, ArrayRef<Type> targetTypes,
       assert(!mlir::isa<ComplexType>(sourceElementType) &&
              "elements of complex numbers should not be complex");
       Value sourceReal =
-          b->create<mlir::complex::ReOp>(loc, sourceElementType, args.front());
-      targetReal =
-          mapConvertOpToStdScalarOp(loc, targetElementType, targetElementType,
-                                    sourceElementType, sourceReal, b);
+          mlir::complex::ReOp::create(*b, loc, sourceElementType, args.front());
+      targetReal = mapConvertOpToStdScalarOp(
+          loc, targetElementType, targetElementType, sourceElementType,
+          sourceReal, attributes, b);
       Value sourceImag =
-          b->create<mlir::complex::ImOp>(loc, sourceElementType, args.front());
-      targetImag =
-          mapConvertOpToStdScalarOp(loc, targetElementType, targetElementType,
-                                    sourceElementType, sourceImag, b);
+          mlir::complex::ImOp::create(*b, loc, sourceElementType, args.front());
+      targetImag = mapConvertOpToStdScalarOp(
+          loc, targetElementType, targetElementType, sourceElementType,
+          sourceImag, attributes, b);
     } else {
       // We are converting from real (float, integer, etc.) type, convert the
       // real part and set the imaginary part to 0.
-      targetReal = mapConvertOpToStdScalarOp(
-          loc, targetElementType, targetElementType, argTypes, args, b);
-      targetImag = b->create<mlir::arith::ConstantOp>(
-          loc, b->getFloatAttr(targetElementType, 0.0));
+      targetReal =
+          mapConvertOpToStdScalarOp(loc, targetElementType, targetElementType,
+                                    argTypes, args, attributes, b);
+      targetImag = mlir::arith::ConstantOp::create(
+          *b, loc, b->getFloatAttr(targetElementType, 0.0));
     }
-    return b->create<mlir::complex::CreateOp>(loc, targetType, targetReal,
-                                              targetImag);
+    return mlir::complex::CreateOp::create(*b, loc, targetType, targetReal,
+                                           targetImag);
   }
   if (auto sourceComplexType = mlir::dyn_cast<ComplexType>(sourceType)) {
     auto sourceElementType = sourceComplexType.getElementType();
     // When converting from complex to a non-complex type, we take just the real
     // part of the complex number.
     Value sourceReal =
-        b->create<mlir::complex::ReOp>(loc, sourceElementType, args.front());
+        mlir::complex::ReOp::create(*b, loc, sourceElementType, args.front());
     return mapConvertOpToStdScalarOp(loc, targetTypes, resultTypes,
-                                     sourceElementType, sourceReal, b);
+                                     sourceElementType, sourceReal, attributes,
+                                     b);
   }
   return nullptr;
 }
@@ -823,23 +886,23 @@ inline Value mapConvertOpToStdScalarOp(Location loc, ArrayRef<Type> targetTypes,
 template <>
 inline Value mapMhloOpToStdScalarOp<mhlo::BitcastConvertOp>(
     Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
-    mhlo::BitcastConvertOp::Adaptor adaptor, OpBuilder* b) {
+    mhlo::BitcastConvertOp::Adaptor adaptor,
+    ArrayRef<NamedAttribute> attributes, OpBuilder* b) {
   Type argType = getElementTypeOrSelf(argTypes.front());
   Type resultType = getElementTypeOrSelf(resultTypes.front());
 
   if (resultType.getIntOrFloatBitWidth() != argType.getIntOrFloatBitWidth())
     return nullptr;
 
-  return b->create<mlir::arith::BitcastOp>(loc, resultTypes,
-                                           adaptor.getOperands());
+  return mlir::arith::BitcastOp::create(*b, loc, resultTypes,
+                                        adaptor.getOperands(), attributes);
 }
 
 template <>
-inline Value mapMhloOpToStdScalarOp<mhlo::DotOp>(Location loc,
-                                                 ArrayRef<Type> resultTypes,
-                                                 ArrayRef<Type> argTypes,
-                                                 mhlo::DotOp::Adaptor adaptor,
-                                                 OpBuilder* b) {
+inline Value mapMhloOpToStdScalarOp<mhlo::DotOp>(
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
+    mhlo::DotOp::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
   // Dot Op converter from lhlo to affine only accepts float and integer types.
   const auto& lhs = adaptor.getOperands()[0];
   const auto& rhs = adaptor.getOperands()[1];
@@ -848,16 +911,16 @@ inline Value mapMhloOpToStdScalarOp<mhlo::DotOp>(Location loc,
   if (mlir::isa<FloatType>(elementType)) {
     Value floatMul =
         MapMhloOpToScalarOpImpl<IsFloatType, ::mlir::arith::MulFOp>{}(
-            loc, resultTypes, argTypes, {lhs, rhs}, b);
+            loc, resultTypes, argTypes, {lhs, rhs}, attributes, b);
     return MapMhloOpToScalarOpImpl<IsFloatType, ::mlir::arith::AddFOp>{}(
-        loc, resultTypes, argTypes, {floatMul, result}, b);
+        loc, resultTypes, argTypes, {floatMul, result}, attributes, b);
   }
   if (mlir::isa<IntegerType>(elementType)) {
     Value intMul =
         MapMhloOpToScalarOpImpl<IsAnyIntegerType, ::mlir::arith::MulIOp>{}(
-            loc, resultTypes, argTypes, {lhs, rhs}, b);
+            loc, resultTypes, argTypes, {lhs, rhs}, attributes, b);
     return MapMhloOpToScalarOpImpl<IsAnyIntegerType, ::mlir::arith::AddIOp>{}(
-        loc, resultTypes, argTypes, {intMul, result}, b);
+        loc, resultTypes, argTypes, {intMul, result}, attributes, b);
   }
   return nullptr;
 }
@@ -865,15 +928,16 @@ inline Value mapMhloOpToStdScalarOp<mhlo::DotOp>(Location loc,
 template <>
 inline Value mapMhloOpToStdScalarOp<mhlo::IsFiniteOp>(
     Location loc, ArrayRef<Type> /*ResultTypes*/, ArrayRef<Type> /*argTypes*/,
-    mhlo::IsFiniteOp::Adaptor adaptor, OpBuilder* b) {
+    mhlo::IsFiniteOp::Adaptor adaptor, ArrayRef<NamedAttribute> /*attributes*/,
+    OpBuilder* b) {
   if (mlir::isa<FloatType>(adaptor.getX().getType())) {
     auto posInf = APFloat::getInf(
         mlir::cast<FloatType>(adaptor.getX().getType()).getFloatSemantics());
-    auto constPosInf = b->create<arith::ConstantOp>(
-        loc, b->getFloatAttr(adaptor.getX().getType(), posInf));
-    Value absX = b->create<::mlir::math::AbsFOp>(loc, adaptor.getX());
-    return b->create<::mlir::arith::CmpFOp>(loc, arith::CmpFPredicate::ONE,
-                                            absX, constPosInf);
+    auto constPosInf = arith::ConstantOp::create(
+        *b, loc, b->getFloatAttr(adaptor.getX().getType(), posInf));
+    Value absX = ::mlir::math::AbsFOp::create(*b, loc, adaptor.getX());
+    return ::mlir::arith::CmpFOp::create(*b, loc, arith::CmpFPredicate::ONE,
+                                         absX, constPosInf);
   }
   return nullptr;
 }
@@ -904,9 +968,9 @@ struct CompareSelectOpToStdScalarOp<SupportedType, StdCompareOp, Predicate,
       auto predicate = getCmpPredicate<Predicate>(
           comparisonDirection, !elementType.isUnsignedInteger());
       assert(predicate.has_value() && "expected valid comparison direction");
-      auto cmp = b->template create<StdCompareOp>(loc, predicate.getValue(),
-                                                  args[0], args[1]);
-      return b->create<::mlir::arith::SelectOp>(loc, cmp, args[0], args[1]);
+      auto cmp =
+          StdCompareOp::create(*b, loc, predicate.getValue(), args[0], args[1]);
+      return ::mlir::arith::SelectOp::create(*b, loc, cmp, args[0], args[1]);
     }
     return CompareSelectOpToStdScalarOp<Args...>::map(
         loc, comparisonDirection, resultTypes, argTypes, args, b);
@@ -917,79 +981,79 @@ inline Value mhloAlwaysPropagateNaN(Value v, ValueRange args, Location loc,
                                     OpBuilder* b) {
   Type elementType = getElementTypeOrSelf(args.front().getType());
   if (auto floatType = mlir::dyn_cast<FloatType>(elementType)) {
-    Value isnan = b->create<mlir::arith::CmpFOp>(loc, arith::CmpFPredicate::UNO,
-                                                 args[0], args[1]);
+    Value isnan = mlir::arith::CmpFOp::create(
+        *b, loc, arith::CmpFPredicate::UNO, args[0], args[1]);
 
     auto nanApfloat = APFloat::getQNaN(floatType.getFloatSemantics());
     Value nan = getConstantOrSplat(b, loc, args[0].getType(),
                                    b->getFloatAttr(floatType, nanApfloat));
-    v = b->create<mlir::arith::SelectOp>(loc, isnan, nan, v);
+    v = mlir::arith::SelectOp::create(*b, loc, isnan, nan, v);
   }
   return v;
 }
 
 template <>
-inline Value mapMhloOpToStdScalarOp<mhlo::ClampOp>(Location loc,
-                                                   ArrayRef<Type> resultTypes,
-                                                   ArrayRef<Type> argTypes,
-                                                   mhlo::ClampOp::Adaptor op,
-                                                   OpBuilder* b) {
+inline Value mapMhloOpToStdScalarOp<mhlo::ClampOp>(
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
+    mhlo::ClampOp::Adaptor op, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
   // clamp(lb, x, ub) = min(max(lb, x), ub)
   Value maxLbX = mapMhloOpToStdScalarOp<mhlo::MaxOp>(
-      loc, resultTypes, argTypes, ValueRange{op.getMin(), op.getOperand()}, b);
-  return mapMhloOpToStdScalarOp<mhlo::MinOp>(
-      loc, resultTypes, argTypes, ValueRange{maxLbX, op.getMax()}, b);
+      loc, resultTypes, argTypes, ValueRange{op.getMin(), op.getOperand()},
+      attributes, b);
+  return mapMhloOpToStdScalarOp<mhlo::MinOp>(loc, resultTypes, argTypes,
+                                             ValueRange{maxLbX, op.getMax()},
+                                             attributes, b);
 }
 
 template <typename U, typename S>
-inline Value makeSafeIntDiv(ImplicitLocOpBuilder& lb, Type originalType,
+inline Value makeSafeIntDiv(ImplicitLocOpBuilder& lb, bool isUnsigned,
                             Value lhs, Value rhs, Value returnedOnZero,
                             Value returnedOnSignedOverflow) {
   Type type = lhs.getType();
   auto elementType = mlir::cast<IntegerType>(getElementTypeOrSelf(type));
-  Value zero = lb.create<arith::ConstantOp>(lb.getZeroAttr(type));
+  Value zero = arith::ConstantOp::create(lb, lb.getZeroAttr(type));
   auto makeConstant = [&](const APInt& i) {
     return getConstantOrSplat(&lb, lb.getLoc(), type,
                               lb.getIntegerAttr(elementType, i));
   };
   Value one = makeConstant(APInt(elementType.getWidth(), 1));
   Value rhsIsZero =
-      lb.create<arith::CmpIOp>(arith::CmpIPredicate::eq, rhs, zero);
+      arith::CmpIOp::create(lb, arith::CmpIPredicate::eq, rhs, zero);
 
   // For unsigned just set the divisor to 1 when it would be 0.
-  if (originalType.isUnsignedInteger()) {
-    Value safeRhs = lb.create<arith::SelectOp>(rhsIsZero, one, rhs);
-    Value safeDiv = lb.create<U>(lhs, safeRhs);
-    return lb.create<arith::SelectOp>(rhsIsZero, returnedOnZero, safeDiv);
+  if (isUnsigned) {
+    Value safeRhs = arith::SelectOp::create(lb, rhsIsZero, one, rhs);
+    Value safeDiv = U::create(lb, lhs, safeRhs);
+    return arith::SelectOp::create(lb, rhsIsZero, returnedOnZero, safeDiv);
   }
 
   // For signed also check for INT_MIN / -1.
   Value smin = makeConstant(APInt::getSignedMinValue(elementType.getWidth()));
   Value lhsIsSmin =
-      lb.create<arith::CmpIOp>(arith::CmpIPredicate::eq, lhs, smin);
+      arith::CmpIOp::create(lb, arith::CmpIPredicate::eq, lhs, smin);
   Value minusOne = makeConstant(APInt::getAllOnes(elementType.getWidth()));
   Value rhsIsMinusOne =
-      lb.create<arith::CmpIOp>(arith::CmpIPredicate::eq, rhs, minusOne);
-  Value hasIntMinOverflow = lb.create<arith::AndIOp>(lhsIsSmin, rhsIsMinusOne);
-  Value rhsIsUnsafe = lb.create<arith::OrIOp>(rhsIsZero, hasIntMinOverflow);
-  Value safeRhs = lb.create<arith::SelectOp>(rhsIsUnsafe, one, rhs);
-  Value safeDiv = lb.create<S>(lhs, safeRhs);
-  Value safeSmin = lb.create<arith::SelectOp>(
-      hasIntMinOverflow, returnedOnSignedOverflow, safeDiv);
-  return lb.create<arith::SelectOp>(rhsIsZero, returnedOnZero, safeSmin);
+      arith::CmpIOp::create(lb, arith::CmpIPredicate::eq, rhs, minusOne);
+  Value hasIntMinOverflow = arith::AndIOp::create(lb, lhsIsSmin, rhsIsMinusOne);
+  Value rhsIsUnsafe = arith::OrIOp::create(lb, rhsIsZero, hasIntMinOverflow);
+  Value safeRhs = arith::SelectOp::create(lb, rhsIsUnsafe, one, rhs);
+  Value safeDiv = S::create(lb, lhs, safeRhs);
+  Value safeSmin = arith::SelectOp::create(lb, hasIntMinOverflow,
+                                           returnedOnSignedOverflow, safeDiv);
+  return arith::SelectOp::create(lb, rhsIsZero, returnedOnZero, safeSmin);
 }
 
 template <>
-inline Value mapMhloOpToStdScalarOp<mhlo::DivOp>(Location loc,
-                                                 ArrayRef<Type> resultTypes,
-                                                 ArrayRef<Type> argTypes,
-                                                 mhlo::DivOp::Adaptor adaptor,
-                                                 OpBuilder* b) {
+inline Value mapMhloOpToStdScalarOp<mhlo::DivOp>(
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
+    mhlo::DivOp::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
   Type originalType = getElementTypeOrSelf(argTypes.front());
   if (mlir::isa<ComplexType, FloatType>(originalType)) {
     return MapMhloOpToScalarOpImpl<IsFloatType, arith::DivFOp, IsComplexType,
-                                   complex::DivOp>{}(loc, resultTypes, argTypes,
-                                                     adaptor.getOperands(), b);
+                                   complex::DivOp>{}(
+        loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
   }
 
   // Integer division overflow behavior:
@@ -1006,21 +1070,20 @@ inline Value mapMhloOpToStdScalarOp<mhlo::DivOp>(Location loc,
   Value minusOne = makeConstant(APInt::getAllOnes(elementType.getWidth()));
   Value smin = makeConstant(APInt::getSignedMinValue(elementType.getWidth()));
   return makeSafeIntDiv<arith::DivUIOp, arith::DivSIOp>(
-      lb, originalType, adaptor.getLhs(), adaptor.getRhs(),
+      lb, originalType.isUnsignedInteger(), adaptor.getLhs(), adaptor.getRhs(),
       /*returnedOnZero=*/minusOne,
       /*returnedOnSignedOverflow=*/smin);
 }
 
 template <>
-inline Value mapMhloOpToStdScalarOp<mhlo::RemOp>(Location loc,
-                                                 ArrayRef<Type> resultTypes,
-                                                 ArrayRef<Type> argTypes,
-                                                 mhlo::RemOp::Adaptor adaptor,
-                                                 OpBuilder* b) {
+inline Value mapMhloOpToStdScalarOp<mhlo::RemOp>(
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
+    mhlo::RemOp::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
   Type originalType = getElementTypeOrSelf(argTypes.front());
   if (mlir::isa<ComplexType, FloatType>(originalType)) {
     return MapMhloOpToScalarOpImpl<IsFloatType, arith::RemFOp>{}(
-        loc, resultTypes, argTypes, adaptor.getOperands(), b);
+        loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
   }
 
   // Integer remainder overflow behavior:
@@ -1029,41 +1092,39 @@ inline Value mapMhloOpToStdScalarOp<mhlo::RemOp>(Location loc,
   // INT_SMIN %s -1 = 0
   ImplicitLocOpBuilder lb(loc, *b);
   Type type = adaptor.getLhs().getType();
-  Value zero = lb.create<arith::ConstantOp>(lb.getZeroAttr(type));
+  Value zero = arith::ConstantOp::create(lb, lb.getZeroAttr(type));
   return makeSafeIntDiv<arith::RemUIOp, arith::RemSIOp>(
-      lb, originalType, adaptor.getLhs(), adaptor.getRhs(),
+      lb, originalType.isUnsignedInteger(), adaptor.getLhs(), adaptor.getRhs(),
       /*returnedOnZero=*/adaptor.getLhs(),
       /*returnedOnSignedOverflow=*/zero);
 }
 
 template <>
-inline Value mapMhloOpToStdScalarOp<mhlo::NegOp>(Location loc,
-                                                 ArrayRef<Type> resultTypes,
-                                                 ArrayRef<Type> argTypes,
-                                                 mhlo::NegOp::Adaptor adaptor,
-                                                 OpBuilder* b) {
+inline Value mapMhloOpToStdScalarOp<mhlo::NegOp>(
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
+    mhlo::NegOp::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
   Type elementType = getElementTypeOrSelf(adaptor.getOperand().getType());
   if (mlir::isa<ComplexType, FloatType>(elementType)) {
     return MapMhloOpToScalarOpImpl<IsFloatType, ::mlir::arith::NegFOp,
                                    IsComplexType, ::mlir::complex::NegOp>{}(
-        loc, resultTypes, argTypes, adaptor.getOperands(), b);
+        loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
   }
   if (mlir::isa<IntegerType>(elementType)) {
     // lmhlo.neg(x, result) -> result = sub(0, x)
     Value lhs = adaptor.getOperand();
     Value zeroIntval =
-        b->create<arith::ConstantOp>(loc, b->getZeroAttr(lhs.getType()));
-    return b->create<ScalarIOp<mhlo::SubtractOp>>(loc, zeroIntval, lhs);
+        arith::ConstantOp::create(*b, loc, b->getZeroAttr(lhs.getType()));
+    return ScalarIOp<mhlo::SubtractOp>::create(*b, loc, zeroIntval, lhs);
   }
   return nullptr;
 }
 
 template <>
-inline Value mapMhloOpToStdScalarOp<mhlo::NotOp>(Location loc,
-                                                 ArrayRef<Type> /*ResultTypes*/,
-                                                 ArrayRef<Type> /*argTypes*/,
-                                                 mhlo::NotOp::Adaptor adaptor,
-                                                 OpBuilder* b) {
+inline Value mapMhloOpToStdScalarOp<mhlo::NotOp>(
+    Location loc, ArrayRef<Type> /*ResultTypes*/, ArrayRef<Type> /*argTypes*/,
+    mhlo::NotOp::Adaptor adaptor, ArrayRef<NamedAttribute> /*attributes*/,
+    OpBuilder* b) {
   Type elementType = getElementTypeOrSelf(adaptor.getOperand().getType());
   if (auto integerType = mlir::dyn_cast<IntegerType>(elementType)) {
     // lmhlo.not(x) -> x ^ -1
@@ -1071,7 +1132,8 @@ inline Value mapMhloOpToStdScalarOp<mhlo::NotOp>(Location loc,
         b, loc, adaptor.getOperand().getType(),
         b->getIntegerAttr(integerType,
                           APInt::getAllOnes(integerType.getWidth())));
-    return b->create<::mlir::arith::XOrIOp>(loc, allOnes, adaptor.getOperand());
+    return ::mlir::arith::XOrIOp::create(*b, loc, allOnes,
+                                         adaptor.getOperand());
   }
   return nullptr;
 }
@@ -1079,91 +1141,106 @@ inline Value mapMhloOpToStdScalarOp<mhlo::NotOp>(Location loc,
 template <>
 inline Value mapMhloOpToStdScalarOp<mhlo::LogisticOp>(
     Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> /*argTypes*/,
-    mhlo::LogisticOp::Adaptor adaptor, OpBuilder* b) {
+    mhlo::LogisticOp::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
   // 1.0 / (1.0 + exp(-x))
   Value negX = mapMhloOpToStdScalarOp<mhlo::NegOp>(
-      loc, resultTypes, resultTypes, {adaptor.getOperand()}, b);
-  Value expNegX = mapMhloOpToStdScalarOp<mhlo::ExpOp>(loc, resultTypes,
-                                                      resultTypes, {{negX}}, b);
+      loc, resultTypes, resultTypes, {adaptor.getOperand()}, attributes, b);
+  Value expNegX = mapMhloOpToStdScalarOp<mhlo::ExpOp>(
+      loc, resultTypes, resultTypes, {{negX}}, attributes, b);
 
   Type type = getElementTypeOrSelf(resultTypes[0]);
   Value oneFloat =
       mlir::isa<ComplexType>(type)
-          ? b->create<arith::ConstantOp>(loc, b->getF32FloatAttr(1.0))
+          ? arith::ConstantOp::create(*b, loc, b->getF32FloatAttr(1.0))
           : getConstantOrSplat(b, loc, resultTypes[0],
                                FloatAttr::get(type, 1.0f));
   Value one = mapConvertOpToStdScalarOp(loc, resultTypes, resultTypes,
-                                        {oneFloat.getType()}, {{oneFloat}}, b);
+                                        {oneFloat.getType()}, {{oneFloat}},
+                                        attributes, b);
   Value oneAddExprNegX = mapMhloOpToStdScalarOp<mhlo::AddOp>(
-      loc, resultTypes, resultTypes, {{expNegX, one}}, b);
-  return mapMhloOpToStdScalarOp<mhlo::DivOp>(loc, resultTypes, resultTypes,
-                                             {{one, oneAddExprNegX}}, b);
+      loc, resultTypes, resultTypes, {{expNegX, one}}, attributes, b);
+  return mapMhloOpToStdScalarOp<mhlo::DivOp>(
+      loc, resultTypes, resultTypes, {{one, oneAddExprNegX}}, attributes, b);
 }
 
 template <>
-inline Value mapMhloOpToStdScalarOp<mhlo::PowOp>(Location loc,
-                                                 ArrayRef<Type> resultTypes,
-                                                 ArrayRef<Type> argTypes,
-                                                 mhlo::PowOp::Adaptor adaptor,
-                                                 OpBuilder* b) {
+inline Value mapMhloOpToStdScalarOp<mhlo::PowOp>(
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
+    mhlo::PowOp::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
   auto lb = ImplicitLocOpBuilder(loc, *b);
   // TODO: b/315868720 Consider alternate lowerings of mhlo::PowOp with integer
   // operands. Floating point can use std::powf
-  auto resultType = getElementTypeOrSelf(resultTypes.front());
-  if (mlir::isa<ComplexType, FloatType>(resultType)) {
+  auto elementType = getElementTypeOrSelf(resultTypes.front());
+  if (mlir::isa<ComplexType, FloatType>(elementType)) {
     return MapMhloOpToScalarOpImpl<IsFloatType, math::PowFOp, IsComplexType,
-                                   complex::PowOp>{}(loc, resultTypes, argTypes,
-                                                     adaptor.getOperands(), b);
+                                   complex::PowOp>{}(
+        loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
   }
 
   // Exponentiation by squaring:
   // https://en.wikipedia.org/wiki/Exponentiation_by_squaring;
-  Value negOne =
-      lb.create<arith::ConstantOp>(lb.getIntegerAttr(resultType, -1));
-  Value zero = lb.create<arith::ConstantOp>(lb.getIntegerAttr(resultType, 0));
-  Value one = lb.create<arith::ConstantOp>(lb.getIntegerAttr(resultType, 1));
-  Value two = lb.create<arith::ConstantOp>(lb.getIntegerAttr(resultType, 2));
-  Value step = lb.create<arith::ConstantIndexOp>(1);
-  Value lowerBound = lb.create<arith::ConstantIndexOp>(0);
+  Value negOne = getConstantOrSplat(&lb, loc, resultTypes[0],
+                                    lb.getIntegerAttr(elementType, -1));
+  Value zero = getConstantOrSplat(&lb, loc, resultTypes[0],
+                                  lb.getIntegerAttr(elementType, 0));
+  Value one = getConstantOrSplat(&lb, loc, resultTypes[0],
+                                 lb.getIntegerAttr(elementType, 1));
+  Value two = getConstantOrSplat(&lb, loc, resultTypes[0],
+                                 lb.getIntegerAttr(elementType, 2));
+  Value step = arith::ConstantIndexOp::create(lb, 1);
+  Value lowerBound = arith::ConstantIndexOp::create(lb, 0);
   // Everything else would overflow for any exponent > 1, as 2^64
   // is the larget possible exponent for a 64-bit integer, and
   // that's 1 << 6.
-  Value upperBound = lb.create<arith::ConstantIndexOp>(6);
+  Value upperBound = arith::ConstantIndexOp::create(lb, 6);
   auto originalBase = adaptor.getLhs();
   auto originalExponent = adaptor.getRhs();
 
-  Value accum =
-      lb.create<scf::ForOp>(
-            lowerBound, upperBound, step,
-            SmallVector<Value>({one, originalBase, originalExponent}),
-            [&](OpBuilder& b, Location, Value /*v*/, ValueRange iters) {
-              Value accum = iters[0];
-              Value base = iters[1];
-              Value exponent = iters[2];
+  auto forOp = scf::ForOp::create(
+      lb, lowerBound, upperBound, step,
+      SmallVector<Value>({one, originalBase, originalExponent}),
+      [&](OpBuilder& b, Location, Value /*v*/, ValueRange iters) {
+        Value accum = iters[0];
+        Value base = iters[1];
+        Value exponent = iters[2];
 
-              Value condition = b.create<arith::CmpIOp>(
-                  loc, arith::CmpIPredicate::eq,
-                  b.create<::mlir::arith::AndIOp>(loc, exponent, one), one);
-              Value multiplied =
-                  b.create<::mlir::arith::MulIOp>(loc, accum, base);
-              accum = b.create<::mlir::arith::SelectOp>(loc, condition,
-                                                        multiplied, accum);
-              base = b.create<::mlir::arith::MulIOp>(loc, base, base);
-              exponent = b.create<::mlir::arith::ShRUIOp>(loc, exponent, one);
-              b.create<scf::YieldOp>(
-                  loc, SmallVector<Value>({accum, base, exponent}));
-            })
-          .getResult(0);
+        Value condition = arith::CmpIOp::create(
+            b, loc, arith::CmpIPredicate::eq,
+            ::mlir::arith::AndIOp::create(b, loc, exponent, one), one);
+        Value multiplied = ::mlir::arith::MulIOp::create(b, loc, accum, base);
+        accum = ::mlir::arith::SelectOp::create(b, loc, condition, multiplied,
+                                                accum);
+        base = ::mlir::arith::MulIOp::create(b, loc, base, base);
+        exponent = ::mlir::arith::ShRUIOp::create(b, loc, exponent, one);
+        scf::YieldOp::create(b, loc,
+                             SmallVector<Value>({accum, base, exponent}));
+      });
+  Value accum = forOp.getResult(0);
+  Value remainingExponent = forOp.getResult(2);
+  Value exponentNonZero = arith::CmpIOp::create(lb, arith::CmpIPredicate::ne,
+                                                remainingExponent, zero);
+  Value baseIsEven = arith::CmpIOp::create(
+      lb, arith::CmpIPredicate::eq,
+      ::mlir::arith::AndIOp::create(lb, originalBase, one), zero);
+  accum = ::mlir::arith::SelectOp::create(
+      lb, ::mlir::arith::AndIOp::create(lb, exponentNonZero, baseIsEven), zero,
+      accum);
 
-  Value rhsIsEven = lb.create<arith::CmpIOp>(
-      arith::CmpIPredicate::eq,
-      lb.create<arith::RemSIOp>(adaptor.getRhs(), two), zero);
-  Value rhsIsNegative = lb.create<arith::CmpIOp>(arith::CmpIPredicate::slt,
-                                                 adaptor.getRhs(), zero);
-  Value lhsIsOne =
-      lb.create<arith::CmpIOp>(arith::CmpIPredicate::eq, adaptor.getLhs(), one);
-  Value lhsIsNegOne = lb.create<arith::CmpIOp>(arith::CmpIPredicate::eq,
-                                               adaptor.getLhs(), negOne);
+  if (IsUnsignedIntegerType{}(getElementTypeOrSelf(argTypes.front()))) {
+    return accum;
+  }
+
+  Value rhsIsEven = arith::CmpIOp::create(
+      lb, arith::CmpIPredicate::eq,
+      arith::RemSIOp::create(lb, adaptor.getRhs(), two), zero);
+  Value rhsIsNegative = arith::CmpIOp::create(lb, arith::CmpIPredicate::slt,
+                                              adaptor.getRhs(), zero);
+  Value lhsIsOne = arith::CmpIOp::create(lb, arith::CmpIPredicate::eq,
+                                         adaptor.getLhs(), one);
+  Value lhsIsNegOne = arith::CmpIOp::create(lb, arith::CmpIPredicate::eq,
+                                            adaptor.getLhs(), negOne);
 
   // The accum is correct when the rhs is non-negative. When rhs is
   // negative, we return 0 for integer, with the exception of lhs values of 1
@@ -1174,61 +1251,61 @@ inline Value mapMhloOpToStdScalarOp<mhlo::PowOp>(Location loc,
   // - Return 1 or -1 depending on the parity of rhs when the lhs is -1.
   // - Return 1 if lhs is 1.
   // - Else return 0.
-  Value ifLhsIsOne = lb.create<::mlir::arith::SelectOp>(lhsIsOne, one, zero);
-  Value ifLhsIsNegOne = lb.create<::mlir::arith::SelectOp>(
-      lhsIsNegOne, lb.create<::mlir::arith::SelectOp>(rhsIsEven, one, negOne),
-      ifLhsIsOne);
-  return lb.create<::mlir::arith::SelectOp>(rhsIsNegative, ifLhsIsNegOne,
-                                            accum);
+  Value ifLhsIsOne = ::mlir::arith::SelectOp::create(lb, lhsIsOne, one, zero);
+  Value ifLhsIsNegOne = ::mlir::arith::SelectOp::create(
+      lb, lhsIsNegOne,
+      ::mlir::arith::SelectOp::create(lb, rhsIsEven, one, negOne), ifLhsIsOne);
+  return ::mlir::arith::SelectOp::create(lb, rhsIsNegative, ifLhsIsNegOne,
+                                         accum);
 }
 
 template <>
 inline Value mapMhloOpToStdScalarOp<mhlo::SelectOp>(
     Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> argTypes,
-    mhlo::SelectOp::Adaptor adaptor, OpBuilder* b) {
+    mhlo::SelectOp::Adaptor adaptor, ArrayRef<NamedAttribute> attributes,
+    OpBuilder* b) {
   return MapMhloOpToScalarOpImpl<::mlir::arith::SelectOp>{}(
-      loc, resultTypes, argTypes, adaptor.getOperands(), b);
+      loc, resultTypes, argTypes, adaptor.getOperands(), attributes, b);
 }
 
 template <>
-inline Value mapMhloOpToStdScalarOp<mhlo::SignOp>(Location loc,
-                                                  ArrayRef<Type> resultTypes,
-                                                  ArrayRef<Type> /*argTypes*/,
-                                                  mhlo::SignOp::Adaptor adaptor,
-                                                  OpBuilder* b) {
+inline Value mapMhloOpToStdScalarOp<mhlo::SignOp>(
+    Location loc, ArrayRef<Type> resultTypes, ArrayRef<Type> /*argTypes*/,
+    mhlo::SignOp::Adaptor adaptor, ArrayRef<NamedAttribute> /*attributes*/,
+    OpBuilder* b) {
   Value operand = adaptor.getOperand();
   Type elementType = getElementTypeOrSelf(operand.getType());
   if (auto floatType = mlir::dyn_cast<FloatType>(elementType)) {
     Value zero =
-        b->create<arith::ConstantOp>(loc, b->getZeroAttr(operand.getType()));
-    Value ne0I1 = b->create<::mlir::arith::CmpFOp>(
-        loc, arith::CmpFPredicate::ONE, operand, zero);
+        arith::ConstantOp::create(*b, loc, b->getZeroAttr(operand.getType()));
+    Value ne0I1 = ::mlir::arith::CmpFOp::create(
+        *b, loc, arith::CmpFPredicate::ONE, operand, zero);
     Value ne0Float =
-        b->create<::mlir::arith::UIToFPOp>(loc, zero.getType(), ne0I1);
-    Value copySign = b->create<::mlir::math::CopySignOp>(loc, resultTypes,
-                                                         ne0Float, operand);
-    auto isNan = b->create<::mlir::arith::CmpFOp>(
-        loc, arith::CmpFPredicate::UNO, operand, operand);
-    return b->create<::mlir::arith::SelectOp>(loc, isNan, operand, copySign);
+        ::mlir::arith::UIToFPOp::create(*b, loc, zero.getType(), ne0I1);
+    Value copySign = ::mlir::math::CopySignOp::create(*b, loc, resultTypes,
+                                                      ne0Float, operand);
+    auto isNan = ::mlir::arith::CmpFOp::create(
+        *b, loc, arith::CmpFPredicate::UNO, operand, operand);
+    return ::mlir::arith::SelectOp::create(*b, loc, isNan, operand, copySign);
   }
   if (auto integerType = mlir::dyn_cast<IntegerType>(elementType)) {
     // sign(x) = x == 0 ? 0 : ((x s>> 31) | 1)
     Value zero =
-        b->create<arith::ConstantOp>(loc, b->getZeroAttr(operand.getType()));
+        arith::ConstantOp::create(*b, loc, b->getZeroAttr(operand.getType()));
     Value bitwidthMinusOne = getConstantOrSplat(
         b, loc, operand.getType(),
         b->getIntegerAttr(integerType, integerType.getWidth() - 1));
     Value one = getConstantOrSplat(b, loc, operand.getType(),
                                    b->getIntegerAttr(integerType, 1));
-    Value cmp = b->create<::mlir::arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                                 operand, zero);
+    Value cmp = ::mlir::arith::CmpIOp::create(*b, loc, arith::CmpIPredicate::eq,
+                                              operand, zero);
     Value ashr =
-        b->create<::mlir::arith::ShRSIOp>(loc, operand, bitwidthMinusOne);
-    Value orOp = b->create<::mlir::arith::OrIOp>(loc, ashr, one);
-    return b->create<::mlir::arith::SelectOp>(loc, cmp, zero, orOp);
+        ::mlir::arith::ShRSIOp::create(*b, loc, operand, bitwidthMinusOne);
+    Value orOp = ::mlir::arith::OrIOp::create(*b, loc, ashr, one);
+    return ::mlir::arith::SelectOp::create(*b, loc, cmp, zero, orOp);
   }
   if (mlir::isa<ComplexType>(elementType)) {
-    return b->create<::mlir::complex::SignOp>(loc, elementType, operand);
+    return ::mlir::complex::SignOp::create(*b, loc, elementType, operand);
   }
   return nullptr;
 }
@@ -1244,23 +1321,24 @@ inline Value selectShiftedOrSaturated(ImplicitLocOpBuilder& lb, Value rhs,
   auto bitWidthInt = etype.getIntOrFloatBitWidth();
   Value bitWidth = getConstantOrSplat(&lb, lb.getLoc(), type,
                                       lb.getIntegerAttr(etype, bitWidthInt));
-  Value cmp = lb.create<mlir::arith::CmpIOp>(mlir::arith::CmpIPredicate::ugt,
-                                             bitWidth, rhs);
-  return lb.create<mlir::arith::SelectOp>(cmp, shifted, saturated);
+  Value cmp = mlir::arith::CmpIOp::create(lb, mlir::arith::CmpIPredicate::ugt,
+                                          bitWidth, rhs);
+  return mlir::arith::SelectOp::create(lb, cmp, shifted, saturated);
 }
 
 template <>
 inline Value mapMhloOpToStdScalarOp<mhlo::ShiftLeftOp>(
     Location loc, ArrayRef<Type> /*ResultTypes*/, ArrayRef<Type> /*argTypes*/,
-    mhlo::ShiftLeftOp::Adaptor adaptor, OpBuilder* b) {
+    mhlo::ShiftLeftOp::Adaptor adaptor, ArrayRef<NamedAttribute> /*attributes*/,
+    OpBuilder* b) {
   ImplicitLocOpBuilder lb(loc, *b);
   Value lhs = adaptor.getLhs();
   Value rhs = adaptor.getRhs();
   Type type = lhs.getType();
 
   // "Saturate" if the shift is greater than the bitwidth of the type
-  Value zero = lb.create<arith::ConstantOp>(lb.getZeroAttr(type));
-  Value shifted = lb.create<mlir::arith::ShLIOp>(lhs, rhs);
+  Value zero = arith::ConstantOp::create(lb, lb.getZeroAttr(type));
+  Value shifted = mlir::arith::ShLIOp::create(lb, lhs, rhs);
 
   return selectShiftedOrSaturated(lb, rhs, shifted, zero, type);
 }
@@ -1268,15 +1346,16 @@ inline Value mapMhloOpToStdScalarOp<mhlo::ShiftLeftOp>(
 template <>
 inline Value mapMhloOpToStdScalarOp<mhlo::ShiftRightLogicalOp>(
     Location loc, ArrayRef<Type> /*ResultTypes*/, ArrayRef<Type> /*argTypes*/,
-    mhlo::ShiftRightLogicalOp::Adaptor adaptor, OpBuilder* b) {
+    mhlo::ShiftRightLogicalOp::Adaptor adaptor,
+    ArrayRef<NamedAttribute> /*attributes*/, OpBuilder* b) {
   ImplicitLocOpBuilder lb(loc, *b);
   Value lhs = adaptor.getLhs();
   Value rhs = adaptor.getRhs();
   Type type = lhs.getType();
 
   // "Saturate" if the shift is greater than the bitwidth of the type
-  Value zero = lb.create<arith::ConstantOp>(b->getZeroAttr(type));
-  Value shifted = lb.create<mlir::arith::ShRUIOp>(lhs, rhs);
+  Value zero = arith::ConstantOp::create(lb, b->getZeroAttr(type));
+  Value shifted = mlir::arith::ShRUIOp::create(lb, lhs, rhs);
 
   return selectShiftedOrSaturated(lb, rhs, shifted, zero, type);
 }
@@ -1284,7 +1363,8 @@ inline Value mapMhloOpToStdScalarOp<mhlo::ShiftRightLogicalOp>(
 template <>
 inline Value mapMhloOpToStdScalarOp<mhlo::ShiftRightArithmeticOp>(
     Location loc, ArrayRef<Type> /*ResultTypes*/, ArrayRef<Type> /*argTypes*/,
-    mhlo::ShiftRightArithmeticOp::Adaptor adaptor, OpBuilder* b) {
+    mhlo::ShiftRightArithmeticOp::Adaptor adaptor,
+    ArrayRef<NamedAttribute> /*attributes*/, OpBuilder* b) {
   ImplicitLocOpBuilder lb(loc, *b);
   Value lhs = adaptor.getLhs();
   Value rhs = adaptor.getRhs();
@@ -1297,8 +1377,8 @@ inline Value mapMhloOpToStdScalarOp<mhlo::ShiftRightArithmeticOp>(
   // "Saturate" if the shift is greater than the bitwidth of the type
   Value maxShift = getConstantOrSplat(
       b, loc, type, lb.getIntegerAttr(etype, bitWidthInt - 1));
-  Value saturatedShifted = lb.create<mlir::arith::ShRSIOp>(lhs, maxShift);
-  Value shifted = lb.create<mlir::arith::ShRSIOp>(lhs, rhs);
+  Value saturatedShifted = mlir::arith::ShRSIOp::create(lb, lhs, maxShift);
+  Value shifted = mlir::arith::ShRSIOp::create(lb, lhs, rhs);
 
   return selectShiftedOrSaturated(lb, rhs, shifted, saturatedShifted, type);
 }
@@ -1308,9 +1388,9 @@ struct MhloOpToStdScalarOp {
   // Converts mhlo 'op' to linalg and arith ops.
   template <typename MhloOpTy>
   static Value mapOp(MhloOpTy op, ArrayRef<Type> resultTypes, ValueRange args,
-                     OpBuilder* b) {
+                     ArrayRef<NamedAttribute> attributes, OpBuilder* b) {
     auto argTypes = llvm::to_vector(op->getOperandTypes());
-    return mapOpWithArgTypes(op, resultTypes, argTypes, args, b);
+    return mapOpWithArgTypes(op, resultTypes, argTypes, args, attributes, b);
   }
 
   // Converts mhlo 'op' to linalg and arith ops. The types of 'args' may already
@@ -1318,38 +1398,40 @@ struct MhloOpToStdScalarOp {
   template <typename MhloOpTy>
   static Value mapOpWithArgTypes(MhloOpTy op, ArrayRef<Type> resultTypes,
                                  ArrayRef<Type> argTypes, ValueRange args,
+                                 ArrayRef<NamedAttribute> attributes,
                                  OpBuilder* b) {
-    static_assert(!std::is_same<MhloOpTy, mhlo::ConvertOp>::value);
+    static_assert(!std::is_same_v<MhloOpTy, mhlo::ConvertOp>);
     typename MhloOpTy::Adaptor adaptor(args, op->getAttrDictionary(),
                                        op->getPropertiesStorage(),
                                        op->getRegions());
     return mapOpOfType<MhloOpTy>(op.getLoc(), resultTypes, argTypes, adaptor,
-                                 b);
+                                 attributes, b);
   }
   // Overload for mhlo::ConvertOp.
   static Value mapOpWithArgTypes(mhlo::ConvertOp op, ArrayRef<Type> resultTypes,
                                  ArrayRef<Type> argTypes, ValueRange args,
+                                 ArrayRef<NamedAttribute> attributes,
                                  OpBuilder* b) {
-    return impl::mapConvertOpToStdScalarOp(op.getLoc(), op.getType(),
-                                           resultTypes, argTypes, args, b);
+    return impl::mapConvertOpToStdScalarOp(
+        op.getLoc(), op.getType(), resultTypes, argTypes, args, attributes, b);
   }
 
   // Converts mhlo 'op' to linalg and arith ops.
   template <typename MhloOpTy>
   static Value mapOpOfType(Location loc, ArrayRef<Type> resultTypes,
                            ArrayRef<Type> argTypes,
-                           typename MhloOpTy::Adaptor adaptor, OpBuilder* b) {
+                           typename MhloOpTy::Adaptor adaptor,
+                           ArrayRef<NamedAttribute> attributes, OpBuilder* b) {
     return impl::mapMhloOpToStdScalarOp<MhloOpTy>(loc, resultTypes, argTypes,
-                                                  adaptor, b);
+                                                  adaptor, attributes, b);
   }
 
-  static Value mapConvertOpToStdScalarOp(Location loc,
-                                         ArrayRef<Type> targetTypes,
-                                         ArrayRef<Type> resultTypes,
-                                         ArrayRef<Type> argTypes,
-                                         ValueRange args, OpBuilder* b) {
+  static Value mapConvertOpToStdScalarOp(
+      Location loc, ArrayRef<Type> targetTypes, ArrayRef<Type> resultTypes,
+      ArrayRef<Type> argTypes, ValueRange args,
+      ArrayRef<NamedAttribute> attributes, OpBuilder* b) {
     return impl::mapConvertOpToStdScalarOp(loc, targetTypes, resultTypes,
-                                           argTypes, args, b);
+                                           argTypes, args, attributes, b);
   }
 };
 

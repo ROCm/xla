@@ -16,18 +16,24 @@ limitations under the License.
 #include "xla/service/gpu/triton_call.h"
 
 #include <cstdint>
-#include <string_view>
+#include <optional>
 #include <utility>
+#include <vector>
 
-#include "mlir/AsmParser/AsmParser.h"  // from @llvm-project
-#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
-#include "mlir/IR/MLIRContext.h"  // from @llvm-project
-#include "mlir/Parser/Parser.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "absl/strings/string_view.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/JSON.h"
+#include "mlir/AsmParser/AsmParser.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/Parser/Parser.h"
+#include "mlir/Support/LLVM.h"
 
 namespace xla::gpu {
 
-TritonCall TritonCall::Parse(std::string_view backend_config,
+TritonCall TritonCall::Parse(absl::string_view backend_config,
                              mlir::MLIRContext* mlir_context) {
   // TODO(slebedev): Plumb through num_ctas and enable_wrap_specialization.
   auto attrs = mlir::cast<mlir::DictionaryAttr>(
@@ -44,8 +50,53 @@ TritonCall TritonCall::Parse(std::string_view backend_config,
       attrs.getAs<mlir::IntegerAttr>("num_stages").getValue().getSExtValue();
   auto num_warps =
       attrs.getAs<mlir::IntegerAttr>("num_warps").getValue().getSExtValue();
-  return TritonCall{std::move(name), std::move(ir), num_stages, num_warps,
-                    grid_x,          grid_y,        grid_z};
+  int64_t global_scratch_memory_size = 0;
+  if (auto attr =
+          attrs.getAs<mlir::IntegerAttr>("global_scratch_memory_size")) {
+    global_scratch_memory_size = attr.getValue().getSExtValue();
+  }
+  bool is_tma_allowed = false;
+  if (auto attr = attrs.getAs<mlir::BoolAttr>("is_tma_allowed")) {
+    is_tma_allowed = attr.getValue();
+  }
+  std::vector<int64_t> zeroed_outputs;
+  if (auto attr = attrs.getAs<mlir::ArrayAttr>("zeroed_outputs")) {
+    for (auto val : attr) {
+      zeroed_outputs.push_back(
+          mlir::cast<mlir::IntegerAttr>(val).getValue().getSExtValue());
+    }
+  }
+  // The optional `serialized_metadata` attribute carries a JSON object emitted
+  // from JAX's `pl.pallas_call(..., metadata=...)`. It is used to pass the
+  // ROCm `waves_per_eu`. Any parse failure leaves `waves_per_eu`
+  // unset (0).
+  int64_t waves_per_eu = 0;
+  if (auto attr = attrs.getAs<mlir::StringAttr>("serialized_metadata")) {
+    llvm::Expected<llvm::json::Value> parsed =
+        llvm::json::parse(attr.getValue());
+    if (parsed) {
+      if (llvm::json::Object* obj = parsed->getAsObject()) {
+        if (std::optional<llvm::StringRef> v = obj->getString("waves_per_eu")) {
+          int64_t tmp = 0;
+          if (llvm::to_integer(*v, tmp) && tmp > 0) {
+            waves_per_eu = tmp;
+          }
+        } else if (std::optional<int64_t> n = obj->getInteger("waves_per_eu")) {
+          if (*n > 0) {
+            waves_per_eu = *n;
+          }
+        }
+      }
+    } else {
+      llvm::consumeError(parsed.takeError());
+    }
+  }
+  return TritonCall{std::move(name), std::move(ir),
+                    num_stages,      num_warps,
+                    grid_x,          grid_y,
+                    grid_z,          global_scratch_memory_size,
+                    is_tma_allowed,  std::move(zeroed_outputs),
+                    waves_per_eu};
 }
 
 }  // namespace xla::gpu

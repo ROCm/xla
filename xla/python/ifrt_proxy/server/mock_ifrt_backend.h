@@ -17,13 +17,14 @@
 #ifndef XLA_PYTHON_IFRT_PROXY_SERVER_MOCK_IFRT_BACKEND_H_
 #define XLA_PYTHON_IFRT_PROXY_SERVER_MOCK_IFRT_BACKEND_H_
 
+#include <gmock/gmock.h>
+
 #include <memory>
 
-#include <gmock/gmock.h>
 #include "absl/status/status.h"
-#include "xla/python/ifrt/future.h"
 #include "xla/python/ifrt_proxy/common/ifrt_service.pb.h"
 #include "xla/python/ifrt_proxy/server/ifrt_backend.h"
+#include "xla/tsl/concurrency/future.h"
 
 namespace xla {
 namespace ifrt {
@@ -31,8 +32,8 @@ namespace proxy {
 
 class MockIfrtBackend final : public BackendInterface {
  public:
-  MOCK_METHOD(Future<Response>, Process, (std::unique_ptr<IfrtRequest> request),
-              (final));
+  MOCK_METHOD(tsl::Future<Response>, Process,
+              (std::unique_ptr<IfrtRequest> request), (final));
 };
 
 }  // namespace proxy

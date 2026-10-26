@@ -1,10 +1,13 @@
-"""Starlark macros for MKL.
+"""Starlark macros for MKL and oneDNN.
 
 if_mkl is a conditional to check if we are building with MKL.
 if_mkl_ml is a conditional to check if we are building with MKL-ML.
 if_mkl_ml_only is a conditional to check for MKL-ML-only (no MKL-DNN) mode.
 if_mkl_lnx_x64 is a conditional to check for MKL
 if_enable_mkl is a conditional to check if building with MKL and MKL is enabled.
+if_mkldnn_openmp checks if we are building x86 backend with OpenMP.
+if_onednn_async checks if we are building x86 backend (only Intel) with experimental async runtime support.
+if_mkldnn_aarch64_acl checks if we are building with Arm Compute Library.
 
 mkl_repository is a repository rule for creating MKL repository rule that can
 be pointed to either a local folder, or download it from the internet.
@@ -18,7 +21,7 @@ def if_mkl(if_true, if_false = []):
     """Shorthand for select()'ing on whether we're building with oneDNN.
 
       OneDNN gets built if we are building on platforms that support oneDNN
-      (x86 linux/windows) or if specifcially configured to use oneDNN.
+      (x86 linux/windows) or if specifically configured to use oneDNN.
 
     Args:
       if_true: expression to evaluate if building with oneDNN.
@@ -32,11 +35,16 @@ def if_mkl(if_true, if_false = []):
       may need it. It may be deleted in future with refactoring.
     """
     return select({
-        "@xla//xla/tsl/mkl:build_with_mkl_aarch64": if_true,
-        "@xla//xla/tsl:linux_x86_64": if_true,
-        "@xla//xla/tsl:windows": if_true,
+        Label("//xla/tsl/mkl:build_with_mkl_aarch64"): if_true,
+        Label("//xla/tsl:linux_aarch64_with_onednn_async"): if_true,
+        Label("//xla/tsl:linux_x86_64"): if_true,
+        Label("//xla/tsl:windows"): if_true,
         "//conditions:default": if_false,
     })
+
+# Use `if_onednn` for XLA code to allow different configurations between TF and
+# XLA in the future.
+if_onednn = if_mkl
 
 def if_mkl_ml(if_true, if_false = []):
     """Shorthand for select()'ing on whether we're building with MKL-ML.
@@ -50,8 +58,8 @@ def if_mkl_ml(if_true, if_false = []):
       a select evaluating to either if_true or if_false as appropriate.
     """
     return select({
-        "@tsl//third_party/mkl_dnn:build_with_mkl_opensource": if_false,
-        "@xla//xla/tsl/mkl:build_with_mkl": if_true,
+        Label("//xla/tsl/mkl:build_with_mkl_opensource"): if_false,
+        Label("//xla/tsl/mkl:build_with_mkl"): if_true,
         "//conditions:default": if_false,
     })
 
@@ -68,7 +76,7 @@ def if_mkl_lnx_x64(if_true, if_false = []):
       a select evaluating to either if_true or if_false as appropriate.
     """
     return select({
-        "@xla//xla/tsl/mkl:build_with_mkl_lnx_x64": if_true,
+        Label("//xla/tsl/mkl:build_with_mkl_lnx_x64"): if_true,
         "//conditions:default": if_false,
     })
 
@@ -85,7 +93,7 @@ def if_enable_mkl(if_true, if_false = []):
       A select evaluating to either if_true or if_false as appropriate.
     """
     return select({
-        "@xla//xla/tsl/mkl:enable_mkl": if_true,
+        Label("//xla/tsl/mkl:enable_mkl"): if_true,
         "//conditions:default": if_false,
     })
 
@@ -101,10 +109,45 @@ def mkl_deps():
       inclusion in the deps attribute of rules.
     """
     return select({
-        "@xla//xla/tsl/mkl:build_with_mkl_aarch64": ["@mkl_dnn_acl_compatible//:mkl_dnn_acl"],
-        "@xla//xla/tsl:linux_x86_64": ["@onednn//:mkl_dnn"],
-        "@xla//xla/tsl:windows": ["@onednn//:mkl_dnn"],
+        Label("//xla/tsl:linux_aarch64_with_onednn_async"): ["@onednn_async_aarch64//:mkl_dnn"],
+        Label("//xla/tsl/mkl:build_with_mkl_aarch64"): ["@mkl_dnn_acl_compatible//:mkl_dnn_acl"],
+        Label("//xla/tsl:linux_x86_64"): ["@onednn_async//:mkl_dnn"],
+        Label("//xla/tsl:windows"): ["@onednn_async//:mkl_dnn"],
         "//conditions:default": [],
+    })
+
+def mkl_dep():
+    """Returns the correct oneDNN library dependency.
+
+      Shorthand for select() to pull in the correct oneDNN library dep
+      depending on the platform. x86 Linux/Windows with or without --config=mkl
+      will always build with oneDNN library.
+
+    Returns:
+      a select evaluating to a library target, suitable for
+      inclusion in the deps attribute of rules.
+    """
+    return select({
+        Label("//xla/tsl:linux_aarch64_with_onednn_async"): "@onednn_async_aarch64//:mkl_dnn",
+        Label("//xla/tsl/mkl:build_with_mkl_aarch64"): "@mkl_dnn_acl_compatible//:mkl_dnn_acl",
+        Label("//xla/tsl:linux_x86_64"): "@onednn_async//:mkl_dnn",
+        Label("//xla/tsl:windows"): "@onednn_async//:mkl_dnn",
+        "//conditions:default": "//xla/tsl/mkl:dummy_mkl_dnn",
+    })
+
+def if_onednn_async(if_true, if_false = []):
+    """Returns `if_true` if building oneDNN with async runtime support.
+
+    Returns:
+      A select statement which evaluates to if_true if we're building oneDNN
+      with the async runtime experimental support.
+      Otherwise, the select statement evaluates to if_false.
+    """
+    return select({
+        Label("//xla/tsl:linux_aarch64_with_onednn_async"): if_true,
+        Label("//xla/tsl:linux_x86_64"): if_true,
+        Label("//xla/tsl:windows"): if_true,
+        "//conditions:default": if_false,
     })
 
 def onednn_v3_define():
@@ -115,10 +158,42 @@ def onednn_v3_define():
       An empty list of all other cases (include ARM builds).
     """
     return select({
-        "@xla//xla/tsl/mkl:build_with_mkl_aarch64": ["-DENABLE_ONEDNN_V3"],
-        "@xla//xla/tsl:linux_x86_64": ["-DENABLE_ONEDNN_V3"],
-        "@xla//xla/tsl:windows": ["-DENABLE_ONEDNN_V3"],
+        Label("//xla/tsl:linux_aarch64_with_onednn_async"): ["-DENABLE_ONEDNN_V3"],
+        Label("//xla/tsl/mkl:build_with_mkl_aarch64"): ["-DENABLE_ONEDNN_V3"],
+        Label("//xla/tsl:linux_x86_64"): ["-DENABLE_ONEDNN_V3"],
+        Label("//xla/tsl:windows"): ["-DENABLE_ONEDNN_V3"],
         "//conditions:default": [],
+    })
+
+def if_mkldnn_openmp(if_true, if_false = []):
+    """Returns `if_true` if OpenMP is used with oneDNN.
+
+    Shorthand for select()'ing on whether we're building with
+    oneDNN open source library only with openmp
+
+    Returns a select statement which evaluates to if_true if we're building
+    with oneDNN open source library only with OpenMP. Otherwise, the
+    select statement evaluates to if_false.
+
+    """
+    return select({
+        Label("//xla/tsl/mkl:build_with_mkldnn_openmp"): if_true,
+        "//conditions:default": if_false,
+    })
+
+def if_mkldnn_aarch64_acl(if_true, if_false = []):
+    return select({
+        Label("//xla/tsl/mkl:build_with_mkl_aarch64"): if_true,
+        "//conditions:default": if_false,
+    })
+
+# Enable Graph API on linux x86_64 and aarch64 platform with mkl builds
+def if_graph_api(if_true, if_false = []):
+    """Returns `if_true` if Graph API is used with oneDNN."""
+    return select({
+        Label("//xla/tsl:linux_x86_64"): if_true,
+        Label("//xla/tsl/mkl:build_with_mkl_aarch64"): if_true,
+        "//conditions:default": if_false,
     })
 
 def _enable_local_mkl(repository_ctx):

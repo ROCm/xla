@@ -13,11 +13,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
 #include <memory>
 #include <utility>
-#include <vector>
 
 #include "xla/error_spec.h"
+#include "xla/hlo/analysis/alias_info.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
@@ -26,11 +27,11 @@ limitations under the License.
 #include "xla/service/cpu/cpu_instruction_fusion.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
 #include "xla/tests/literal_test_util.h"
+#include "xla/tsl/platform/test.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/test.h"
 
 namespace xla {
 namespace cpu {
@@ -38,12 +39,11 @@ namespace {
 
 class CpuFusionTest : public HloTestBase {
  protected:
-  CpuFusionTest() {}
-
   ErrorSpec error_spec_{0.0001, 1e-5};
+  AliasInfo alias_info_;
 
  private:
-  DebugOptions GetDebugOptionsForTest() override {
+  DebugOptions GetDebugOptionsForTest() const override {
     DebugOptions debug_options = HloTestBase::GetDebugOptionsForTest();
     debug_options.add_xla_disable_hlo_passes("layout-assignment");
     return debug_options;
@@ -69,7 +69,7 @@ TEST_F(CpuFusionTest, FuseTwoElementwiseOps) {
   auto module = CreateNewVerifiedModule();
   module->AddEntryComputation(builder.Build());
 
-  CpuInstructionFusion fusion;
+  CpuInstructionFusion fusion(&alias_info_);
   EXPECT_TRUE(fusion.Run(module.get()).value());
 
   // The computation root instruction was fused. Verify the fusion instruction
@@ -84,7 +84,7 @@ TEST_F(CpuFusionTest, FuseTwoElementwiseOps) {
   EXPECT_EQ(4, fusion_instruction->fused_instruction_count());
 
   // Compile and execute the computation.
-  auto result = ExecuteAndTransfer(module->Clone(), {});
+  ASSERT_OK_AND_ASSIGN(const Literal result, Execute(std::move(module), {}));
 
   // Check the output correctness.
   LiteralTestUtil::ExpectR1Near<float>({1.0, 40.0, -5.0}, result, error_spec_);
@@ -116,7 +116,7 @@ TEST_F(CpuFusionTest, FuseElementwiseOpChain) {
   auto module = CreateNewVerifiedModule();
   module->AddEntryComputation(builder.Build());
 
-  CpuInstructionFusion fusion;
+  CpuInstructionFusion fusion(&alias_info_);
   EXPECT_TRUE(fusion.Run(module.get()).value());
 
   // The computation root instruction was fused. Verify the fusion instruction
@@ -131,7 +131,7 @@ TEST_F(CpuFusionTest, FuseElementwiseOpChain) {
   EXPECT_EQ(8, fusion_instruction->fused_instruction_count());
 
   // Compile and execute the computation.
-  auto result = ExecuteAndTransfer(module->Clone(), {});
+  ASSERT_OK_AND_ASSIGN(const Literal result, Execute(std::move(module), {}));
 
   // Check the output correctness.
   LiteralTestUtil::ExpectR1Near<float>({14.0, 40.0, 40.0}, result, error_spec_);
@@ -167,15 +167,19 @@ TEST_F(CpuFusionTest, ElementwiseOpChainWithNonfusibleInstruction) {
           HloInstruction::CreateParameter(1, r0f32, "y"))));
   auto add_f32 = module->AddEmbeddedComputation(embedded_builder.Build());
 
+  Window window;
+  WindowDimension* window_dimension = window.add_dimensions();
+  window_dimension->set_size(1);
+  window_dimension->set_stride(1);
+  window_dimension->set_base_dilation(1);
+  window_dimension->set_window_dilation(1);
   // This is a nop reduction.
-  auto reduce = builder.AddInstruction(HloInstruction::CreateReduce(
-      cshape,
-      builder.AddInstruction(HloInstruction::CreateReshape(
-          ShapeUtil::MakeShape(F32, {1, 6}), concatenate)),
+  auto reduce = builder.AddInstruction(HloInstruction::CreateReduceWindow(
+      cshape, concatenate,
       /*init_value=*/
       builder.AddInstruction(
           HloInstruction::CreateConstant(LiteralUtil::CreateR0<float>(0))),
-      /*dimensions_to_reduce=*/{0}, add_f32));
+      window, add_f32));
 
   auto exp = builder.AddInstruction(
       HloInstruction::CreateUnary(cshape, HloOpcode::kExp, reduce));
@@ -191,7 +195,7 @@ TEST_F(CpuFusionTest, ElementwiseOpChainWithNonfusibleInstruction) {
 
   module->AddEntryComputation(builder.Build());
 
-  CpuInstructionFusion fusion;
+  CpuInstructionFusion fusion(&alias_info_);
   EXPECT_TRUE(fusion.Run(module.get()).value());
 
   // The computation root instruction was fused. Verify the fusion instruction
@@ -209,15 +213,15 @@ TEST_F(CpuFusionTest, ElementwiseOpChainWithNonfusibleInstruction) {
 
   auto fusion_instruction2 = reduce->operand(0);
   EXPECT_EQ(HloOpcode::kFusion, fusion_instruction1->opcode());
-  EXPECT_EQ(HloOpcode::kReshape,
+  EXPECT_EQ(HloOpcode::kConcatenate,
             fusion_instruction2->fused_expression_root()->opcode());
   // There should be 5 fused instructions in the second fusion instruction: 1
-  // parameter, negate, ceil, concat, and reshape.
-  EXPECT_EQ(5, fusion_instruction2->fused_instruction_count())
+  // parameter, negate, ceil and concat.
+  EXPECT_EQ(4, fusion_instruction2->fused_instruction_count())
       << fusion_instruction2->fused_instructions_computation()->ToString();
 
   // Compile and execute the computation.
-  auto result = ExecuteAndTransfer(module->Clone(), {});
+  ASSERT_OK_AND_ASSIGN(const Literal result, Execute(std::move(module), {}));
 
   // Check the output correctness.
   LiteralTestUtil::ExpectR1Near<float>({14.0, 40.0, 40.0, 14.0, 40.0, 40.0},
@@ -263,7 +267,7 @@ TEST_F(CpuFusionTest, TestOperandOrderToAvoidDuplication) {
   module->AddEntryComputation(builder.Build());
 
   // Run fusion.
-  CpuInstructionFusion fusion;
+  CpuInstructionFusion fusion(&alias_info_);
   EXPECT_TRUE(fusion.Run(module.get()).value());
 
   auto fusion1 = result->operand(0);
@@ -276,9 +280,9 @@ TEST_F(CpuFusionTest, TestOperandOrderToAvoidDuplication) {
   EXPECT_EQ(4, fusion1->fused_instruction_count());
   EXPECT_EQ(4, fusion2->fused_instruction_count());
 
-  // The fusion has no parameters, everything is fused including constants.
-  EXPECT_EQ(0, fusion1->operand_count());
-  EXPECT_EQ(0, fusion2->operand_count());
+  // The fusion has a single constant parameter.
+  EXPECT_EQ(1, fusion1->operand_count());
+  EXPECT_EQ(1, fusion2->operand_count());
 }
 
 TEST_F(CpuFusionTest, DoNotDuplicateExpensiveOps) {
@@ -319,7 +323,7 @@ TEST_F(CpuFusionTest, DoNotDuplicateExpensiveOps) {
   auto module = CreateNewVerifiedModule();
   module->AddEntryComputation(builder.Build());
 
-  CpuInstructionFusion fusion;
+  CpuInstructionFusion fusion(&alias_info_);
   EXPECT_TRUE(fusion.Run(module.get()).value());
 
   // The only fusion instruction should be operand 0 of the tuple (formerly
@@ -333,6 +337,128 @@ TEST_F(CpuFusionTest, DoNotDuplicateExpensiveOps) {
   // constant.
   EXPECT_EQ(3, fusion_inst->fused_instruction_count());
   EXPECT_EQ(0, fusion_inst->operand_count());
+}
+
+TEST_F(CpuFusionTest, DynamicUpdateSliceOutOfPlace) {
+  const char* const hlo_string = R"(
+HloModule OutOfPlaceDus
+
+dus_fusion {
+  base = f32[4,4] parameter(0)
+  update = f32[2,2] parameter(1)
+  idx0 = s32[] parameter(2)
+  idx1 = s32[] parameter(3)
+  ROOT dus = f32[4,4] dynamic-update-slice(base, update, idx0, idx1)
+}
+
+ENTRY main {
+  p0 = f32[4,4] parameter(0)
+  p1 = f32[2,2] parameter(1)
+  p2 = s32[] parameter(2)
+  p3 = s32[] parameter(3)
+  fusion = f32[4,4] fusion(p0, p1, p2, p3), kind=kLoop, calls=dus_fusion
+  neg = f32[4,4] negate(p0)
+  ROOT tuple = (f32[4,4], f32[4,4]) tuple(fusion, neg)
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
+
+  auto p0_literal = LiteralUtil::CreateR2<float>({
+      {1.0f, 2.0f, 3.0f, 4.0f},
+      {5.0f, 6.0f, 7.0f, 8.0f},
+      {9.0f, 10.0f, 11.0f, 12.0f},
+      {13.0f, 14.0f, 15.0f, 16.0f},
+  });
+  auto p1_literal = LiteralUtil::CreateR2<float>({
+      {100.0f, 200.0f},
+      {300.0f, 400.0f},
+  });
+  auto p2_literal = LiteralUtil::CreateR0<int32_t>(1);
+  auto p3_literal = LiteralUtil::CreateR0<int32_t>(1);
+
+  ASSERT_OK_AND_ASSIGN(const Literal result,
+                       Execute(std::move(module), {&p0_literal, &p1_literal,
+                                                   &p2_literal, &p3_literal}));
+
+  LiteralTestUtil::ExpectR2Near<float>({{1.0f, 2.0f, 3.0f, 4.0f},
+                                        {5.0f, 100.0f, 200.0f, 8.0f},
+                                        {9.0f, 300.0f, 400.0f, 12.0f},
+                                        {13.0f, 14.0f, 15.0f, 16.0f}},
+                                       LiteralSlice(result, {0}), error_spec_);
+
+  LiteralTestUtil::ExpectR2Near<float>({{-1.0f, -2.0f, -3.0f, -4.0f},
+                                        {-5.0f, -6.0f, -7.0f, -8.0f},
+                                        {-9.0f, -10.0f, -11.0f, -12.0f},
+                                        {-13.0f, -14.0f, -15.0f, -16.0f}},
+                                       LiteralSlice(result, {1}), error_spec_);
+}
+
+TEST_F(CpuFusionTest, DynamicUpdateSliceOutOfPlaceWithBitcast) {
+  const char* const hlo_string = R"(
+HloModule OutOfPlaceDusWithBitcast
+
+dus_fusion {
+  base = f32[16] parameter(0)
+  bitcast_base = f32[4,4] bitcast(base)
+  update = f32[2,2] parameter(1)
+  idx0 = s32[] parameter(2)
+  idx1 = s32[] parameter(3)
+  dus = f32[4,4] dynamic-update-slice(bitcast_base, update, idx0, idx1)
+  ROOT bitcast_dus = f32[16] bitcast(dus)
+}
+
+ENTRY main {
+  p0 = f32[16] parameter(0)
+  p1 = f32[2,2] parameter(1)
+  p2 = s32[] parameter(2)
+  p3 = s32[] parameter(3)
+  fusion = f32[16] fusion(p0, p1, p2, p3), kind=kLoop, calls=dus_fusion
+  neg = f32[16] negate(p0)
+  ROOT tuple = (f32[16], f32[16]) tuple(fusion, neg)
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
+
+  auto p0_literal = LiteralUtil::CreateR1<float>({
+      1.0f,
+      2.0f,
+      3.0f,
+      4.0f,
+      5.0f,
+      6.0f,
+      7.0f,
+      8.0f,
+      9.0f,
+      10.0f,
+      11.0f,
+      12.0f,
+      13.0f,
+      14.0f,
+      15.0f,
+      16.0f,
+  });
+  auto p1_literal = LiteralUtil::CreateR2<float>({
+      {100.0f, 200.0f},
+      {300.0f, 400.0f},
+  });
+  auto p2_literal = LiteralUtil::CreateR0<int32_t>(1);
+  auto p3_literal = LiteralUtil::CreateR0<int32_t>(1);
+
+  ASSERT_OK_AND_ASSIGN(const Literal result,
+                       Execute(std::move(module), {&p0_literal, &p1_literal,
+                                                   &p2_literal, &p3_literal}));
+
+  LiteralTestUtil::ExpectR1Near<float>(
+      {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 100.0f, 200.0f, 8.0f, 9.0f, 300.0f, 400.0f,
+       12.0f, 13.0f, 14.0f, 15.0f, 16.0f},
+      LiteralSlice(result, {0}), error_spec_);
+
+  LiteralTestUtil::ExpectR1Near<float>(
+      {-1.0f, -2.0f, -3.0f, -4.0f, -5.0f, -6.0f, -7.0f, -8.0f, -9.0f, -10.0f,
+       -11.0f, -12.0f, -13.0f, -14.0f, -15.0f, -16.0f},
+      LiteralSlice(result, {1}), error_spec_);
 }
 
 }  // namespace

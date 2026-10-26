@@ -15,34 +15,106 @@ limitations under the License.
 
 #include "xla/pjrt/distributed/topology_util.h"
 
+#include <cstdlib>
 #include <fstream>
 #include <map>
+#include <set>
 #include <string>
-#include <string_view>
 #include <vector>
 
+#include "absl/algorithm/container.h"
+#include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/log/vlog_is_on.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
+#include "absl/strings/str_split.h"
+#include "absl/strings/string_view.h"
+#include "absl/strings/substitute.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
 #include "absl/types/span.h"
+#include "xla/backends/cpu/target_machine_options.h"
+#include "xla/backends/gpu/target_config/target_config.h"
 #include "xla/pjrt/distributed/key_value_store_interface.h"
 #include "xla/pjrt/distributed/protocol.pb.h"
-#include "xla/pjrt/pjrt_client.h"
 #include "xla/pjrt/utils.h"
-#include "xla/statusor.h"
+#include "xla/service/gpu_topology.pb.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/threadpool.h"
 #include "xla/util.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/statusor.h"
-#include "tsl/platform/threadpool.h"
 
 namespace xla {
+
+namespace {
+bool SameDevice(const DeviceProto& a, const DeviceProto& b) {
+  return (a.name() == b.name() && a.vendor() == b.vendor() &&
+          a.local_device_ordinal() == b.local_device_ordinal() &&
+          a.core_count() == b.core_count() &&
+          a.device_kind() == b.device_kind() &&
+          a.partition_index() == b.partition_index() &&
+          // Global device ID Might not be set for LocalTopologyProto, still
+          // check it for default value.
+          a.global_device_id() == b.global_device_id() &&
+          a.compute_capability() == b.compute_capability());
+}
+
+bool SameLocalTopology(const LocalTopologyProto& a,
+                       const LocalTopologyProto& b) {
+  if (a.process_id() != b.process_id() ||
+      a.devices_size() != b.devices_size()) {
+    return false;
+  }
+  for (int i = 0; i < a.devices_size(); ++i) {
+    if (!SameDevice(a.devices(i), b.devices(i))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Returns true if all devices have a valid fabric_uuid.
+bool HasFabricUuid(absl::Span<LocalTopologyProto> local_topologies) {
+  for (const LocalTopologyProto& local : local_topologies) {
+    for (const DeviceProto& device : local.devices()) {
+      if (device.fabric_uuid().empty() ||
+          device.fabric_uuid() == "00000000-0000-0000-0000-000000000000/0") {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool HasPartitionIndex(const LocalTopologyProto& local) {
+  return local.has_partition_index();
+}
+
+// Comparator for sorting LocalTopologyProto by network_nodes.
+// Lexicographic ordering groups topologically-close hosts (sharing
+// more network switches) adjacent in the sorted order.
+struct NetworkProximityComparator {
+  bool operator()(const LocalTopologyProto& a,
+                  const LocalTopologyProto& b) const {
+    for (size_t i = 0; i < a.network_nodes_size() && i < b.network_nodes_size();
+         ++i) {
+      if (a.network_nodes(i) < b.network_nodes(i)) return true;
+      if (a.network_nodes(i) > b.network_nodes(i)) return false;
+    }
+    return a.network_nodes_size() < b.network_nodes_size();
+  }
+};
+
+}  // namespace
 
 // Exists on Linux systems. Unique per OS kernel restart.
 static constexpr char kBootIdPath[] = "/proc/sys/kernel/random/boot_id";
@@ -66,16 +138,29 @@ absl::StatusOr<std::string> GetBootIdString() {
   return boot_id_str;
 }
 
-static std::string GetLocalTopologyKey(std::string_view platform, int node_id) {
+absl::StatusOr<std::vector<std::string>> GetNetworkNodes() {
+  // There is no infrastructure-agnostic way to query network topology which
+  // is portable between cloud providers, so we require users to pass it
+  // explicitly via the environment variable.
+  const char* env = std::getenv("XLA_DISTRIBUTED_TOPOLOGY_NETWORK_NODES");
+  if (env == nullptr) {
+    return std::vector<std::string>();
+  }
+
+  return absl::StrSplit(env, ',', absl::SkipWhitespace());
+}
+
+static std::string GetLocalTopologyKey(absl::string_view platform,
+                                       int node_id) {
   return absl::StrCat("local_topology/", platform, "/", node_id);
 }
 
-static std::string GetGlobalTopologyKey(std::string_view platform) {
+static std::string GetGlobalTopologyKey(absl::string_view platform) {
   return absl::StrCat("global_topology/", platform);
 }
 
 static absl::StatusOr<std::vector<LocalTopologyProto>> GetAllLocalTopologies(
-    std::string_view platform, int num_nodes, KeyValueStoreInterface* kv_store,
+    absl::string_view platform, int num_nodes, KeyValueStoreInterface* kv_store,
     absl::Duration timeout) {
   std::vector<absl::StatusOr<std::string>> local_topology_strs(num_nodes);
 
@@ -90,7 +175,7 @@ static absl::StatusOr<std::vector<LocalTopologyProto>> GetAllLocalTopologies(
       absl::StatusOr<std::string> local_topology_str =
           kv_store->Get(GetLocalTopologyKey(platform, i), timeout);
       {
-        absl::MutexLock lock(&mu);
+        absl::MutexLock lock(mu);
         local_topology_strs[i] = local_topology_str;
       }
       blocking_counter.DecrementCount();
@@ -124,122 +209,244 @@ static absl::StatusOr<std::vector<LocalTopologyProto>> GetAllLocalTopologies(
 }
 
 // Steals the contents of `local_topologies`.
-GlobalTopologyProto BuildGlobalTopology(
-    absl::Span<LocalTopologyProto> local_topologies) {
-  GlobalTopologyProto global_topology;
-  int next_global_device_id = 0;
-  // Assign local devices of the same host to the same slice_index.
-  int next_slice_index = 0;
-  absl::flat_hash_map<std::string, int> boot_id_to_slice_index;
-  for (LocalTopologyProto& local : local_topologies) {
-    // Every new boot_id seen is treated as a new host/slice.
-    std::string_view boot_id = local.boot_id();
-    auto [it, inserted] =
-        boot_id_to_slice_index.try_emplace(boot_id, next_slice_index);
-    if (inserted) {
-      ++next_slice_index;
+absl::StatusOr<GlobalTopologyProto> BuildGlobalTopology(
+    absl::Span<LocalTopologyProto> local_topologies,
+    bool assign_global_device_ids) {
+  CHECK(!local_topologies.empty());
+
+  if (VLOG_IS_ON(3)) {
+    VLOG(3) << "BuildGlobalTopology called with " << local_topologies.size()
+            << " local topologies.";
+    for (size_t i = 0; i < local_topologies.size(); ++i) {
+      VLOG(3) << "  local_topology[" << i
+              << "]: process_id=" << local_topologies[i].process_id()
+              << ", boot_id=" << local_topologies[i].boot_id()
+              << ", partition_index="
+              << (local_topologies[i].has_partition_index()
+                      ? absl::StrCat(local_topologies[i].partition_index())
+                      : "unset")
+              << ", num_devices=" << local_topologies[i].devices_size();
     }
-    for (DeviceProto& device : *local.mutable_devices()) {
-      device.set_global_device_id(next_global_device_id++);
-      device.set_slice_index(it->second);
-    }
-    global_topology.add_nodes()->Swap(&local);
   }
-  if (VLOG_IS_ON(10)) {
-    for (auto it = boot_id_to_slice_index.begin();
-         it != boot_id_to_slice_index.end(); ++it) {
-      LOG(INFO) << "BuildGlobalTopology boot_id_to_slice_index " << it->first
-                << "->" << it->second;
+
+  bool all_have_partition_index =
+      absl::c_all_of(local_topologies, HasPartitionIndex);
+  bool none_have_partition_index =
+      absl::c_none_of(local_topologies, HasPartitionIndex);
+
+  if (!all_have_partition_index && !none_have_partition_index) {
+    return InvalidArgument(
+        "Either all of or none of the local topologies should explicitly set "
+        "partition_index");
+  }
+
+  if (all_have_partition_index) {
+    // Every local topology explicitly declares its partition_index.
+    for (LocalTopologyProto& local : local_topologies) {
+      for (DeviceProto& device : *local.mutable_devices()) {
+        device.set_partition_index(local.partition_index());
+      }
     }
+  } else {
+    // Assign local devices of the same fabric_uuid/boot_id to the same
+    // partition_index.
+    bool has_fabric_uuid = HasFabricUuid(local_topologies);
+
+    // First sort all local topologies according to their network proximity,
+    // this will guarantee that consecutive global devices are close to each
+    // other. It is up to the end user to shard computations in a way that would
+    // maximize communication between "close" global device ids.
+    absl::c_stable_sort(local_topologies, NetworkProximityComparator());
+
+    absl::flat_hash_map<std::string, int> id_to_partition_index;
+    for (LocalTopologyProto& local : local_topologies) {
+      for (DeviceProto& device : *local.mutable_devices()) {
+        // Each new fabric_uuid/boot_id seen is treated as a new partition.
+        auto [it, _] = id_to_partition_index.try_emplace(
+            has_fabric_uuid ? device.fabric_uuid() : local.boot_id(),
+            id_to_partition_index.size());
+        device.set_partition_index(it->second);
+      }
+    }
+  }
+
+  if (assign_global_device_ids) {
+    absl::btree_multimap<int, DeviceProto*> partition_to_devices;
+    for (LocalTopologyProto& local : local_topologies) {
+      for (DeviceProto& device : *local.mutable_devices()) {
+        partition_to_devices.emplace(device.partition_index(), &device);
+      }
+    }
+    int next_global_device_id = 0;
+    for (auto& [_, device] : partition_to_devices) {
+      device->set_global_device_id(next_global_device_id++);
+    }
+  }
+
+  GlobalTopologyProto global_topology;
+  for (LocalTopologyProto& local : local_topologies) {
+    global_topology.add_processes()->Swap(&local);
+  }
+  if (VLOG_IS_ON(3)) {
+    VLOG(3) << "BuildGlobalTopology generated GlobalTopologyProto:\n"
+            << global_topology.DebugString();
   }
   return global_topology;
 }
 
-absl::Status ExchangeTopologies(std::string_view platform, int node_id,
+absl::Status ExchangeTopologies(absl::string_view platform, int node_id,
                                 int num_nodes,
                                 absl::Duration get_local_topology_timeout,
                                 absl::Duration get_global_topology_timeout,
                                 KeyValueStoreInterface* kv_store,
                                 const LocalTopologyProto& local_topology,
-                                GlobalTopologyProto* global_topology) {
-  VLOG(3) << "Local Topology for platform" << platform << ":\n"
+                                GlobalTopologyProto* global_topology,
+                                bool assign_global_device_ids) {
+  VLOG(3) << "Local Topology for platform " << platform << ":\n"
           << local_topology.DebugString();
   if (num_nodes == 1) {
-    LocalTopologyProto* topology = global_topology->add_nodes();
+    LocalTopologyProto* topology = global_topology->add_processes();
     *topology = local_topology;
-    for (DeviceProto& device : *topology->mutable_devices()) {
-      device.set_global_device_id(device.local_device_ordinal());
+    if (assign_global_device_ids) {
+      for (int i = 0; i < topology->devices_size(); ++i) {
+        topology->mutable_devices(i)->set_global_device_id(i);
+      }
     }
     return absl::OkStatus();
   }
   CHECK(kv_store != nullptr);
-  TF_RETURN_IF_ERROR(kv_store->Set(GetLocalTopologyKey(platform, node_id),
-                                   local_topology.SerializeAsString()));
+  const std::string local_topology_key = GetLocalTopologyKey(platform, node_id);
+  const std::string serialized_local_topology =
+      local_topology.SerializeAsString();
+
+  auto status = kv_store->Set(GetLocalTopologyKey(platform, node_id),
+                              serialized_local_topology);
+  if (absl::IsAlreadyExists(status)) {
+    // Local topology has been set previously from the same node before
+    // restart.
+    absl::StatusOr<std::string> existing_local_topology =
+        kv_store->TryGet(local_topology_key);
+    LocalTopologyProto existing_local_topology_proto;
+    existing_local_topology_proto.ParseFromString(*existing_local_topology);
+    if (!SameLocalTopology(existing_local_topology_proto, local_topology)) {
+      return absl::InternalError(absl::Substitute(
+          "Different local topology for node $0 has been set previously, "
+          "possibly before a restart.\nBefore: $1\nAfter: $2",
+          node_id, existing_local_topology_proto.DebugString(),
+          local_topology.DebugString()));
+    }
+  } else if (!status.ok()) {
+    return status;
+  }
 
   // The lead node gets all local topologies, builds the global topology and
   // puts it to the key-value store.
   std::string global_topology_key = GetGlobalTopologyKey(platform);
   if (node_id == 0) {
-    TF_ASSIGN_OR_RETURN(std::vector<LocalTopologyProto> local_topologies,
-                        GetAllLocalTopologies(platform, num_nodes, kv_store,
-                                              get_local_topology_timeout));
-    *global_topology =
-        BuildGlobalTopology(absl::Span<LocalTopologyProto>(local_topologies));
-    TF_RETURN_IF_ERROR(kv_store->Set(global_topology_key,
-                                     global_topology->SerializeAsString()));
+    ABSL_ASSIGN_OR_RETURN(std::vector<LocalTopologyProto> local_topologies,
+                          GetAllLocalTopologies(platform, num_nodes, kv_store,
+                                                get_local_topology_timeout));
+    ABSL_ASSIGN_OR_RETURN(
+        *global_topology,
+        BuildGlobalTopology(absl::Span<LocalTopologyProto>(local_topologies),
+                            assign_global_device_ids));
+    ABSL_RETURN_IF_ERROR(kv_store->Set(global_topology_key,
+                                       global_topology->SerializeAsString()));
   } else {
-    TF_ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         std::string global_topology_str,
         kv_store->Get(global_topology_key, get_global_topology_timeout));
     global_topology->ParseFromString(global_topology_str);
   }
-  VLOG(3) << "Global topology for platform " << platform << ":\n"
-          << global_topology->DebugString();
+
+  // Because we might do global topology assignment based on network proximity
+  // of XLA processes, the process id might not be ordered anymore, however it
+  // does not matter for XLA at run time, as we always lookup replica and
+  // partition id based on global topology we compute here.
+  if (VLOG_IS_ON(3)) {
+    VLOG(3) << "Global topology for platform " << platform
+            << ": num_processes=" << global_topology->processes_size();
+    for (size_t rank = 0; rank < global_topology->processes_size(); ++rank) {
+      VLOG(3) << "topology for process rank #" << rank << ":\n"
+              << global_topology->processes(rank).DebugString();
+    }
+  }
+
   return absl::OkStatus();
 }
 
+bool IsGpuTopologySymmetric(
+    const std::map<int, std::set<int>>& partition_id_to_node_ids,
+    const std::map<int, int>& process_id_to_device_count) {
+  CHECK(!partition_id_to_node_ids.empty());
+  CHECK(!process_id_to_device_count.empty());
+
+  int num_hosts_per_partition = partition_id_to_node_ids.begin()->second.size();
+  int num_devices_per_host = process_id_to_device_count.begin()->second;
+  for (const auto& [partition_id, node_ids] : partition_id_to_node_ids) {
+    if (node_ids.size() != num_hosts_per_partition) {
+      LOG(INFO) << "GpuTopology is asymmetric as partition " << partition_id
+                << " has " << node_ids.size() << " hosts, but expected "
+                << num_hosts_per_partition << " (hosts in partition: ["
+                << absl::StrJoin(node_ids, ", ") << "])";
+      return false;
+    }
+  }
+  for (const auto& [node_id, device_count] : process_id_to_device_count) {
+    if (device_count != num_devices_per_host) {
+      LOG(INFO) << "GpuTopology is asymmetric as process " << node_id << " has "
+                << device_count << " devices, but expected "
+                << num_devices_per_host;
+      return false;
+    }
+  }
+  return true;
+}
+
 absl::StatusOr<GpuTopologyProto> BuildGpuTopology(
-    const GlobalTopologyProto& global_topology) {
+    const GlobalTopologyProto& global_topology,
+    const gpu::GpuTargetConfig& gpu_target_config,
+    const cpu::TargetMachineOptions& host_target_machine_options) {
+  if (VLOG_IS_ON(3)) {
+    VLOG(3) << "BuildGpuTopology input GlobalTopologyProto:\n"
+            << global_topology.DebugString();
+  }
   GpuTopologyProto gpu_topology;
-  std::map<int, std::vector<int>> slice_id_to_node_ids;
-  std::vector<int> device_ids;
-  for (int i = 0; i < global_topology.nodes_size(); ++i) {
-    const LocalTopologyProto& local_topology = global_topology.nodes(i);
-
-    slice_id_to_node_ids[local_topology.devices(0).slice_index()].push_back(
-        local_topology.node_id());
-
-    // Initializes GPU topology with the first local topology.
-    if (i == 0) {
-      gpu_topology.set_platform_version((local_topology.devices(0).name()));
-      gpu_topology.set_num_devices_per_host(local_topology.devices_size());
-    } else {
-      // Check for consistent number of devices per host.
-      if (gpu_topology.num_devices_per_host() !=
-          local_topology.devices_size()) {
-        return absl::InternalError(
-            "GpuTopology doesn't support multi-host with different number of "
-            "devices per host.");
-      }
-    }
-
+  std::map<int, std::set<int>> partition_id_to_node_ids;
+  std::map<int, int> process_id_to_device_count;
+  for (int i = 0; i < global_topology.processes_size(); ++i) {
+    const LocalTopologyProto& local_topology = global_topology.processes(i);
+    process_id_to_device_count[local_topology.process_id()] =
+        local_topology.devices_size();
     for (const DeviceProto& device : local_topology.devices()) {
-      device_ids.push_back(device.global_device_id());
+      if (gpu_topology.platform_version().empty()) {
+        gpu_topology.set_platform_version(device.name());
+      }
+      partition_id_to_node_ids[device.partition_index()].insert(
+          local_topology.process_id());
     }
   }
 
-  gpu_topology.set_num_slices(slice_id_to_node_ids.size());
-  gpu_topology.set_num_hosts_per_slice(
-      slice_id_to_node_ids.begin()->second.size());
-  // Check for consistent number of hosts per slice.
-  for (const auto& [boot_id, node_ids] : slice_id_to_node_ids) {
-    if (node_ids.size() != gpu_topology.num_hosts_per_slice()) {
-      return absl::InternalError(
-          "GpuTopology doesn't support multi-host with different number of "
-          "hosts per slice.");
-    }
+  if (IsGpuTopologySymmetric(partition_id_to_node_ids,
+                             process_id_to_device_count)) {
+    gpu_topology.set_num_partitions(partition_id_to_node_ids.size());
+    gpu_topology.set_num_hosts_per_partition(
+        partition_id_to_node_ids.begin()->second.size());
+    gpu_topology.set_num_devices_per_host(
+        process_id_to_device_count.begin()->second);
+  } else {
+    // If gpu topology is not symmetric, then we don't need to populate
+    // the topology with the partition/host/device information.
+    LOG(INFO) << "GPU topology is asymmetric; setting partitions, hosts per "
+                 "partition, and devices per host to -1.";
+    gpu_topology.set_num_partitions(-1);
+    gpu_topology.set_num_hosts_per_partition(-1);
+    gpu_topology.set_num_devices_per_host(-1);
   }
-  gpu_topology.mutable_device_ids()->Add(device_ids.begin(), device_ids.end());
+
+  *gpu_topology.mutable_gpu_target_config() = gpu_target_config.ToProto();
+  *gpu_topology.mutable_host_target_machine_options() =
+      host_target_machine_options.ToProto();
   return gpu_topology;
 }
 

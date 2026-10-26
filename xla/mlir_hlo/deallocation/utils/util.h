@@ -19,7 +19,6 @@ limitations under the License.
 #include <optional>
 #include <set>
 
-#include "llvm/ADT/EquivalenceClasses.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 
 namespace mlir {
@@ -49,12 +48,14 @@ struct RegionEdge {
   }
 
   ValueRange getSuccessorValues() const {
-    if (successorOpOrRegion.is<Operation*>()) {
-      return successorOpOrRegion.get<Operation*>()->getResults().drop_front(
-          successorValueIndex);
+    if (llvm::isa<Operation*>(successorOpOrRegion)) {
+      return llvm::cast<Operation*>(successorOpOrRegion)
+          ->getResults()
+          .drop_front(successorValueIndex);
     }
-    return successorOpOrRegion.get<Region*>()->getArguments().drop_front(
-        successorValueIndex);
+    return llvm::cast<Region*>(successorOpOrRegion)
+        ->getArguments()
+        .drop_front(successorValueIndex);
   }
 
   Value getSuccessorValue(unsigned predecessorIndex) const {
@@ -136,8 +137,6 @@ namespace breaks_if_you_move_ops {
 
 // The comparator depends on the location of ops, so if you insert an op into
 // a set and then move it, it may end up in the wrong location.
-using ValueEquivalenceClasses =
-    llvm::EquivalenceClasses<Value, detail::ValueComparator>;
 using ValueSet = std::set<Value, detail::ValueComparator>;
 template <typename T>
 using ValueMap = std::map<Value, T, detail::ValueComparator>;

@@ -21,29 +21,42 @@
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/functional/bind_front.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/cord.h"
 #include "absl/strings/string_view.h"
-#include "llvm/Support/Casting.h"
+#include "tsl/profiler/lib/traceme.h"
+#include "xla/debug_options_flags.h"
 #include "xla/pjrt/host_callback.h"
 #include "xla/python/ifrt/client.h"
 #include "xla/python/ifrt/compiler.h"
 #include "xla/python/ifrt/device.h"
+#include "xla/python/ifrt/device_list.h"
 #include "xla/python/ifrt/executable.h"
-#include "xla/python/ifrt/future.h"
 #include "xla/python/ifrt/host_callback.h"
 #include "xla/python/ifrt/program.h"
+#include "xla/python/ifrt/rtti.h"
 #include "xla/python/ifrt/serdes.h"
 #include "xla/python/ifrt/topology.h"
+#include "xla/python/ifrt/user_context.h"
+#include "xla/python/ifrt/user_context_status_util.h"
 #include "xla/python/ifrt_proxy/client/executable.h"
+#include "xla/python/ifrt_proxy/client/mpmd_executable.h"
 #include "xla/python/ifrt_proxy/client/rpc_helper.h"
 #include "xla/python/ifrt_proxy/common/ifrt_service.pb.h"
+#include "xla/python/ifrt_proxy/common/versions.h"
 #include "xla/python/ifrt_proxy/server/host_callback.h"
 #include "xla/python/pjrt_ifrt/pjrt_host_callback.h"
 #include "xla/python/pjrt_ifrt/xla_compiler.h"
+#include "xla/tsl/concurrency/future.h"
 #include "xla/tsl/concurrency/ref_count.h"
-#include "tsl/platform/status_to_from_proto.h"
-#include "tsl/platform/statusor.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/status_to_from_proto.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace ifrt {
@@ -53,11 +66,22 @@ Compiler::Compiler(xla::ifrt::Client* client,
                    std::shared_ptr<RpcHelper> rpc_helper)
     : client_(client), rpc_helper_(std::move(rpc_helper)) {}
 
-absl::StatusOr<std::unique_ptr<xla::ifrt::LoadedExecutable>> Compiler::Compile(
+tsl::Future<xla::ifrt::LoadedExecutableRef> Compiler::CompileAndLoad(
     std::unique_ptr<Program> program,
     std::unique_ptr<xla::ifrt::CompileOptions> options) {
   auto request = std::make_unique<CompileRequest>();
-  TF_ASSIGN_OR_RETURN(*request->mutable_program(), Serialize(*program));
+  {
+    tsl::profiler::TraceMe traceme("IfrtProxyProgramSerialize");
+    auto serialize_options = std::make_unique<xla::ifrt::SerializeOptions>(
+        rpc_helper_->ifrt_serdes_version());
+    ABSL_ASSIGN_OR_RETURN(*request->mutable_program(),
+                          Serialize(*program, std::move(serialize_options)));
+  }
+  tsl::profiler::TraceMe traceme_ifrt_entrypoint(
+      [prog_size = request->program().data().size()]() {
+        return tsl::profiler::TraceMeEncode(
+            "IfrtProxyEntrypointCompilerCompile", {{"prog_size", prog_size}});
+      });
 
   // Extract host callbacks from the XLA compile options. `XlaCompileOptions`'s
   // SerDes fails when it contains host callbacks, so the following
@@ -66,11 +90,11 @@ absl::StatusOr<std::unique_ptr<xla::ifrt::LoadedExecutable>> Compiler::Compile(
   std::vector<tsl::RCReference<xla::ifrt::LoadedHostCallback>>
       loaded_host_callbacks;
   if (auto* xla_options =
-          llvm::dyn_cast<xla::ifrt::XlaCompileOptions>(options.get())) {
+          dyn_cast<xla::ifrt::XlaCompileOptions>(options.get())) {
     for (const auto& loaded_host_callback :
          xla_options->loaded_host_callbacks) {
       auto* pjrt_host_callback =
-          llvm::dyn_cast<xla::ifrt::PjRtHostSendAndRecvLoadedHostCallback>(
+          dyn_cast<xla::ifrt::PjRtHostSendAndRecvLoadedHostCallback>(
               loaded_host_callback.get());
       if (pjrt_host_callback == nullptr) {
         return absl::UnimplementedError("Unsupported host callback type");
@@ -84,36 +108,83 @@ absl::StatusOr<std::unique_ptr<xla::ifrt::LoadedExecutable>> Compiler::Compile(
       auto remote_loaded_host_callback = tsl::MakeRef<RemoteLoadedHostCallback>(
           client_, xla_host_callback.operands, xla_host_callback.results,
           /*queue=*/nullptr);
-      TF_ASSIGN_OR_RETURN(*request->add_host_callbacks(),
-                          remote_loaded_host_callback->Serialize());
+      ABSL_ASSIGN_OR_RETURN(*request->add_host_callbacks(),
+                            remote_loaded_host_callback->Serialize());
     }
 
     loaded_host_callbacks.swap(xla_options->loaded_host_callbacks);
+
+#if defined(PLATFORM_GOOGLE)
+    // Capture XLA flags.
+    // This is disabled for OSS because, if not, it creates a difference in
+    // behavior between OSS XLA_FLAGS and XLA TPU flags. XLA_FLAGS would be
+    // captured here and propagated to the server, but XLA TPU flags would not.
+    //
+    // With the current implementation both XLA_FLAGS and XLA TPU flags should
+    // be set at the proxy server in OSS/Cloud. For google internal usecases,
+    // both should be set at the proxy client.
+    auto& build_options = xla_options->compile_options.executable_build_options;
+    *build_options.mutable_debug_options() = xla::GetDebugOptionsFromFlags();
+    ABSL_RETURN_IF_ERROR(
+        build_options.mutable_comp_envs()->InitializeAllKnownEnvs());
+#endif
   }
 
-  TF_ASSIGN_OR_RETURN(*request->mutable_compile_options(), Serialize(*options));
+  auto serialize_options = std::make_unique<xla::ifrt::SerializeOptions>(
+      rpc_helper_->ifrt_serdes_version());
+  ABSL_ASSIGN_OR_RETURN(*request->mutable_compile_options(),
+                        Serialize(*options, std::move(serialize_options)));
 
-  // TODO(b/266635130): Avoid blocking the caller.
-  TF_ASSIGN_OR_RETURN(std::shared_ptr<CompileResponse> response,
-                      rpc_helper_->Compile(std::move(request)).Await());
+  xla::ifrt::UserContextRef user_context =
+      xla::ifrt::UserContextScope::current();
 
-  std::vector<xla::ifrt::LoadedExecutable::LogicalDeviceIds>
-      addressable_device_logical_device_ids;
-  addressable_device_logical_device_ids.reserve(
-      response->addressable_device_logical_ids_size());
-  for (const auto& logical_device_id :
-       response->addressable_device_logical_ids()) {
-    xla::ifrt::LoadedExecutable::LogicalDeviceIds id{
-        logical_device_id.replica(), logical_device_id.partition()};
-    addressable_device_logical_device_ids.push_back(id);
-  }
+  return rpc_helper_->Compile(std::move(request))
+      .Map(absl::bind_front(&Compiler::CreateExecutableFromResponse, this,
+                            std::move(loaded_host_callbacks),
+                            std::move(user_context)));
+}
+
+absl::StatusOr<xla::ifrt::LoadedExecutableRef>
+Compiler::CreateExecutableFromResponse(
+    std::vector<tsl::RCReference<xla::ifrt::LoadedHostCallback>>
+        loaded_host_callbacks,
+    xla::ifrt::UserContextRef user_context,
+    std::shared_ptr<CompileResponse> response) {
+  xla::ifrt::UserContextScope user_context_scope(user_context);
 
   std::vector<xla::ifrt::Device*> addressable_devices;
   addressable_devices.reserve(response->addressable_device_ids_size());
   for (const int32_t device_id : response->addressable_device_ids()) {
-    TF_ASSIGN_OR_RETURN(xla::ifrt::Device* const device,
-                        client_->LookupDevice(DeviceId(device_id)));
+    ABSL_ASSIGN_OR_RETURN(xla::ifrt::Device* const device,
+                          client_->LookupDevice(DeviceId(device_id)));
     addressable_devices.push_back(device);
+  }
+  absl::StatusOr<
+      absl::flat_hash_map<std::string, std::vector<xla::ifrt::Device*>>>
+      mpmd_addressable_devices;
+  bool is_mpmd_executable = false;
+
+  if (response->has_mpmd_addressable_devices()) {
+    is_mpmd_executable = true;
+    mpmd_addressable_devices =
+        absl::flat_hash_map<std::string, std::vector<xla::ifrt::Device*>>();
+    for (const auto& [name, devices_proto] :
+         response->mpmd_addressable_devices().mpmd_addressable_devices()) {
+      std::vector<xla::ifrt::Device*> current_devices;
+      current_devices.reserve(devices_proto.mpmd_addressable_device_ids_size());
+
+      for (const auto& device_id :
+           devices_proto.mpmd_addressable_device_ids()) {
+        ABSL_ASSIGN_OR_RETURN(xla::ifrt::Device* const device,
+                              client_->LookupDevice(DeviceId(device_id)));
+        current_devices.push_back(device);
+      }
+      mpmd_addressable_devices->insert({name, std::move(current_devices)});
+    }
+  } else if (response->has_mpmd_addressable_devices_error()) {
+    is_mpmd_executable = true;
+    mpmd_addressable_devices = xla::ifrt::ReattachUserContextRefs(
+        tsl::StatusFromProto(response->mpmd_addressable_devices_error()));
   }
 
   absl::StatusOr<std::optional<std::string>> fingerprint;
@@ -122,39 +193,67 @@ absl::StatusOr<std::unique_ptr<xla::ifrt::LoadedExecutable>> Compiler::Compile(
       fingerprint = response->fingerprint_value();
       break;
     case CompileResponse::kFingerprintError:
-      fingerprint = tsl::StatusFromProto(response->fingerprint_error());
+      fingerprint = xla::ifrt::ReattachUserContextRefs(
+          tsl::StatusFromProto(response->fingerprint_error()));
       break;
     default:
       fingerprint = std::nullopt;
       break;
   }
 
-  Future<> ready_future =
+  tsl::Future<> ready_future =
       rpc_helper_->CheckFuture(response->ready_future_handle());
 
   std::vector<uint64_t> loaded_host_callback_handles(
       response->loaded_host_callback_handles().begin(),
       response->loaded_host_callback_handles().end());
 
+  std::vector<xla::ifrt::Device*> devices;
+  if (rpc_helper_->protocol_version() < protocol_version::kExecutableDevices) {
+    devices.reserve(response->addressable_device_ids_size());
+    for (const int32_t device_id : response->addressable_device_ids()) {
+      ABSL_ASSIGN_OR_RETURN(xla::ifrt::Device* const device,
+                            client_->LookupDevice(DeviceId(device_id)));
+      devices.push_back(device);
+    }
+  } else {
+    devices.reserve(response->device_ids_size());
+    for (const int32_t device_id : response->device_ids()) {
+      ABSL_ASSIGN_OR_RETURN(xla::ifrt::Device* const device,
+                            client_->LookupDevice(DeviceId(device_id)));
+      devices.push_back(device);
+    }
+  }
+  std::optional<DeviceListRef> device_list;
+  if (!devices.empty()) {
+    ABSL_ASSIGN_OR_RETURN(device_list, client_->MakeDeviceList(devices));
+  }
+
+  if (is_mpmd_executable) {
+    return std::make_unique<MpmdLoadedExecutable>(
+        client_, rpc_helper_, response->loaded_executable_handle(),
+        response->name(), device_list, std::move(addressable_devices),
+        std::move(mpmd_addressable_devices), std::move(fingerprint),
+        std::move(loaded_host_callbacks),
+        std::move(loaded_host_callback_handles));
+  }
   return std::make_unique<LoadedExecutable>(
       client_, rpc_helper_, response->loaded_executable_handle(),
-      response->name(), response->num_devices(),
-      std::move(addressable_device_logical_device_ids),
-      std::move(addressable_devices), std::move(fingerprint),
-      std::move(ready_future), std::move(loaded_host_callbacks),
+      response->name(), device_list, std::move(addressable_devices),
+      std::move(fingerprint), std::move(loaded_host_callbacks),
       std::move(loaded_host_callback_handles));
 }
 
-absl::StatusOr<std::unique_ptr<Executable>> Compiler::Compile(
+tsl::Future<xla::ifrt::ExecutableRef> Compiler::Compile(
     std::unique_ptr<Program> program, const Topology& topology,
     std::unique_ptr<CompileOptions> options) {
   return absl::UnimplementedError(
       "IFRT service compiler does not support `Compile` with a topology");
 }
 
-absl::StatusOr<std::unique_ptr<xla::ifrt::LoadedExecutable>>
+tsl::Future<xla::ifrt::LoadedExecutableRef>
 Compiler::DeserializeLoadedExecutable(
-    absl::string_view serialized,
+    const absl::Cord& serialized,
     std::unique_ptr<xla::ifrt::DeserializeExecutableOptions> options) {
   return absl::UnimplementedError(
       "IFRT service compiler does not support `DeserializeLoadedExecutable` "

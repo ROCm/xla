@@ -21,16 +21,16 @@ limitations under the License.
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
-#include "mlir/IR/Builders.h"  // from @llvm-project
-#include "mlir/IR/BuiltinAttributeInterfaces.h"  // from @llvm-project
-#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
-#include "mlir/IR/OpDefinition.h"  // from @llvm-project
-#include "mlir/IR/Operation.h"  // from @llvm-project
-#include "mlir/IR/OwningOpRef.h"  // from @llvm-project
-#include "mlir/IR/Value.h"  // from @llvm-project
-#include "mlir/Interfaces/SideEffectInterfaces.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributeInterfaces.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/OwningOpRef.h"
+#include "mlir/IR/Value.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Support/LLVM.h"
 #include "xla/mlir/tools/mlir_bisect/bisect_lib.h"
 #include "xla/mlir/tools/mlir_replay/public/execution_trace_utils.h"
 
@@ -100,10 +100,9 @@ llvm::SmallVector<std::function<OwningOpRef<ModuleOp>()>> ReplaceOpWithConstant(
         if (attribute.size() != 1) {
           return nullptr;
         }
-        op_clone->getResults()[i].replaceAllUsesWith(
-            b.create<arith::ConstantOp>(
-                op_clone->getLoc(), type,
-                llvm::cast<TypedAttr>(attribute.front())));
+        op_clone->getResults()[i].replaceAllUsesWith(arith::ConstantOp::create(
+            b, op_clone->getLoc(), type,
+            llvm::cast<TypedAttr>(attribute.front())));
       }
       return std::move(module_clone);
     });
@@ -135,8 +134,8 @@ ReplaceOperandWithConstant(BisectState& state, Operation* op) {
         }
         auto [module_clone, op_clone] = CloneModuleFor(op);
         OpBuilder b(op_clone);
-        op_clone->setOperand(i, b.create<arith::ConstantOp>(
-                                    op_clone->getLoc(), type,
+        op_clone->setOperand(i, arith::ConstantOp::create(
+                                    b, op_clone->getLoc(), type,
                                     llvm::cast<TypedAttr>(attribute.front())));
         return std::move(module_clone);
       });

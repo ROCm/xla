@@ -14,33 +14,40 @@
 
 #include "xla/python/ifrt_proxy/client/compiler.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <memory>
 #include <string>
 #include <vector>
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
 #include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/cord.h"
 #include "absl/strings/string_view.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/ExtensibleRTTI.h"
+#include "absl/time/time.h"
+#include "google/protobuf/text_format.h"
+#include "tsl/platform/protobuf.h"
+#include "xla/python/ifrt/basic_device_list.h"
 #include "xla/python/ifrt/compiler.h"
-#include "xla/python/ifrt/future.h"
+#include "xla/python/ifrt/device.h"
 #include "xla/python/ifrt/mock.h"
+#include "xla/python/ifrt/program.h"
+#include "xla/python/ifrt/rtti.h"
 #include "xla/python/ifrt/serdes.h"
+#include "xla/python/ifrt/serdes_version.h"
 #include "xla/python/ifrt_proxy/client/client_session.h"
 #include "xla/python/ifrt_proxy/client/host_buffer.h"
 #include "xla/python/ifrt_proxy/client/mock_client_session.h"
 #include "xla/python/ifrt_proxy/client/mock_host_buffer.h"
 #include "xla/python/ifrt_proxy/client/rpc_helper.h"
-#include "xla/python/ifrt_proxy/client/version.h"
 #include "xla/python/ifrt_proxy/common/ifrt_service.pb.h"
-#include "tsl/platform/protobuf.h"  // IWYU pragma: keep
-#include "tsl/platform/status_matchers.h"
-#include "tsl/platform/statusor.h"
-#include "tsl/platform/test.h"
+#include "xla/python/ifrt_proxy/common/test_utils.h"
+#include "xla/python/ifrt_proxy/common/versions.h"
+#include "xla/tsl/concurrency/future.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace ifrt {
@@ -49,39 +56,32 @@ namespace {
 
 using ::testing::_;
 using ::testing::ElementsAre;
-using ::testing::FieldsAre;
 using ::testing::Invoke;
 using ::testing::Optional;
-using ::testing::Pointee;
 using ::testing::Return;
 using ::tsl::protobuf::TextFormat;
-using ::tsl::testing::IsOkAndHolds;
-using ::tsl::testing::StatusIs;
 
-#if defined(PLATFORM_GOOGLE)
-using ::testing::EquivToProto;
-using ::testing::proto::Partially;
-#endif
-
-struct TestProgram : llvm::RTTIExtends<TestProgram, Program> {
+struct TestProgram : RTTIExtends<TestProgram, Program> {
   static char ID;  // NOLINT
 };
 
 [[maybe_unused]] char TestProgram::ID = 0;  // NOLINT
 
-class TestProgramSerDes : public llvm::RTTIExtends<TestProgramSerDes, SerDes> {
+class TestProgramSerDes : public RTTIExtends<TestProgramSerDes, SerDes> {
  public:
   absl::string_view type_name() const override {
     return "xla::ifrt::proxy::TestProgram";
   }
 
-  absl::StatusOr<std::string> Serialize(Serializable& serializable) override {
-    CHECK(llvm::isa<TestProgram>(serializable));
-    return "";
+  absl::StatusOr<absl::Cord> Serialize(
+      const Serializable& serializable,
+      std::unique_ptr<SerializeOptions>) override {
+    CHECK(isa<TestProgram>(serializable));
+    return absl::Cord();
   }
 
   absl::StatusOr<std::unique_ptr<Serializable>> Deserialize(
-      const std::string& serialized,
+      const absl::Cord& serialized,
       std::unique_ptr<DeserializeOptions> options) override {
     return std::make_unique<TestProgram>();
   }
@@ -91,27 +91,28 @@ class TestProgramSerDes : public llvm::RTTIExtends<TestProgramSerDes, SerDes> {
 
 [[maybe_unused]] char TestProgramSerDes::ID = 0;  // NOLINT
 
-struct TestCompileOptions
-    : llvm::RTTIExtends<TestCompileOptions, CompileOptions> {
+struct TestCompileOptions : RTTIExtends<TestCompileOptions, CompileOptions> {
   static char ID;  // NOLINT
 };
 
 [[maybe_unused]] char TestCompileOptions::ID = 0;  // NOLINT
 
 class TestCompileOptionsSerDes
-    : public llvm::RTTIExtends<TestCompileOptionsSerDes, SerDes> {
+    : public RTTIExtends<TestCompileOptionsSerDes, SerDes> {
  public:
   absl::string_view type_name() const override {
     return "xla::ifrt::proxy::TestCompileOptions";
   }
 
-  absl::StatusOr<std::string> Serialize(Serializable& serializable) override {
-    CHECK(llvm::isa<TestCompileOptions>(serializable));
-    return "";
+  absl::StatusOr<absl::Cord> Serialize(
+      const Serializable& serializable,
+      std::unique_ptr<SerializeOptions>) override {
+    CHECK(isa<TestCompileOptions>(serializable));
+    return absl::Cord();
   }
 
   absl::StatusOr<std::unique_ptr<Serializable>> Deserialize(
-      const std::string& serialized,
+      const absl::Cord& serialized,
       std::unique_ptr<DeserializeOptions> options) override {
     return std::make_unique<TestCompileOptions>();
   }
@@ -123,7 +124,9 @@ class TestCompileOptionsSerDes
 
 IfrtProxyVersion Version() {
   IfrtProxyVersion version;
-  version.set_protocol_version(kClientMinVersion);
+  version.set_protocol_version(protocol_version::kClientMin);
+  version.set_ifrt_serdes_version_number(
+      SerDesAnyVersionAccessor::GetMinimum().version_number().value());
   return version;
 }
 
@@ -145,7 +148,7 @@ class CompilerTest : public testing::Test {
     // Default handler that ignores all uninteresting requests but still
     // invokes the callback in order to avoid hanging the caller forever.
     EXPECT_CALL(*session_, Enqueue(_))
-        .WillRepeatedly(Return(Future<ClientSession::Response>(
+        .WillRepeatedly(Return(tsl::Future<ClientSession::Response>(
             absl::InternalError("Request has no mock handlers"))));
   }
 
@@ -154,15 +157,16 @@ class CompilerTest : public testing::Test {
   std::shared_ptr<ClientHostBufferStore> host_buffer_store_;
 };
 
-// TODO(b/315809436): Test needs rewrite because protobuf matchers are not OSS
-#if defined(PLATFORM_GOOGLE)
 TEST_F(CompilerTest, Compile) {
   std::vector<MockDevice> devices(2);
+  TestQueue<IfrtRequest> requests_queue(/*pop_timeout=*/absl::Minutes(1));
+  auto device_list = BasicDeviceList::Create({&devices[0], &devices[1]});
 
   MockClient client;
-  ON_CALL(client, LookupDevice(_)).WillByDefault(Invoke([&](DeviceId id) {
+  ON_CALL(client, LookupDevice(_)).WillByDefault([&](DeviceId id) {
     return &devices[id.value()];
-  }));
+  });
+  ON_CALL(client, MakeDeviceList(_)).WillByDefault(Return(device_list));
 
   Compiler compiler(&client, rpc_helper_);
 
@@ -172,52 +176,39 @@ TEST_F(CompilerTest, Compile) {
              loaded_executable_handle: 1234
              name: "foo-executable"
              num_devices: 2
-             addressable_device_logical_ids { replica: 0 partition: 0 }
-             addressable_device_logical_ids { replica: 0 partition: 1 }
+             device_ids: [ 0, 1 ]
              addressable_device_ids: [ 0, 1 ]
              fingerprint_value: "fingerprint"
-             ready_future_handle: 5678
            })pb",
       &response));
   EXPECT_CALL(*session_,
-              Enqueue(Pointee(Partially(EquivToProto(
-                  R"pb(compile_request {
-                         program { type_name: "xla::ifrt::proxy::TestProgram" }
-                       })pb")))))
-      .WillOnce(MockClientSessionReturnResponse(response));
+              Enqueue(IfrtRequestOfType(IfrtRequest::kCompileRequest)))
+      .WillOnce(MockClientCaptureAndReturn(&requests_queue, response));
 
   ASSERT_TRUE(TextFormat::ParseFromString(R"pb(
                                             response_metadata {
                                               status {
-                                                code: 2  # UNKNOWN
-                                                message: "injected error"
+                                                code: 0  # OK
                                               }
                                             }
                                           )pb",
                                           &response));
-  EXPECT_CALL(*session_,
-              Enqueue(Pointee(Partially(EquivToProto(R"pb(check_future_request {
-                                                            future_handle: 5678
-                                                          })pb")))))
-      .WillOnce(MockClientSessionReturnResponse(response));
 
   TF_ASSERT_OK_AND_ASSIGN(
       auto executable,
-      compiler.Compile(std::make_unique<TestProgram>(),
-                       std::make_unique<TestCompileOptions>()));
+      compiler
+          .CompileAndLoad(std::make_unique<TestProgram>(),
+                          std::make_unique<TestCompileOptions>())
+          .Await());
+
+  EXPECT_EQ(requests_queue.Pop().compile_request().program().type_name(),
+            "xla::ifrt::proxy::TestProgram");
 
   EXPECT_EQ(executable->name(), "foo-executable");
-  EXPECT_EQ(executable->num_devices(), 2);
-  EXPECT_THAT(executable->addressable_device_logical_ids(),
-              ElementsAre(FieldsAre(0, 0), FieldsAre(0, 1)));
-  EXPECT_THAT(executable->addressable_devices(),
-              ElementsAre(&devices[0], &devices[1]));
+  EXPECT_THAT(executable->devices(), Optional(device_list));
   EXPECT_THAT(executable->Fingerprint(),
-              IsOkAndHolds(Optional(std::string("fingerprint"))));
-  EXPECT_THAT(executable->GetReadyFuture().Await(),
-              StatusIs(absl::StatusCode::kUnknown, "injected error"));
+              absl_testing::IsOkAndHolds(Optional(std::string("fingerprint"))));
 }
-#endif
 
 }  // namespace
 }  // namespace proxy

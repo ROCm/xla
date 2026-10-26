@@ -56,8 +56,7 @@ std::unique_ptr<HloProfilePrinterData> CreateHloProfilePrinterData(
 
   size_t profile_counters_size = hlo_profile_index_map.total_count();
 
-  std::unique_ptr<HloProfilePrinterData> profile_printer_data =
-      std::make_unique<HloProfilePrinterData>();
+  auto profile_printer_data = std::make_unique<HloProfilePrinterData>();
   profile_printer_data->set_profile_counters_size(profile_counters_size);
   profile_printer_data->mutable_computation_infos()->Reserve(
       hlo_profile_index_map.computation_count());
@@ -150,18 +149,6 @@ uint64_t HloExecutionProfile::GetCyclesTakenBy(
 
 uint64_t HloExecutionProfile::GetCyclesTakenBy(size_t index) const {
   return profile_counters_[index];
-}
-
-HloExecutionProfileData HloExecutionProfile::ToProto() const {
-  HloExecutionProfileData hlo_execution_profile_data;
-  hlo_execution_profile_data.mutable_profile_counters()->Reserve(
-      profile_counters_.size());
-  for (const auto& counter : profile_counters_) {
-    hlo_execution_profile_data.add_profile_counters(counter);
-  }
-  *(hlo_execution_profile_data.mutable_printer_data()) =
-      hlo_profile_printer_data_;
-  return hlo_execution_profile_data;
 }
 
 }  // namespace xla

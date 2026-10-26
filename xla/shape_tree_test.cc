@@ -15,16 +15,19 @@ limitations under the License.
 
 #include "xla/shape_tree.h"
 
+#include <gtest/gtest.h>
+
 #include <iterator>
 #include <memory>
 #include <utility>
 #include <vector>
 
+#include "tsl/platform/platform.h"
+#include "xla/hlo/testlib/test.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/test.h"
+#include "xla/tsl/platform/test_benchmark.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/test_benchmark.h"
 
 namespace xla {
 namespace {
@@ -240,16 +243,16 @@ TEST_F(ShapeTreeTest, NestedTupleShape) {
 
 TEST_F(ShapeTreeTest, InvalidIndexingTuple) {
   ShapeTree<int> shape_tree{tuple_shape_};
-#ifndef NDEBUG
-  EXPECT_DEATH(shape_tree.element({4}), "");
-#endif
+  if constexpr (tsl::kIsDebugBuild) {
+    EXPECT_DEATH(shape_tree.element({4}), "");
+  }
 }
 
 TEST_F(ShapeTreeTest, InvalidIndexingNestedTuple) {
   ShapeTree<int> shape_tree{nested_tuple_shape_};
-#ifndef NDEBUG
-  EXPECT_DEATH(shape_tree.element({0, 0}), "");
-#endif
+  if constexpr (tsl::kIsDebugBuild) {
+    EXPECT_DEATH(shape_tree.element({0, 0}), "");
+  }
 }
 
 TEST_F(ShapeTreeTest, ShapeTreeOfNonCopyableType) {
@@ -384,6 +387,22 @@ TEST_F(ShapeTreeTest, OperatorEquals) {
     EXPECT_TRUE(b == c);
     EXPECT_FALSE(b != c);
   }
+  {
+    Shape array_shape1 = ShapeUtil::MakeShape(F32, {1});
+    Shape array_shape2 = ShapeUtil::MakeShape(F32, {2});
+    Shape array_shape3 = ShapeUtil::MakeShape(S32, {1});
+    ShapeTree<int> a(array_shape1, 7);
+    ShapeTree<int> b(array_shape2, 7);
+    ShapeTree<int> c(array_shape3, 7);
+    EXPECT_TRUE(a == b);
+    EXPECT_TRUE(a == c);
+
+    Shape tuple1 = ShapeUtil::MakeTupleShape({array_shape1, array_shape3});
+    Shape tuple2 = ShapeUtil::MakeTupleShape({array_shape2, array_shape1});
+    ShapeTree<int> d(tuple1, 8);
+    ShapeTree<int> e(tuple2, 8);
+    EXPECT_TRUE(d == e);
+  }
 }
 
 TEST_F(ShapeTreeTest, ConstructWithPointerToShape) {
@@ -410,6 +429,15 @@ TEST_F(ShapeTreeTest, CopyAssignWithPointerToShape) {
   ShapeTree<int> dest;
   dest = source;
   EXPECT_EQ(&dest.shape(), &nested_tuple_shape_);
+}
+
+TEST_F(ShapeTreeTest, ReplaceShapePtrSelfReplacement) {
+  ShapeTree<int> tree(ShapeUtil::MakeTupleShape({array_shape_, array_shape_}));
+  // Self-replacement should not cause Use-After-Free.
+  tree.replace_shape_ptr(tree.shape());
+  // Accessing the shape after replacement should be safe.
+  EXPECT_TRUE(tree.shape().IsTuple());
+  EXPECT_EQ(tree.shape().tuple_shapes().size(), 2);
 }
 
 TEST_F(ShapeTreeTest, IterateSimple) {
@@ -653,7 +681,7 @@ void BM_Iterate(::testing::benchmark::State& state) {
 }
 
 #define BENCHMARK_WITH_ARGS(name) \
-  BENCHMARK(name)->ArgPair(2, 8)->ArgPair(1, 1000)
+  BENCHMARK(name)->ArgPair(0, 0)->ArgPair(2, 8)->ArgPair(1, 1000)
 
 BENCHMARK_WITH_ARGS(BM_Construct);
 BENCHMARK_WITH_ARGS(BM_ConstructUnowned);

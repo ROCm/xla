@@ -20,14 +20,14 @@ limitations under the License.
 #include <memory>
 #include <utility>
 
+#include "absl/status/statusor.h"
+#include "tsl/platform/logging.h"
 #include "xla/executable_run_options.h"
 #include "xla/service/backend.h"
 #include "xla/service/stream_pool.h"
-#include "xla/statusor.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/logging.h"
 
 namespace xla {
 

@@ -16,28 +16,38 @@ limitations under the License.
 #include "xla/tsl/util/device_name_utils.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <ostream>
+#include <string>
+#include <vector>
 
-#include "tsl/platform/errors.h"
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
+#include "absl/strings/strip.h"
+#include "tsl/platform/str_util.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/types.h"
 
 namespace tsl {
 
-static bool IsAlpha(char c) {
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-}
-
 static bool IsAlphaNumOrUnderscore(char c) {
-  return IsAlpha(c) || (c >= '0' && c <= '9') || c == '_';
+  return absl::ascii_isalnum(c) || c == '_';
 }
 
 // Returns true iff "in" is a valid job name.
-static bool IsJobName(StringPiece in) {
-  return !in.empty() && IsAlpha(in.front()) &&
+static bool IsJobName(absl::string_view in) {
+  return !in.empty() && absl::ascii_isalpha(in.front()) &&
          std::all_of(in.begin(), in.end(), IsAlphaNumOrUnderscore);
 }
 
-static bool ConsumePrefix(StringPiece* in, string* out,
-                          StringPiece prefix_terminators) {
-  if (in->empty() || !IsAlpha(in->front())) return false;
+static bool ConsumePrefix(absl::string_view* in, std::string* out,
+                          absl::string_view prefix_terminators) {
+  if (in->empty() || !absl::ascii_isalpha(in->front())) {
+    return false;
+  }
   const auto end_it =
       std::find_first_of(in->begin(), in->end(), prefix_terminators.begin(),
                          prefix_terminators.end());
@@ -50,55 +60,55 @@ static bool ConsumePrefix(StringPiece* in, string* out,
 }
 
 // Returns true and fills in "*job" iff "*in" starts with a job name.
-static bool ConsumeJobName(StringPiece* in, string* job) {
+static bool ConsumeJobName(absl::string_view* in, std::string* job) {
   return ConsumePrefix(in, job, "/");
 }
 
 // Returns true and fills in "*device_type" iff "*in" starts with a device type
 // name.
-static bool ConsumeDeviceType(StringPiece* in, string* device_type) {
+static bool ConsumeDeviceType(absl::string_view* in, std::string* device_type) {
   return ConsumePrefix(in, device_type, "/:");
 }
 
 // Returns true and fills in "*val" iff "*in" starts with a decimal
 // number.
-static bool ConsumeNumber(StringPiece* in, int* val) {
-  uint64 tmp;
+static bool ConsumeNumber(absl::string_view* in, int* val) {
+  uint64_t tmp;
   if (str_util::ConsumeLeadingDigits(in, &tmp)) {
     *val = tmp;
     return true;
-  } else {
-    return false;
   }
+  return false;
 }
 
 // Returns a fully qualified device name given the parameters.
-static string DeviceName(const string& job, int replica, int task,
-                         const string& device_prefix, const string& device_type,
-                         int id) {
+static std::string DeviceName(absl::string_view job, int replica, int task,
+                              absl::string_view device_prefix,
+                              absl::string_view device_type, int id) {
   CHECK(IsJobName(job)) << job;
   CHECK_LE(0, replica);
   CHECK_LE(0, task);
   CHECK(!device_type.empty());
   CHECK_LE(0, id);
-  return strings::StrCat("/job:", job, "/replica:", replica, "/task:", task,
-                         device_prefix, device_type, ":", id);
+  return absl::StrCat("/job:", job, "/replica:", replica, "/task:", task,
+                      device_prefix, device_type, ":", id);
 }
 
 /* static */
-string DeviceNameUtils::FullName(const string& job, int replica, int task,
-                                 const string& type, int id) {
+std::string DeviceNameUtils::FullName(const std::string& job, int replica,
+                                      int task, const std::string& type,
+                                      int id) {
   return DeviceName(job, replica, task, "/device:", type, id);
 }
 
 namespace {
-string LegacyName(const string& job, int replica, int task, const string& type,
-                  int id) {
+std::string LegacyName(const std::string& job, int replica, int task,
+                       const std::string& type, int id) {
   return DeviceName(job, replica, task, "/", absl::AsciiStrToLower(type), id);
 }
 }  // anonymous namespace
 
-bool DeviceNameUtils::ParseFullName(StringPiece fullname, ParsedName* p) {
+bool DeviceNameUtils::ParseFullName(absl::string_view fullname, ParsedName* p) {
   p->Clear();
   if (fullname == "/") {
     return true;
@@ -171,7 +181,7 @@ bool DeviceNameUtils::ParseFullName(StringPiece fullname, ParsedName* p) {
   return true;
 }
 
-bool DeviceNameUtils::ParseFullOrLocalName(StringPiece fullname,
+bool DeviceNameUtils::ParseFullOrLocalName(absl::string_view fullname,
                                            ParsedName* p) {
   return ParseFullName(fullname, p) || ParseLocalName(fullname, p);
 }
@@ -205,21 +215,21 @@ void CompleteName(const DeviceNameUtils::ParsedName& parsed_basename,
 }  // namespace
 
 /* static */
-absl::Status DeviceNameUtils::CanonicalizeDeviceName(StringPiece fullname,
-                                                     StringPiece basename,
-                                                     string* canonical_name) {
+absl::Status DeviceNameUtils::CanonicalizeDeviceName(
+    absl::string_view fullname, absl::string_view basename,
+    std::string* canonical_name) {
   *canonical_name = "";
   ParsedName parsed_basename;
   if (!ParseFullName(basename, &parsed_basename)) {
-    return errors::InvalidArgument("Could not parse basename: ", basename,
-                                   " into a device specification.");
+    return absl::InvalidArgumentError(
+        absl::StrCat("Could not parse basename: ", basename,
+                     " into a device specification."));
   }
   if (!(parsed_basename.has_job && parsed_basename.has_replica &&
         parsed_basename.has_task && parsed_basename.has_type &&
         parsed_basename.has_id)) {
-    return errors::InvalidArgument("Basename: ", basename,
-                                   " should be fully "
-                                   "specified.");
+    return absl::InvalidArgumentError(
+        absl::StrCat("Basename: ", basename, " should be fully specified."));
   }
   ParsedName parsed_name;
   if (ParseLocalName(fullname, &parsed_name)) {
@@ -232,23 +242,29 @@ absl::Status DeviceNameUtils::CanonicalizeDeviceName(StringPiece fullname,
     *canonical_name = ParsedNameToString(parsed_name);
     return absl::OkStatus();
   }
-  return errors::InvalidArgument("Could not parse ", fullname,
-                                 " into a device "
-                                 "specification.");
+  return absl::InvalidArgumentError(absl::StrCat("Could not parse ", fullname,
+                                                 " into a device "
+                                                 "specification."));
 }
 
 /* static */
-string DeviceNameUtils::ParsedNameToString(const ParsedName& pn) {
-  string buf;
-  if (pn.has_job) strings::StrAppend(&buf, "/job:", pn.job);
-  if (pn.has_replica) strings::StrAppend(&buf, "/replica:", pn.replica);
-  if (pn.has_task) strings::StrAppend(&buf, "/task:", pn.task);
+std::string DeviceNameUtils::ParsedNameToString(const ParsedName& pn) {
+  std::string buf;
+  if (pn.has_job) {
+    absl::StrAppend(&buf, "/job:", pn.job);
+  }
+  if (pn.has_replica) {
+    absl::StrAppend(&buf, "/replica:", pn.replica);
+  }
+  if (pn.has_task) {
+    absl::StrAppend(&buf, "/task:", pn.task);
+  }
   if (pn.has_type) {
-    strings::StrAppend(&buf, "/device:", pn.type, ":");
+    absl::StrAppend(&buf, "/device:", pn.type, ":");
     if (pn.has_id) {
-      strings::StrAppend(&buf, pn.id);
+      absl::StrAppend(&buf, pn.id);
     } else {
-      strings::StrAppend(&buf, "*");
+      absl::StrAppend(&buf, "*");
     }
   }
   return buf;
@@ -332,11 +348,21 @@ bool DeviceNameUtils::IsCompleteSpecification(const ParsedName& pattern,
   CHECK(name.has_job && name.has_replica && name.has_task && name.has_type &&
         name.has_id);
 
-  if (pattern.has_job && (pattern.job != name.job)) return false;
-  if (pattern.has_replica && (pattern.replica != name.replica)) return false;
-  if (pattern.has_task && (pattern.task != name.task)) return false;
-  if (pattern.has_type && (pattern.type != name.type)) return false;
-  if (pattern.has_id && (pattern.id != name.id)) return false;
+  if (pattern.has_job && (pattern.job != name.job)) {
+    return false;
+  }
+  if (pattern.has_replica && (pattern.replica != name.replica)) {
+    return false;
+  }
+  if (pattern.has_task && (pattern.task != name.task)) {
+    return false;
+  }
+  if (pattern.has_type && (pattern.type != name.type)) {
+    return false;
+  }
+  if (pattern.has_id && (pattern.id != name.id)) {
+    return false;
+  }
   return true;
 }
 
@@ -348,48 +374,46 @@ absl::Status MergeDevNamesImpl(DeviceNameUtils::ParsedName* target,
   const auto& ParsedNameToString = DeviceNameUtils::ParsedNameToString;
   if (other.has_job) {
     if (target->has_job && target->job != other.job) {
-      return errors::InvalidArgument(
-          "Cannot merge devices with incompatible jobs: '",
-          ParsedNameToString(*target), "' and '", ParsedNameToString(other),
-          "'");
-    } else {
-      target->has_job = other.has_job;
-      target->job = other.job;
+      return absl::InvalidArgumentError(
+          absl::StrCat("Cannot merge devices with incompatible jobs: '",
+                       ParsedNameToString(*target), "' and '",
+                       ParsedNameToString(other), "'"));
     }
+    target->has_job = other.has_job;
+    target->job = other.job;
   }
 
   if (other.has_replica) {
     if (target->has_replica && target->replica != other.replica) {
-      return errors::InvalidArgument(
-          "Cannot merge devices with incompatible replicas: '",
-          ParsedNameToString(*target), "' and '", ParsedNameToString(other),
-          "'");
-    } else {
-      target->has_replica = other.has_replica;
-      target->replica = other.replica;
+      return absl::InvalidArgumentError(
+          absl::StrCat("Cannot merge devices with incompatible replicas: '",
+                       ParsedNameToString(*target), "' and '",
+                       ParsedNameToString(other), "'"));
     }
+    target->has_replica = other.has_replica;
+    target->replica = other.replica;
   }
 
   if (other.has_task) {
     if (target->has_task && target->task != other.task) {
-      return errors::InvalidArgument(
-          "Cannot merge devices with incompatible tasks: '",
-          ParsedNameToString(*target), "' and '", ParsedNameToString(other),
-          "'");
-    } else {
-      target->has_task = other.has_task;
-      target->task = other.task;
+      return absl::InvalidArgumentError(
+          absl::StrCat("Cannot merge devices with incompatible tasks: '",
+                       ParsedNameToString(*target), "' and '",
+                       ParsedNameToString(other), "'"));
     }
+    target->has_task = other.has_task;
+    target->task = other.task;
   }
 
   if (other.has_type) {
     if (target->has_type && target->type != other.type) {
       if (!allow_soft_placement) {
-        return errors::InvalidArgument(
-            "Cannot merge devices with incompatible types: '",
-            ParsedNameToString(*target), "' and '", ParsedNameToString(other),
-            "'");
-      } else if (override_conflicts) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Cannot merge devices with incompatible types: '",
+                         ParsedNameToString(*target), "' and '",
+                         ParsedNameToString(other), "'"));
+      }
+      if (override_conflicts) {
         target->type = other.type;
       } else {
         target->has_id = false;
@@ -405,11 +429,12 @@ absl::Status MergeDevNamesImpl(DeviceNameUtils::ParsedName* target,
   if (other.has_id) {
     if (target->has_id && target->id != other.id) {
       if (!allow_soft_placement) {
-        return errors::InvalidArgument(
-            "Cannot merge devices with incompatible ids: '",
-            ParsedNameToString(*target), "' and '", ParsedNameToString(other),
-            "'");
-      } else if (override_conflicts) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Cannot merge devices with incompatible ids: '",
+                         ParsedNameToString(*target), "' and '",
+                         ParsedNameToString(other), "'"));
+      }
+      if (override_conflicts) {
         target->id = other.id;
       } else {
         target->has_id = false;
@@ -479,7 +504,8 @@ bool DeviceNameUtils::IsSameAddressSpace(const ParsedName& a,
 }
 
 /* static */
-bool DeviceNameUtils::IsSameAddressSpace(StringPiece src, StringPiece dst) {
+bool DeviceNameUtils::IsSameAddressSpace(absl::string_view src,
+                                         absl::string_view dst) {
   ParsedName x;
   ParsedName y;
   return ParseFullName(src, &x) && ParseFullName(dst, &y) &&
@@ -508,27 +534,27 @@ const DeviceNameUtils::ParsedName DeviceNameUtils::AddressSpace(
 }
 
 /* static */
-string DeviceNameUtils::LocalName(StringPiece type, int id) {
-  return strings::StrCat("/device:", type, ":", id);
+std::string DeviceNameUtils::LocalName(absl::string_view type, int id) {
+  return absl::StrCat("/device:", type, ":", id);
 }
 
 namespace {
 // Returns the legacy local device name given its "type" and "id" (which is
 // '/device:type:id').
-string LegacyLocalName(StringPiece type, int id) {
-  return strings::StrCat(type, ":", id);
+std::string LegacyLocalName(absl::string_view type, int id) {
+  return absl::StrCat(type, ":", id);
 }
 }  // anonymous namespace
 
 /* static */
-string DeviceNameUtils::LocalName(StringPiece fullname) {
+std::string DeviceNameUtils::LocalName(absl::string_view fullname) {
   ParsedName x;
   CHECK(ParseFullName(fullname, &x)) << fullname;
   return LocalName(x.type, x.id);
 }
 
 /* static */
-bool DeviceNameUtils::ParseLocalName(StringPiece name, ParsedName* p) {
+bool DeviceNameUtils::ParseLocalName(absl::string_view name, ParsedName* p) {
   if (!ConsumeDeviceType(&name, &p->type)) {
     return false;
   }
@@ -544,8 +570,8 @@ bool DeviceNameUtils::ParseLocalName(StringPiece name, ParsedName* p) {
 }
 
 /* static */
-bool DeviceNameUtils::SplitDeviceName(StringPiece name, string* task,
-                                      string* device) {
+bool DeviceNameUtils::SplitDeviceName(absl::string_view name, std::string* task,
+                                      std::string* device) {
   ParsedName pn;
   if (ParseFullName(name, &pn) && pn.has_type && pn.has_id) {
     task->clear();
@@ -554,62 +580,61 @@ bool DeviceNameUtils::SplitDeviceName(StringPiece name, string* task,
         (pn.has_replica ? (9 + 4 /*estimated UB for # replica digits*/) : 0) +
         (pn.has_task ? (6 + 4 /*estimated UB for # task digits*/) : 0));
     if (pn.has_job) {
-      strings::StrAppend(task, "/job:", pn.job);
+      absl::StrAppend(task, "/job:", pn.job);
     }
     if (pn.has_replica) {
-      strings::StrAppend(task, "/replica:", pn.replica);
+      absl::StrAppend(task, "/replica:", pn.replica);
     }
     if (pn.has_task) {
-      strings::StrAppend(task, "/task:", pn.task);
+      absl::StrAppend(task, "/task:", pn.task);
     }
     device->clear();
-    strings::StrAppend(device, pn.type, ":", pn.id);
+    absl::StrAppend(device, pn.type, ":", pn.id);
     return true;
   }
   return false;
 }
 
 /* static */
-bool DeviceNameUtils::GetTaskName(const ParsedName& pn, string* task) {
+bool DeviceNameUtils::GetTaskName(const ParsedName& pn, std::string* task) {
   if (pn.has_job && pn.has_replica && pn.has_task) {
     task->clear();
     task->reserve((5 + pn.job.size()) +
                   (9 + 4 /*estimated UB for # replica digits*/) +
                   (6 + 4 /*estimated UB for # task digits*/));
-    strings::StrAppend(task, "/job:", pn.job);
-    strings::StrAppend(task, "/replica:", pn.replica);
-    strings::StrAppend(task, "/task:", pn.task);
+    absl::StrAppend(task, "/job:", pn.job);
+    absl::StrAppend(task, "/replica:", pn.replica);
+    absl::StrAppend(task, "/task:", pn.task);
     return true;
   }
   return false;
 }
 
-std::vector<string> DeviceNameUtils::GetNamesForDeviceMappings(
+std::vector<std::string> DeviceNameUtils::GetNamesForDeviceMappings(
     const ParsedName& pn) {
   if (pn.has_job && pn.has_replica && pn.has_task && pn.has_type && pn.has_id) {
     return {
         DeviceNameUtils::FullName(pn.job, pn.replica, pn.task, pn.type, pn.id),
         LegacyName(pn.job, pn.replica, pn.task, pn.type, pn.id)};
-  } else {
-    return {};
   }
+  return {};
 }
 
-std::vector<string> DeviceNameUtils::GetLocalNamesForDeviceMappings(
+std::vector<std::string> DeviceNameUtils::GetLocalNamesForDeviceMappings(
     const ParsedName& pn) {
   if (pn.has_type && pn.has_id) {
     return {DeviceNameUtils::LocalName(pn.type, pn.id),
             LegacyLocalName(pn.type, pn.id)};
-  } else {
-    return {};
   }
+  return {};
 }
 
 /*static*/ absl::Status DeviceNameUtils::DeviceNameToCpuDeviceName(
-    const string& device_name, string* host_device_name) {
+    const std::string& device_name, std::string* host_device_name) {
   DeviceNameUtils::ParsedName device;
   if (!DeviceNameUtils::ParseFullName(device_name, &device)) {
-    return errors::Internal("Could not parse device name ", device_name);
+    return absl::InternalError(
+        absl::StrCat("Could not parse device name ", device_name));
   }
   device.type = "CPU";
   device.has_type = true;

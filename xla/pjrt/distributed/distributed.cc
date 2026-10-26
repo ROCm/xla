@@ -17,31 +17,50 @@ limitations under the License.
 
 #include <memory>
 #include <string>
+#include <utility>
 
+#include "absl/status/statusor.h"
 #include "grpcpp/channel.h"
 #include "grpcpp/create_channel.h"
 #include "xla/pjrt/distributed/client.h"
 #include "xla/pjrt/distributed/service.h"
-#include "xla/statusor.h"
-#include "tsl/platform/grpc_credentials.h"
+#include "xla/tsl/platform/grpc_credentials.h"
 
 namespace xla {
-
-// In OSS, insecure credentials are used as default.
-constexpr bool kVerifySecureCredentials = false;
 
 absl::StatusOr<std::unique_ptr<DistributedRuntimeService>>
 GetDistributedRuntimeService(std::string address,
                              const CoordinationServiceImpl::Options& options) {
-  return DistributedRuntimeService::Get(
-      address, tsl::GetServerCredentials(kVerifySecureCredentials), options);
+  auto credentials = options.credentials;
+  if (credentials == nullptr) {
+    credentials = tsl::GetServerCredentials(options.verify_secure_credentials);
+  }
+  return DistributedRuntimeService::Get(address, std::move(credentials),
+                                        options);
 }
 
 std::shared_ptr<DistributedRuntimeClient> GetDistributedRuntimeClient(
-    std::string address, const DistributedRuntimeClient::Options& options) {
-  std::shared_ptr<grpc::Channel> channel = grpc::CreateChannel(
-      address, tsl::GetClientCredentials(kVerifySecureCredentials));
+    std::string address, const DistributedRuntimeClient::Options& options,
+    bool use_compression) {
+  auto credentials = options.credentials;
+  if (credentials == nullptr) {
+    credentials = tsl::GetClientCredentials(options.verify_secure_credentials);
+  }
+  auto channel = GetDistributedRuntimeClientChannel(
+      address, std::move(credentials), use_compression);
   return GetDistributedRuntimeClient(channel, options);
+}
+
+std::shared_ptr<::grpc::Channel> GetDistributedRuntimeClientChannel(
+    std::string address, std::shared_ptr<::grpc::ChannelCredentials> creds,
+    bool use_compression) {
+  grpc::ChannelArguments args;
+  if (use_compression) {
+    args.SetCompressionAlgorithm(GRPC_COMPRESS_GZIP);
+  }
+  args.SetMaxReceiveMessageSize(-1);
+  args.SetMaxSendMessageSize(-1);
+  return ::grpc::CreateCustomChannel(address, creds, args);
 }
 
 }  // namespace xla

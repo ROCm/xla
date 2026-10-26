@@ -14,7 +14,6 @@
 
 #include "xla/python/ifrt_proxy/client/grpc_client_session.h"
 
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -28,6 +27,7 @@
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
@@ -38,30 +38,29 @@
 #include "grpcpp/create_channel.h"
 #include "grpcpp/security/credentials.h"
 #include "grpcpp/support/channel_arguments.h"
-#include "xla/pjrt/distributed/util.h"
-#include "xla/python/ifrt/future.h"
-#include "xla/python/ifrt_proxy/client/client_session.h"
-#include "xla/python/ifrt_proxy/common/grpc_credentials.h"
-#include "xla/python/ifrt_proxy/common/grpc_ifrt_service.grpc.pb.h"
-#include "xla/python/ifrt_proxy/common/ifrt_service.pb.h"
 #include "tsl/platform/env.h"
-#include "tsl/platform/errors.h"
 #include "tsl/platform/logging.h"
 #include "tsl/platform/threadpool.h"
 #include "tsl/platform/unbounded_work_queue.h"
+#include "tsl/profiler/lib/traceme.h"
+#include "xla/pjrt/distributed/util.h"
+#include "xla/python/ifrt_proxy/common/grpc_credentials_possibly_insecure_wrapper.h"
+#include "xla/python/ifrt_proxy/common/grpc_ifrt_service.grpc.pb.h"
+#include "xla/python/ifrt_proxy/common/grpc_ifrt_service.pb.h"
+#include "xla/python/ifrt_proxy/common/ifrt_service.pb.h"
+#include "xla/tsl/concurrency/future.h"
+#include "xla/tsl/platform/errors.h"
 
 namespace xla {
 namespace ifrt {
 namespace proxy {
-
-using OpId = int64_t;
 
 // Logically equivalent to a map<OpId, ResponseCallback>, but thread-safe and
 // with various convenience functions.
 class GrpcClientSession::ResponseCallbackTable {
  public:
   absl::Status Add(OpId op_id, ResponseCallback callback) {
-    absl::MutexLock l(&mu_);
+    absl::MutexLock l(mu_);
     const bool inserted = table_.insert({op_id, std::move(callback)}).second;
     if (!inserted) {
       return absl::AlreadyExistsError(
@@ -71,7 +70,7 @@ class GrpcClientSession::ResponseCallbackTable {
   }
 
   std::optional<ResponseCallback> Pop(OpId op_id) {
-    absl::MutexLock l(&mu_);
+    absl::MutexLock l(mu_);
     auto it = table_.find(op_id);
     if (it == table_.end()) {
       return std::nullopt;
@@ -83,7 +82,7 @@ class GrpcClientSession::ResponseCallbackTable {
 
   absl::flat_hash_map<OpId, ResponseCallback> PopAll() {
     absl::flat_hash_map<OpId, ResponseCallback> result;
-    absl::MutexLock l(&mu_);
+    absl::MutexLock l(mu_);
     result = std::move(table_);
     table_ = absl::flat_hash_map<OpId, ResponseCallback>();
     return result;
@@ -124,38 +123,44 @@ GrpcClientSession::GrpcClientSession(
       absl::bind_front(&GrpcClientSession::ReadLoop, this));
 }
 
-Future<std::shared_ptr<IfrtResponse>> GrpcClientSession::Enqueue(
+tsl::Future<std::shared_ptr<IfrtResponse>> GrpcClientSession::Enqueue(
     std::unique_ptr<IfrtRequest> request) {
-  auto promise = Future<std::shared_ptr<IfrtResponse>>::CreatePromise();
+  auto [promise_tmp, future] =
+      tsl::MakePromise<std::shared_ptr<IfrtResponse>>();
+  auto promise = std::move(promise_tmp).ToShared();
   absl::Status status = Enqueue(
       std::move(request),
       [promise, queue = user_futures_work_queue_.get()](
           absl::StatusOr<std::shared_ptr<IfrtResponse>> response) mutable {
-        queue->Schedule([promise = std::move(promise),
-                         response = std::move(response)]() mutable -> void {
-          promise.Set(std::move(response));
-        });
+        queue->Schedule(
+            [promise, response = std::move(response)]() mutable -> void {
+              promise->Set(std::move(response));
+            });
       });
   if (!status.ok()) {
     user_futures_work_queue_->Schedule([promise, status]() mutable -> void {
-      promise.Set(std::move(status));
+      promise->Set(std::move(status));
     });
   }
-  return Future<std::shared_ptr<IfrtResponse>>(std::move(promise));
+  return std::move(future);
 }
 
 absl::Status GrpcClientSession::Enqueue(std::unique_ptr<IfrtRequest> req,
                                         ResponseCallback callback) {
-  const OpId op_id = req->request_metadata().op_id();
+  absl::MutexLock l(writer_mu_);
+  const OpId op_id = writer_next_op_id_++;
 
-  absl::MutexLock l(&writer_mu_);
   if (writes_stopped_) {
     return absl::FailedPreconditionError(
         "GrpcClientSession: writes no longer allowed.");
   }
 
-  TF_RETURN_IF_ERROR(response_callbacks_->Add(op_id, std::move(callback)));
+  ABSL_RETURN_IF_ERROR(response_callbacks_->Add(op_id, std::move(callback)));
 
+  CHECK_EQ(req->mutable_request_metadata()->op_id(), 0);
+  req->mutable_request_metadata()->set_op_id(op_id);
+
+  tsl::profiler::TraceMe t("grpc_stream_write");
   if (!stream_->Write(*req)) {
     CHECK(response_callbacks_->Pop(op_id).has_value());
     return absl::UnknownError("GrpcClientSession: writing to stream failed.");
@@ -194,6 +199,7 @@ void GrpcClientSession::Finish(const absl::Status& client_status) {
             << client_status;
 
   absl::call_once(finish_once_, [&] {
+    LOG(INFO) << "GrpcClientSession: Finish(): calling context_->TryCancel();";
     context_->TryCancel();
 
     LOG(INFO) << "GrpcClientSession: Waiting for reader thread to stop.";
@@ -201,7 +207,7 @@ void GrpcClientSession::Finish(const absl::Status& client_status) {
 
     auto finish_stream_and_get_server_status = [&]() -> absl::Status {
       LOG(INFO) << "GrpClientSession: Attempting to call stream->Finish()";
-      absl::MutexLock l(&writer_mu_);
+      absl::MutexLock l(writer_mu_);
       // Note: stream_->Finish() counts as a write, and needs to be serialized
       // with stream->Write().
       LOG(INFO) << "GrpClientSession: Attempting to call stream->Finish(), "
@@ -216,8 +222,23 @@ void GrpcClientSession::Finish(const absl::Status& client_status) {
       return server_status;
     };
 
-    absl::Status combined_status = finish_stream_and_get_server_status();
-    combined_status.Update(client_status);
+    // Prioritize `client_status` if non-OK because `context_->TryCancel()`
+    // above causes `stream_->Finish()` to return `CANCELLED` even when the
+    // stream was healthy before client-initiated termination. If both
+    // `client_status` and `server_status` are non-OK, include both in the
+    // combined error message so neither error is lost.
+    absl::Status server_status = finish_stream_and_get_server_status();
+    absl::Status combined_status;
+    if (!client_status.ok() && !server_status.ok()) {
+      combined_status = tsl::errors::CreateWithUpdatedMessage(
+          client_status,
+          absl::StrCat("Client error: ", client_status.ToString(),
+                       "; Server error: ", server_status.ToString()));
+    } else if (!client_status.ok()) {
+      combined_status = client_status;
+    } else {
+      combined_status = server_status;
+    }
 
     auto all_callbacks = response_callbacks_->PopAll();
     for (auto& [_, cb] : all_callbacks) {
@@ -232,9 +253,11 @@ void GrpcClientSession::Finish(const absl::Status& client_status) {
               << combined_status;
     stream_terminated_cb_(combined_status);
   });
+  LOG(INFO) << "GrpcClientSession: Finish() done.";
 }
 
 GrpcClientSession::~GrpcClientSession() {
+  LOG(INFO) << "GrpcClientSession::~GrpcClientSession() starting.";
   GrpcClientSession::Finish(absl::CancelledError("~GrpcClientSession called."));
   reader_thread_.reset();  // Wait until the reader thread exits.
   LOG(INFO) << "Deleting GrpcClientSession.user_futures_work_queue_ ...";
@@ -249,8 +272,10 @@ std::shared_ptr<grpc::GrpcIfrtService::StubInterface> CreateGrpcStub(
   // model compilation.
   args.SetInt(GRPC_ARG_MAX_SEND_MESSAGE_LENGTH, -1);
   args.SetInt(GRPC_ARG_MAX_RECEIVE_MESSAGE_LENGTH, -1);
-  std::shared_ptr<::grpc::Channel> channel = ::grpc::CreateCustomChannel(
-      std::string(server_address), GetClientCredentials(), args);
+  args.SetInt(GRPC_ARG_USE_LOCAL_SUBCHANNEL_POOL, true);
+  std::shared_ptr<::grpc::Channel> channel =
+      ::grpc::CreateCustomChannel(std::string(server_address),
+                                  GetClientCredentialsPossiblyInsecure(), args);
   VLOG(0) << "  Established channel.";
   CHECK(channel != nullptr);
 

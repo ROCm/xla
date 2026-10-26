@@ -32,9 +32,9 @@ limitations under the License.
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/IR/Operation.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
-#include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "mlir/IR/Operation.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Support/LogicalResult.h"
 
 namespace mlir {
 namespace interpreter {
@@ -73,7 +73,9 @@ struct BufferView {
   std::optional<int64_t> num_vector_dims = std::nullopt;
   bool is_vector = false;
 
-  int64_t Rank() const { return sizes.size() - num_vector_dims.value_or(0); }
+  int64_t num_dimensions() const {
+    return sizes.size() - num_vector_dims.value_or(0);
+  }
 
   // Removes the dimension from the view. If you need to keep it, use the
   // overload below with dim_size = 1.
@@ -154,14 +156,14 @@ struct BufferView {
       return {
           view_,
           llvm::SmallVector<int64_t>(
-              view_->Rank() +
+              view_->num_dimensions() +
               (include_vector_dims_ ? view_->num_vector_dims.value_or(0) : 0)),
           include_vector_dims_};
     }
     Iterator end() const { return {view_, {-1}, false}; }
 
    private:
-    friend class BufferView;
+    friend struct BufferView;
 
     LogicalIndexView(const BufferView* view, bool include_vector_dims)
         : view_(view), include_vector_dims_(include_vector_dims) {}
@@ -314,8 +316,10 @@ struct TensorOrMemref {
   TensorOrMemref VectorAt(ArrayRef<int64_t> indices) const {
     auto offset = view.GetPhysicalIndex(indices);
     BufferView subview;
-    subview.strides = {view.strides.begin() + view.Rank(), view.strides.end()};
-    subview.sizes = {view.sizes.begin() + view.Rank(), view.sizes.end()};
+    subview.strides = {view.strides.begin() + view.num_dimensions(),
+                       view.strides.end()};
+    subview.sizes = {view.sizes.begin() + view.num_dimensions(),
+                     view.sizes.end()};
     if (offset) {
       subview.offset = *offset;
     } else {

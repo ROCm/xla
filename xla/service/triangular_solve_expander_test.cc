@@ -15,15 +15,21 @@ limitations under the License.
 
 #include "xla/service/triangular_solve_expander.h"
 
+#include <gmock/gmock.h>
+
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 
+#include "xla/array2d.h"
+#include "xla/error_spec.h"
 #include "xla/literal.h"
+#include "xla/literal_util.h"
 #include "xla/reference_util.h"
-#include "xla/test.h"
-#include "xla/tests/hlo_test_base.h"
-#include "xla/types.h"
-#include "tsl/lib/core/status_test_util.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/tests/literal_test_util.h"
+#include "xla/tsl/platform/test.h"
 
 namespace xla {
 namespace {
@@ -45,14 +51,13 @@ TEST_P(TriangularExpanderTest, TestBlockSize) {
     }
   )";
 
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
 
   {
     TriangularSolveExpander triangular_solve_expander(block_size);
 
-    TF_ASSERT_OK_AND_ASSIGN(
-        bool result, RunHloPass(&triangular_solve_expander, module.get()));
+    ASSERT_OK_AND_ASSIGN(bool result,
+                         RunHloPass(&triangular_solve_expander, module.get()));
     EXPECT_TRUE(result);
   }
 
@@ -79,10 +84,10 @@ TEST_P(TriangularExpanderTest, TestBlockSize) {
   auto la = LiteralUtil::CreateR2FromArray2D(a);
   auto lb = LiteralUtil::CreateR2FromArray2D(b);
 
-  TF_ASSERT_OK_AND_ASSIGN(Literal lx, Execute(std::move(module), {&la, &lb}));
+  ASSERT_OK_AND_ASSIGN(Literal lx, Execute(std::move(module), {&la, &lb}));
 
   auto x_shape = lx.shape();
-  EXPECT_EQ(x_shape.dimensions_size(), 2);
+  EXPECT_EQ(x_shape.dimensions().size(), 2);
   EXPECT_EQ(x_shape.dimensions(0), b.dim(0));
   EXPECT_EQ(x_shape.dimensions(1), b.dim(1));
 

@@ -18,22 +18,21 @@ limitations under the License.
 
 #include <cstdint>
 #include <memory>
-#include <string>
 #include <vector>
 
-#include "absl/container/flat_hash_map.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "llvm/Support/ExtensibleRTTI.h"
 #include "xla/layout.h"
 #include "xla/pjrt/pjrt_compiler.h"
 #include "xla/pjrt/pjrt_device_description.h"
+#include "xla/python/ifrt/attribute_map.h"
+#include "xla/python/ifrt/rtti.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla::ifrt {
 
-class Topology : public llvm::RTTIExtends<Topology, llvm::RTTIRoot> {
+class Topology : public RTTIExtends<Topology, RTTIRoot> {
  public:
   // Returns a string that identifies the platform (CPU/GPU/TPU).
   virtual absl::string_view platform_name() const = 0;
@@ -42,10 +41,17 @@ class Topology : public llvm::RTTIExtends<Topology, llvm::RTTIRoot> {
   // (e.g. the CUDA version on GPU or libtpu version on Cloud TPU).
   virtual absl::string_view platform_version() const = 0;
 
+  // Returns an ID that identifies the platform (CPU/GPU/TPU).
   virtual PjRtPlatformId platform_id() const = 0;
 
+  // Returns the topology description.
+  // TODO(hyeontaek): Consider introducing an IFRT-specific API here instead of
+  // delegating to PJRT.
+  virtual const std::shared_ptr<const xla::PjRtTopologyDescription>&
+  description() const = 0;
+
   // Returns an unordered list of descriptions for all devices in this topology.
-  // TODO(phawkins): consider introducing an IFRT-specific API here instead of
+  // TODO(hyeontaek): Consider introducing an IFRT-specific API here instead of
   // delegating to PJRT.
   virtual std::vector<std::unique_ptr<const PjRtDeviceDescription>>
   DeviceDescriptions() const = 0;
@@ -59,13 +65,12 @@ class Topology : public llvm::RTTIExtends<Topology, llvm::RTTIRoot> {
   virtual absl::StatusOr<xla::Layout> GetDefaultLayout(
       PrimitiveType element_type, absl::Span<const int64_t> dims) const = 0;
 
-  // Serializes the topology for use in cache keys. (No guarantees on
-  // stability).
-  virtual absl::StatusOr<std::string> Serialize() const = 0;
+  // Returns a fingerprint of the topology for use in cache keys. (No guarantees
+  // on stability).
+  virtual absl::StatusOr<uint64_t> Fingerprint() const = 0;
 
   // Returns vendor specific attributes about the topology.
-  virtual const absl::flat_hash_map<std::string, PjRtDeviceAttribute>&
-  Attributes() const = 0;
+  virtual const AttributeMap& Attributes() const = 0;
 
   static char ID;  // NOLINT
 };
