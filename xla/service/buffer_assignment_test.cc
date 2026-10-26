@@ -1705,6 +1705,47 @@ ENTRY main {
               ::testing::Not(::testing::Contains(&neg0_value)));
 }
 
+TEST_F(BufferAssignmentTest, NoPackingColorPlacesEveryBufferAtOffsetZero) {
+  // a and b (color 1) are live at the same time, c (color 1) only after both
+  // are dead. With color 1 in no_packing_colors, a and b get allocations of
+  // their own, c reuses one of them, and every buffer is at offset 0.
+  const char* const hlo_text = R"(
+HloModule test, is_scheduled=true
+
+ENTRY main {
+  p0 = f32[1024]{0} parameter(0)
+  a = f32[1024]{0:S(1)} negate(p0)
+  b = f32[1024]{0:S(1)} exponential(p0)
+  ab = f32[1024]{0} add(a, b)
+  c = f32[1024]{0:S(1)} negate(ab)
+  ROOT out = f32[1024]{0} exponential(c)
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_text));
+  BufferAssigner::Options opts;
+  opts.no_packing_colors.insert(1);
+  ASSERT_OK_AND_ASSIGN(
+      auto assignment,
+      BufferAssigner::Run(
+          module.get(),
+          std::make_unique<SequentialHloOrdering>(module->schedule()),
+          &BufferSizeBytes, &alias_info_,
+          [](LogicalBuffer::Color) { return 1; }, std::move(opts)));
+
+  auto slice = [&](absl::string_view name) {
+    return assignment->GetUniqueSlice(FindInstruction(module.get(), name), {})
+        .value();
+  };
+  for (absl::string_view name : {"a", "b", "c"}) {
+    EXPECT_EQ(slice(name).offset(), 0) << name;
+    EXPECT_EQ(slice(name).allocation()->color(), 1) << name;
+  }
+  EXPECT_NE(slice("a").index(), slice("b").index());
+  EXPECT_TRUE(slice("c").index() == slice("a").index() ||
+              slice("c").index() == slice("b").index());
+}
+
 TEST_F(BufferAssignmentTest, CrossColorReuseDoesNotPartiallyOverlapOperand) {
   // Operand/user buffer sharing is only safe when the user is assigned the
   // operand's exact chunk. Cross-color best-fit placement cannot use that
