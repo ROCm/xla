@@ -45,6 +45,8 @@ ConvolutionDimensionNumbers RestoreDimNumberFromBackwardFilter(
 ConvolutionDimensionNumbers RestoreDimNumber(
     const HloConvolutionInstruction* conv);
 
+bool LooksLikeForwardConvolution(const HloInstruction* conv);
+
 // We should use this in code instead of AutotuneResult::TritonConvKey.
 // This has some advantages, for example it can be used in hashmaps.
 struct TritonConvConfig {
