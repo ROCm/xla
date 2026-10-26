@@ -201,6 +201,11 @@ absl::StatusOr<bool> ShouldTryRewriteFusion(
     return true;
   }
 
+  // The heuristics below are only known to be profitable on NVIDIA GPUs.
+  if (device_description.gpu_compute_capability().IsRocm()) {
+    return false;
+  }
+
   // TODO(b/370690811): ShouldRewriteLoopTransposeFusion rewrite may no longer
   // be necessary once MLIR emitters transposes are faster.
   return ShouldRewriteLoopTransposeFusion(fusion, device_description) ||

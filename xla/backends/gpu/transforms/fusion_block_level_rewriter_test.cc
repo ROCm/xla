@@ -583,5 +583,82 @@ ENTRY entry {
   EXPECT_TRUE(HasTritonBlockLevelFusionConfig(root));
 }
 
+TEST_F(FusionBlockLevelRewriterTestBase,
+       RewritesLoopTransposeFusionByDefaultOnCudaButNotOnRocm) {
+  const absl::string_view hlo_text = R"(
+fusion_computation {
+  p0 = f32[100,200,10,30] parameter(0)
+  ROOT transpose = f32[10,30,200,100] transpose(p0), dimensions={2,3,1,0}
+}
+
+ENTRY entry {
+  p0 = f32[100,200,10,30] parameter(0)
+  ROOT fusion = f32[10,30,200,100] fusion(p0), kind=kLoop,
+    calls=fusion_computation
+})";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> cuda_module,
+                       ParseAndReturnVerifiedModule(hlo_text));
+  EXPECT_THAT(
+      FusionBlockLevelRewriter(device_info_, HloCostAnalysis::DefaultShapeSize,
+                               &mlir_context_)
+          .Run(cuda_module.get()),
+      IsOkAndHolds(true));
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> rocm_module,
+                       ParseAndReturnVerifiedModule(hlo_text));
+  se::DeviceDescription rocm_device_info{
+      TestGpuDeviceInfo::AMDMI350DeviceInfo()};
+  EXPECT_THAT(
+      FusionBlockLevelRewriter(
+          rocm_device_info, HloCostAnalysis::DefaultShapeSize, &mlir_context_)
+          .Run(rocm_module.get()),
+      IsOkAndHolds(false));
+  EXPECT_EQ(rocm_module->entry_computation()->root_instruction()->fusion_kind(),
+            HloInstruction::FusionKind::kLoop);
+}
+
+TEST_F(FusionBlockLevelRewriterTestBase, RewritesScanFusionsOnRocm) {
+  constexpr absl::string_view kHloText = R"(
+combiner {
+  in = f32[4,8] parameter(0)
+  carry = f32[4,8] parameter(1)
+  add = f32[4,8] add(carry, in)
+  ROOT t = (f32[4,8], f32[4,8]) tuple(add, add)
+}
+
+fused_scan {
+  input = f32[4,8,1024] parameter(0)
+  init = f32[4,8] parameter(1)
+  scan = (f32[4,8,1024], f32[4,8]) scan(input, init), dimensions={2}, num_carries=1, to_apply=combiner, is_associative=true
+  ROOT gte0 = f32[4,8,1024] get-tuple-element(scan), index=0
+}
+
+ENTRY entry {
+  input = f32[4,8,1024] parameter(0)
+  init = f32[4,8] parameter(1)
+  ROOT fusion = f32[4,8,1024] fusion(input, init), kind=kCustom, calls=fused_scan,
+    backend_config={"fusion_backend_config":{"kind":"__triton"}}
+}
+)";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloText));
+  se::DeviceDescription device_info{TestGpuDeviceInfo::AMDMI350DeviceInfo()};
+
+  EXPECT_THAT(
+      FusionBlockLevelRewriter(device_info, HloCostAnalysis::DefaultShapeSize,
+                               &mlir_context_)
+          .Run(module.get()),
+      IsOkAndHolds(true));
+
+  const HloInstruction* root = module->entry_computation()->root_instruction();
+  EXPECT_TRUE(HasTritonBlockLevelFusionConfig(root));
+  ASSERT_OK_AND_ASSIGN(GpuBackendConfig backend_config,
+                       root->backend_config<GpuBackendConfig>());
+  EXPECT_THAT(backend_config.fusion_backend_config()
+                  .block_level_fusion_config()
+                  .sequential_tile_sizes(),
+              testing::SizeIs(1));
+}
+
 }  // namespace
 }  // namespace xla::gpu
