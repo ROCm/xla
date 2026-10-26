@@ -1127,14 +1127,21 @@ class GlobalDecreasingSizeBestFitHeap : public HeapAlgorithm<BufferType> {
 class ConstrainedGlobalDecreasingSizeBestFitHeap
     : public GlobalDecreasingSizeBestFitHeap<HloValue> {
  public:
+  // With `offset_zero_only`, a heap holds only buffers placed at offset 0:
+  // buffers whose live ranges do not overlap share it, a buffer that overlaps
+  // one of them goes to the next heap. Every buffer then starts its heap (no
+  // packing), while heaps are still reused over time. size_limit_per_heap is
+  // ignored in that mode.
   explicit ConstrainedGlobalDecreasingSizeBestFitHeap(
       uint64_t size_limit_per_heap, int64_t alignment,
       PackingStrategy packing_strategy = kSpatial,
-      BufferIntervalCompare buffer_interval_compare = nullptr)
+      BufferIntervalCompare buffer_interval_compare = nullptr,
+      bool offset_zero_only = false)
       : GlobalDecreasingSizeBestFitHeap<HloValue>(alignment, packing_strategy,
                                                   buffer_interval_compare),
         size_limit_per_heap_(size_limit_per_heap),
-        packing_strategy_(packing_strategy) {}
+        packing_strategy_(packing_strategy),
+        offset_zero_only_(offset_zero_only) {}
   ~ConstrainedGlobalDecreasingSizeBestFitHeap() override {}
 
   absl::StatusOr<Result> Finish() override;
@@ -1164,6 +1171,7 @@ class ConstrainedGlobalDecreasingSizeBestFitHeap
 
   uint64_t size_limit_per_heap_;
   PackingStrategy packing_strategy_;
+  bool offset_zero_only_;
 };
 
 // A heap algorithm that chooses the best results from other algorithms added to

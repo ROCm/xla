@@ -2115,7 +2115,13 @@ message DebugOptions {
   // Non-temporal cache hints for MLIR kernels on gfx942 (MI300). Default false.
   optional bool xla_gpu_enable_nontemporal_hints = 591;
 
-  // Next id: 592
+  // Gives every buffer in the collective memory space an allocation that starts
+  // at it (so each symmetric memory window starts at its buffer): collective
+  // buffers are never packed, but buffers with non-overlapping live ranges
+  // still share an allocation.
+  optional bool xla_gpu_experimental_collective_allocation_no_packing = 592;
+
+  // Next id: 593
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

@@ -198,6 +198,13 @@ absl::StatusOr<std::unique_ptr<BufferAssignment>> RunBufferAssignment(
   BufferAssigner::Options opts = CreateBufferAssignerOptions(options);
   opts.allocate_buffers_for_constants = true;
   opts.temp_buffer_color = color;
+  // Symmetric memory windows are registered per allocation; with no packing,
+  // every collective buffer starts its allocation and so its window, while
+  // buffers with non-overlapping live ranges still share memory.
+  if (options.xla_gpu_experimental_collective_allocation_no_packing()) {
+    opts.no_packing_colors.insert(
+        static_cast<int>(MemorySpaceColor::kCollective));
+  }
 
   std::unique_ptr<HloOrdering> hlo_ordering;
   switch (options.xla_gpu_command_buffer_scheduling_mode()) {
