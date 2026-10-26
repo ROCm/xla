@@ -15,6 +15,8 @@ limitations under the License.
 
 #include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
 
+#include <unistd.h>
+
 #include <cstddef>
 #include <string>
 
@@ -54,8 +56,7 @@ bool ExportableHandlesEnabled() {
   if (status.ok() && env_value.empty()) {
     if (TF_ROCM_VERSION < kMinRocmVersionForExportableHandles) {
       LOG(INFO) << "Exportable VMM handles require ROCm 10.0 or newer; "
-                   "requesting non-exportable handles. RCCL symmetric memory "
-                   "is unavailable.";
+                   "requesting non-exportable handles.";
       return false;
     }
     return true;
@@ -73,17 +74,16 @@ bool ExportableHandlesEnabled() {
     LOG(WARNING) << kExportableHandlesEnvVar
                  << " requests exportable VMM handles on ROCm older than 10.0. "
                     "This is only safe on a runtime carrying a backport of the "
-                    "fix; otherwise RCCL symmetric memory may read freed "
-                    "memory.";
+                    "fix; otherwise an exported handle may resolve to memory "
+                    "that has already been freed.";
   }
   return enabled;
 }
 
-// Attempts a minimal exportable allocation on `device` to find out whether the
-// driver supports POSIX file descriptor handles here, and returns the handle
-// type to use from now on. A probe allocation is cheaper than discovering the
-// answer on the first real allocation, and keeps the decision out of the hot
-// path.
+// Exports a minimal allocation on `device` to find out whether POSIX file
+// descriptor handles actually work here, and returns the handle type to use
+// from now on. A probe is cheaper than discovering the answer on the first
+// real allocation, and keeps the decision out of the hot path.
 hipMemAllocationHandleType ProbeHandleType(hipDevice_t device) {
   if (!ExportableHandlesEnabled()) {
     return hipMemHandleTypeNone;
@@ -100,23 +100,36 @@ hipMemAllocationHandleType ProbeHandleType(hipDevice_t device) {
       &granularity, &props, hipMemAllocationGranularityMinimum);
   if (result != hipSuccess || granularity == 0) {
     LOG(WARNING) << "Device " << device
-                 << " reports no granularity for exportable VMM allocations ("
+                 << " reports no VMM allocation granularity ("
                  << ToString(result)
-                 << "); falling back to non-exportable handles. RCCL "
-                    "symmetric memory is unavailable on this device.";
+                 << "); falling back to non-exportable handles.";
     return hipMemHandleTypeNone;
   }
 
   hipMemGenericAllocationHandle_t handle = nullptr;
   result = hipMemCreate(&handle, granularity, &props, 0ULL);
   if (result != hipSuccess) {
+    // Allocating says nothing about export support, so a failure here is about
+    // memory, not capability. Keep the exportable handle type rather than
+    // disabling exportable handles for the lifetime of the process because the
+    // device happened to be full at startup.
+    LOG(WARNING) << "Could not allocate the VMM handle type probe on device "
+                 << device << ": " << ToString(result)
+                 << "; assuming exportable handles are supported.";
+    return hipMemHandleTypePosixFileDescriptor;
+  }
+
+  int fd = -1;
+  hipError_t export_result = hipMemExportToShareableHandle(
+      &fd, handle, hipMemHandleTypePosixFileDescriptor, 0ULL);
+  if (export_result == hipSuccess) {
+    close(fd);
+  } else {
     LOG(WARNING) << "Device " << device
-                 << " cannot create exportable (POSIX file descriptor) VMM "
-                    "allocations: "
-                 << ToString(result)
-                 << "; falling back to non-exportable handles. RCCL symmetric "
-                    "memory is unavailable on this device.";
-    return hipMemHandleTypeNone;
+                 << " cannot export VMM allocations as POSIX file "
+                    "descriptors: "
+                 << ToString(export_result)
+                 << "; falling back to non-exportable handles.";
   }
 
   hipError_t release_result = hipMemRelease(handle);
@@ -125,7 +138,8 @@ hipMemAllocationHandleType ProbeHandleType(hipDevice_t device) {
                   "device "
                << device << ": " << ToString(release_result);
   }
-  return hipMemHandleTypePosixFileDescriptor;
+  return export_result == hipSuccess ? hipMemHandleTypePosixFileDescriptor
+                                     : hipMemHandleTypeNone;
 }
 
 }  // namespace
@@ -143,8 +157,7 @@ hipMemAllocationHandleType RocmVmmHandleType(hipDevice_t device) {
   hipMemAllocationHandleType handle_type = ProbeHandleType(device);
   LOG(INFO) << "ROCm VMM allocations on device " << device << " will request "
             << (handle_type == hipMemHandleTypePosixFileDescriptor
-                    ? "POSIX file descriptor handles (exportable, required by "
-                      "RCCL symmetric memory)"
+                    ? "POSIX file descriptor handles (exportable)"
                     : "no handles (non-exportable)")
             << ".";
   cache.emplace(device, handle_type);

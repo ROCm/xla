@@ -46,12 +46,10 @@ limitations under the License.
 namespace stream_executor::gpu {
 namespace {
 
-// Exports `handle` as a POSIX file descriptor exactly the way RCCL's symmetric
-// memory path does (symMemoryObtain -> ncclProxyClientGetFdBlocking), and
-// immediately closes it. This is the property the exportable handle type
-// exists for: before the fix the allocation carried hipMemHandleTypeNone and
-// this export is impossible, which made RCCL block forever waiting for a file
-// descriptor that could never be produced.
+// Exports `handle` as a POSIX file descriptor and immediately closes it. This
+// is the property the exportable handle type exists for: an allocation
+// carrying hipMemHandleTypeNone permits no export mechanism, so the same call
+// cannot succeed on one.
 hipError_t TryExportAsPosixFd(hipMemGenericAllocationHandle_t handle) {
   int fd = -1;
   hipError_t result = hipMemExportToShareableHandle(
@@ -107,7 +105,7 @@ class RocmVmmHandleTypeTest : public ::testing::Test {
 
 // The probe accepts POSIX file descriptor handles on hardware that supports
 // them. A ROCm 10.0+ device that fails this is not a test bug - it means
-// symmetric memory cannot work there at all.
+// handles cannot be exported there at all.
 TEST_F(RocmVmmHandleTypeTest, ProbeSelectsExportableHandlesWhenSupported) {
   if (TF_ROCM_VERSION < 100000) {
     GTEST_SKIP() << "Exportable VMM handles are gated off below ROCm 10.0; "
@@ -126,16 +124,18 @@ TEST_F(RocmVmmHandleTypeTest, ProbeSelectsExportableHandlesWhenSupported) {
   props.requestedHandleTypes = hipMemHandleTypePosixFileDescriptor;
 
   size_t granularity = 0;
+  ASSERT_EQ(hipMemGetAllocationGranularity(&granularity, &props,
+                                           hipMemAllocationGranularityMinimum),
+            hipSuccess);
+  ASSERT_NE(granularity, 0u);
+
   hipMemGenericAllocationHandle_t handle = nullptr;
-  bool driver_supports_exportable =
-      hipMemGetAllocationGranularity(&granularity, &props,
-                                     hipMemAllocationGranularityMinimum) ==
-          hipSuccess &&
-      granularity != 0 &&
-      hipMemCreate(&handle, granularity, &props, 0ULL) == hipSuccess;
-  if (driver_supports_exportable) {
-    EXPECT_EQ(hipMemRelease(handle), hipSuccess);
-  }
+  ASSERT_EQ(hipMemCreate(&handle, granularity, &props, 0ULL), hipSuccess);
+
+  // Exporting is the question the probe asks; creating the allocation only
+  // records the requested handle type and always succeeds.
+  bool driver_supports_exportable = TryExportAsPosixFd(handle) == hipSuccess;
+  EXPECT_EQ(hipMemRelease(handle), hipSuccess);
 
   EXPECT_EQ(RocmVmmHandleType(device_) == hipMemHandleTypePosixFileDescriptor,
             driver_supports_exportable);
@@ -165,8 +165,7 @@ TEST_F(RocmVmmHandleTypeTest, HandleTypeIsStableAcrossCalls) {
 }
 
 // Every device the platform exposes must agree, otherwise a multi-GPU job
-// would have some ranks registerable and some not - the asymmetric case that
-// deadlocks instead of failing.
+// would have some ranks able to export their allocations and some not.
 TEST_F(RocmVmmHandleTypeTest, AllDevicesAgreeOnHandleType) {
   SkipIfExportableHandlesUnsupported();
 
@@ -182,8 +181,8 @@ TEST_F(RocmVmmHandleTypeTest, AllDevicesAgreeOnHandleType) {
   }
 }
 
-// This is the allocation that hung: RocmDeviceAddressVmmAllocator creates its
-// physical memory through RocmRawMemoryAllocation::Create.
+// RocmDeviceAddressVmmAllocator creates its physical memory through
+// RocmRawMemoryAllocation::Create, so this covers both.
 TEST_F(RocmVmmHandleTypeTest, RawMemoryAllocationHandleIsExportable) {
   SkipIfExportableHandlesUnsupported();
 
@@ -195,11 +194,11 @@ TEST_F(RocmVmmHandleTypeTest, RawMemoryAllocationHandleIsExportable) {
   std::unique_ptr<ActivateContext> activation = executor_->Activate();
   EXPECT_EQ(TryExportAsPosixFd(allocation->GetHandle()), hipSuccess)
       << "VMM allocation handle cannot be exported as a POSIX file "
-         "descriptor; RCCL symmetric memory registration would hang.";
+         "descriptor.";
 }
 
-// An exported descriptor that cannot be imported back is of no use to the NCCL
-// proxy, so check the full round trip rather than just the export call.
+// An exported descriptor that cannot be imported back is of no use to whoever
+// receives it, so check the full round trip rather than just the export call.
 TEST_F(RocmVmmHandleTypeTest, ExportedDescriptorCanBeImported) {
   SkipIfExportableHandlesUnsupported();
 
@@ -244,9 +243,8 @@ TEST_F(RocmVmmHandleTypeTest, VmmAllocatorMemoryIsExportable) {
   EXPECT_EQ(hipMemRelease(handle), hipSuccess);
 }
 
-// The path symmetric memory actually takes: a collective-space buffer from the
-// kVmm allocator, retained and exported the way RCCL does after
-// ncclCommWindowRegister.
+// The path that matters in practice: a collective-space buffer from the kVmm
+// allocator, retained and exported the way a collective library would.
 TEST_F(RocmVmmHandleTypeTest, CollectiveAllocationIsExportable) {
   SkipIfExportableHandlesUnsupported();
 
@@ -269,8 +267,8 @@ TEST_F(RocmVmmHandleTypeTest, CollectiveAllocationIsExportable) {
             hipSuccess);
 
   EXPECT_EQ(TryExportAsPosixFd(handle), hipSuccess)
-      << "Collective-space VMM buffer is not registerable; this is the "
-         "configuration that deadlocked in ncclProxyClientGetFdBlocking.";
+      << "Collective-space VMM buffer cannot be exported as a POSIX file "
+         "descriptor.";
   EXPECT_EQ(hipMemRelease(handle), hipSuccess);
 }
 

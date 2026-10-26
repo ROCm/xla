@@ -23,23 +23,19 @@ namespace stream_executor::gpu {
 // Returns the allocation handle type that ROCm VMM allocations should request
 // on `device`.
 //
-// RCCL's symmetric-memory path (ncclCommWindowRegister with
-// NCCL_WIN_COLL_SYMMETRIC) exports the registered buffer's allocation handle
-// as a POSIX file descriptor and obtains it from the NCCL proxy over a Unix
-// domain socket. An allocation created with hipMemHandleTypeNone cannot be
-// exported, so that request never completes and registration blocks forever
-// inside ncclProxyClientGetFdBlocking. Requesting
-// hipMemHandleTypePosixFileDescriptor keeps VMM allocations registerable,
-// matching what the CUDA device allocator already does with
-// CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR.
+// An allocation created with hipMemHandleTypeNone permits no export
+// mechanism, so its handle can never be shared with another device or
+// process. Requesting hipMemHandleTypePosixFileDescriptor keeps VMM
+// allocations exportable, matching what the CUDA device allocator already
+// does with CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR.
 //
 // Exportable handles are only requested on ROCm 10.0 and newer; earlier
 // releases cannot be relied on to export and import them correctly.
 //
-// Where they are requested, the handle type is probed once per device. A
-// device that cannot create an exportable allocation falls back to
-// hipMemHandleTypeNone, which preserves the previous behavior for everything
-// except symmetric memory.
+// Where they are requested, the handle type is probed once per device by
+// exporting a minimal allocation. A device that cannot export falls back to
+// hipMemHandleTypeNone, which preserves the previous behavior for every
+// caller that does not need to export a handle.
 //
 // XLA_ROCM_VMM_EXPORTABLE_HANDLES overrides the version gate in both
 // directions: 0 or false forces the fallback, 1 or true requests exportable
