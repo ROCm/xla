@@ -1076,6 +1076,9 @@ message DebugOptions {
   // If true, enable autotuning between the native & triton fusion emitters.
   optional bool xla_gpu_experimental_enable_fusion_autotuner = 409;
 
+  // Experimentally route eligible convolutions to the Triton emitter.
+  optional bool xla_gpu_experimental_enable_triton_conv_fusion = 563;
+
   // Enabling this flag will attempt to redirect every already-constructed
   // fusion possible to the Triton emitter.
   //
@@ -1983,7 +1986,7 @@ message DebugOptions {
   // (ScanRewriterTriton).
   optional bool xla_gpu_experimental_enable_triton_scan = 562;
 
-  // Next id: 563
+  // Next id: 564
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
