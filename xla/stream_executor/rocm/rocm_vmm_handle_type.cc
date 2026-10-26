@@ -25,6 +25,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "rocm/include/hip/hip_runtime.h"
+#include "rocm/rocm_config.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
 #include "xla/tsl/util/env_var.h"
 
@@ -35,18 +36,47 @@ namespace {
 constexpr absl::string_view kExportableHandlesEnvVar =
     "XLA_ROCM_VMM_EXPORTABLE_HANDLES";
 
-// Returns true if kExportableHandlesEnvVar is set to a false value ("0" or
-// "false"), which forces the non-exportable handle type used before symmetric
-// memory needed exportable allocations.
-bool ExportableHandlesDisabled() {
+// Exportable VMM handles are only usable from ROCm 10.0 onwards; earlier
+// releases cannot be relied on to export and import them correctly. Encoded
+// the way rocm_config.h encodes TF_ROCM_VERSION (10000 * major + 100 * minor +
+// patch).
+constexpr int kMinRocmVersionForExportableHandles = 100000;  // ROCm 10.0.0
+
+// Returns whether VMM allocations should request exportable handles.
+//
+// kExportableHandlesEnvVar unset: gated on the ROCm version.
+// Set to false: request non-exportable handles.
+// Set to true: request exportable handles whatever the ROCm version.
+bool ExportableHandlesEnabled() {
+  std::string env_value;
+  absl::Status status = tsl::ReadStringFromEnvVar(
+      kExportableHandlesEnvVar, /*default_val=*/"", &env_value);
+  if (status.ok() && env_value.empty()) {
+    if (TF_ROCM_VERSION < kMinRocmVersionForExportableHandles) {
+      LOG(INFO) << "Exportable VMM handles require ROCm 10.0 or newer; "
+                   "requesting non-exportable handles. RCCL symmetric memory "
+                   "is unavailable.";
+      return false;
+    }
+    return true;
+  }
+
   bool enabled = true;
-  absl::Status status = tsl::ReadBoolFromEnvVar(kExportableHandlesEnvVar,
-                                                /*default_val=*/true, &enabled);
+  status = tsl::ReadBoolFromEnvVar(kExportableHandlesEnvVar,
+                                   /*default_val=*/true, &enabled);
   if (!status.ok()) {
     LOG(WARNING) << status.message()
                  << "; requesting exportable VMM handle types.";
+    enabled = true;
   }
-  return !enabled;
+  if (enabled && TF_ROCM_VERSION < kMinRocmVersionForExportableHandles) {
+    LOG(WARNING) << kExportableHandlesEnvVar
+                 << " requests exportable VMM handles on ROCm older than 10.0. "
+                    "This is only safe on a runtime carrying a backport of the "
+                    "fix; otherwise RCCL symmetric memory may read freed "
+                    "memory.";
+  }
+  return enabled;
 }
 
 // Attempts a minimal exportable allocation on `device` to find out whether the
@@ -55,7 +85,7 @@ bool ExportableHandlesDisabled() {
 // answer on the first real allocation, and keeps the decision out of the hot
 // path.
 hipMemAllocationHandleType ProbeHandleType(hipDevice_t device) {
-  if (ExportableHandlesDisabled()) {
+  if (!ExportableHandlesEnabled()) {
     return hipMemHandleTypeNone;
   }
 

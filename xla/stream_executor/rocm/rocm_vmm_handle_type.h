@@ -33,10 +33,17 @@ namespace stream_executor::gpu {
 // matching what the CUDA device allocator already does with
 // CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR.
 //
-// The handle type is probed once per device. A device that cannot create an
-// exportable allocation falls back to hipMemHandleTypeNone, which preserves
-// the previous behavior for everything except symmetric memory. Set
-// XLA_ROCM_VMM_EXPORTABLE_HANDLES to 0 or false to force that fallback.
+// Exportable handles are only requested on ROCm 10.0 and newer; earlier
+// releases cannot be relied on to export and import them correctly.
+//
+// Where they are requested, the handle type is probed once per device. A
+// device that cannot create an exportable allocation falls back to
+// hipMemHandleTypeNone, which preserves the previous behavior for everything
+// except symmetric memory.
+//
+// XLA_ROCM_VMM_EXPORTABLE_HANDLES overrides the version gate in both
+// directions: 0 or false forces the fallback, 1 or true requests exportable
+// handles whatever the ROCm version.
 //
 // The caller must have activated `device`'s context.
 hipMemAllocationHandleType RocmVmmHandleType(hipDevice_t device);

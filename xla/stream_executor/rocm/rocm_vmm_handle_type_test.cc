@@ -26,6 +26,7 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/status/status_matchers.h"  // IWYU pragma: keep
 #include "rocm/include/hip/hip_runtime.h"
+#include "rocm/rocm_config.h"
 #include "xla/stream_executor/activate_context.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/device_address_vmm_allocator.h"
@@ -85,10 +86,11 @@ class RocmVmmHandleTypeTest : public ::testing::Test {
                        "hipDeviceGet"));
   }
 
-  // Skips the calling test on a driver that refuses exportable allocations.
-  // RocmVmmHandleType() falls back to hipMemHandleTypeNone there, so the
-  // exportability assertions below do not apply; the fallback itself is
-  // covered by RequestedHandleTypeMatchesProbe.
+  // Skips the calling test below ROCm 10.0, or on a driver that refuses
+  // exportable allocations. RocmVmmHandleType() falls back to
+  // hipMemHandleTypeNone in both cases, so the exportability assertions below
+  // do not apply; the fallback itself is covered by
+  // RequestedHandleTypeMatchesProbe.
   void SkipIfExportableHandlesUnsupported() {
     std::unique_ptr<ActivateContext> activation = executor_->Activate();
     if (RocmVmmHandleType(device_) != hipMemHandleTypePosixFileDescriptor) {
@@ -104,9 +106,13 @@ class RocmVmmHandleTypeTest : public ::testing::Test {
 };
 
 // The probe accepts POSIX file descriptor handles on hardware that supports
-// them. A plain ROCm device that fails this is not a test bug - it means
+// them. A ROCm 10.0+ device that fails this is not a test bug - it means
 // symmetric memory cannot work there at all.
 TEST_F(RocmVmmHandleTypeTest, ProbeSelectsExportableHandlesWhenSupported) {
+  if (TF_ROCM_VERSION < 100000) {
+    GTEST_SKIP() << "Exportable VMM handles are gated off below ROCm 10.0; "
+                    "the probe does not run.";
+  }
   if (getenv("XLA_ROCM_VMM_EXPORTABLE_HANDLES") != nullptr) {
     GTEST_SKIP() << "XLA_ROCM_VMM_EXPORTABLE_HANDLES overrides the probe; see "
                     "rocm_vmm_handle_type_disabled_test.";
