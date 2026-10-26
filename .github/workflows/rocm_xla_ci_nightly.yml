@@ -158,6 +158,7 @@ jobs:
             --jobs=30 \
             --spawn_strategy=local \
             --bes_keywords=single_gpu \
+            --build_event_json_file=xla_${{ matrix.mode.name }}_single_gpu_build_events.json \
             ${COMMON_ARGS} \
             ${ROCM_DISTRO_ARGS} \
             -- \
@@ -171,6 +172,7 @@ jobs:
             --local_test_jobs=1 \
             --test_strategy=exclusive \
             --bes_keywords=multi_gpu \
+            --build_event_json_file=xla_${{ matrix.mode.name }}_multi_gpu_build_events.json \
             ${COMMON_ARGS} \
             ${ROCM_DISTRO_ARGS} \
             --spawn_strategy=local \
@@ -186,11 +188,22 @@ jobs:
             --config=ci_rocm_cpu \
             --local_test_jobs=70 \
             --bes_keywords=cpu \
+            --build_event_json_file=xla_${{ matrix.mode.name }}_rocm_cpu_build_events.json \
             ${COMMON_ARGS} \
             ${ROCM_DISTRO_ARGS} \
             --spawn_strategy=local \
             -- \
             //xla/...
+
+      # Consumed by .github/workflows/rocm_infra_monitor.yml to tell
+      # infrastructure failures apart from genuine build/test failures.
+      - name: Upload XLA BEP Files
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: xla-bep-${{ matrix.mode.name }}
+          path: xla_${{ matrix.mode.name }}_*_build_events.json
+          if-no-files-found: warn
 
   # Call sanitizers workflow as a separate job.
   # Only on the daily cron (not the 2-hourly one), on manual dispatch, on the

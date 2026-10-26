@@ -42,6 +42,14 @@ if [ ! -f "$RUN_IDS_FILE" ]; then
     exit 2
 fi
 
+# BEP artifacts of the nightly pipeline jobs we monitor. The nightly and JAX
+# workflows upload one artifact per matrix mode.
+BEP_ARTIFACTS=(
+    "xla-bep-therock_release"
+    "xla-bep-therock_release_bb"
+    "jax-bep-therock_release"
+)
+
 mkdir -p bep-files
 HAS_BEPS=false
 
@@ -52,17 +60,13 @@ while read -r RUN_ID; do
     echo "Downloading BEP artifacts for run: $RUN_ID"
     echo "========================================="
 
-    # Download JAX BEP artifact
-    if gh run download "$RUN_ID" -n jax-bep -D "bep-files/run-${RUN_ID}" -R "$REPOSITORY" 2>/dev/null; then
-        echo "Downloaded JAX BEP for run $RUN_ID from $REPOSITORY"
-        HAS_BEPS=true
-    fi
-
-    # Download XLA BEP artifacts
-    if gh run download "$RUN_ID" -n xla-bep -D "bep-files/run-${RUN_ID}" -R "$REPOSITORY" 2>/dev/null; then
-        echo "Downloaded XLA BEP for run $RUN_ID from $REPOSITORY"
-        HAS_BEPS=true
-    fi
+    for ARTIFACT in "${BEP_ARTIFACTS[@]}"; do
+        if gh run download "$RUN_ID" -n "$ARTIFACT" -D "bep-files/run-${RUN_ID}" \
+            -R "$REPOSITORY" </dev/null 2>/dev/null; then
+            echo "Downloaded $ARTIFACT for run $RUN_ID from $REPOSITORY"
+            HAS_BEPS=true
+        fi
+    done
 done < "$RUN_IDS_FILE"
 
 echo "========================================="
