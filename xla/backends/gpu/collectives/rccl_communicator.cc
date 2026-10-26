@@ -73,6 +73,23 @@ se::Stream* ToStream(const Communicator::Executor& executor) {
   return absl::down_cast<const GpuCollectives::Executor&>(executor).stream();
 }
 
+#if NCCL_VERSION_CODE >= 22800
+// True if the buffers are laid out back to back in one allocation.
+bool IsContiguous(absl::Span<const se::DeviceAddressBase> buffers) {
+  if (buffers.empty()) {
+    return false;
+  }
+  for (size_t i = 1; i < buffers.size(); ++i) {
+    se::DeviceAddress<uint8_t> a(buffers[i - 1]);
+    se::DeviceAddress<uint8_t> b(buffers[i]);
+    if (a.base() + a.size() != b.base()) {
+      return false;
+    }
+  }
+  return true;
+}
+#endif  // NCCL_VERSION_CODE >= 22800
+
 }  // namespace
 
 //==-----------------------------------------------------------------------===//
@@ -451,6 +468,23 @@ absl::Status RcclCommunicator::LaunchAllToAll(
       ToNcclDataType(
           dtype, /*is_reduction_op=*/false,
           stream->parent()->GetDeviceDescription().rocm_compute_capability()));
+
+  // Contiguous send and receive buffers go to RCCL's all-to-all directly (as
+  // the CUDA path does), which reaches its all-to-all algorithms and, on
+  // registered windows, its copy-engine path; otherwise one send/recv per peer.
+  // Both are launched in an RCCL group, so that with several collectives in
+  // flight every rank enqueues them in the same order. ncclAlltoAll first
+  // appeared in RCCL 2.28.
+#if NCCL_VERSION_CODE >= 22800
+  if (IsContiguous(send_buffers) && IsContiguous(recv_buffers)) {
+    return GroupLaunch([&] {
+      XLA_RCCL_RETURN_IF_ERROR(ncclAlltoAll(
+          send_buffers[0].opaque(), recv_buffers[0].opaque(),
+          ToNcclCount(dtype, count), nccl_dtype, comm_, AsHipStream(stream)));
+      return absl::OkStatus();
+    });
+  }
+#endif  // NCCL_VERSION_CODE >= 22800
 
   auto group = [&] {
     for (size_t i = 0; i < send_buffers.size(); ++i) {
