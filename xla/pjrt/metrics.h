@@ -1,4 +1,4 @@
-/* Copyright 2021 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2021 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,13 +16,16 @@ limitations under the License.
 #ifndef XLA_PJRT_METRICS_H_
 #define XLA_PJRT_METRICS_H_
 
-#include "tsl/lib/monitoring/counter.h"
+#include <cstdint>
 
 // Simplified version of tensorflow/core/framework/metrics.h for JAX.
 
 namespace xla {
+namespace metrics {
 
 void ReportExecutableEnqueueTime(uint64_t running_time_usecs);
-}
+
+}  // namespace metrics
+}  // namespace xla
 
 #endif  // XLA_PJRT_METRICS_H_

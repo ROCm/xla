@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -43,14 +43,15 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/function_ref.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
-#include "xla/status.h"
-#include "xla/statusor.h"
-#include "xla/util.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/logging.h"
 #include "tsl/platform/statusor.h"
+#include "xla/util.h"
 
 namespace xla {
 
@@ -79,7 +80,7 @@ class MappedPtrContainerSorter {
   using UnmappedPtrIndexFn = absl::FunctionRef<size_t(const PointedToTy*)>;
 
   // Functions that return an UnmappedElementIndexFn that indicates that
-  // ummapped elements (from an unordered container) should be placed before or
+  // unmapped elements (from an unordered container) should be placed before or
   // after all mapped elements, respectively.
   static UnmappedPtrIndexFn IndexBeforeMappedElementsFn();
   static UnmappedPtrIndexFn IndexAfterMappedElementsFn();
@@ -94,9 +95,9 @@ class MappedPtrContainerSorter {
   // - unmapped_index() returns an invalid index
   // - An internal error occurs. (This should theoretically not happen.)
   template <typename OrderedTy, typename UnorderedTy>
-  static Status Sort(MapPtrFn map_ptr, UnmappedPtrIndexFn unmapped_index,
-                     const OrderedTy& ordered_container,
-                     UnorderedTy& unordered_container);
+  static absl::Status Sort(MapPtrFn map_ptr, UnmappedPtrIndexFn unmapped_index,
+                           const OrderedTy& ordered_container,
+                           UnorderedTy& unordered_container);
 
  private:
   // A class for sorting the indices of the unordered_container.
@@ -114,8 +115,8 @@ class MappedPtrContainerSorter {
     // Specify the partial ordering value of a mapped element from the
     // unordered container. The partial ordering is amongst other mapped
     // elements.
-    Status AddMappedElement(size_t unordered_container_index,
-                            size_t partial_order);
+    absl::Status AddMappedElement(size_t unordered_container_index,
+                                  size_t partial_order);
 
     // Specify the index (amongst mapped elements), where an unmapped element
     // should be inserted. The unmapped element is inserted just after the
@@ -127,7 +128,7 @@ class MappedPtrContainerSorter {
 
     // The result maps each element in the unordered_container to the target
     // index that it will occupy in the sorted result.
-    StatusOr<std::vector<size_t>> Flatten() const;
+    absl::StatusOr<std::vector<size_t>> Flatten() const;
 
    private:
     SortedIndices() = delete;
@@ -152,7 +153,7 @@ class MappedPtrContainerSorter {
   // Returns a mapping in which the element at index i indicates the target
   // index that unordered_container[i] should occupy in the sorted result.
   template <typename OrderedTy, typename UnorderedTy>
-  static StatusOr<std::vector<size_t>> ComputeNewIndices(
+  static absl::StatusOr<std::vector<size_t>> ComputeNewIndices(
       MapPtrFn map_ptr, UnmappedPtrIndexFn unmapped_index,
       const OrderedTy& ordered_container,
       const UnorderedTy& unordered_container);
@@ -227,17 +228,17 @@ MappedPtrContainerSorter<PointedToTy>::InvalidIndexFn() {
 }
 
 template <typename PointedToTy>
-Status MappedPtrContainerSorter<PointedToTy>::SortedIndices::AddMappedElement(
+absl::Status
+MappedPtrContainerSorter<PointedToTy>::SortedIndices::AddMappedElement(
     size_t unordered_container_index, size_t partial_order) {
   if (partial_order >= mapped_element_indices_by_partial_order_.size()) {
-    return InternalErrorStrCat(
-        "invalid partial order: ", partial_order, " v max(",
-        mapped_element_indices_by_partial_order_.size(), ")");
+    return InternalStrCat("invalid partial order: ", partial_order, " v max(",
+                          mapped_element_indices_by_partial_order_.size(), ")");
   }
 
   mapped_element_indices_by_partial_order_[partial_order].push_back(
       unordered_container_index);
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 template <typename PointedToTy>
@@ -284,13 +285,13 @@ std::string MappedPtrContainerSorter<PointedToTy>::SortedIndices::ToString()
 }
 
 template <typename PointedToTy>
-StatusOr<std::vector<size_t>>
+absl::StatusOr<std::vector<size_t>>
 MappedPtrContainerSorter<PointedToTy>::SortedIndices::Flatten() const {
   std::vector<size_t> result(unordered_container_size_, InvalidIndex());
   size_t next_available_index = 0;
-  auto next_index_fn = [&]() -> StatusOr<size_t> {
+  auto next_index_fn = [&]() -> absl::StatusOr<size_t> {
     if (next_available_index >= unordered_container_size_) {
-      return InternalErrorStrCat(
+      return InternalStrCat(
           "invalid unordered_container index: ", next_available_index,
           " v size(", unordered_container_size_, ")");
     }
@@ -302,14 +303,14 @@ MappedPtrContainerSorter<PointedToTy>::SortedIndices::Flatten() const {
     const auto& indices =
         target_index_to_unmapped_element_index_.at(IndexBeforeMappedElements());
     for (size_t index : indices) {
-      TF_ASSIGN_OR_RETURN(result[index], next_index_fn());
+      ABSL_ASSIGN_OR_RETURN(result[index], next_index_fn());
     }
   }
   size_t num_inserted_mapped_elements = 0;
   for (const auto& mapped_element_indices :
        mapped_element_indices_by_partial_order_) {
     for (size_t mapped_element_index : mapped_element_indices) {
-      TF_ASSIGN_OR_RETURN(result[mapped_element_index], next_index_fn());
+      ABSL_ASSIGN_OR_RETURN(result[mapped_element_index], next_index_fn());
       ++num_inserted_mapped_elements;
       if (target_index_to_unmapped_element_index_.contains(
               num_inserted_mapped_elements - 1)) {
@@ -317,7 +318,8 @@ MappedPtrContainerSorter<PointedToTy>::SortedIndices::Flatten() const {
             target_index_to_unmapped_element_index_.at(
                 num_inserted_mapped_elements - 1);
         for (size_t unmapped_element_index : unmapped_element_indices) {
-          TF_ASSIGN_OR_RETURN(result[unmapped_element_index], next_index_fn());
+          ABSL_ASSIGN_OR_RETURN(result[unmapped_element_index],
+                                next_index_fn());
         }
       }
     }
@@ -327,7 +329,7 @@ MappedPtrContainerSorter<PointedToTy>::SortedIndices::Flatten() const {
     const auto& indices =
         target_index_to_unmapped_element_index_.at(IndexAfterMappedElements());
     for (size_t index : indices) {
-      TF_ASSIGN_OR_RETURN(result[index], next_index_fn());
+      ABSL_ASSIGN_OR_RETURN(result[index], next_index_fn());
     }
   }
 
@@ -335,7 +337,7 @@ MappedPtrContainerSorter<PointedToTy>::SortedIndices::Flatten() const {
   absl::flat_hash_set<size_t> used_indices;
   for (size_t index : result) {
     if (used_indices.contains(index)) {
-      return InternalErrorStrCat(
+      return InternalStrCat(
           "2 elements in unordered_container are destined for the same "
           "index: ",
           index);
@@ -351,7 +353,7 @@ MappedPtrContainerSorter<PointedToTy>::SortedIndices::Flatten() const {
 
 template <typename PointedToTy>
 template <typename OrderedTy, typename UnorderedTy>
-StatusOr<std::vector<size_t>>
+absl::StatusOr<std::vector<size_t>>
 MappedPtrContainerSorter<PointedToTy>::ComputeNewIndices(
     MapPtrFn map_ptr, UnmappedPtrIndexFn unmapped_index,
     const OrderedTy& ordered_container,
@@ -409,7 +411,7 @@ MappedPtrContainerSorter<PointedToTy>::ComputeNewIndices(
     // Potentially, several elements in ordered_container map to ptr.
     // We assign ptr theindex corresponding to the next such ordered element.
     auto& index_list = mapped_ptr_to_partial_order[ptr];
-    TF_RETURN_IF_ERROR(result.AddMappedElement(i, index_list.front()));
+    ABSL_RETURN_IF_ERROR(result.AddMappedElement(i, index_list.front()));
     // Do not map more than one unordered element to the same index, unless we
     // have no choice.
     if (index_list.size() > 1) {
@@ -441,15 +443,15 @@ void MappedPtrContainerSorter<PointedToTy>::Reorder(
 
 template <typename PointedToTy>
 template <typename OrderedTy, typename UnorderedTy>
-Status MappedPtrContainerSorter<PointedToTy>::Sort(
+absl::Status MappedPtrContainerSorter<PointedToTy>::Sort(
     MapPtrFn map_ptr, UnmappedPtrIndexFn unmapped_index,
     const OrderedTy& ordered_container, UnorderedTy& unordered_container) {
   std::vector<size_t> indices;
-  TF_ASSIGN_OR_RETURN(
+  ABSL_ASSIGN_OR_RETURN(
       indices, ComputeNewIndices(map_ptr, unmapped_index, ordered_container,
                                  unordered_container));
   Reorder(std::move(indices), unordered_container);
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace xla

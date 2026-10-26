@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,17 +15,21 @@ limitations under the License.
 
 #include <vector>
 
-#include "xla/client/local_client.h"
-#include "xla/client/xla_builder.h"
-#include "xla/tests/client_library_test_base.h"
-#include "xla/tests/literal_test_util.h"
-#include "xla/tests/test_macros.h"
-#include "tsl/platform/test.h"
+#include "xla/error_spec.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/tests/client_library_test_runner_mixin.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
 
 namespace xla {
 namespace {
 
-class AxpySimpleTest : public ClientLibraryTestBase {};
+using AxpySimpleTest =
+    ClientLibraryTestRunnerMixin<HloInterpreterReferenceMixin<HloTestBase>>;
 
 TEST_F(AxpySimpleTest, AxTenValues) {
   XlaBuilder builder("ax_10");
@@ -40,7 +44,7 @@ TEST_F(AxpySimpleTest, AxTenValues) {
   ComputeAndCompareR1<float>(&builder, expected, {}, ErrorSpec(0.0001));
 }
 
-XLA_TEST_F(AxpySimpleTest, AxpyZeroValues) {
+TEST_F(AxpySimpleTest, AxpyZeroValues) {
   XlaBuilder builder("axpy_10");
   auto alpha = ConstantR0<float>(&builder, 3.1415926535);
   auto x = ConstantR1<float>(&builder, {});

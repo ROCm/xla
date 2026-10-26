@@ -1,4 +1,4 @@
-/* Copyright 2015 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2015 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,110 +15,77 @@ limitations under the License.
 
 #include "xla/stream_executor/cuda/cuda_platform.h"
 
-#include "absl/base/call_once.h"
-#include "absl/base/const_init.h"
-#include "absl/memory/memory.h"
+#include <memory>
+#include <string>
+#include <utility>
+
+#include "absl/base/nullability.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/str_format.h"
-#include "xla/stream_executor/cuda/cuda_driver.h"
-#include "xla/stream_executor/cuda/cuda_gpu_executor.h"
+#include "cub/version.cuh"
+#include "third_party/gpus/cuda/include/cuda.h"
+#include "third_party/gpus/cuda/nvml/include/nvml.h"
+#include "third_party/gpus/cudnn/cudnn_version.h"
+#include "xla/stream_executor/abi/runtime_abi_version.h"
+#include "xla/stream_executor/cuda/cuda_diagnostics.h"
+#include "xla/stream_executor/cuda/cuda_executor.h"
 #include "xla/stream_executor/cuda/cuda_platform_id.h"
+#include "xla/stream_executor/cuda/cuda_runtime_abi_version.h"
+#include "xla/stream_executor/cuda/cuda_status.h"
+#include "xla/stream_executor/cuda/cuda_version_parser.h"
+#include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform/initialize.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/status.h"
+#include "xla/stream_executor/platform_manager.h"
+#include "xla/stream_executor/semantic_version.h"
+#include "xla/tsl/platform/errors.h"
 
 namespace stream_executor {
 namespace gpu {
 namespace {
 
-// Synchronize with spinlocks.
-const char kScheduleSpinString[] = "spin";
-// Synchronize with spinlocks that also call CPU yield instructions.
-const char kScheduleYieldString[] = "yield";
-// Synchronize with a "synchronization primitive" (e.g. mutex).
-const char kScheduleBlockingSyncString[] = "blocking_sync";
-
-const DeviceOptions GetDeviceOptionsFromEnv() {
-  const char* gpu_schedule_string =
-      std::getenv("TF_CUDA_PLATFORM_GPU_DEVICE_SCHEDULE");
-
-  if (gpu_schedule_string == nullptr) {
-    return DeviceOptions::Default();
+// Actually performs the work of CUDA initialization. Wrapped up in one-time
+// execution guard.
+static absl::Status InternalInit() {
+  absl::Status status =
+      cuda::ToStatus(cuInit(0 /* = flags */), "Failed call to cuInit");
+  if (!status.ok()) {
+    LOG(ERROR) << "failed call to cuInit: " << status;
+    cuda::Diagnostician::LogDiagnosticInformation();
+    return status;
   }
 
-  unsigned device_flags = 0;
-  if (strcmp(kScheduleSpinString, gpu_schedule_string) == 0) {
-    device_flags = DeviceOptions::kScheduleSpin;
-  } else if (strcmp(kScheduleYieldString, gpu_schedule_string) == 0) {
-    device_flags = DeviceOptions::kScheduleYield;
-  } else if (strcmp(kScheduleBlockingSyncString, gpu_schedule_string) == 0) {
-    device_flags = DeviceOptions::kScheduleBlockingSync;
-  } else {
-    LOG(QFATAL) << "Unknown option for environment variable "
-                   "TF_CUDA_PLATFORM_GPU_DEVICE_SCHEDULE "
-                << gpu_schedule_string << " should be one of {"
-                << kScheduleBlockingSyncString << ", " << kScheduleSpinString
-                << ", " << kScheduleYieldString << "}";
+  nvmlReturn_t init_result = nvmlInit();
+  if (init_result != NVML_SUCCESS) {
+    return absl::InternalError(
+        absl::StrCat("NVML init failed with ", init_result));
   }
 
-  return DeviceOptions(device_flags);
+  return absl::OkStatus();
+}
+
+static absl::Status PlatformInitialize() {
+  // Cached return value from calling InternalInit(), as cuInit need only be
+  // called once, but PlatformInitialize may be called many times.
+  static absl::Status* initialization_status = [] {
+    return new absl::Status(InternalInit());
+  }();
+  return *initialization_status;
 }
 
 }  // namespace
 
-CudaPlatform::CudaPlatform()
-    : name_("CUDA"), min_numa_node_(0), limit_numa_node_(0) {}
+CudaPlatform::CudaPlatform() : name_(cuda::kCudaPlatformId->ToName()) {}
 
-CudaPlatform::~CudaPlatform() {}
-
-// Due to legacy issues in user code, we can't currently call InpectNumaNodes
-// at module initialization time, because non-GPU programs still include this
-// plugin via various methods, so instead, it has to be init-on-reference.
-void CudaPlatform::InspectNumaNodes() {
-  // To get NUMA node information, we need to create all executors, so we can
-  // examine their device descriptions to see their bus assignments.
-  static absl::once_flag once;
-  absl::call_once(once, [&] {
-    for (int i = 0; i < VisibleDeviceCount(); i++) {
-      StreamExecutor* exec = *ExecutorForDevice(i);
-      if (i == 0) {
-        // NUMA nodes may not start at 0, so set the minimum node  based on the
-        // first executor we see.
-        min_numa_node_ = exec->GetDeviceDescription().numa_node();
-        limit_numa_node_ = min_numa_node_ + 1;
-      } else {
-        min_numa_node_ =
-            std::min(min_numa_node_, exec->GetDeviceDescription().numa_node());
-        limit_numa_node_ = std::max(
-            limit_numa_node_, exec->GetDeviceDescription().numa_node() + 1);
-      }
-    }
-  });
-}
-
-int CudaPlatform::BusCount() {
-  InspectNumaNodes();
-  return limit_numa_node_ - min_numa_node_;
-}
-
-int CudaPlatform::DeviceToBus(int device_ordinal) {
-  StreamExecutor* exec = *ExecutorForDevice(device_ordinal);
-  return exec->GetDeviceDescription().numa_node() - min_numa_node_;
-}
-
-tsl::StatusOr<StreamExecutor*> CudaPlatform::FirstExecutorForBus(
-    int bus_ordinal) {
-  InspectNumaNodes();
-  CHECK_LT(bus_ordinal, BusCount()) << "bus ordinal out of available range";
-  for (int i = 0; i < VisibleDeviceCount(); i++) {
-    if (DeviceToBus(i) == bus_ordinal) {
-      return *ExecutorForDevice(i);
-    }
+CudaPlatform::~CudaPlatform() {
+  nvmlReturn_t shutdown_result = nvmlShutdown();
+  if (shutdown_result != NVML_SUCCESS) {
+    LOG(ERROR) << "NVML shutdown failed with " << shutdown_result;
   }
-
-  return tsl::Status(
-      absl::StatusCode::kNotFound,
-      absl::StrFormat("Executor for bus %d not found.", bus_ordinal));
 }
 
 Platform::Id CudaPlatform::id() const { return cuda::kCudaPlatformId; }
@@ -126,91 +93,65 @@ Platform::Id CudaPlatform::id() const { return cuda::kCudaPlatformId; }
 int CudaPlatform::VisibleDeviceCount() const {
   // Initialized in a thread-safe manner the first time this is run.
   static const int num_devices = [] {
-    if (!GpuDriver::Init().ok()) return -1;
-    return GpuDriver::GetDeviceCount();
+    if (!PlatformInitialize().ok()) {
+      return -1;
+    }
+    int device_count = 0;
+    auto status = cuda::ToStatus(cuDeviceGetCount(&device_count));
+    if (!status.ok()) {
+      LOG(ERROR) << "could not retrieve CUDA device count: " << status;
+      return 0;
+    }
+
+    return device_count;
   }();
   return num_devices;
 }
 
 const std::string& CudaPlatform::Name() const { return name_; }
 
-tsl::StatusOr<std::unique_ptr<DeviceDescription>>
+absl::StatusOr<std::unique_ptr<DeviceDescription>>
 CudaPlatform::DescriptionForDevice(int ordinal) const {
-  return GpuExecutor::CreateDeviceDescription(ordinal);
+  ABSL_RETURN_IF_ERROR(PlatformInitialize());
+  return CudaExecutor::CreateDeviceDescription(ordinal);
 }
 
-tsl::StatusOr<StreamExecutor*> CudaPlatform::ExecutorForDevice(int ordinal) {
-  StreamExecutorConfig config;
-  config.ordinal = ordinal;
-  config.plugin_config = PluginConfig();
-  config.device_options = GetDeviceOptionsFromEnv();
-  return GetExecutor(config);
-}
-
-tsl::StatusOr<StreamExecutor*> CudaPlatform::ExecutorForDeviceWithPluginConfig(
-    int device_ordinal, const PluginConfig& plugin_config) {
-  StreamExecutorConfig config;
-  config.ordinal = device_ordinal;
-  config.plugin_config = plugin_config;
-  config.device_options = GetDeviceOptionsFromEnv();
-  return GetExecutor(config);
-}
-
-tsl::StatusOr<StreamExecutor*> CudaPlatform::GetExecutor(
-    const StreamExecutorConfig& config) {
-  if (config.gpu_stream) {
-    // If the GPU stream was provided, it's not possible to get-or-create a
-    // stream with a required pointer: so we are looking for previously
-    // allocated streams.
-    return executor_cache_.Get(config);
-  }
+absl::StatusOr<StreamExecutor*> CudaPlatform::ExecutorForDevice(int ordinal) {
+  ABSL_RETURN_IF_ERROR(PlatformInitialize());
   return executor_cache_.GetOrCreate(
-      config, [&]() { return GetUncachedExecutor(config); });
+      ordinal, [this, ordinal]() { return GetUncachedExecutor(ordinal); });
 }
 
-tsl::StatusOr<std::unique_ptr<StreamExecutor>>
-CudaPlatform::GetUncachedExecutor(const StreamExecutorConfig& config) {
-  auto executor = std::make_unique<StreamExecutor>(
-      this, std::make_unique<GpuExecutor>(config.plugin_config),
-      config.ordinal);
-  auto init_status = executor->Init(config.device_options);
-  if (!init_status.ok()) {
-    return tsl::Status(
-        absl::StatusCode::kInternal,
-        absl::StrFormat(
-            "failed initializing StreamExecutor for CUDA device ordinal %d: %s",
-            config.ordinal, init_status.ToString()));
-  }
+absl::StatusOr<StreamExecutor*> CudaPlatform::FindExisting(int ordinal) {
+  return executor_cache_.Get(ordinal);
+}
 
+absl::StatusOr<std::unique_ptr<StreamExecutor>>
+CudaPlatform::GetUncachedExecutor(int ordinal) {
+  auto executor = std::make_unique<CudaExecutor>(this, ordinal);
+  ABSL_RETURN_IF_ERROR(executor->Init());
   return std::move(executor);
 }
 
-void CudaPlatform::RegisterTraceListener(
-    std::unique_ptr<TraceListener> listener) {
-  LOG(FATAL) << "not yet implemented: register CUDA trace listener";
-}
-
-void CudaPlatform::UnregisterTraceListener(TraceListener* listener) {
-  LOG(FATAL) << "not yet implemented: unregister CUDA trace listener";
+absl::StatusOr<std::unique_ptr<RuntimeAbiVersion> absl_nonnull>
+CudaPlatform::GetRuntimeAbiVersion() const {
+  SemanticVersion cuda_toolkit_version =
+      ParseCudaVersion(CUDA_VERSION).value_or(SemanticVersion{0, 0, 0});
+  SemanticVersion cudnn_version(CUDNN_MAJOR, CUDNN_MINOR, CUDNN_PATCHLEVEL);
+  SemanticVersion cub_version = SemanticVersion(
+      CUB_MAJOR_VERSION, CUB_MINOR_VERSION, CUB_SUBMINOR_VERSION);
+  return std::make_unique<cuda::CudaRuntimeAbiVersion>(
+      cuda_toolkit_version, cudnn_version, cub_version);
 }
 
 }  // namespace gpu
 
 static void InitializeCudaPlatform() {
-  // Disabling leak checking, MultiPlatformManager does not destroy its
-  // registered platforms.
-
-  std::unique_ptr<gpu::CudaPlatform> platform(new gpu::CudaPlatform);
-  TF_CHECK_OK(MultiPlatformManager::RegisterPlatform(std::move(platform)));
+  CHECK_OK(
+      PlatformManager::RegisterPlatform(std::make_unique<gpu::CudaPlatform>()));
 }
 
 }  // namespace stream_executor
 
-REGISTER_MODULE_INITIALIZER(cuda_platform,
-                            stream_executor::InitializeCudaPlatform());
-
-// Note that module initialization sequencing is not supported in the
-// open-source project, so this will be a no-op there.
-REGISTER_MODULE_INITIALIZER_SEQUENCE(cuda_platform, multi_platform_manager);
-REGISTER_MODULE_INITIALIZER_SEQUENCE(multi_platform_manager_listener,
-                                     cuda_platform);
+STREAM_EXECUTOR_REGISTER_MODULE_INITIALIZER(
+    cuda_platform, stream_executor::InitializeCudaPlatform());

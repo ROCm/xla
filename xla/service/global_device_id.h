@@ -1,4 +1,4 @@
-/* Copyright 2020 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2020 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,23 +16,7 @@ limitations under the License.
 #ifndef XLA_SERVICE_GLOBAL_DEVICE_ID_H_
 #define XLA_SERVICE_GLOBAL_DEVICE_ID_H_
 
-#include <string>
-
-#include "absl/types/span.h"
-#include "xla/types.h"
-#include "tsl/lib/gtl/int_type.h"
-
-namespace xla {
-
-// Strongly-typed integer type for naming a device globally within a distributed
-// system. XLA doesn't have a strong opinion about what global numbering scheme
-// is applied to GPUs; the user must provide a local -> global mapping via
-// GpuExecutableRunOptions for the local GPUs.
-TSL_LIB_GTL_DEFINE_INT_TYPE(GlobalDeviceId, int64_t);
-
-// Returns a comma-separated string of global device IDs.
-std::string GlobalDeviceIdsToString(absl::Span<GlobalDeviceId const> ids);
-
-}  // namespace xla
+// TODO(ezhulenev): Remove this file once all references are updated.
+#include "xla/runtime/device_id.h"  // INLINER_FORWARD_TO
 
 #endif  // XLA_SERVICE_GLOBAL_DEVICE_ID_H_

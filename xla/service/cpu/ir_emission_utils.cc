@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,18 +15,22 @@ limitations under the License.
 
 #include "xla/service/cpu/ir_emission_utils.h"
 
-#include "xla/hlo/ir/hlo_module.h"
+#include <cstdint>
+
+#include "absl/log/check.h"
+#include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/layout_util.h"
 #include "xla/service/cpu/cpu_runtime.h"
 #include "xla/shape_util.h"
 #include "xla/window_util.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace cpu {
 
 int64_t GetMinimumAlignmentForArray(
     const Shape& shape, const TargetMachineFeatures& target_machine_features) {
-  CHECK(LayoutUtil::IsDenseArray(shape));
+  CHECK(shape.IsArray());
 
   // We don't require a layout to be set on `shape`.  This only works on CPU
   // because we don't pad our tensors or otherwise have complicated data tiling
@@ -100,14 +104,32 @@ bool PotentiallyImplementedAsEigenConvolution(
   }
 
   return dnums.input_batch_dimension() == 0 &&
-         dnums.input_feature_dimension() == input_shape.dimensions_size() - 1 &&
+         dnums.input_feature_dimension() ==
+             input_shape.dimensions().size() - 1 &&
          dnums.output_batch_dimension() == 0 &&
          dnums.output_feature_dimension() ==
-             output_shape.dimensions_size() - 1 &&
+             output_shape.dimensions().size() - 1 &&
          dnums.kernel_input_feature_dimension() ==
-             kernel_shape.dimensions_size() - 2 &&
+             kernel_shape.dimensions().size() - 2 &&
          dnums.kernel_output_feature_dimension() ==
-             kernel_shape.dimensions_size() - 1;
+             kernel_shape.dimensions().size() - 1;
+}
+
+bool CanUseEigenConvolution(
+    const HloInstruction& convolution,
+    const TargetMachineFeatures& target_machine_features) {
+  if (!PotentiallyImplementedAsEigenConvolution(convolution,
+                                                target_machine_features)) {
+    return false;
+  }
+
+  const Shape& input_shape = convolution.operand(0)->shape();
+  const Shape& kernel_shape = convolution.operand(1)->shape();
+  const Shape& output_shape = convolution.shape();
+
+  return LayoutUtil::IsMonotonicWithDim0Major(input_shape.layout()) &&
+         LayoutUtil::IsMonotonicWithDim0Major(kernel_shape.layout()) &&
+         LayoutUtil::IsMonotonicWithDim0Major(output_shape.layout());
 }
 
 }  // namespace cpu

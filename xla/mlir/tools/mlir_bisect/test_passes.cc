@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,8 +15,15 @@ limitations under the License.
 
 #include "xla/mlir/tools/mlir_bisect/test_passes.h"
 
-#include "mlir/Dialect/Linalg/IR/Linalg.h"  // from @llvm-project
-#include "mlir/Pass/Pass.h"  // from @llvm-project
+#include <utility>
+
+#include "llvm/ADT/SmallVector.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassRegistry.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Support/TypeID.h"
 
 namespace mlir {
 namespace bisect {

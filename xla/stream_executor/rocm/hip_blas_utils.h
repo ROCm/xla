@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,20 +18,23 @@ limitations under the License.
 
 #include <string>
 
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "rocm/include/hipblas/hipblas.h"
+#include "rocm/include/hipblaslt/hipblaslt.h"
+#include "rocm/rocm_config.h"
 #include "xla/stream_executor/blas.h"
-#include "xla/stream_executor/rocm/hipblaslt_wrapper.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/status.h"
+#include "xla/tsl/platform/errors.h"
 
 namespace stream_executor {
 namespace rocm {
 
 #define SE_HIPBLAS_RETURN_IF_ERROR(expr) \
-  TF_RETURN_IF_ERROR(::stream_executor::rocm::ToStatus(expr, #expr))
+  ABSL_RETURN_IF_ERROR(::stream_executor::rocm::ToStatus(expr, #expr))
 
-tsl::Status ToStatus(hipblasStatus_t status, const char* prefix);
-hipblasDatatype_t AsHipblasDataType(blas::DataType type);
-hipblasLtComputeType_t AsHipblasComputeType(blas::ComputationType type);
+absl::Status ToStatus(hipblasStatus_t status, const char* prefix);
+hipDataType AsHipblasDataType(blas::DataType type);
+hipblasComputeType_t AsHipblasComputeType(blas::ComputationType type);
 hipblasOperation_t AsHipblasOperation(blas::Transpose trans);
 
 }  // namespace rocm

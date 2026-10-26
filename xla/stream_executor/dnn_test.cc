@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,10 +15,13 @@ limitations under the License.
 
 #include "xla/stream_executor/dnn.h"
 
+#include <gtest/gtest.h>
+
 #include <tuple>
 #include <vector>
 
-#include "tsl/platform/test.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/tsl/protobuf/dnn.pb.h"
 
 namespace stream_executor {
 namespace {
@@ -52,6 +55,32 @@ TEST(DnnTest, VersionInfoComparisonOperators) {
       EXPECT_EQ((a >= b), va >= vb);
     }
   }
+}
+
+TEST(DnnTest, PoolingDescriptorSetDimOutOfBounds) {
+  EXPECT_DEATH(
+      {
+        dnn::PoolingDescriptor pool(1);
+        pool.set_window_height(1337);
+      },
+      "");
+}
+
+TEST(DnnTest, ReorderDimsRankBelow2) {
+  EXPECT_DEATH(dnn::ReorderDims({0}, dnn::DataLayout::kYXBatchDepth,
+                                dnn::DataLayout::kBatchYXDepth),
+               "");
+  EXPECT_DEATH(dnn::ReorderDims({0}, dnn::FilterLayout::kYXInputOutput,
+                                dnn::FilterLayout::kOutputInputYX),
+               "");
+}
+
+TEST(DnnTest, TensorDescriptorScalarStrides) {
+  dnn::TensorDescriptor desc =
+      dnn::TensorDescriptor::For(dnn::DataType::kFloat, {}, {});
+  EXPECT_EQ(desc.ndims(), 0);
+  EXPECT_TRUE(desc.GetPhysicalStridesMajorToMinor().empty());
+  EXPECT_TRUE(desc.GetLogicalStrides().empty());
 }
 
 }  // namespace

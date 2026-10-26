@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,16 +16,17 @@ limitations under the License.
 #ifndef XLA_MLIR_TOOLS_MLIR_REPLAY_PUBLIC_EXECUTION_TRACE_UTILS_H_
 #define XLA_MLIR_TOOLS_MLIR_REPLAY_PUBLIC_EXECUTION_TRACE_UTILS_H_
 
-#include "mlir/IR/Attributes.h"  // from @llvm-project
-#include "mlir/IR/Operation.h"  // from @llvm-project
-#include "mlir/IR/Region.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "absl/status/statusor.h"
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/Region.h"
+#include "mlir/IR/Types.h"
+#include "mlir/Support/LLVM.h"
 #include "xla/literal.h"
+#include "xla/mlir/tools/mlir_interpreter/framework/interpreter.h"
+#include "xla/mlir/tools/mlir_interpreter/framework/interpreter_value.h"
 #include "xla/mlir/tools/mlir_replay/public/execution_trace.pb.h"
-#include "xla/mlir_hlo/tools/mlir_interpreter/framework/interpreter.h"
-#include "xla/mlir_hlo/tools/mlir_interpreter/framework/interpreter_value.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/statusor.h"
 
 namespace mlir {
 namespace interpreter {
@@ -35,10 +36,10 @@ class ExecutionTraceListener : public InterpreterListener {
  public:
   explicit ExecutionTraceListener(ExecutionTrace* trace) : trace_(trace) {}
 
-  void beforeOp(ArrayRef<InterpreterValue> args, Operation* op) override;
-  void afterOp(ArrayRef<InterpreterValue> results) override;
-  void enterRegion(ArrayRef<InterpreterValue> bbargs, Region& region) override;
-  void leaveRegion(ArrayRef<InterpreterValue> yielded) override;
+  void BeforeOp(ArrayRef<InterpreterValue> args, Operation* op) override;
+  void AfterOp(ArrayRef<InterpreterValue> results) override;
+  void EnterRegion(ArrayRef<InterpreterValue> bbargs, Region& region) override;
+  void LeaveRegion(ArrayRef<InterpreterValue> yielded) override;
 
  private:
   ExecutionTrace* trace_;
@@ -50,20 +51,20 @@ llvm::SmallVector<mlir::Attribute> ValueToAttribute(
     const InterpreterValue& value, mlir::Type type);
 
 // Deserializes the given literal.
-tsl::StatusOr<InterpreterValue> LiteralToValue(
+absl::StatusOr<InterpreterValue> LiteralToValue(
     const xla::LiteralProto& literal);
 // Deserializes the given literal and then casts it to the given type.
-tsl::StatusOr<InterpreterValue> LiteralToValue(const xla::LiteralProto& literal,
-                                               mlir::Type type);
+absl::StatusOr<InterpreterValue> LiteralToValue(
+    const xla::LiteralProto& literal, mlir::Type type);
 
 // Deserializes the given literal.
-tsl::StatusOr<InterpreterValue> LiteralToValue(const xla::Literal& literal);
+absl::StatusOr<InterpreterValue> LiteralToValue(const xla::Literal& literal);
 
 // Serializes the given interpreter value.
 TracedValue ValueToTracedValue(const InterpreterValue& value);
 
 // Deserializes the given traced value.
-tsl::StatusOr<InterpreterValue> TracedValueToValue(
+absl::StatusOr<InterpreterValue> TracedValueToValue(
     const TracedValue& traced_value);
 
 // Returns all executions of the given op in the given trace.

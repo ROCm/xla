@@ -14,14 +14,15 @@ limitations under the License.
 ==============================================================================*/
 #include "tsl/profiler/lib/profiler_controller.h"
 
+#include <any>
 #include <memory>
 #include <utility>
 
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/status.h"
+#include "absl/status/status.h"
 #include "tsl/profiler/lib/profiler_interface.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/logging.h"
 
 namespace tsl {
 namespace profiler {
@@ -37,8 +38,8 @@ ProfilerController::~ProfilerController() {
   }
 }
 
-Status ProfilerController::Start() {
-  Status status;
+absl::Status ProfilerController::Start() {
+  absl::Status status;
   if (state_ == ProfilerState::kInit) {
     state_ = ProfilerState::kStart;
     if (status_.ok()) {
@@ -53,8 +54,8 @@ Status ProfilerController::Start() {
   return status;
 }
 
-Status ProfilerController::Stop() {
-  Status status;
+absl::Status ProfilerController::Stop() {
+  absl::Status status;
   if (state_ == ProfilerState::kStart) {
     state_ = ProfilerState::kStop;
     if (status_.ok()) {
@@ -69,8 +70,9 @@ Status ProfilerController::Stop() {
   return status;
 }
 
-Status ProfilerController::CollectData(tensorflow::profiler::XSpace* space) {
-  Status status;
+absl::Status ProfilerController::CollectData(
+    tensorflow::profiler::XSpace* space) {
+  absl::Status status;
   if (state_ == ProfilerState::kStop) {
     state_ = ProfilerState::kCollectData;
     if (status_.ok()) {
@@ -83,6 +85,21 @@ Status ProfilerController::CollectData(tensorflow::profiler::XSpace* space) {
   }
   if (!status.ok()) LOG(ERROR) << status;
   return status;
+}
+
+absl::StatusOr<ConsumeResult> ProfilerController::Consume() {
+  if (state_ == ProfilerState::kInit) {
+    return absl::AbortedError("Consume called in the wrong order.");
+  }
+  if (!status_.ok()) {
+    return absl::AbortedError("Previous call returned an error.");
+  }
+  return profiler_->Consume();
+}
+
+absl::Status ProfilerController::Serialize(
+    std::any data, tensorflow::profiler::XSpace* space) {
+  return profiler_->Serialize(std::move(data), space);
 }
 
 }  // namespace profiler

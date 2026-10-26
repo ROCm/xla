@@ -1,3 +1,18 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# =============================================================================
+
 """Functions common across configure rules."""
 
 BAZEL_SH = "BAZEL_SH"
@@ -17,6 +32,8 @@ def which(repository_ctx, program_name, allow_failure = False):
     Args:
       repository_ctx: the repository_ctx
       program_name: name of the program on the PATH
+      allow_failure: if True, an empty stdout result or output to stderr
+        is fine, otherwise either of these is an error
 
     Returns:
       The full path to a program on the execution platform.
@@ -165,10 +182,15 @@ def get_host_environ(repository_ctx, name, default_value = None):
     Args:
       repository_ctx: the repository_ctx
       name: the name of environment variable
+      default_value: the value to return if not set
 
     Returns:
       The value of the environment variable 'name' on the host platform.
     """
+    if repository_ctx.getenv(name):
+        return repository_ctx.getenv(name).strip()
+
+    # Keep here for backward compatibility. Deprecated method.
     if name in repository_ctx.os.environ:
         return repository_ctx.os.environ.get(name).strip()
 
@@ -212,7 +234,8 @@ def execute(
         cmdline,
         error_msg = None,
         error_details = None,
-        allow_failure = False):
+        allow_failure = False,
+        env_vars = {}):
     """Executes an arbitrary shell command.
 
     Args:
@@ -222,21 +245,22 @@ def execute(
       error_details: string, details about the error or steps to fix it
       allow_failure: bool, if True, an empty stdout result or output to stderr
         is fine, otherwise either of these is an error
+      env_vars: environment variables
     Returns:
       The result of repository_ctx.execute(cmdline)
     """
-    result = raw_exec(repository_ctx, cmdline)
-    if (result.stderr or not result.stdout) and not allow_failure:
+    result = raw_exec(repository_ctx, cmdline, env_vars)
+    if (result.return_code != 0 or not result.stdout) and not allow_failure:
         fail(
             "\n".join([
-                error_msg.strip() if error_msg else "Repository command failed",
+                error_msg.strip() if error_msg else "Repository command failed (code {})".format(result.return_code),
                 result.stderr.strip(),
                 error_details if error_details else "",
             ]),
         )
     return result
 
-def raw_exec(repository_ctx, cmdline):
+def raw_exec(repository_ctx, cmdline, env_vars = {}):
     """Executes a command via repository_ctx.execute() and returns the result.
 
     This method is useful for debugging purposes. For example, to print all
@@ -245,11 +269,12 @@ def raw_exec(repository_ctx, cmdline):
     Args:
       repository_ctx: the repository_ctx
       cmdline: the list of args
+      env_vars: environment variables
 
     Returns:
       The 'exec_result' of repository_ctx.execute().
     """
-    return repository_ctx.execute(cmdline)
+    return repository_ctx.execute(cmdline, environment = env_vars)
 
 def files_exist(repository_ctx, paths, bash_bin = None):
     """Checks which files in paths exists.
@@ -288,6 +313,23 @@ def realpath(repository_ctx, path, bash_bin = None):
         bash_bin = get_bash_bin(repository_ctx)
 
     return execute(repository_ctx, [bash_bin, "-c", "realpath \"%s\"" % path]).stdout.strip()
+
+def relative_to(repository_ctx, base, path, bash_bin = None):
+    """Returns the result of "realpath --relative-to".
+
+    Args:
+      repository_ctx: the repository_ctx
+      base: a path on the file system
+      path: a path on the file system
+      bash_bin: path to the bash interpreter
+
+    Returns:
+      Returns the result of "realpath --relative-to"
+    """
+    if bash_bin == None:
+        bash_bin = get_bash_bin(repository_ctx)
+
+    return execute(repository_ctx, [bash_bin, "-c", "realpath --relative-to \"%s\" \"%s\"" % (base, path)]).stdout.strip()
 
 def err_out(result):
     """Returns stderr if set, else stdout.

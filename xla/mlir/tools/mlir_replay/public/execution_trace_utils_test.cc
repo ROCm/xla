@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,19 +15,22 @@ limitations under the License.
 
 #include "xla/mlir/tools/mlir_replay/public/execution_trace_utils.h"
 
+#include <gtest/gtest.h>
+
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <memory>
-#include <string>
 #include <utility>
 #include <vector>
 
-#include <gtest/gtest.h>
 #include "llvm/ADT/STLExtras.h"
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"
+#include "xla/literal.h"
 #include "xla/literal_util.h"
-#include "xla/mlir_hlo/tools/mlir_interpreter/framework/interpreter_value.h"
-#include "tsl/platform/statusor.h"
+#include "xla/mlir/tools/mlir_interpreter/framework/interpreter_value.h"
+#include "xla/mlir/tools/mlir_interpreter/framework/tensor_or_memref.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace mlir {
 namespace interpreter {
@@ -39,13 +42,13 @@ class TracedValueRoundTripTest
 TEST_P(TracedValueRoundTripTest, Run) {
   auto traced_value = ValueToTracedValue(GetParam());
   TF_ASSERT_OK_AND_ASSIGN(auto value, TracedValueToValue(traced_value));
-  EXPECT_EQ(GetParam(), value) << GetParam().toString();
+  EXPECT_EQ(GetParam(), value) << GetParam().ToString();
 }
 
 template <typename T>
 InterpreterValue MakeTensor(ArrayRef<int64_t> shape, ArrayRef<T> values) {
-  auto result = TensorOrMemref<T>::empty(shape);
-  for (auto [indices, value] : llvm::zip(result.view.indices(), values)) {
+  auto result = TensorOrMemref<T>::Empty(shape);
+  for (auto [indices, value] : llvm::zip(result.view.Indices(), values)) {
     result.at(indices) = value;
   }
   return {result};
@@ -88,7 +91,7 @@ class FromLiteralTest
 TEST_P(FromLiteralTest, Run) {
   TF_ASSERT_OK_AND_ASSIGN(auto value, LiteralToValue(*GetParam().first));
   EXPECT_EQ(value, GetParam().second)
-      << value.toString() << " vs " << GetParam().second.toString();
+      << value.ToString() << " vs " << GetParam().second.ToString();
 }
 
 std::vector<std::pair<std::shared_ptr<xla::Literal>, InterpreterValue>>

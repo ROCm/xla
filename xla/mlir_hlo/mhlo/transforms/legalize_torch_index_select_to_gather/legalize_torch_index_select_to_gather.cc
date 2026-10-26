@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@ limitations under the License.
 #include <algorithm>
 #include <cstdint>
 #include <limits>
-#include <memory>
 #include <utility>
 
 #include "llvm/ADT/SmallVector.h"
@@ -30,6 +29,7 @@ limitations under the License.
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -45,7 +45,7 @@ struct TorchIndexSelectIsGather : public OpRewritePattern<TorchIndexSelectOp> {
   using OpRewritePattern<TorchIndexSelectOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(TorchIndexSelectOp op,
-                                PatternRewriter &rewriter) const override {
+                                PatternRewriter& rewriter) const override {
     auto operand = op.getOperand();
     auto operandTy = operand.getType();
     if (!operandTy.hasRank()) {
@@ -68,7 +68,7 @@ struct TorchIndexSelectIsGather : public OpRewritePattern<TorchIndexSelectOp> {
 
     int64_t indexVectorDim = index.getType().getRank();
     auto indexTy = index.getType();
-    auto indexElementTy = indexTy.getElementType().dyn_cast<IntegerType>();
+    auto indexElementTy = mlir::dyn_cast<IntegerType>(indexTy.getElementType());
     if (!indexElementTy) {
       return rewriter.notifyMatchFailure(
           op, "index must have integer element type");
@@ -76,8 +76,9 @@ struct TorchIndexSelectIsGather : public OpRewritePattern<TorchIndexSelectOp> {
 
     if (index.getType().getElementType().getIntOrFloatBitWidth() == 64 &&
         operandTy.getShape()[dim] < std::numeric_limits<uint32_t>::max()) {
-      index = rewriter.create<ConvertOp>(
-          op.getLoc(), index, rewriter.getIntegerType(32, /*isSigned=*/false));
+      index =
+          ConvertOp::create(rewriter, op.getLoc(), index,
+                            rewriter.getIntegerType(32, /*isSigned=*/false));
     }
 
     if (batchDims > 0) {
@@ -89,12 +90,12 @@ struct TorchIndexSelectIsGather : public OpRewritePattern<TorchIndexSelectOp> {
       llvm::SmallVector<Value> toConcat;
       for (auto batchDim = 0; batchDim < batchDims; ++batchDim) {
         toConcat.push_back(
-            rewriter.create<IotaOp>(op.getLoc(), newIndexType, batchDim));
+            IotaOp::create(rewriter, op.getLoc(), newIndexType, batchDim));
       }
       toConcat.push_back(
-          rewriter.create<ReshapeOp>(op.getLoc(), newIndexType, index));
-      index = rewriter.create<ConcatenateOp>(op.getLoc(), ValueRange(toConcat),
-                                             indexVectorDim);
+          ReshapeOp::create(rewriter, op.getLoc(), newIndexType, index));
+      index = ConcatenateOp::create(rewriter, op.getLoc(), ValueRange(toConcat),
+                                    indexVectorDim);
     }
 
     llvm::SmallVector<int64_t> offsetDims;
@@ -116,14 +117,16 @@ struct TorchIndexSelectIsGather : public OpRewritePattern<TorchIndexSelectOp> {
     }
 
     auto gatherDimensionNumbersAttr = GatherDimensionNumbersAttr::get(
-        rewriter.getContext(), offsetDims, collapsedSliceDims, startIndexMap,
-        indexVectorDim);
+        rewriter.getContext(), offsetDims, collapsedSliceDims,
+        // TODO: b/342172264 - Implement handling of batching dims.
+        /*operandBatchingDims=*/{}, /*startIndicesBatchingDims=*/{},
+        startIndexMap, indexVectorDim);
 
     auto sliceSizesAttr = rewriter.getI64TensorAttr(sliceSizes);
 
     auto gatherOp =
-        rewriter.create<GatherOp>(op.getLoc(), operand, index,
-                                  gatherDimensionNumbersAttr, sliceSizesAttr);
+        GatherOp::create(rewriter, op.getLoc(), operand, index,
+                         gatherDimensionNumbersAttr, sliceSizesAttr);
     rewriter.replaceOp(op, gatherOp);
     return success();
   }
@@ -136,21 +139,15 @@ struct LegalizeTorchIndexSelectToGatherPass
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
     populateTorchIndexSelectToGatherPatterns(&getContext(), &patterns);
-    if (failed(
-            applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       return signalPassFailure();
   }
 };
 }  // namespace
 
-void populateTorchIndexSelectToGatherPatterns(mlir::MLIRContext *context,
-                                              RewritePatternSet *patterns) {
+void populateTorchIndexSelectToGatherPatterns(mlir::MLIRContext* context,
+                                              RewritePatternSet* patterns) {
   patterns->add<TorchIndexSelectIsGather>(context);
-}
-
-std::unique_ptr<OperationPass<func::FuncOp>>
-createLegalizeTorchIndexSelectToGatherPass() {
-  return std::make_unique<LegalizeTorchIndexSelectToGatherPass>();
 }
 
 }  // namespace mhlo

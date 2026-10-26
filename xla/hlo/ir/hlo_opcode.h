@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,12 +16,12 @@ limitations under the License.
 #ifndef XLA_HLO_IR_HLO_OPCODE_H_
 #define XLA_HLO_IR_HLO_OPCODE_H_
 
+#include <cstdint>
 #include <iosfwd>
 #include <optional>
 
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "xla/statusor.h"
-#include "xla/xla_data.pb.h"
 
 namespace xla {
 
@@ -48,6 +48,8 @@ namespace xla {
 #define HLO_OPCODE_LIST(V)                                                     \
   /* go/keep-sorted start */                                                   \
   V(kAbs, "abs", 1)                                                            \
+  V(kAcos, "acos", 1)                                                          \
+  V(kAcosh, "acosh", 1)                                                        \
   V(kAdd, "add", 2)                                                            \
   V(kAddDependency, "add-dependency", 2)                                       \
   V(kAfterAll, "after-all", kHloOpcodeIsVariadic)                              \
@@ -59,10 +61,13 @@ namespace xla {
   V(kAllReduceStart, "all-reduce-start", kHloOpcodeIsVariadic)                 \
   V(kAllToAll, "all-to-all", kHloOpcodeIsVariadic)                             \
   V(kAnd, "and", 2)                                                            \
+  V(kAsin, "asin", 1)                                                          \
+  V(kAsinh, "asinh", 1)                                                        \
   V(kAsyncDone, "async-done", 1)                                               \
   V(kAsyncStart, "async-start", kHloOpcodeIsVariadic)                          \
-  V(kAsyncUpdate, "async-update", 1)                                           \
+  V(kAsyncUpdate, "async-update", kHloOpcodeIsVariadic)                        \
   V(kAtan2, "atan2", 2)                                                        \
+  V(kAtanh, "atanh", 1)                                                        \
   V(kBatchNormGrad, "batch-norm-grad", 5)                                      \
   V(kBatchNormInference, "batch-norm-inference", 5)                            \
   V(kBatchNormTraining, "batch-norm-training", 3)                              \
@@ -75,28 +80,33 @@ namespace xla {
   V(kCholesky, "cholesky", 1)                                                  \
   V(kClamp, "clamp", 3)                                                        \
   V(kClz, "count-leading-zeros", 1)                                            \
+  V(kCollectiveBroadcast, "collective-broadcast", kHloOpcodeIsVariadic)        \
   V(kCollectivePermute, "collective-permute", kHloOpcodeIsVariadic)            \
   V(kCollectivePermuteDone, "collective-permute-done", 1)                      \
   V(kCollectivePermuteStart, "collective-permute-start", kHloOpcodeIsVariadic) \
+  V(kCollectiveReduce, "collective-reduce", kHloOpcodeIsVariadic)              \
   V(kCompare, "compare", 2)                                                    \
   V(kComplex, "complex", 2)                                                    \
   V(kConcatenate, "concatenate", kHloOpcodeIsVariadic)                         \
   V(kConditional, "conditional", kHloOpcodeIsVariadic)                         \
   V(kConstant, "constant", 0)                                                  \
   V(kConvert, "convert", 1)                                                    \
-  V(kConvolution, "convolution", 2)                                            \
+  V(kConvolution, "convolution", kHloOpcodeIsVariadic)                         \
   V(kCopy, "copy", 1)                                                          \
   V(kCopyDone, "copy-done", 1)                                                 \
   V(kCopyStart, "copy-start", 1)                                               \
   V(kCos, "cosine", 1)                                                         \
+  V(kCosh, "cosh", 1)                                                          \
   V(kCustomCall, "custom-call", kHloOpcodeIsVariadic)                          \
   V(kDivide, "divide", 2)                                                      \
   V(kDomain, "domain", 1)                                                      \
-  V(kDot, "dot", 2)                                                            \
+  V(kDot, "dot", kHloOpcodeIsVariadic)                                         \
   V(kDynamicReshape, "dynamic-reshape", kHloOpcodeIsVariadic)                  \
   V(kDynamicSlice, "dynamic-slice", kHloOpcodeIsVariadic)                      \
   V(kDynamicUpdateSlice, "dynamic-update-slice", kHloOpcodeIsVariadic)         \
+  V(kErf, "erf", 1)                                                            \
   V(kExp, "exponential", 1)                                                    \
+  V(kExp2, "exp2", 1)                                                          \
   V(kExpm1, "exponential-minus-one", 1)                                        \
   V(kFft, "fft", 1)                                                            \
   V(kFloor, "floor", 1)                                                        \
@@ -110,10 +120,12 @@ namespace xla {
   V(kIsFinite, "is-finite", 1)                                                 \
   V(kLog, "log", 1)                                                            \
   V(kLog1p, "log-plus-one", 1)                                                 \
+  V(kLog2, "log2", 1)                                                          \
   V(kLogistic, "logistic", 1)                                                  \
   V(kMap, "map", kHloOpcodeIsVariadic)                                         \
   V(kMaximum, "maximum", 2)                                                    \
   V(kMinimum, "minimum", 2)                                                    \
+  V(kMulhi, "mulhi", 2)                                                        \
   V(kMultiply, "multiply", 2)                                                  \
   V(kNegate, "negate", 1)                                                      \
   V(kNot, "not", 1)                                                            \
@@ -125,6 +137,8 @@ namespace xla {
   V(kPartitionId, "partition-id", 0)                                           \
   V(kPopulationCount, "popcnt", 1)                                             \
   V(kPower, "power", 2)                                                        \
+  V(kRaggedAllToAll, "ragged-all-to-all", 6)                                   \
+  V(kRaggedDot, "ragged-dot", 3)                                               \
   V(kReal, "real", 1)                                                          \
   V(kRecv, "recv", 1)                                                          \
   V(kRecvDone, "recv-done", 1)                                                 \
@@ -142,6 +156,8 @@ namespace xla {
   V(kRoundNearestAfz, "round-nearest-afz", 1)                                  \
   V(kRoundNearestEven, "round-nearest-even", 1)                                \
   V(kRsqrt, "rsqrt", 1)                                                        \
+  V(kScaledDot, "scaled-dot", 4)                                               \
+  V(kScan, "scan", kHloOpcodeIsVariadic)                                       \
   V(kScatter, "scatter", kHloOpcodeIsVariadic)                                 \
   V(kSelect, "select", 3)                                                      \
   V(kSelectAndScatter, "select-and-scatter", 3)                                \
@@ -151,8 +167,10 @@ namespace xla {
   V(kShiftLeft, "shift-left", 2)                                               \
   V(kShiftRightArithmetic, "shift-right-arithmetic", 2)                        \
   V(kShiftRightLogical, "shift-right-logical", 2)                              \
+  V(kShuffle, "shuffle", 1)                                                    \
   V(kSign, "sign", 1)                                                          \
   V(kSin, "sine", 1)                                                           \
+  V(kSinh, "sinh", 1)                                                          \
   V(kSlice, "slice", 1)                                                        \
   V(kSort, "sort", kHloOpcodeIsVariadic)                                       \
   V(kSqrt, "sqrt", 1)                                                          \
@@ -169,7 +187,8 @@ namespace xla {
   /* go/keep-sorted end */
 // LINT.ThenChange(../../mlir_hlo/mhlo/IR/hlo_ops.td)
 
-enum class HloOpcode {
+// Upto 256 opcodes. Increase the base type if/when needed.
+enum class HloOpcode : uint8_t {
 #define DECLARE_ENUM(enum_name, opcode_name, ...) enum_name,
   HLO_OPCODE_LIST(DECLARE_ENUM)
 #undef DECLARE_ENUM
@@ -184,31 +203,33 @@ enum {
 absl::string_view HloOpcodeString(HloOpcode opcode);
 
 // Retrieves the opcode enum by name if the opcode exists.
-StatusOr<HloOpcode> StringToHloOpcode(absl::string_view opcode_name);
+absl::StatusOr<HloOpcode> StringToHloOpcode(absl::string_view opcode_name);
 
 inline std::ostream& operator<<(std::ostream& os, HloOpcode opcode) {
   return os << HloOpcodeString(opcode);
 }
 
-// Returns true iff the given opcode is a comparison operation.
-bool HloOpcodeIsComparison(HloOpcode opcode);
+// Returns the arity of opcode or nullopt for variadic opcodes.
+std::optional<int8_t> HloOpcodeArity(HloOpcode opcode);
 
-// Returns true iff the given opcode has variadic operands.
-bool HloOpcodeIsVariadic(HloOpcode opcode);
-
-// Returns the arity of opcode. If the opcode is variadic,
-// returns nullopt.
-std::optional<int> HloOpcodeArity(HloOpcode opcode);
-
-// Returns true if the given opcode is one of kAsyncStart, kAsyncUpdate, or
-// kAsyncDone.
-bool HloOpcodeIsAsync(HloOpcode opcode);
+// Returns true for kAsyncStart, kAsyncUpdate, kAsyncDone.
+inline bool HloOpcodeIsAsync(HloOpcode opcode) {
+  switch (opcode) {
+    case HloOpcode::kAsyncStart:
+    case HloOpcode::kAsyncUpdate:
+    case HloOpcode::kAsyncDone:
+      return true;
+    default:
+      return false;
+  }
+}
 
 // True if the op takes two arguments and order doesn't matter.
 inline bool HloOpcodeIsBinaryCommutative(HloOpcode opcode) {
   switch (opcode) {
     case HloOpcode::kAdd:
     case HloOpcode::kMultiply:
+    case HloOpcode::kMulhi:
     case HloOpcode::kMaximum:
     case HloOpcode::kMinimum:
     case HloOpcode::kAnd:
@@ -226,7 +247,34 @@ inline constexpr uint32_t HloOpcodeCount() {
 #define HLO_XLIST_LENGTH(list) list(HLO_COUNT_ONE)
   return HLO_XLIST_LENGTH(HLO_OPCODE_LIST);
 }
+static_assert(HloOpcodeCount() < 256,
+              "HloOpcode is a uint8_t. You need to increase its size before "
+              "adding new op codes.");
 
+// The context in which a computation is called by another computation. This is
+// decided by the opcode of the callsite instruction.
+enum class CallContext : std::uint8_t {
+  // In an embedded call context, the body of the function cannot allocate
+  // buffers.
+  kEmbedded,
+
+  // A control flow call context can allocate buffers.
+  kControlFlow,
+
+  // A computation is called from both an embedded and control flow context.
+  kBoth,
+
+  // During call graph construction kNone is used to indicate that the context
+  // has not been determined. This is the top value for the context
+  // lattice. After construction, no call sites or call graph nodes should have
+  // this value.
+  kNone
+};
+
+std::string CallContextToString(CallContext context);
+std::ostream& operator<<(std::ostream& out, const CallContext& context);
+
+CallContext GetInstructionCallContext(HloOpcode opcode);
 }  // namespace xla
 
 #endif  // XLA_HLO_IR_HLO_OPCODE_H_

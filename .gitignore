@@ -8,6 +8,13 @@ bazel-bin
 bazel-out
 bazel-testlogs
 
+# Ignore Bazel lock file
+MODULE.bazel.lock
+
+# Ignore files produced by `configure`
+.tf_configure.bazelrc
+xla_configure.bazelrc
+tools/python_bin_path.sh
 
 # Emacs autosaves
 *~
@@ -21,3 +28,11 @@ bazel-testlogs
 *.VC.opendb
 *.suo
 *.user
+
+# Ignore clangd files and directories: https://openxla.org/xla/lsp
+.cache
+compile_commands.json
+external
+
+# Ignore python cache files.
+__pycache__/

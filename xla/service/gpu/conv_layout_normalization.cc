@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,24 +15,31 @@ limitations under the License.
 
 #include "xla/service/gpu/conv_layout_normalization.h"
 
+#include <cstdint>
 #include <optional>
-#include <tuple>
 #include <vector>
 
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "tsl/platform/protobuf.h"  // IWYU pragma: keep
+#include "tsl/platform/statusor.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_module.h"
-#include "xla/layout_util.h"
 #include "xla/service/gpu/cublas_cudnn.h"
 #include "xla/service/hlo_creation_utils.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
+#include "xla/status_macros.h"
+#include "xla/util.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace gpu {
 namespace {
 
-StatusOr<HloInstruction*> UpdateLayoutForCudnnConvolution(
+absl::StatusOr<std::optional<HloInstruction*>> UpdateLayoutForCudnnConvolution(
     HloCustomCallInstruction* hlo) {
   HloInstruction* lhs = hlo->mutable_operand(0);
   HloInstruction* rhs = hlo->mutable_operand(1);
@@ -40,7 +47,7 @@ StatusOr<HloInstruction*> UpdateLayoutForCudnnConvolution(
       hlo->convolution_dimension_numbers();
 
   auto transpose_dim = [&](int64_t dim, const Shape& unnormalized_shape) {
-    return unnormalized_shape.rank() -
+    return unnormalized_shape.dimensions().size() -
            FindIndex(unnormalized_shape.layout().minor_to_major(), dim) - 1;
   };
 
@@ -55,7 +62,7 @@ StatusOr<HloInstruction*> UpdateLayoutForCudnnConvolution(
       hlo->shape().IsTuple() ? hlo->shape().tuple_shapes(0) : hlo->shape();
 
   Shape input_shape, filter_shape, output_shape;
-  TF_ASSIGN_OR_RETURN(
+  ABSL_ASSIGN_OR_RETURN(
       gpu::CudnnConvKind conv_kind,
       gpu::GetCudnnConvKind(Cast<HloCustomCallInstruction>(hlo)));
   switch (conv_kind) {
@@ -105,14 +112,17 @@ StatusOr<HloInstruction*> UpdateLayoutForCudnnConvolution(
 
   Shape normalized_shape;
   if (hlo->shape().IsTuple()) {
-    TF_RET_CHECK(hlo->shape().tuple_shapes_size() == 2);
-    TF_RET_CHECK(hlo->shape().tuple_shapes(1).rank() == 1)
-        << "Second element in a convolution tuple is expected to be an "
+    TF_RET_CHECK(hlo->shape().tuple_shapes().back().dimensions().size() == 1)
+        << "The last element in the tuple returned by a convolution Custom "
+           "Call is expected to be an "
            "allocator of rank one";
-    normalized_shape = ShapeUtil::MakeTupleShape(
-        {ShapeUtil::MakeShapeWithDescendingLayoutAndSamePhysicalLayout(
-             hlo->shape().tuple_shapes(0)),
-         hlo->shape().tuple_shapes(1)});
+    std::vector<Shape> new_tuple_shape;
+    for (const Shape& tuple_shape : hlo->shape().tuple_shapes()) {
+      new_tuple_shape.emplace_back(
+          ShapeUtil::MakeShapeWithDescendingLayoutAndSamePhysicalLayout(
+              tuple_shape));
+    }
+    normalized_shape = ShapeUtil::MakeTupleShape(new_tuple_shape);
   } else {
     normalized_shape =
         ShapeUtil::MakeShapeWithDescendingLayoutAndSamePhysicalLayout(
@@ -122,19 +132,21 @@ StatusOr<HloInstruction*> UpdateLayoutForCudnnConvolution(
   // We need to restore degenerate dimensions, since those might be used in
   // either batch dimension, or contracting dimensions.
   std::vector<HloInstruction*> normalized_operands;
+  bool performed_normalization = false;
   for (int idx = 0; idx < hlo->operand_count(); idx++) {
     HloInstruction* op = hlo->mutable_operand(idx);
     const Shape& s = op->shape();
     Shape s_reordered =
         ShapeUtil::MakeShapeWithDescendingLayoutAndSamePhysicalLayout(s);
-    HloInstruction* normalized_op = op->mutable_operand(0);
-    HloInstruction* new_op;
-    if (normalized_op->shape() == s_reordered) {
-      new_op = normalized_op;
-    } else {
-      new_op = MakeBitcastHlo(op, s_reordered);
-    }
-    normalized_operands.push_back(new_op);
+    normalized_operands.emplace_back(MakeBitcastHlo(op, s_reordered));
+  }
+
+  // Avoid replacing the Custom Call with an identical copy.
+  if (!performed_normalization &&
+      ShapeUtil::Equal(normalized_shape, hlo->shape()) &&
+      ConvolutionDimensionNumbersToString(new_dim_numbers) ==
+          ConvolutionDimensionNumbersToString(dim_numbers)) {
+    return std::nullopt;
   }
 
   HloInstruction* normalized_conv = hlo->parent()->AddInstruction(
@@ -155,13 +167,16 @@ StatusOr<HloInstruction*> UpdateLayoutForCudnnConvolution(
   // tuples built this way.
   HloInstruction* bc_to_orig;
   if (normalized_conv->shape().IsTuple()) {
-    TF_ASSIGN_OR_RETURN(HloInstruction * normalized_out,
-                        MakeGetTupleElementHlo(normalized_conv, 0));
-    TF_ASSIGN_OR_RETURN(HloInstruction * allocator,
-                        MakeGetTupleElementHlo(normalized_conv, 1));
-    HloInstruction* orig_shape_out =
-        MakeBitcastHlo(normalized_out, hlo->shape().tuple_shapes(0));
-    bc_to_orig = MaybeMakeTuple({orig_shape_out, allocator});
+    std::vector<HloInstruction*> tuple_elements(
+        normalized_conv->shape().tuple_shapes().size());
+
+    for (int i = 0; i < normalized_conv->shape().tuple_shapes().size(); ++i) {
+      ABSL_ASSIGN_OR_RETURN(HloInstruction * normalized_out,
+                            MakeGetTupleElementHlo(normalized_conv, i));
+      tuple_elements[i] =
+          MakeBitcastHlo(normalized_out, hlo->shape().tuple_shapes(i));
+    }
+    bc_to_orig = MaybeMakeTuple(tuple_elements);
   } else {
     bc_to_orig = MakeBitcastHlo(normalized_conv, hlo->shape());
   }
@@ -170,14 +185,14 @@ StatusOr<HloInstruction*> UpdateLayoutForCudnnConvolution(
 
 }  // namespace
 
-StatusOr<std::optional<HloInstruction*>> NormalizeLayoutForGpuCustomCalls(
+absl::StatusOr<std::optional<HloInstruction*>> NormalizeLayoutForGpuCustomCalls(
     HloCustomCallInstruction* hlo) {
   if (IsCustomCallToDnnConvolution(*hlo)) {
-    TF_ASSIGN_OR_RETURN(HloInstruction * bc_to_orig,
-                        UpdateLayoutForCudnnConvolution(hlo));
-    return std::make_optional(bc_to_orig);
+    ABSL_ASSIGN_OR_RETURN(std::optional<HloInstruction*> bc_to_orig,
+                          UpdateLayoutForCudnnConvolution(hlo));
+    return bc_to_orig;
   }
-  return {std::nullopt};
+  return std::nullopt;
 }
 
 }  // end namespace gpu

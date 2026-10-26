@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,16 +20,12 @@ namespace xla {
 const char kXlaHostTransferRendezvousNameAttr[] =
     "_xla_host_transfer_rendezvous";
 
-const char kXlaHostTransferOriginalTypeAttr[] =
-    "_xla_host_transfer_original_type";
-
-const char kXlaHostTransferIsLowerBitsAttr[] =
-    "_xla_host_transfer_is_lower_bits";
-
 const char kXlaHostTransferHandlerNameAttr[] =
     "_xla_host_transfer_handler_name";
 
 const char kXlaHostTransferTfRendezvousHandlerName[] = "tf_rendezvous";
+
+const char kXlaHostTransferPjRtRendezvousHandlerName[] = "pjrt_rendezvous";
 
 const char kXlaComputeTypeAttr[] = "_xla_compute_type";
 
@@ -39,10 +35,14 @@ const char kXlaComputeTypeDense[] = "dense";
 
 const char kXlaComputeTypeHost[] = "host";
 
+const char kXlaComputeTypeSparseOffload[] = "sparseoffload";
+
 const char kXlaMaxIdsPerPartitionAttr[] = "_xla_max_ids_per_partition";
 
 const char kXlaMaxUniqueIdsPerPartitionAttr[] =
     "_xla_max_unique_ids_per_partition";
+
+const char kXlaMaxValencyAttr[] = "_xla_max_valency";
 
 const char kXlaShardingStrategyAttr[] = "_xla_sharding_strategy";
 
@@ -64,5 +64,70 @@ const char kXlaTableId[] = "_xla_table_id";
 const char kXlaBufferPlacementAttr[] = "_xla_buffer_placement";
 
 const char kXlaBufferPlacementParam[] = "arg";
+
+const char kXlaStreamAnnotationAttr[] = "_xla_stream_annotation";
+
+const char kXlaCollectiveStreamAnnotation[] = "collective";
+
+const char kCollectiveCommunicationDomainAttr[] =
+    "collective_communication_domain";
+
+const char kXlaCollectiveMatmulAttr[] = "_xla_collective_matmul";
+
+const char kXlaCollectiveMatmulLhsAg[] = "lhs_ag";
+
+const char kXlaCollectiveMatmulRhsAg[] = "rhs_ag";
+
+const char kXlaCollectiveMatmulRs[] = "rs";
+
+const char kXlaCollectiveMatmulNone[] = "none";
+
+const char kXlaMultiRecvCountAttr[] = "_xla_multi_recv_count";
+
+const char kXlaSchedulingGroupIdAttr[] = "_scheduling_group_id";
+
+const char kXlaNoOpSchedulingGroup[] = "noop";
+
+const char kMustFuseAttr[] = "MUST_FUSE";
+
+const char kFuseLimitAttr[] = "FUSE_LIMIT";
+
+const char kMaximalFuseAttr[] = "MAXIMAL_FUSE";
+
+const char kBufferingLevelAttr[] = "buffering_level";
+
+const char kOutputWindowBoundsAttr[] = "output_window_bounds";
+
+const char kKernelWindowBoundsAttr[] = "kernel_window_bounds";
+
+const char kScopedVmemLimitKibAttr[] = "scoped_vmem_limit_kib";
+
+const char kIntegerAttr[] = "integer";
+
+const char kXlaCseSafeZeroOperandAttr[] = "_xla_cse_safe_zero_operand";
+
+const char kCollectiveGroupKeyAttr[] = "collective_group_key";
+
+const char kCollectiveGroupMarkerAttr[] = "_collectives_group";
+
+const char kCombinerKeyAttr[] = "combiner_key";
+
+const char kNumSlotVariables[] = "_num_slot_variables";
+
+const char kNumHyperparameters[] = "_num_hyperparameters";
+
+const char kLogTag[] = "_xla_log_tag";
+
+const char kXlaTableNameAttr[] = "_xla_table_name";
+
+const char kXlaVocabSizeAttr[] = "_xla_vocab_size";
+const char kXlaFeatureWidthAttr[] = "_xla_feature_width";
+const char kXlaSampleCountAttr[] = "_xla_sample_count";
+
+const char kIsPipelineableAttr[] = "is_pipelineable";
+
+const char kXlaLoopUnrollAttr[] = "_xla_loop_unroll_strategy";
+
+const char kSpmdGeneratedAttr[] = "is_spmd_generated";
 
 }  // namespace xla

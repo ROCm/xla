@@ -1,4 +1,4 @@
-/* Copyright 2016 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2016 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,98 +17,90 @@ limitations under the License.
 // the HostExecutor implementation.
 #include "xla/stream_executor/host/host_stream.h"
 
-#include <queue>
+#include <cstdint>
+#include <cstring>
+#include <memory>
 #include <utility>
 
 #include "absl/functional/any_invocable.h"
+#include "absl/status/status.h"
 #include "absl/synchronization/notification.h"
-#include "tsl/platform/denormal.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/setround.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/event.h"
+#include "xla/stream_executor/host/host_event.h"
+#include "xla/stream_executor/stream.h"
+#include "xla/stream_executor/stream_common.h"
 
 namespace stream_executor {
 namespace host {
 
-namespace {
+HostStream::HostStream(StreamExecutor* executor) : StreamCommon(executor) {}
 
-tsl::ThreadOptions GetThreadOptions(size_t stack_size_in_bytes) {
-  tsl::ThreadOptions options;
-  options.stack_size = stack_size_in_bytes;
-  return options;
+HostStream::~HostStream() { parent()->DeallocateStream(this); }
+
+absl::Status HostStream::Memcpy(DeviceAddressBase* gpu_dst,
+                                const DeviceAddressBase& gpu_src,
+                                uint64_t size) {
+  void* dst_mem = gpu_dst->opaque();
+  void* src_mem = const_cast<void*>(gpu_src.opaque());
+  memcpy(dst_mem, src_mem, size);
+  return absl::OkStatus();
 }
 
-}  // namespace
+absl::Status HostStream::Memcpy(void* host_dst,
+                                const DeviceAddressBase& gpu_src,
+                                uint64_t size) {
+  void* src_mem = const_cast<void*>(gpu_src.opaque());
+  memcpy(host_dst, src_mem, size);
+  return absl::OkStatus();
+}
 
-HostStream::HostStream(size_t stack_size_in_bytes)
-    : thread_(tsl::Env::Default()->StartThread(
-          GetThreadOptions(stack_size_in_bytes), "host_executor",
-          [this]() { WorkLoop(); })) {}
+absl::Status HostStream::Memcpy(DeviceAddressBase* gpu_dst,
+                                const void* host_src, uint64_t size) {
+  void* dst_mem = gpu_dst->opaque();
+  memcpy(dst_mem, host_src, size);
+  return absl::OkStatus();
+}
 
-HostStream::~HostStream() {
-  {
-    absl::MutexLock lock(&mu_);
-    work_queue_.push(nullptr);
+absl::Status HostStream::Memset32(DeviceAddressBase* location, uint32_t pattern,
+                                  uint64_t size) {
+  if (size % sizeof(uint32_t) != 0) {
+    return absl::InvalidArgumentError(
+        "Memset32 requires size to be a multiple of 4 bytes.");
   }
-  // thread_'s destructor blocks until the thread finishes running.
-  thread_.reset();
-}
-
-bool HostStream::EnqueueTask(absl::AnyInvocable<void() &&> task) {
-  return EnqueueTaskWithStatus([task = std::move(task)]() mutable {
-    std::move(task)();
-    return ::tsl::OkStatus();
-  });
-}
-
-bool HostStream::EnqueueTaskWithStatus(
-    absl::AnyInvocable<tsl::Status() &&> task) {
-  CHECK(task != nullptr);
-  absl::MutexLock lock(&mu_);
-  work_queue_.push(std::move(task));
-  return true;
-}
-
-bool HostStream::WorkAvailable() { return !work_queue_.empty(); }
-
-void HostStream::WorkLoop() {
-  // Set denormal and rounding behavior to match the default TF ThreadPool
-  // behavior.
-  // TODO(phawkins, jlebar): it's not clear this is the best place to set this.
-  tsl::port::ScopedFlushDenormal flush;
-  tsl::port::ScopedSetRound round(FE_TONEAREST);
-  while (true) {
-    std::queue<absl::AnyInvocable<tsl::Status() &&>> queue;
-    {
-      absl::MutexLock lock(&mu_);
-      mu_.Await(absl::Condition(this, &HostStream::WorkAvailable));
-      std::swap(queue, work_queue_);
-    }
-    while (!queue.empty()) {
-      absl::AnyInvocable<tsl::Status()&&>& fn = queue.front();
-      if (!fn) {
-        return;
-      }
-      status_.Update(std::move(fn)());
-      queue.pop();
-    }
+  char* dst = static_cast<char*>(location->opaque());
+  for (uint64_t i = 0; i < size; i += sizeof(uint32_t)) {
+    memcpy(dst + i, &pattern, sizeof(uint32_t));
   }
+  return absl::OkStatus();
 }
 
-tsl::Status HostStream::BlockUntilDone() {
-  absl::Notification done;
-  tsl::Status status;
-  EnqueueTask([&done, &status, this]() {
-    // This task is always executed synchronously before 'status_' is updated
-    // with the result of the task (always OK() in this case), so we don't need
-    // to worry about locking access to 'status_'.
-    status = status_;
-    status_ = ::tsl::OkStatus();
-    done.Notify();
-  });
-  done.WaitForNotification();
-  return status;
+absl::Status HostStream::MemZero(DeviceAddressBase* location, uint64_t size) {
+  void* gpu_mem = location->opaque();
+  memset(gpu_mem, 0, size);
+  return absl::OkStatus();
+}
+
+absl::Status HostStream::WaitFor(Stream* other) {
+  return other->BlockHostUntilDone();
+}
+
+absl::Status HostStream::WaitFor(Event* event) {
+  const std::shared_ptr<absl::Notification>& notification =
+      static_cast<HostEvent*>(event)->notification();
+  notification->WaitForNotification();
+  return absl::OkStatus();
+}
+
+absl::Status HostStream::RecordEvent(Event* event) {
+  static_cast<HostEvent*>(event)->Record();
+  return absl::OkStatus();
+}
+
+absl::Status HostStream::DoHostCallbackWithStatus(
+    absl::AnyInvocable<absl::Status() &&> callback) {
+  return std::move(callback)();
 }
 
 }  // namespace host
-
 }  // namespace stream_executor

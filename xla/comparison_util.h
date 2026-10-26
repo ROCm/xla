@@ -1,4 +1,4 @@
-/* Copyright 2019 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2019 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,15 +16,20 @@ limitations under the License.
 #ifndef XLA_COMPARISON_UTIL_H_
 #define XLA_COMPARISON_UTIL_H_
 
-#include <cmath>
+#include <cstdint>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <ostream>
 #include <string>
-#include <type_traits>
 
+#include "absl/functional/function_ref.h"
+#include "absl/log/check.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
 #include "xla/primitive_util.h"
-#include "xla/statusor.h"
+#include "xla/tsl/platform/logging.h"  // IWYU pragma: keep
 #include "xla/types.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
@@ -56,9 +61,20 @@ class Comparison {
   enum class Order : uint8_t {
     // https://en.wikipedia.org/wiki/Total_order
     kTotal,
+    // https://en.wikipedia.org/wiki/Weak_ordering
+    kWeak,
     // https://en.wikipedia.org/wiki/Partially_ordered_set
     kPartial,
   };
+
+  friend absl::string_view ComparisonOrderToString(Comparison::Order order);
+  friend absl::string_view ComparisonOrderToShortString(
+      Comparison::Order order);
+
+  template <typename Sink>
+  friend void AbslStringify(Sink& sink, const Order& p) {
+    absl::Format(&sink, "%s", ComparisonOrderToString(p));
+  }
 
   // Represents different comparison operations.
   enum class Direction : uint8_t {
@@ -68,16 +84,6 @@ class Comparison {
     kGt,
     kLe,
     kLt,
-  };
-
-  // (DEPRECATED) Represents the type of comparison. Prefer xla::PrimitiveType
-  // and Comparison::Order, since there are multiple floating point
-  // representations that support total ordering.
-  enum class [[deprecated("Use PrimitiveType and Order")]] Type : uint8_t{
-      kFloat,
-      kFloatTotalOrder,
-      kSigned,
-      kUnsigned,
   };
 
   Comparison() = delete;
@@ -90,45 +96,29 @@ class Comparison {
   // targets may support total order floating point type comparisons.
   explicit Comparison(Direction dir, PrimitiveType type, Order order);
 
-  // Returns a comparison with a primitive type matching the Comparison::Type
-  // and using a default bit width of 32. For example,
-  // Comparison(Direction::kLt, Type::kFloat).PrimitiveType()  /* F32 */
-  [[deprecated(
-      "Use Comparison(Comparison::Direction, "
-      "PrimitiveType)")]] explicit Comparison(Direction dir, Type type);
-
   inline Direction GetDirection() const { return dir_; }
   inline PrimitiveType GetPrimitiveType() const { return primitive_type_; }
   inline Order GetOrder() const { return order_; }
-
-  [[deprecated("Use GetPrimitiveType() and GetOrder()")]] inline Type GetType()
-      const {
-    return type_;
-  }
 
   inline bool IsEq() const { return dir_ == Direction::kEq; }
   inline bool IsNe() const { return dir_ == Direction::kNe; }
   inline bool IsGe() const { return dir_ == Direction::kGe; }
   inline bool IsGt() const { return dir_ == Direction::kGt; }
+  inline bool IsLe() const { return dir_ == Direction::kLe; }
   inline bool IsLt() const { return dir_ == Direction::kLt; }
   inline bool IsTotalOrder() const { return order_ == Order::kTotal; }
+  bool IsWeakOrder() const { return order_ == Order::kWeak; }
   inline bool IsPartialOrder() const { return order_ == Order::kPartial; }
 
   // Returns whether this is a floating point total order comparison.
   inline bool IsF32TotalOrder() const {
     return primitive_type_ == PrimitiveType::F32 && IsTotalOrder();
   }
-  inline bool IsBf16TotalOrder() const {
-    return primitive_type_ == PrimitiveType::BF16 && IsTotalOrder();
-  }
 
   // Returns whether this is a standard comparison, i.e., what you would expect
   // as the industry standard on most architectures.
   inline bool IsStandardF32() const {
     return primitive_type_ == PrimitiveType::F32 && IsPartialOrder();
-  }
-  inline bool IsStandardBf16() const {
-    return primitive_type_ == PrimitiveType::BF16 && IsPartialOrder();
   }
   inline bool IsStandardS32() const {
     return primitive_type_ == PrimitiveType::S32 && IsTotalOrder();
@@ -159,60 +149,74 @@ class Comparison {
   // Returns optional value because not all inversions may be supported.
   std::optional<Comparison> Inverse() const;
 
-  // Returns a string version of this comparison, e.g., ".GT.F32.TOTALORDER"
+  // Returns a string version of this comparison, e.g., ".GT.F32.TOTAL"
   std::string ToString(std::string prefix1 = ".", std::string prefix2 = ".",
                        std::string prefix3 = ".") const;
 
   // Returns a comparison operator: (T, T) -> bool for this Comparison's
   // Direction.
   template <typename T>
-  inline std::function<bool(T, T)> GetComparator() const {
+  absl::FunctionRef<bool(T, T) const> GetComparator() const {
     switch (GetDirection()) {
       case Direction::kEq:
-        return std::equal_to<T>();
+        return +[](T l, T r) { return std::equal_to<T>()(l, r); };
       case Direction::kNe:
-        return std::not_equal_to<T>();
+        return +[](T l, T r) { return std::not_equal_to<T>()(l, r); };
       case Direction::kGe:
-        return std::greater_equal<T>();
+        if constexpr (!is_complex_v<T>) {
+          return +[](T l, T r) { return std::greater_equal<T>()(l, r); };
+        }
+        break;
       case Direction::kGt:
-        return std::greater<T>();
+        if constexpr (!is_complex_v<T>) {
+          return +[](T l, T r) { return std::greater<T>()(l, r); };
+        }
+        break;
       case Direction::kLe:
-        return std::less_equal<T>();
+        if constexpr (!is_complex_v<T>) {
+          return +[](T l, T r) { return std::less_equal<T>()(l, r); };
+        }
+        break;
       case Direction::kLt:
-        return std::less<T>();
+        if constexpr (!is_complex_v<T>) {
+          return +[](T l, T r) { return std::less<T>()(l, r); };
+        }
+        break;
     }
+    LOG(FATAL) << "Unsupported comparison: " << ToString();
   }
 
-  // Applies the comparison from this Comparison's direction and ordering for
-  // integral types.
-  template <typename T,
-            absl::enable_if_t<std::numeric_limits<T>::is_integer, int> = 0>
+  template <typename T>
   inline bool Compare(const T a, const T b) const {
-    DCHECK(primitive_util::IsCanonicalRepresentation<T>(primitive_type_));
+    DCHECK(primitive_util::CanRepresent<T>(primitive_type_));
+    if constexpr (is_specialized_floating_point_v<T>) {
+      if (IsTotalOrder()) {
+        //  -NaN < -Inf < -Finite < -0 < +0 < +Finite < +Inf < +NaN
+        // Reference:
+        // https://www.tensorflow.org/xla/operation_semantics#element-wise_comparison_operations
+        if constexpr (std::numeric_limits<T>::is_signed) {
+          using R = SignedIntegerTypeForSizeType<sizeof(T)>;
+          return GetComparator<R>()(ToSignMagnitude(a), ToSignMagnitude(b));
+        } else {
+          using R = UnsignedIntegerTypeForSizeType<sizeof(T)>;
+          return GetComparator<R>()(ToSignMagnitude(a), ToSignMagnitude(b));
+        }
+      }
+      if (IsWeakOrder()) {
+        // -Inf < -Finite < (-0 == +0) < +Finite < +Inf < NaN
+        bool a_is_nan = Eigen::numext::isnan(a);
+        bool b_is_nan = Eigen::numext::isnan(b);
+        if (a_is_nan || b_is_nan) {
+          return GetComparator<bool>()(a_is_nan, b_is_nan);
+        }
+      }
+    }
+    // Applies the comparison from this Comparison's direction and ordering.
     return GetComparator<T>()(a, b);
   }
 
-  // Applies the comparison from this Comparison's direction and ordering
-  // for floating point types.
-  template <typename T,
-            absl::enable_if_t<!std::numeric_limits<T>::is_integer, int> = 0>
-  inline bool Compare(const T a, const T b) const {
-    DCHECK(primitive_util::IsCanonicalRepresentation<T>(primitive_type_));
-    if (IsTotalOrder()) {
-      //  -NaN < -Inf < -Finite < -0 < +0 < +Finite < +Inf < +NaN
-      // Reference:
-      // https://www.tensorflow.org/xla/operation_semantics#element-wise_comparison_operations
-      using R = SignedIntegerTypeForSizeType<sizeof(T)>;
-      return GetComparator<R>()(ToSignMagnitude(a), ToSignMagnitude(b));
-    }
-    return GetComparator<T>()(a, b);
-  }
-
-  // Returns the Comparison::Type for the given primitive type. This assumes
-  // that each numerical representation follows the standard behavior, e.g.,
-  // integers are total order and floats are partial order.
-  [[deprecated("Use PrimitiveType and Order")]] static Comparison::Type
-  DefaultComparisonType(PrimitiveType type);
+  // Returns the expected Comparison::Order for each primitive type.
+  static Comparison::Order DefaultOrdering(PrimitiveType type);
 
  private:
   // The direction of the Comparison, e.g., GT.
@@ -221,9 +225,6 @@ class Comparison {
   const PrimitiveType primitive_type_;
   // The ordering of the Comparison, e.g., kPartial.
   const Order order_;
-  // The Type of the Comparison. This tries to mesh together the ordering and
-  // the numerical data classification.
-  [[deprecated]] const Type type_;
 };
 
 using ComparisonDirection = Comparison::Direction;
@@ -234,14 +235,21 @@ inline std::ostream& operator<<(std::ostream& os, const Comparison& cmp) {
 }
 
 std::string ComparisonDirectionToString(Comparison::Direction direction);
-std::string ComparisonTypeToString(Comparison::Type type);
 absl::string_view ComparisonPrimitiveTypeToString(PrimitiveType type);
 absl::string_view ComparisonOrderToString(Comparison::Order order);
+absl::string_view ComparisonOrderToShortString(Comparison::Order order);
 
-StatusOr<Comparison::Direction> StringToComparisonDirection(
+template <typename Sink>
+void AbslStringify(Sink& sink, const ComparisonDirection& direction) {
+  absl::Format(&sink, "%s", ComparisonDirectionToString(direction));
+}
+
+absl::StatusOr<Comparison::Direction> StringToComparisonDirection(
     absl::string_view direction);
-StatusOr<Comparison::Type> StringToComparisonType(absl::string_view comparison);
-StatusOr<Comparison::Order> StringToComparisonOrder(absl::string_view order);
+absl::StatusOr<Comparison::Order> ShortStringToComparisonOrder(
+    absl::string_view order);
+absl::StatusOr<Comparison::Order> ComparisonTypeToOrder(
+    absl::string_view comparison_type);
 
 // Returns a comparison function using the provided key function on each value,
 // i.e. `key_fn(a) < key_fn(b)`.

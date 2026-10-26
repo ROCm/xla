@@ -1,11 +1,26 @@
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 # Description:
 #   Eigen is a C++ template library for linear algebra: vectors,
 #   matrices, and related algorithms.
 # This is the BUILD file used for the @eigen_archive external repository.
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 licenses([
-    # Note: Although Eigen also includes GPL V3 and LGPL v2.1+ code, TensorFlow
-    #       has taken special care to not reference any restricted code.
     "reciprocal",  # MPL2
     "notice",  # Portions BSD
 ])
@@ -26,38 +41,29 @@ EIGEN_HEADERS = glob(
     ] + ALL_FILES_WITH_EXTENSIONS,
 )
 
-# Internal eigen headers, known to be under an MPL2 license.
-EIGEN_MPL2_SOURCES = glob(
+# Internal eigen headers.
+EIGEN_SOURCES = glob(
     [
         "Eigen/**/src/**/*.h",
         "Eigen/**/src/**/*.inc",
         "unsupported/Eigen/**/src/**/*.h",
         "unsupported/Eigen/**/src/**/*.inc",
     ],
-    exclude = [
-        # This guarantees that any file depending on non MPL2 licensed code
-        # will not compile.
-        "Eigen/src/Core/util/NonMPL2.h",
-    ],
-)
-
-alias(
-    name = "eigen3",
-    actual = "@xla//third_party/eigen3",
-    visibility = ["//visibility:public"],
 )
 
 cc_library(
-    name = "eigen3_internal",
-    srcs = EIGEN_MPL2_SOURCES,
+    name = "eigen3",
+    srcs = EIGEN_SOURCES,
     hdrs = EIGEN_HEADERS,
     defines = [
-        # This define (mostly) guarantees we don't link any problematic
-        # code. We use it, but we do not rely on it, as evidenced above.
-        "EIGEN_MPL2_ONLY",
         "EIGEN_MAX_ALIGN_BYTES=64",
+        "EIGEN_ALLOW_UNALIGNED_SCALARS",  # TODO(b/296071640): Remove when underlying bugs are fixed.
+        "EIGEN_USE_AVX512_GEMM_KERNELS=0",  # TODO(b/238649163): Remove this once no longer necessary.
     ],
-    includes = ["."],
+    includes = [
+        ".",  # Third-party libraries include eigen relative to its root.
+        "./mkl_include",  # For using MKL backend for Eigen when available.
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -69,6 +75,31 @@ filegroup(
 
 filegroup(
     name = "eigen_source_files",
-    srcs = EIGEN_MPL2_SOURCES,
+    srcs = EIGEN_SOURCES,
     visibility = ["//visibility:public"],
+)
+
+# ==============================================================================
+# Eigen BLAS Library (:blas)
+# ==============================================================================
+
+cc_library(
+    name = "blas",
+    srcs = glob([
+        "blas/*.cpp",
+        "blas/*.h",
+        "blas/f2c/*.c",
+        "blas/f2c/*.h",
+    ]) + [
+        "Eigen/src/misc/blas.h",
+    ],
+    hdrs = ["blas/blas.h"],
+    copts = ["-O3"],
+    includes = [
+        "blas",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":eigen3",
+    ],
 )

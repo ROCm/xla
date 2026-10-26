@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@ limitations under the License.
 #include <optional>
 #include <set>
 
-#include "llvm/ADT/EquivalenceClasses.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 
 namespace mlir {
@@ -37,8 +36,8 @@ struct RegionEdge {
   // The index in the successor's arguments or op results where `operands`
   // start.
   int64_t successorValueIndex;
-  std::optional<unsigned> predecessorRegionIndex;
-  std::optional<unsigned> successorRegionIndex;
+  RegionBranchPoint predecessorRegionPoint = RegionBranchPoint::parent();
+  RegionBranchPoint successorRegionPoint = RegionBranchPoint::parent();
 
   ValueRange getPredecessorOperands() const {
     return predecessorOp->getOperands().drop_front(predecessorOperandIndex);
@@ -49,12 +48,14 @@ struct RegionEdge {
   }
 
   ValueRange getSuccessorValues() const {
-    if (successorOpOrRegion.is<Operation*>()) {
-      return successorOpOrRegion.get<Operation*>()->getResults().drop_front(
-          successorValueIndex);
+    if (llvm::isa<Operation*>(successorOpOrRegion)) {
+      return llvm::cast<Operation*>(successorOpOrRegion)
+          ->getResults()
+          .drop_front(successorValueIndex);
     }
-    return successorOpOrRegion.get<Region*>()->getArguments().drop_front(
-        successorValueIndex);
+    return llvm::cast<Region*>(successorOpOrRegion)
+        ->getArguments()
+        .drop_front(successorValueIndex);
   }
 
   Value getSuccessorValue(unsigned predecessorIndex) const {
@@ -62,13 +63,12 @@ struct RegionEdge {
   }
 };
 
-// Returns predecessors of the given region. Includes nullopt if the region is
-// an entry region. Returns exit regions if index is nullopt.
+// Returns predecessors of the given region.
 SmallVector<RegionEdge> getPredecessorRegions(RegionBranchOpInterface op,
-                                              std::optional<unsigned> index);
+                                              RegionBranchPoint index);
 
 SmallVector<RegionEdge> getSuccessorRegions(RegionBranchOpInterface op,
-                                            std::optional<unsigned> index);
+                                            RegionBranchPoint index);
 
 // Replaces the op with a new op with proper return types. The old op is not
 // removed and it still has uses.
@@ -82,8 +82,8 @@ struct ValueComparator {
     if (lhs == rhs) return false;
 
     // Block arguments are less than results.
-    bool lhsIsBBArg = lhs.isa<BlockArgument>();
-    if (lhsIsBBArg != rhs.isa<BlockArgument>()) {
+    bool lhsIsBBArg = isa<BlockArgument>(lhs);
+    if (lhsIsBBArg != isa<BlockArgument>(rhs)) {
       return lhsIsBBArg;
     }
 
@@ -137,8 +137,6 @@ namespace breaks_if_you_move_ops {
 
 // The comparator depends on the location of ops, so if you insert an op into
 // a set and then move it, it may end up in the wrong location.
-using ValueEquivalenceClasses =
-    llvm::EquivalenceClasses<Value, detail::ValueComparator>;
 using ValueSet = std::set<Value, detail::ValueComparator>;
 template <typename T>
 using ValueMap = std::map<Value, T, detail::ValueComparator>;

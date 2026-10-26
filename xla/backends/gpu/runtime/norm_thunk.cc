@@ -1,0 +1,284 @@
+/* Copyright 2023 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include "xla/backends/gpu/runtime/norm_thunk.h"
+
+#include <memory>
+#include <optional>
+#include <utility>
+
+#include "absl/base/nullability.h"
+#include "absl/memory/memory.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/types/span.h"
+#include "xla/backends/gpu/runtime/per_device_state.h"
+#include "xla/backends/gpu/runtime/thunk.h"
+#include "xla/backends/gpu/runtime/thunk.pb.h"
+#include "xla/runtime/buffer_use.h"
+#include "xla/service/buffer_assignment.h"
+#include "xla/service/gpu/gpu_norm_runner.h"
+#include "xla/service/gpu/gpu_norm_runner.pb.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/lazy_op_runner.h"
+#include "xla/stream_executor/stream.h"
+#include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/util.h"
+
+namespace xla {
+namespace gpu {
+
+absl::StatusOr<std::unique_ptr<NormThunk>> NormThunk::Create(
+    ThunkInfo thunk_info, GpuNormDescriptor descriptor,
+    BufferAllocation::Slice x_slice, BufferAllocation::Slice scale_slice,
+    BufferAllocation::Slice y_or_dx_slice,
+    std::optional<BufferAllocation::Slice> bias_slice,
+    std::optional<BufferAllocation::Slice> expectation_slice,
+    std::optional<BufferAllocation::Slice> norm_factor_slice,
+    std::optional<BufferAllocation::Slice> dy_slice,
+    std::optional<BufferAllocation::Slice> dscale_slice,
+    std::optional<BufferAllocation::Slice> dbias_slice,
+    BufferAllocation::Slice scratch_slice, int devices_per_host) {
+  ABSL_ASSIGN_OR_RETURN(GpuNormConfig config, GpuNormConfig::For(descriptor));
+
+  // Can't use make_unique because the constructor is private. go/totw/134
+  return absl::WrapUnique(new NormThunk(
+      thunk_info, std::move(config), std::move(descriptor), x_slice,
+      scale_slice, y_or_dx_slice, bias_slice, expectation_slice,
+      norm_factor_slice, dy_slice, dscale_slice, dbias_slice, scratch_slice,
+      devices_per_host));
+}
+
+NormThunk::NormThunk(ThunkInfo thunk_info, GpuNormConfig config,
+                     GpuNormDescriptor descriptor,
+                     BufferAllocation::Slice x_slice,
+                     BufferAllocation::Slice scale_slice,
+                     BufferAllocation::Slice y_or_dx_slice,
+                     std::optional<BufferAllocation::Slice> bias_slice,
+                     std::optional<BufferAllocation::Slice> expectation_slice,
+                     std::optional<BufferAllocation::Slice> norm_factor_slice,
+                     std::optional<BufferAllocation::Slice> dy_slice,
+                     std::optional<BufferAllocation::Slice> dscale_slice,
+                     std::optional<BufferAllocation::Slice> dbias_slice,
+                     BufferAllocation::Slice scratch_slice,
+                     int devices_per_host)
+    : Thunk(Kind::kNorm, thunk_info),
+      x_buffer_(x_slice),
+      scale_buffer_(scale_slice),
+      y_or_dx_buffer_(y_or_dx_slice),
+      bias_buffer_(bias_slice),
+      expectation_buffer_(expectation_slice),
+      norm_factor_buffer_(norm_factor_slice),
+      dy_buffer_(dy_slice),
+      dscale_buffer_(dscale_slice),
+      dbias_buffer_(dbias_slice),
+      scratch_buffer_(scratch_slice),
+      descriptor_(descriptor),
+      config_(config),
+      runner_states_(devices_per_host) {}
+
+absl::StatusOr<NormRunner*> NormThunk::GetOrCreateRunner(
+    const stream_executor::Stream* absl_nonnull stream) {
+  int device_ordinal = stream->parent()->device_ordinal();
+  ABSL_RETURN_IF_ERROR(runner_states_.GetOrCreateAndInitialize(
+      device_ordinal, [&](std::optional<NormRunner>* state) {
+        state->emplace(config_);
+        return absl::OkStatus();
+      }));
+  return &**runner_states_.Find(device_ordinal);
+}
+
+absl::Status NormThunk::ExecuteOnStream(const ExecuteParams& params) {
+  const auto& buffer_allocations = *params.buffer_allocations;
+
+  se::DeviceAddressBase x_se_buffer =
+      buffer_allocations.GetDeviceAddress(x_buffer_);
+  se::DeviceAddressBase scale_se_buffer =
+      buffer_allocations.GetDeviceAddress(scale_buffer_);
+  se::DeviceAddressBase y_or_dx_se_buffer =
+      buffer_allocations.GetDeviceAddress(y_or_dx_buffer_);
+
+  std::optional<se::DeviceAddressBase> bias_se_buffer, expectation_se_buffer,
+      norm_factor_se_buffer, dy_se_buffer, dscale_se_buffer, dbias_se_buffer;
+  if (bias_buffer_) {
+    bias_se_buffer = buffer_allocations.GetDeviceAddress(bias_buffer_.value());
+  }
+  if (expectation_buffer_) {
+    expectation_se_buffer =
+        buffer_allocations.GetDeviceAddress(expectation_buffer_.value());
+    norm_factor_se_buffer =
+        buffer_allocations.GetDeviceAddress(norm_factor_buffer_.value());
+  }
+  if (dscale_buffer_) {
+    dy_se_buffer = buffer_allocations.GetDeviceAddress(dy_buffer_.value());
+    dscale_se_buffer =
+        buffer_allocations.GetDeviceAddress(dscale_buffer_.value());
+    dbias_se_buffer =
+        buffer_allocations.GetDeviceAddress(dbias_buffer_.value());
+  }
+
+  se::DeviceAddressBase scratch =
+      buffer_allocations.GetDeviceAddress(scratch_buffer_);
+
+  RunNormOptions opts;
+  ABSL_ASSIGN_OR_RETURN(opts.norm_runner, GetOrCreateRunner(params.stream));
+
+  ABSL_RETURN_IF_ERROR(RunGpuNorm(
+      config_, x_se_buffer, scale_se_buffer, y_or_dx_se_buffer, bias_se_buffer,
+      dy_se_buffer, expectation_se_buffer, norm_factor_se_buffer,
+      dscale_se_buffer, dbias_se_buffer, scratch, params.stream, opts));
+
+  if (!params.stream->ok()) {
+    return Internal("NormThunk::ExecuteOnStream failed.");
+  }
+  return absl::OkStatus();
+}
+
+absl::Status NormThunk::Initialize(const InitializeParams& params) {
+  // Create the runner at initialization time to avoid hangs if we try to build
+  // the execution plan while a NCCL collective is running.
+  ABSL_ASSIGN_OR_RETURN(NormRunner * runner, GetOrCreateRunner(params.stream));
+  se::dnn::LazyOpRunner<se::dnn::NormOp>* lazy_runner = runner->AsNormRunner();
+  ABSL_ASSIGN_OR_RETURN(auto ln_config, config_.AsDnnNormOpConfig());
+  return lazy_runner->GetOrCreateRunner(ln_config, params.stream).status();
+}
+
+Thunk::BufferUses NormThunk::buffer_uses() const {
+  Thunk::BufferUses res{
+      BufferUse::Read(x_buffer_, descriptor_.x_shape),
+      BufferUse::Read(scale_buffer_, descriptor_.scale_shape),
+      BufferUse::Write(y_or_dx_buffer_, descriptor_.y_or_dx_shape),
+      BufferUse::Scratch(scratch_buffer_, descriptor_.scratch_shape),
+  };
+  if (bias_buffer_.has_value()) {
+    res.push_back(BufferUse::Read(*bias_buffer_, *descriptor_.bias_shape));
+  }
+  if (expectation_buffer_.has_value()) {
+    res.push_back(
+        BufferUse::Write(*expectation_buffer_, *descriptor_.expectation_shape));
+  }
+  if (norm_factor_buffer_.has_value()) {
+    res.push_back(
+        BufferUse::Write(*norm_factor_buffer_, *descriptor_.norm_factor_shape));
+  }
+  if (dy_buffer_.has_value()) {
+    res.push_back(BufferUse::Read(*dy_buffer_, *descriptor_.dy_shape));
+  }
+  if (dscale_buffer_.has_value()) {
+    res.push_back(BufferUse::Write(*dscale_buffer_, *descriptor_.dscale_shape));
+  }
+  if (dbias_buffer_.has_value()) {
+    res.push_back(BufferUse::Write(*dbias_buffer_, *descriptor_.dbias_shape));
+  }
+  return res;
+}
+
+absl::StatusOr<std::unique_ptr<NormThunk>> NormThunk::FromProto(
+    ThunkInfo thunk_info, const NormThunkProto& proto,
+    absl::Span<const BufferAllocation> buffer_allocations,
+    int devices_per_host) {
+  ABSL_ASSIGN_OR_RETURN(GpuNormDescriptor descriptor,
+                        GpuNormDescriptor::FromProto(proto.norm_descriptor()));
+
+  ABSL_ASSIGN_OR_RETURN(auto x, BufferAllocation::Slice::FromProto(
+                                    proto.x(), buffer_allocations));
+  ABSL_ASSIGN_OR_RETURN(auto scale, BufferAllocation::Slice::FromProto(
+                                        proto.scale(), buffer_allocations));
+  ABSL_ASSIGN_OR_RETURN(auto y_or_dx, BufferAllocation::Slice::FromProto(
+                                          proto.y_or_dx(), buffer_allocations));
+  std::optional<BufferAllocation::Slice> bias;
+  if (proto.has_bias()) {
+    ABSL_ASSIGN_OR_RETURN(bias, BufferAllocation::Slice::FromProto(
+                                    proto.bias(), buffer_allocations));
+  }
+  std::optional<BufferAllocation::Slice> expectation;
+  if (proto.has_expectation()) {
+    ABSL_ASSIGN_OR_RETURN(
+        expectation, BufferAllocation::Slice::FromProto(proto.expectation(),
+                                                        buffer_allocations));
+  }
+  std::optional<BufferAllocation::Slice> norm_factor;
+  if (proto.has_norm_factor()) {
+    ABSL_ASSIGN_OR_RETURN(
+        norm_factor, BufferAllocation::Slice::FromProto(proto.norm_factor(),
+                                                        buffer_allocations));
+  }
+  std::optional<BufferAllocation::Slice> dy;
+  if (proto.has_dy()) {
+    ABSL_ASSIGN_OR_RETURN(
+        dy, BufferAllocation::Slice::FromProto(proto.dy(), buffer_allocations));
+  }
+  std::optional<BufferAllocation::Slice> dscale;
+  if (proto.has_dscale()) {
+    ABSL_ASSIGN_OR_RETURN(dscale, BufferAllocation::Slice::FromProto(
+                                      proto.dscale(), buffer_allocations));
+  }
+  std::optional<BufferAllocation::Slice> dbias;
+  if (proto.has_dbias()) {
+    ABSL_ASSIGN_OR_RETURN(dbias, BufferAllocation::Slice::FromProto(
+                                     proto.dbias(), buffer_allocations));
+  }
+  ABSL_ASSIGN_OR_RETURN(auto scratch, BufferAllocation::Slice::FromProto(
+                                          proto.scratch(), buffer_allocations));
+
+  return Create(std::move(thunk_info), descriptor, x, scale, y_or_dx, bias,
+                expectation, norm_factor, dy, dscale, dbias, scratch,
+                devices_per_host);
+}
+
+absl::StatusOr<ThunkProto> NormThunk::ToProto() const {
+  ThunkProto proto;
+  *proto.mutable_thunk_info() = thunk_info().ToProto();
+
+  NormThunkProto* norm_proto = proto.mutable_norm_thunk();
+  *norm_proto->mutable_norm_descriptor() = descriptor_.ToProto();
+
+  ABSL_ASSIGN_OR_RETURN(*norm_proto->mutable_x(), x_buffer_.ToProto());
+  ABSL_ASSIGN_OR_RETURN(*norm_proto->mutable_scale(), scale_buffer_.ToProto());
+  ABSL_ASSIGN_OR_RETURN(*norm_proto->mutable_y_or_dx(),
+                        y_or_dx_buffer_.ToProto());
+  if (bias_buffer_.has_value()) {
+    ABSL_ASSIGN_OR_RETURN(*norm_proto->mutable_bias(), bias_buffer_->ToProto());
+  }
+  if (expectation_buffer_.has_value()) {
+    ABSL_ASSIGN_OR_RETURN(*norm_proto->mutable_expectation(),
+                          expectation_buffer_->ToProto());
+  }
+  if (norm_factor_buffer_.has_value()) {
+    ABSL_ASSIGN_OR_RETURN(*norm_proto->mutable_norm_factor(),
+                          norm_factor_buffer_->ToProto());
+  }
+  if (dy_buffer_.has_value()) {
+    ABSL_ASSIGN_OR_RETURN(*norm_proto->mutable_dy(), dy_buffer_->ToProto());
+  }
+  if (dscale_buffer_.has_value()) {
+    ABSL_ASSIGN_OR_RETURN(*norm_proto->mutable_dscale(),
+                          dscale_buffer_->ToProto());
+  }
+  if (dbias_buffer_.has_value()) {
+    ABSL_ASSIGN_OR_RETURN(*norm_proto->mutable_dbias(),
+                          dbias_buffer_->ToProto());
+  }
+  ABSL_ASSIGN_OR_RETURN(*norm_proto->mutable_scratch(),
+                        scratch_buffer_.ToProto());
+
+  return proto;
+}
+
+}  // namespace gpu
+}  // namespace xla

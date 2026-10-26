@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,21 +15,34 @@ limitations under the License.
 
 #include "xla/service/triangular_solve_expander.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <memory>
+#include <numeric>
+#include <string>
 #include <vector>
 
+#include "absl/algorithm/container.h"
+#include "absl/log/check.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
 #include "absl/types/span.h"
-#include "xla/client/lib/constants.h"
-#include "xla/client/lib/math.h"
-#include "xla/client/lib/matrix.h"
-#include "xla/client/lib/slicing.h"
-#include "xla/client/xla_builder.h"
-#include "xla/client/xla_computation.h"
-#include "xla/literal.h"
+#include "xla/hlo/builder/lib/constants.h"
+#include "xla/hlo/builder/lib/math.h"
+#include "xla/hlo/builder/lib/matrix.h"
+#include "xla/hlo/builder/lib/slicing.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/hlo/ir/hlo_clone_context.h"
+#include "xla/hlo/ir/hlo_computation.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/service/hlo_creation_utils.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/status_macros.h"
-#include "xla/statusor.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 
@@ -38,9 +51,9 @@ namespace {
 // Get the diagonal blocks of the coefficient matrix
 XlaOp DiagonalBlocks(XlaOp a, int64_t block_size) {
   XlaBuilder* builder = a.builder();
-  return builder->ReportErrorOrReturn([&]() -> StatusOr<XlaOp> {
-    TF_ASSIGN_OR_RETURN(Shape shape, builder->GetShape(a));
-    int ndims = shape.rank();
+  return builder->ReportErrorOrReturn([&]() -> absl::StatusOr<XlaOp> {
+    ABSL_ASSIGN_OR_RETURN(Shape shape, builder->GetShape(a));
+    int ndims = shape.dimensions().size();
     int64_t n = ShapeUtil::GetDimension(shape, -1);
     int64_t num_blocks = n / block_size;
     absl::Span<int64_t const> batch_dims = absl::MakeConstSpan(
@@ -104,10 +117,10 @@ XlaOp DiagonalBlocks(XlaOp a, int64_t block_size) {
 
       // Add a singleton dimension
       // i.e. [..., block_size, block_size] -> [..., 1, block_size, block_size]
-      TF_ASSIGN_OR_RETURN(Shape blocks_shape, builder->GetShape(last_blocks));
+      ABSL_ASSIGN_OR_RETURN(Shape blocks_shape, builder->GetShape(last_blocks));
       auto shape_dims = blocks_shape.dimensions();
       auto last_blocks_dims = std::vector<int64_t>(ndims);
-      std::copy(shape_dims.begin(), shape_dims.end(), last_blocks_dims.begin());
+      absl::c_copy(shape_dims, last_blocks_dims.begin());
       last_blocks_dims.insert(last_blocks_dims.end() - 2, 1);
       last_blocks = Reshape(last_blocks, last_blocks_dims);
 
@@ -129,20 +142,21 @@ XlaOp SolveWithInvertedDiagonalBlocks(XlaOp a, XlaOp b, XlaOp inv_diag_blocks,
                                       bool transpose_a, bool conjugate_a,
                                       PrecisionConfig::Precision precision) {
   XlaBuilder* builder = a.builder();
-  return builder->ReportErrorOrReturn([&]() -> StatusOr<XlaOp> {
-    TF_ASSIGN_OR_RETURN(Shape blocks_shape, builder->GetShape(inv_diag_blocks));
-    TF_ASSIGN_OR_RETURN(Shape b_shape, builder->GetShape(b));
+  return builder->ReportErrorOrReturn([&]() -> absl::StatusOr<XlaOp> {
+    ABSL_ASSIGN_OR_RETURN(Shape blocks_shape,
+                          builder->GetShape(inv_diag_blocks));
+    ABSL_ASSIGN_OR_RETURN(Shape b_shape, builder->GetShape(b));
     int64_t block_size = ShapeUtil::GetDimension(blocks_shape, -1);
 
-    TF_ASSIGN_OR_RETURN(Shape a_shape, builder->GetShape(a));
-    int64_t ndims = a_shape.rank();
+    ABSL_ASSIGN_OR_RETURN(Shape a_shape, builder->GetShape(a));
+    int64_t ndims = a_shape.dimensions().size();
     int64_t n = ShapeUtil::GetDimension(a_shape, -1);
     int64_t num_blocks = n / block_size + (n % block_size != 0);
     int64_t m_dim = (left_side) ? -1 : -2;
     int64_t m = ShapeUtil::GetDimension(b_shape, m_dim);
 
     std::vector<XlaOp> update_ops;
-    int bdims = b_shape.rank();
+    int bdims = b_shape.dimensions().size();
     int64_t block_dim = (left_side) ? bdims - 2 : bdims - 1;
 
     // Initialize the solution
@@ -238,10 +252,10 @@ XlaOp TriangularSolveExpander::InvertDiagonalBlocks(
     XlaOp diag_blocks, bool lower_triangular,
     PrecisionConfig::Precision precision) {
   XlaBuilder* builder = diag_blocks.builder();
-  return builder->ReportErrorOrReturn([&]() -> StatusOr<XlaOp> {
+  return builder->ReportErrorOrReturn([&]() -> absl::StatusOr<XlaOp> {
     // Input is a batch of square lower triangular square matrices. Its shape is
     // (..., size, size). We resize this to (num_blocks, size, size).
-    TF_ASSIGN_OR_RETURN(Shape shape, builder->GetShape(diag_blocks));
+    ABSL_ASSIGN_OR_RETURN(Shape shape, builder->GetShape(diag_blocks));
     int64_t block_size = ShapeUtil::GetDimension(shape, -1);
     int64_t num_blocks = ShapeUtil::ElementsIn(shape) / IPow(block_size, 2);
     diag_blocks = Reshape(diag_blocks, {num_blocks, block_size, block_size});
@@ -250,12 +264,10 @@ XlaOp TriangularSolveExpander::InvertDiagonalBlocks(
     // multiplications later on
     diag_blocks = Triangle(diag_blocks, /*lower=*/lower_triangular);
 
-    // Rescale blocks to be unit triangular, but avoid dividing by
-    // zero (which can happen if the last block was padded) otherwise it will
-    // introduce nans which will propagate
+    // Rescale blocks to be unit triangular. We were careful to pad the last
+    // block with the identity matrix, which means we won't introduce NaNs by
+    // doing this (unless the matrix is singular, in which case that's ok).
     auto diags = GetMatrixDiagonal(diag_blocks);
-    auto ones = FullLike(diags, 1);
-    diags = Select(Eq(diags, Zero(builder, shape.element_type())), ones, diags);
     auto scaled_diag_blocks = Div(diag_blocks, diags, {0, 2});
 
     // We can now use the fact that for an upper triangular matrix
@@ -311,7 +323,7 @@ XlaOp TriangularSolveExpander::InvertDiagonalBlocks(
           Parameter(condb.get(), 0, tuple_shape, "InvertDiagCondTuple"), 0);
       Lt(i, ConstantR0<int32_t>(condb.get(), block_size));
     }
-    TF_ASSIGN_OR_RETURN(auto cond, condb->Build());
+    ABSL_ASSIGN_OR_RETURN(auto cond, condb->Build());
 
     // Construct the loop body function.
     std::unique_ptr<XlaBuilder> bodyb =
@@ -346,7 +358,7 @@ XlaOp TriangularSolveExpander::InvertDiagonalBlocks(
       auto next_i = i + ScalarLike(i, 1);
       Tuple(bodyb.get(), {next_i, body_out, body_input});
     }
-    TF_ASSIGN_OR_RETURN(auto body, bodyb->Build());
+    ABSL_ASSIGN_OR_RETURN(auto body, bodyb->Build());
 
     // Construct the While loop and return the result,
     // return while_loop(cond_fun, body_fun, init)[1]
@@ -366,9 +378,9 @@ XlaOp TriangularSolveExpander::SolveByInvertingDiagonalBlocks(
     bool conjugate_a, bool unit_diagonal,
     PrecisionConfig::Precision precision) {
   XlaBuilder* builder = a.builder();
-  return builder->ReportErrorOrReturn([&]() -> StatusOr<XlaOp> {
-    TF_ASSIGN_OR_RETURN(Shape a_shape, builder->GetShape(a));
-    const int64_t ndims = a_shape.rank();
+  return builder->ReportErrorOrReturn([&]() -> absl::StatusOr<XlaOp> {
+    ABSL_ASSIGN_OR_RETURN(Shape a_shape, builder->GetShape(a));
+    const int64_t ndims = a_shape.dimensions().size();
     int64_t k = ShapeUtil::GetDimension(a_shape, -1);
 
     // TODO(phawkins): consider pushing triangle masking into
@@ -410,9 +422,9 @@ XlaOp TriangularSolveExpander::SolveDirectly(
     bool conjugate_a, bool unit_diagonal,
     PrecisionConfig::Precision precision) {
   XlaBuilder* builder = a.builder();
-  return builder->ReportErrorOrReturn([&]() -> StatusOr<XlaOp> {
-    TF_ASSIGN_OR_RETURN(Shape a_shape, builder->GetShape(a));
-    TF_ASSIGN_OR_RETURN(Shape b_shape, builder->GetShape(b));
+  return builder->ReportErrorOrReturn([&]() -> absl::StatusOr<XlaOp> {
+    ABSL_ASSIGN_OR_RETURN(Shape a_shape, builder->GetShape(a));
+    ABSL_ASSIGN_OR_RETURN(Shape b_shape, builder->GetShape(b));
     int64_t m = ShapeUtil::GetDimension(b_shape, -2);
     int64_t n = ShapeUtil::GetDimension(b_shape, -1);
     const int64_t a_size = ShapeUtil::GetDimension(a_shape, -1);
@@ -467,16 +479,16 @@ XlaOp TriangularSolveExpander::BuildTriangularSolve(
     bool conjugate_a, bool unit_diagonal, int64_t block_size,
     PrecisionConfig::Precision precision) {
   XlaBuilder* builder = a.builder();
-  return builder->ReportErrorOrReturn([&]() -> StatusOr<XlaOp> {
-    TF_ASSIGN_OR_RETURN(Shape a_shape, builder->GetShape(a));
-    TF_ASSIGN_OR_RETURN(Shape b_shape, builder->GetShape(b));
-    if (a_shape.rank() != b_shape.rank()) {
+  return builder->ReportErrorOrReturn([&]() -> absl::StatusOr<XlaOp> {
+    ABSL_ASSIGN_OR_RETURN(Shape a_shape, builder->GetShape(a));
+    ABSL_ASSIGN_OR_RETURN(Shape b_shape, builder->GetShape(b));
+    if (a_shape.dimensions().size() != b_shape.dimensions().size()) {
       return InvalidArgument(
           "Arguments to TriangularSolve have shapes with different ranks: "
           "%s vs. %s",
           ShapeUtil::HumanString(a_shape), ShapeUtil::HumanString(b_shape));
     }
-    const int64_t ndims = a_shape.rank();
+    const int64_t ndims = a_shape.dimensions().size();
     if (ndims < 2) {
       return InvalidArgument(
           "Arguments to TriangularSolve was rank %d but must have rank >= 2.",
@@ -551,7 +563,7 @@ bool TriangularSolveExpander::InstructionMatchesPattern(
   return instruction->opcode() == HloOpcode::kTriangularSolve;
 }
 
-StatusOr<HloInstruction*> TriangularSolveExpander::ExpandInstruction(
+absl::StatusOr<HloInstruction*> TriangularSolveExpander::ExpandInstruction(
     HloInstruction* instruction) {
   const TriangularSolveOptions& options =
       instruction->triangular_solve_options();
@@ -590,16 +602,9 @@ StatusOr<HloInstruction*> TriangularSolveExpander::ExpandInstruction(
                          transpose_a, conjugate_a, options.unit_diagonal(),
                          /*block_size=*/block_size_,
                          /*precision=*/PrecisionConfig::HIGHEST);
-    TF_ASSIGN_OR_RETURN(XlaComputation xla_computation, builder.Build());
-
-    TF_ASSIGN_OR_RETURN(ProgramShape program_shape,
-                        xla_computation.GetProgramShape());
-    HloModuleConfig config(program_shape);
-    TF_ASSIGN_OR_RETURN(auto new_module, HloModule::CreateFromProto(
-                                             xla_computation.proto(), config));
-    HloCloneContext context(module);
-    computation =
-        module->DeepCloneComputation(new_module->entry_computation(), &context);
+    ABSL_ASSIGN_OR_RETURN(XlaComputation xla_computation, builder.Build());
+    ABSL_ASSIGN_OR_RETURN(
+        computation, XlaComputationToHloComputation(xla_computation, module));
   }
 
   return instruction->parent()->AddInstruction(HloInstruction::CreateCall(

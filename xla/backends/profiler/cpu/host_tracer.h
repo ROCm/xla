@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,12 +15,20 @@ limitations under the License.
 #ifndef XLA_BACKENDS_PROFILER_CPU_HOST_TRACER_H_
 #define XLA_BACKENDS_PROFILER_CPU_HOST_TRACER_H_
 
+#include <cstdint>
+#include <limits>
 #include <memory>
 
 #include "tsl/profiler/lib/profiler_interface.h"
+#include "xla/tsl/profiler/backends/cpu/traceme_recorder.h"
 
 namespace xla {
 namespace profiler {
+
+struct HostTracerChunk {
+  uint64_t start_timestamp_ns;
+  tsl::profiler::TraceMeRecorder::Events events;
+};
 
 struct HostTracerOptions {
   // Levels of host tracing:
@@ -32,6 +40,8 @@ struct HostTracerOptions {
   // - Level 3 enables tracing of all level 2 TraceMe(s) and more verbose
   //           (low-level) program execution details (cheap TF ops, etc).
   int trace_level = 2;
+  bool enable_source_location = true;
+  uint64_t filter_mask = std::numeric_limits<uint64_t>::max();
 };
 
 std::unique_ptr<tsl::profiler::ProfilerInterface> CreateHostTracer(

@@ -1,4 +1,4 @@
-/* Copyright 2019 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2019 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,20 +13,30 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "xla/execution_options_util.h"
-#include "xla/service/hlo_parser.h"
-#include "xla/status_macros.h"
-#include "xla/test.h"
-#include "xla/tests/client_library_test_base.h"
-#include "xla/tests/hlo_test_base.h"
-#include "xla/tests/test_macros.h"
+#include <gmock/gmock.h>
+
+#include <cstdint>
+#include <iterator>
+#include <utility>
+#include <vector>
+
+#include "absl/algorithm/container.h"
+#include "absl/types/span.h"
+#include "xla/error_spec.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/literal.h"
+#include "xla/literal_util.h"
+#include "xla/shape_util.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/tests/test_utils.h"
 
 namespace xla {
 namespace {
 
-class DynamicUpdateSliceTest : public HloTestBase {};
+using DynamicUpdateSliceTest = HloInterpreterReferenceMixin<HloTestBase>;
 
-XLA_TEST_F(DynamicUpdateSliceTest, ShardedInPlaceDUS) {
+TEST_F(DynamicUpdateSliceTest, ShardedInPlaceDUS) {
   // A dynamic-update-slice within a while loop.  This construction is an easy
   // way to make a DUS which can be run "in-place" (i.e. the input and output
   // are the same buffer, and running the DUS only writes to the updated
@@ -65,9 +75,8 @@ XLA_TEST_F(DynamicUpdateSliceTest, ShardedInPlaceDUS) {
   }
 )";
 
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(kModuleStr));
-  TF_ASSERT_OK_AND_ASSIGN(auto fake_arguments, MakeFakeArguments(module.get()));
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(kModuleStr));
+  ASSERT_OK_AND_ASSIGN(auto fake_arguments, MakeFakeArguments(module.get()));
   fake_arguments[0] = LiteralUtil::CreateR0<int32_t>(0);
 
   std::vector<Literal*> fake_argument_ptrs;
@@ -83,7 +92,7 @@ XLA_TEST_F(DynamicUpdateSliceTest, ShardedInPlaceDUS) {
 // kScatter op.  Apologies for the large testcase, this proved difficult to
 // reduce.  The bug we're checking for occurs when the dynamic-update-slice is
 // run in place but is sharded across cores by ParallelTaskAssigner.
-XLA_TEST_F(DynamicUpdateSliceTest, ExpandedScatter) {
+TEST_F(DynamicUpdateSliceTest, ExpandedScatter) {
   const char kModuleStr[] = R"(
 HloModule TensorFlowScatter
 

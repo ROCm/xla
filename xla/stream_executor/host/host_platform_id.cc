@@ -1,4 +1,4 @@
-/* Copyright 2016 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2016 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,12 +15,12 @@ limitations under the License.
 
 #include "xla/stream_executor/host/host_platform_id.h"
 
-#include "xla/stream_executor/platform.h"
+#include "xla/stream_executor/platform_id.h"
 
 namespace stream_executor {
 namespace host {
 
-PLATFORM_DEFINE_ID(kHostPlatformId);
+PLATFORM_DEFINE_ID(kHostPlatformId, Host);
 
 }  // namespace host
 }  // namespace stream_executor

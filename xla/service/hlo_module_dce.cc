@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,27 +17,28 @@ limitations under the License.
 
 #include <deque>
 
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "tsl/platform/errors.h"
+#include "tsl/platform/logging.h"
+#include "xla/hlo/analysis/hlo_liveness_analysis.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/service/hlo_dce.h"
-#include "xla/service/hlo_liveness_analysis.h"
-#include "xla/service/tuple_simplifier.h"
+#include "xla/hlo/transforms/simplifiers/hlo_dce.h"
+#include "xla/hlo/transforms/simplifiers/tuple_simplifier.h"
 #include "xla/service/while_loop_simplifier.h"
-#include "xla/status.h"
 #include "xla/status_macros.h"
-#include "xla/statusor.h"
 #include "xla/types.h"
 #include "xla/util.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"
 
 namespace xla {
 
 namespace {
 
-StatusOr<bool> RunWhileDCE(
+absl::StatusOr<bool> RunWhileDCE(
     HloModule* module, HloLivenessAnalysis* liveness,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   bool changed = false;
@@ -81,7 +82,7 @@ StatusOr<bool> RunWhileDCE(
         // Replace while.body.root Tuple operand at 'tuple_index' with
         // 'pass_thru_gte', making prior operand a dead root (to be cleaned
         // up with a subsequent DCE pass).
-        TF_RETURN_IF_ERROR(
+        ABSL_RETURN_IF_ERROR(
             while_body_root->ReplaceOperandWith(i, pass_thru_gte));
         changed = true;
         modified_while_body_comp = true;
@@ -94,10 +95,10 @@ StatusOr<bool> RunWhileDCE(
 
   // Run DCE on while body computations that we modified.
   for (auto* while_body_comp : while_body_comps_to_dce) {
-    TF_ASSIGN_OR_RETURN(bool changed_for_computation,
-                        HloDCE::RunOnComputation(
-                            while_body_comp,
-                            /*remove_cross_partition_collective_ops=*/false));
+    ABSL_ASSIGN_OR_RETURN(bool changed_for_computation,
+                          HloDCE::RunOnComputation(
+                              while_body_comp,
+                              /*remove_cross_partition_collective_ops=*/false));
     changed |= changed_for_computation;
   }
   return changed;
@@ -105,34 +106,34 @@ StatusOr<bool> RunWhileDCE(
 
 }  // namespace
 
-StatusOr<bool> HloModuleDCE::Run(
+absl::StatusOr<bool> HloModuleDCE::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   VLOG(2) << "Before HloModuleDCE:";
   XLA_VLOG_LINES(3, module->ToString());
 
   std::unique_ptr<HloLivenessAnalysis> liveness;
-  TF_ASSIGN_OR_RETURN(liveness, HloLivenessAnalysis::Run(*module));
+  ABSL_ASSIGN_OR_RETURN(liveness, HloLivenessAnalysis::Run(*module));
 
   // Sweep through while instructions, transforming dead while tuple element
   // computations to pass through tuple values (creating dead roots in while
   // body computation in the process).
-  TF_ASSIGN_OR_RETURN(bool hlo_module_dce_changed,
-                      RunWhileDCE(module, liveness.get(), execution_threads));
+  ABSL_ASSIGN_OR_RETURN(bool hlo_module_dce_changed,
+                        RunWhileDCE(module, liveness.get(), execution_threads));
 
   // Run the while loop simplifier to remove dead tuple elements.
   WhileLoopSimplifier while_loop_simplifier;
-  TF_ASSIGN_OR_RETURN(bool while_loop_simplifier_changed,
-                      while_loop_simplifier.Run(module, execution_threads));
+  ABSL_ASSIGN_OR_RETURN(bool while_loop_simplifier_changed,
+                        while_loop_simplifier.Run(module, execution_threads));
 
   TupleSimplifier tuple_simplifier;
-  TF_ASSIGN_OR_RETURN(bool tuple_simplifier_changed,
-                      tuple_simplifier.Run(module, execution_threads));
+  ABSL_ASSIGN_OR_RETURN(bool tuple_simplifier_changed,
+                        tuple_simplifier.Run(module, execution_threads));
 
   // Run HloDCE to clean up any dead code created during HloModuleDCE.
   HloDCE hlo_dce;
-  TF_ASSIGN_OR_RETURN(bool hlo_dce_changed,
-                      hlo_dce.Run(module, execution_threads));
+  ABSL_ASSIGN_OR_RETURN(bool hlo_dce_changed,
+                        hlo_dce.Run(module, execution_threads));
 
   VLOG(2) << "After HloModuleDCE:";
   XLA_VLOG_LINES(3, module->ToString());

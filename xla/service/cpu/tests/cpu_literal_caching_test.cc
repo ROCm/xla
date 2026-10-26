@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,15 +13,22 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <memory>
+#include <string>
+#include <utility>
+
+#include "xla/hlo/ir/hlo_module.h"
 #include "xla/service/cpu/cpu_compiler.h"
 #include "xla/service/cpu/test_target_triple_helper.h"
-#include "xla/service/cpu/tests/cpu_codegen_test.h"
-#include "xla/service/hlo_parser.h"
+#include "xla/service/cpu/tests/cpu_pjrt_codegen_test.h"
 
 namespace xla {
 namespace cpu {
 namespace {
-class CpuDuplicateConstantsTest : public CpuCodegenTest {};
+class CpuDuplicateConstantsTest : public CpuPjRtCodegenTest {};
 
 TEST_F(CpuDuplicateConstantsTest, RepeatedArrayConstants) {
   // We use a while loop here to force the two constant HloInstructions to be in
@@ -40,7 +47,7 @@ while_cond {
   arg_cond = f32[2,3,2] parameter(0)
   token0 = token[] after-all()
   infeed = (pred[], token[]) infeed(token0)
-  ROOT unknown = pred[] get-tuple-element((pred[], token[]) infeed), index=0
+  ROOT cond = pred[] get-tuple-element((pred[], token[]) infeed), index=0
 }
 
 ENTRY main {
@@ -61,8 +68,8 @@ CHECK: private unnamed_addr constant [48 x i8]
 CHECK-NOT: private unnamed_addr constant [48 x i8]
 )";
 
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(hlo_text));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_text));
 
   CpuAotCompilationOptions options{
       /*triple=*/kTargetTripleForHost, /*cpu_name=*/kTargetCpuForHost,
@@ -89,7 +96,7 @@ while_cond {
   arg_cond = (f32[2,1]{1,0}, f32[1]{0}) parameter(0)
   token0 = token[] after-all()
   infeed = (pred[], token[]) infeed(token0)
-  ROOT unknown = pred[] get-tuple-element((pred[], token[]) infeed), index=0
+  ROOT cond = pred[] get-tuple-element((pred[], token[]) infeed), index=0
 }
 
 ENTRY main {
@@ -110,8 +117,8 @@ CHECK-NOT: private unnamed_addr constant [4 x i8]
 CHECK-NOT: private unnamed_addr constant [8 x i8]
 )";
 
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(hlo_text));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_text));
 
   CpuAotCompilationOptions options{
       /*triple=*/kTargetTripleForHost, /*cpu_name=*/kTargetCpuForHost,

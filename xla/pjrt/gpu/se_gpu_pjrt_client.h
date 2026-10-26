@@ -1,4 +1,4 @@
-/* Copyright 2020 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2020 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,193 +16,203 @@ limitations under the License.
 #ifndef XLA_PJRT_GPU_SE_GPU_PJRT_CLIENT_H_
 #define XLA_PJRT_GPU_SE_GPU_PJRT_CLIENT_H_
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
-#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "xla/pjrt/distributed/client.h"
-#include "xla/pjrt/gpu/gpu_helpers.h"
-#include "xla/pjrt/gpu/gpu_topology.h"
-#include "xla/pjrt/pjrt_stream_executor_client.h"
-#include "xla/statusor.h"
-
-namespace stream_executor {
-
-class MultiDeviceAdapter;
-
-}
+#include "absl/base/thread_annotations.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
+#include "absl/types/span.h"
+#include "xla/backends/gpu/collectives/allocator_memory_registration.h"
+#include "xla/backends/gpu/collectives/gpu_clique_key.h"
+#include "xla/backends/gpu/collectives/gpu_cliques.h"
+#include "xla/client/local_client.h"
+#include "xla/executable_run_options.h"
+#include "xla/future.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/layout.h"
+#include "xla/pjrt/device_event.h"
+#include "xla/pjrt/distributed/coordination/coordination_service.pb.h"
+#include "xla/pjrt/distributed/key_value_store_interface.h"
+#include "xla/pjrt/gpu/allocator_config.h"
+#include "xla/pjrt/gpu/se_gpu_topology_description.h"
+#include "xla/pjrt/host_memory_allocator.h"
+#include "xla/pjrt/maybe_owning_mlir_module.h"
+#include "xla/pjrt/pjrt_abi_version.h"
+#include "xla/pjrt/pjrt_client.h"
+#include "xla/pjrt/pjrt_compiler.h"
+#include "xla/pjrt/pjrt_executable.h"
+#include "xla/pjrt/plugin/xla_gpu/xla_gpu_client_options.h"
+#include "xla/pjrt/raw_buffer.h"
+#include "xla/pjrt/se/buffer_sequencing_event.h"
+#include "xla/pjrt/se/local_device_state.h"
+#include "xla/pjrt/se/pjrt_stream_executor_client.h"
+#include "xla/pjrt/se/se_raw_buffer.h"
+#include "xla/runtime/device_id.h"
+#include "xla/service/gpu/gpu_executable_run_options.h"
+#include "xla/service/gpu_topology.h"
+#include "xla/service/gpu_topology.pb.h"
+#include "xla/shape.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/device_address_allocator.h"
+#include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/concurrency/async_value.h"
+#include "xla/tsl/concurrency/ref_count.h"
+#include "xla/tsl/framework/allocator.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 
-class StreamExecutorGpuTopologyDescription : public PjRtTopologyDescription {
+class StreamExecutorGpuHbmMemorySpace : public PjRtStreamExecutorMemorySpace {
  public:
-  static StreamExecutorGpuTopologyDescription Create(
-      const PjRtPlatformId platform_id, const absl::string_view platform_name,
-      const absl::string_view platform_version,
-      const std::vector<PjRtDevice*>& devices) {
-    std::vector<int> device_ids;
-    device_ids.reserve(devices.size());
-    for (PjRtDevice* device : devices) {
-      device_ids.push_back(device->id());
-    }
-    return StreamExecutorGpuTopologyDescription(platform_id, platform_name,
-                                                platform_version, device_ids);
-  }
-  // `gpu_device_ids` is the list of logical device ids for the GPU devices and
-  // will be used to initialize the GPU topology.
-  StreamExecutorGpuTopologyDescription(const PjRtPlatformId platform_id,
-                                       const absl::string_view platform_name,
-                                       const absl::string_view platform_version,
-                                       const std::vector<int>& gpu_device_ids)
-      : platform_id_(platform_id),
-        platform_name_(platform_name),
-        platform_version_(platform_version),
-        gpu_topology_(gpu_device_ids) {}
+  static constexpr absl::string_view kKind = "device";
+  static const int kKindId;
 
-  bool operator==(const StreamExecutorGpuTopologyDescription& other) const {
-    return this->platform_id() == other.platform_id() &&
-           this->platform_name() == other.platform_name() &&
-           this->platform_version() == other.platform_version() &&
-           this->gpu_topology().device_ids() ==
-               other.gpu_topology().device_ids();
-  }
-
-  PjRtPlatformId platform_id() const override { return platform_id_; }
-
-  absl::string_view platform_name() const override { return platform_name_; }
-
-  absl::string_view platform_version() const override {
-    return platform_version_;
-  }
-
-  std::vector<std::unique_ptr<const PjRtDeviceDescription>> DeviceDescriptions()
-      const override {
-    std::vector<std::unique_ptr<const PjRtDeviceDescription>> devices;
-    devices.reserve(gpu_topology_.number_of_devices());
-    for (const int device_id : gpu_topology_.device_ids()) {
-      devices.push_back(std::make_unique<PjRtStreamExecutorDeviceDescription>(
-          device_id, platform_version_));
-    }
-    return devices;
-  }
-
-  const GpuTopology& gpu_topology() const { return gpu_topology_; }
-  const GpuTopology* gpu_topology_ptr() const { return &gpu_topology_; }
-
-  // No subslice is supported.
-  bool is_subslice_topology() const override { return false; }
-
-  // The topology support only single host now.
-  absl::StatusOr<int> ProcessCount() const override { return 1; }
-
-  absl::StatusOr<int> CoreCountOfDefaultType() const override {
-    return gpu_topology_.number_of_devices();
-  }
-
-  absl::StatusOr<int> LogicalDeviceCountOfDefaultType() const override {
-    return gpu_topology_.number_of_devices();
-  }
-
-  absl::StatusOr<int> CoreCountOfDefaultTypePerProcess() const override {
-    return gpu_topology_.number_of_devices();
-  }
-
-  absl::StatusOr<int> CoreCountOfDefaultTypePerChip() const override {
-    return 1;
-  }
-
- private:
-  const PjRtPlatformId platform_id_;
-  const std::string platform_name_;
-  const std::string platform_version_;
-  const GpuTopology gpu_topology_;
+  StreamExecutorGpuHbmMemorySpace(int id, PjRtDevice* device);
 };
 
-class StreamExecutorGpuDevice : public PjRtStreamExecutorDevice {
+class StreamExecutorGpuRawClient : public PjRtStreamExecutorRawClient {
  public:
-  StreamExecutorGpuDevice(int id,
-                          std::unique_ptr<LocalDeviceState> local_device_state,
-                          std::string device_kind, std::string device_vendor,
-                          int node_id, int slice_index = 0);
-
-  int slice_index() const;
-
-  absl::string_view device_vendor() const;
-
- private:
-  std::string device_vendor_;
-  int slice_index_;
-};
-
-// A custom PjRtClient that overrides the device assignment method.
-class StreamExecutorGpuClient : public xla::PjRtStreamExecutorClient {
- public:
-  using xla::PjRtStreamExecutorClient::PjRtStreamExecutorClient;
-
-  StreamExecutorGpuClient(
-      std::string platform_name, LocalClient* client,
-      std::vector<std::unique_ptr<PjRtStreamExecutorDevice>> devices,
-      int process_index, std::unique_ptr<se::DeviceMemoryAllocator> allocator,
-      std::unique_ptr<tsl::Allocator> host_memory_allocator,
+  StreamExecutorGpuRawClient(
+      PjRtPlatformId platform_id,
+      std::vector<std::unique_ptr<LocalDeviceState>> local_device_states,
+      std::unique_ptr<se::DeviceAddressAllocator> allocator,
+      LocalClient* client,
+      std::unique_ptr<HostMemoryAllocator> host_memory_allocator,
       bool should_stage_host_to_device_transfers,
-      std::unique_ptr<gpu::GpuExecutableRunOptions> gpu_run_options)
-      : xla::PjRtStreamExecutorClient(
-            platform_name, client, std::move(devices), process_index,
-            std::move(allocator), std::move(host_memory_allocator),
-            should_stage_host_to_device_transfers, std::move(gpu_run_options)),
-        topology_(xla::StreamExecutorGpuTopologyDescription::Create(
-            xla::GpuId(), std::move(platform_name),
-            devices_.back()->device_kind(), devices_)) {}
+      bool confidential_computing_enabled,
+      std::unique_ptr<AsyncWorkRunner> async_work_runner,
+      se::StreamExecutor* executor = nullptr,
+      std::shared_ptr<KeyValueStoreInterface> kv_store = nullptr,
+      bool cache_fabric_handles = false,
+      bool abort_collectives_on_failure = false,
+      std::unique_ptr<gpu::GpuExecutableRunOptions> gpu_run_options = nullptr,
+      std::shared_ptr<gpu::AllocatorMemoryRegistration> memory_registration =
+          nullptr)
+      : PjRtStreamExecutorRawClient(
+            std::move(local_device_states), std::move(allocator), client,
+            std::move(host_memory_allocator),
+            should_stage_host_to_device_transfers, std::move(async_work_runner),
+            executor, std::move(gpu_run_options),
+            confidential_computing_enabled),
+        platform_id_(platform_id),
+        kv_store_(std::move(kv_store)),
+        cache_fabric_handles_(cache_fabric_handles),
+        abort_collectives_on_failure_(abort_collectives_on_failure),
+        memory_registration_(std::move(memory_registration)) {}
 
-  xla::StatusOr<xla::DeviceAssignment> GetDefaultDeviceAssignment(
-      int num_replicas, int num_partitions) const override;
-
-  absl::string_view platform_version() const override;
-
-  StatusOr<std::unique_ptr<PjRtClient::AsyncHostToDeviceTransferManager>>
-  CreateBuffersForAsyncHostToDevice(absl::Span<const Shape> shapes,
-                                    PjRtDevice* device) override;
-
-  PjRtFuture<Status> CopyRawSubBufferToHost(PjRtBuffer* buffer, void* dst,
-                                            int64_t offset,
-                                            int64_t transfer_size) override;
-
-  StatusOr<const xla::PjRtTopologyDescription*> GetTopologyDescription()
+  std::optional<std::shared_ptr<KeyValueStoreInterface>> key_value_store()
       const override {
-    return &topology_;
+    if (!kv_store_) {
+      return std::nullopt;
+    }
+    return kv_store_;
   }
 
-  // TODO(b/285385306): Enable loading a non-loaded PjRtExecutable.
-  StatusOr<std::unique_ptr<PjRtLoadedExecutable>> Load(
-      std::unique_ptr<PjRtExecutable> executable,
-      const LoadOptions& load_options) override {
-    return absl::WrapUnique<PjRtLoadedExecutable>(
-        tensorflow::down_cast<PjRtLoadedExecutable*>(executable.release()));
-  }
+  void ScheduleRemoteSend(LocalDeviceId local_device_id, int memory_kind_id,
+                          PjRtRawBufferRef raw_buffer,
+                          PjRtDeviceEventRefVector definition_events,
+                          PjRtDeviceEventPromiseRef usage_event_promise,
+                          Future<std::string> serialized_descriptor,
+                          PjRtBuffer::RemoteSendCallback on_done) override;
+
+  absl::StatusOr<PjRtDeviceEventRefVector> CrossHostReceiveBuffersInto(
+      absl::Span<const PjRtRawBufferRef> buffers,
+      PjRtCrossHostRecvNotifier notifier,
+      PjRtDeviceEventSpan transfer_dependency_avs) override;
+
+  absl::StatusOr<PjRtDeviceEventRefVector> CrossHostTransferBuffers(
+      PjRtDeviceEventRefVector transfer_dependencies,
+      std::vector<CommonPjRtClient::CrossHostTransferSpec> transfer_specs)
+      override;
+
+  void UpdateCompileOptionsTopology(const PjRtTopologyDescription& topology,
+                                    CompileOptions* options) const override;
+
+  void UpdateGlobalProcessInfo(absl::Span<xla::coordination::TaskInfo> infos);
+
+  absl::StatusOr<std::unique_ptr<PjRtRuntimeAbiVersion>> RuntimeAbiVersion()
+      const override;
+
+  void RecordMemoryStats(LocalDeviceState* local_device_state) override;
 
  private:
-  xla::StreamExecutorGpuTopologyDescription topology_;
+  void ScheduleTransfersOnLocalDevice(
+      LocalDeviceState* local_device_state, GlobalDeviceId device_id,
+      tsl::AsyncValueRef<BufferSequencingEvent> transfer_event,
+      PjRtDeviceEventRefVector transfer_dependencies,
+      std::vector<CommonPjRtClient::CrossHostTransferSpec> transfer_specs);
+
+  // Exports a fabric handle for a given buffer. If `cache_fabric_handles_` is
+  // true, the fabric handle will be cached and reused for subsequent calls.
+  absl::StatusOr<std::string> GetOrExportFabricHandle(
+      se::StreamExecutor* executor, void* ptr);
+
+  // Imports a fabric handle and returns the address. If `cache_fabric_handles_`
+  // is true, the fabric handle will be cached and reused for subsequent calls.
+  absl::StatusOr<std::shared_ptr<se::DeviceAddressBase>>
+  GetOrImportFabricHandle(se::StreamExecutor* executor,
+                          absl::string_view fabric_handle);
+
+  PjRtPlatformId platform_id_;
+
+  std::shared_ptr<KeyValueStoreInterface> kv_store_;
+  // Whether to cache fabric handles. Exporting and importing fabric handles can
+  // be expensive, but it makes sense to cache them only if there are only a
+  // handful of such handles, e.g., preallocation is enabled.
+  const bool cache_fabric_handles_ = false;
+
+  const bool abort_collectives_on_failure_ = false;
+
+  absl::Mutex mu_;
+
+  // Mapping from (executor, buffer_ptr) to fabric handle.
+  absl::flat_hash_map<std::pair<se::StreamExecutor*, void*>, std::string>
+      exported_fabric_handles_ ABSL_GUARDED_BY(mu_);
+
+  // Mapping from (executor, fabric_handle) to buffer.
+  absl::flat_hash_map<std::pair<se::StreamExecutor*, std::string>,
+                      std::shared_ptr<se::DeviceAddressBase>>
+      imported_fabric_handles_ ABSL_GUARDED_BY(mu_);
+
+  std::shared_ptr<gpu::AllocatorMemoryRegistration> memory_registration_;
 };
 
-std::vector<std::unique_ptr<PjRtStreamExecutorDevice>> BuildLocalDevices(
-    std::map<int, std::unique_ptr<LocalDeviceState>> local_device_states,
-    int node_id);
+absl::StatusOr<std::unique_ptr<PjRtClient>> GetStreamExecutorGpuClient(
+    const GpuClientOptions& options);
 
-// kv_get and kv_put are callbacks provided by the caller to access a key-value
-// store shared between nodes. kv_get and kv_put must be non-null if num_nodes
-// > 1.
-StatusOr<std::unique_ptr<PjRtClient>> GetStreamExecutorGpuClient(
-    bool asynchronous, const GpuAllocatorConfig& allocator_config, int node_id,
-    int num_nodes = 1,
-    const std::optional<std::set<int>>& allowed_devices = std::nullopt,
-    std::optional<std::string> platform_name = std::nullopt,
-    bool should_stage_host_to_device_transfers = true,
-    PjRtClient::KeyValueGetCallback kv_get = nullptr,
-    PjRtClient::KeyValuePutCallback kv_put = nullptr);
+// Constructs a StreamExecutorGpuClient which is intended to be used by
+// tensorflow. Don't use this for anything because it has tensorflow specific
+// quirks.
+absl::StatusOr<std::unique_ptr<PjRtClient>> GetSharedStreamExecutorGpuClient(
+    const GpuClientOptions& options, LocalClient* local_client,
+    std::map<int, std::unique_ptr<LocalDeviceState>> local_device_states,
+    std::unique_ptr<se::DeviceAddressAllocator> allocator,
+    std::unique_ptr<HostMemoryAllocator> host_memory_allocator);
+
+// Tensorflow specific API for exchanging an empty topology. Tensorflow
+// has some processes which don't have any hardware on them but still exchanges
+// topologies for these devices for some reason.
+absl::Status ExchangeEmptyStreamExecutorGpuTopology(
+    int process_id, int num_nodes,
+    std::shared_ptr<KeyValueStoreInterface> kv_store,
+    absl::Duration get_local_topology_timeout = absl::Minutes(2),
+    absl::Duration get_global_topology_timeout = absl::Minutes(5));
+
+// Creates allocator memory registration and adds the required suballocator
+// visitors to `allocator_config`.
+std::shared_ptr<gpu::AllocatorMemoryRegistration>
+CreateAllocatorMemoryRegistration(GpuAllocatorConfig* allocator_config);
 
 }  // namespace xla
 

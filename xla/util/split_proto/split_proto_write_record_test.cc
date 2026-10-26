@@ -1,0 +1,124 @@
+/* Copyright 2026 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include "xla/util/split_proto/split_proto_write_record.h"
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <memory>
+#include <string>
+
+#include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
+#include "riegeli/bytes/string_writer.h"
+#include "riegeli/records/record_writer.h"
+#include "xla/pjrt/proto/compile_options.pb.h"
+#include "xla/service/gpu/gpu_executable.pb.h"
+#include "xla/tsl/util/proto/parse_text_proto.h"
+
+namespace xla {
+namespace {
+
+using ::absl_testing::StatusIs;
+using ::testing::HasSubstr;
+using ::testing::Not;
+using ::tsl::proto_testing::ParseTextProtoOrDie;
+
+TEST(SplitProtoWriteRecordTest, WriteRecord_MapSerialization_IsDeterministic) {
+  auto proto1 = ParseTextProtoOrDie<ExecutableAndOptionsProto>(R"pb(
+    compile_options {
+      env_option_overrides {
+        key: "a"
+        value { string_field: "A" }
+      }
+      env_option_overrides {
+        key: "b"
+        value { string_field: "B" }
+      }
+      env_option_overrides {
+        key: "c"
+        value { string_field: "C" }
+      }
+    }
+  )pb");
+
+  auto proto2 = ParseTextProtoOrDie<ExecutableAndOptionsProto>(R"pb(
+    compile_options {
+      env_option_overrides {
+        key: "c"
+        value { string_field: "C" }
+      }
+      env_option_overrides {
+        key: "b"
+        value { string_field: "B" }
+      }
+      env_option_overrides {
+        key: "a"
+        value { string_field: "A" }
+      }
+    }
+  )pb");
+
+  std::string serialized1;
+  riegeli::RecordWriter record_writer1(
+      std::make_unique<riegeli::StringWriter<>>(&serialized1));
+  ASSERT_OK(WriteRecord(record_writer1, proto1));
+
+  std::string serialized2;
+  riegeli::RecordWriter record_writer2(
+      std::make_unique<riegeli::StringWriter<>>(&serialized2));
+  ASSERT_OK(WriteRecord(record_writer2, proto2));
+
+  EXPECT_EQ(serialized1, serialized2);
+}
+
+TEST(SplitProtoWriteRecordTest,
+     WriteRecord_ResourceExhaustedProto_AnnotatesError) {
+  gpu::GpuExecutableProto proto;
+  proto.set_module_name("test_module");
+  proto.set_binary(std::string(200, 'x'));
+
+  std::string serialized;
+  riegeli::RecordWriter record_writer(
+      std::make_unique<riegeli::StringWriter<>>(&serialized));
+  record_writer.Fail(absl::ResourceExhaustedError("message too large"));
+
+  absl::Status status = WriteRecord(record_writer, proto);
+  EXPECT_THAT(status, StatusIs(absl::StatusCode::kResourceExhausted,
+                               HasSubstr("message too large")));
+  EXPECT_THAT(
+      status.message(),
+      HasSubstr("Top 2 largest fields in proto [xla.gpu.GpuExecutableProto]"));
+  EXPECT_THAT(status.message(), HasSubstr("1. binary (tag 4, type BYTES):"));
+}
+
+TEST(SplitProtoWriteRecordTest, WriteRecord_OtherError_DoesNotAnnotateError) {
+  gpu::GpuExecutableProto proto;
+  proto.set_module_name("test_module");
+
+  std::string serialized;
+  riegeli::RecordWriter record_writer(
+      std::make_unique<riegeli::StringWriter<>>(&serialized));
+  record_writer.Fail(absl::InternalError("internal I/O error"));
+
+  absl::Status status = WriteRecord(record_writer, proto);
+  EXPECT_THAT(status, StatusIs(absl::StatusCode::kInternal,
+                               HasSubstr("internal I/O error")));
+  EXPECT_THAT(status.message(), Not(HasSubstr("largest fields in proto")));
+}
+
+}  // namespace
+}  // namespace xla

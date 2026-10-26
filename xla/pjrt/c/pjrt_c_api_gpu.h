@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,13 +17,14 @@ limitations under the License.
 #define XLA_PJRT_C_PJRT_C_API_GPU_H_
 
 #include "xla/pjrt/c/pjrt_c_api.h"
+#include "xla/pjrt/c/pjrt_c_api_macros.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 // Does not pass ownership of returned PJRT_Api* to caller.
-const PJRT_Api* GetPjrtApi();
+PJRT_CAPI_EXPORT const PJRT_Api* GetPjrtApi();
 
 #ifdef __cplusplus
 }

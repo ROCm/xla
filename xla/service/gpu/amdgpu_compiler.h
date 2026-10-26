@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,13 +16,24 @@ limitations under the License.
 #ifndef XLA_SERVICE_GPU_AMDGPU_COMPILER_H_
 #define XLA_SERVICE_GPU_AMDGPU_COMPILER_H_
 
-#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "llvm/IR/Module.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/service/compiler.h"
+#include "xla/service/gpu/alias_info.h"
 #include "xla/service/gpu/gpu_compiler.h"
-#include "xla/statusor.h"
+#include "xla/service/gpu_topology.h"
+#include "xla/service/hlo_module_config.h"
+#include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/dnn.h"
+#include "xla/stream_executor/semantic_version.h"
+#include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/platform/threadpool.h"
 #include "xla/xla.pb.h"
 
 namespace xla {
@@ -33,48 +44,34 @@ class AMDGPUCompiler : public GpuCompiler {
  public:
   AMDGPUCompiler();
 
-  Status OptimizeHloConvolutionCanonicalization(
-      HloModule* hlo_module, GpuVersion gpu_version,
+  absl::Status OptimizeHloConvolutionCanonicalization(
+      HloModule* hlo_module, const se::GpuComputeCapability& gpu_version,
       se::dnn::VersionInfo dnn_version,
-      se::DeviceMemoryAllocator* device_allocator) override;
+      const se::SemanticVersion& toolkit_version,
+      CompilationStats* compilation_stats) override;
 
-  Status OptimizeHloPostLayoutAssignment(
+  void AddPaddingForGpublasGemms(
+      HloPassPipeline& pipeline, const DebugOptions& debug_options,
+      const se::GpuComputeCapability& gpu_version) override;
+
+  absl::Status OptimizeHloPostLayoutAssignment(
       HloModule* hlo_module, se::StreamExecutor* stream_exec,
-      const CompileOptions& options, const GpuTargetConfig& gpu_target_config,
-      const AutotuneResults* autotune_results) override;
+      const CompileOptions& options, const GpuTopology& gpu_topology,
+      const GpuAliasInfo* alias_info, tsl::thread::ThreadPool* thread_pool,
+      CompilationStats* compilation_stats,
+      mlir::MLIRContext* mlir_context) override;
 
-  bool EnableCollectiveScheduleLinearizerForSpmd(
-      HloModule* hlo_module, se::StreamExecutor* stream_exec) override;
-
-  bool RequiresCollectiveScheduleLinearizer(const HloModule* module) override;
-
-  Status AddAutotuningPasses(HloPassPipeline* pipeline, HloModule* hlo_module,
-                             se::StreamExecutor* stream_exec,
-                             const DebugOptions& debug_options,
-                             const CompileOptions& options,
-                             const GpuTargetConfig& gpu_target_config,
-                             const AutotuneResults* autotune_results,
-                             tsl::thread::ThreadPool* thread_pool) override;
-
-  Status LoadAutotuneResultsFromFile(
-      const DebugOptions& debug_options) override;
-
-  Status SerializeAutotuneResultsToFile(
-      const DebugOptions& debug_options) override;
-
-  GpuVersion GetGpuVersion(se::StreamExecutor* stream_exec) override;
-
-  StatusOr<std::pair<std::string, std::vector<uint8_t>>> CompileTargetBinary(
+  absl::StatusOr<BackendCompileResult> CompileTargetBinary(
       const HloModuleConfig& module_config, llvm::Module* llvm_module,
-      GpuVersion gpu_version, bool relocatable, const HloModule* debug_module,
-      const CompileOptions& options) override;
+      const se::DeviceDescription& device_description, bool relocatable,
+      const HloModule* debug_module, std::optional<int> shard_number) override;
 
  private:
-  // The parent directory of ROCm-Device-Libs IR libraries.
-  std::string rocdl_dir_;
-
   AMDGPUCompiler(const AMDGPUCompiler&) = delete;
   AMDGPUCompiler& operator=(const AMDGPUCompiler&) = delete;
+
+  std::vector<std::string> GetLLVMCommandLineOptions(
+      const DebugOptions& debug_options) const override;
 };
 
 }  // namespace gpu

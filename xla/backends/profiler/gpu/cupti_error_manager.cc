@@ -1,4 +1,4 @@
-/* Copyright 2021 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2021 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,15 +15,26 @@ limitations under the License.
 
 #include "xla/backends/profiler/gpu/cupti_error_manager.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
 #include <utility>
 
 #include "absl/debugging/leak_check.h"
-#include "tsl/platform/logging.h"
+#include "absl/log/log.h"
+#include "absl/synchronization/mutex.h"
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_activity.h"
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_callbacks.h"
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_profiler_target.h"
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_result.h"
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_target.h"
+#include "third_party/gpus/cuda/include/cuda.h"
+#include "xla/backends/profiler/gpu/cupti_interface.h"
 
 namespace xla {
 namespace profiler {
-
-using tsl::mutex_lock;
 
 CuptiErrorManager::CuptiErrorManager(std::unique_ptr<CuptiInterface> interface)
     : interface_(std::move(interface)), disabled_(0), undo_disabled_(false) {}
@@ -51,13 +62,16 @@ CuptiErrorManager::CuptiErrorManager(std::unique_ptr<CuptiInterface> interface)
 
 void CuptiErrorManager::RegisterUndoFunction(
     const CuptiErrorManager::UndoFunction& func) {
-  mutex_lock lock(undo_stack_mu_);
+  absl::MutexLock lock(undo_stack_mu_);
   undo_stack_.push_back(func);
 }
 
 CUptiResult CuptiErrorManager::ActivityDisable(CUpti_ActivityKind kind) {
   IGNORE_CALL_IF_DISABLED;
   CUptiResult error = interface_->ActivityDisable(kind);
+  if (error != CUPTI_SUCCESS) {
+    LOG(ERROR) << "ActivityDisable() error on activity kind: " << kind;
+  }
   LOG_AND_DISABLE_IF_ERROR(error);
   return error;
 }
@@ -68,6 +82,8 @@ CUptiResult CuptiErrorManager::ActivityEnable(CUpti_ActivityKind kind) {
   if (error == CUPTI_SUCCESS) {
     auto f = std::bind(&CuptiErrorManager::ActivityDisable, this, kind);
     RegisterUndoFunction(f);
+  } else {
+    LOG(ERROR) << "ActivityEnable() error on activity kind: " << kind;
   }
   LOG_AND_DISABLE_IF_ERROR(error);
   return error;
@@ -88,6 +104,21 @@ CUptiResult CuptiErrorManager::ActivityGetNextRecord(
   CUptiResult error = interface_->ActivityGetNextRecord(
       buffer, valid_buffer_size_bytes, record);
   ALLOW_ERROR(error, CUPTI_ERROR_MAX_LIMIT_REACHED);
+  ALLOW_ERROR(error, CUPTI_ERROR_INVALID_KIND);
+  LOG_AND_DISABLE_IF_ERROR(error);
+  return error;
+}
+
+CUptiResult CuptiErrorManager::ActivityGetNextRecordV2(
+    CUpti_SubscriberHandle subscriber, uint8_t* buffer,
+    size_t valid_buffer_size_bytes, CUpti_Activity** record) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult error = interface_->ActivityGetNextRecordV2(
+      subscriber, buffer, valid_buffer_size_bytes, record);
+  ALLOW_ERROR(error, CUPTI_ERROR_NOT_SUPPORTED);
+  ALLOW_ERROR(error, CUPTI_ERROR_UNKNOWN);
+  ALLOW_ERROR(error, CUPTI_ERROR_MAX_LIMIT_REACHED);
+  ALLOW_ERROR(error, CUPTI_ERROR_INVALID_KIND);
   LOG_AND_DISABLE_IF_ERROR(error);
   return error;
 }
@@ -123,6 +154,88 @@ CUptiResult CuptiErrorManager::ActivityRegisterCallbacks(
   return error;
 }
 
+CUptiResult CuptiErrorManager::ActivityRegisterCallbacksV2(
+    CUpti_SubscriberHandle subscriber,
+    CuptiBuffersCallbackRequestFuncV2 func_buffer_requested,
+    CuptiBuffersCallbackCompleteFuncV2 func_buffer_completed) {
+  IGNORE_CALL_IF_DISABLED;
+  absl::LeakCheckDisabler disabler;
+  CUptiResult error = interface_->ActivityRegisterCallbacksV2(
+      subscriber, func_buffer_requested, func_buffer_completed);
+  LOG_AND_DISABLE_IF_ERROR(error);
+  return error;
+}
+
+CUptiResult CuptiErrorManager::ActivityEnableV2(
+    CUpti_SubscriberHandle subscriber, CUpti_ActivityKind kind, void* cfg) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult error = interface_->ActivityEnableV2(subscriber, kind, cfg);
+  if (error == CUPTI_SUCCESS) {
+    auto f = std::bind(&CuptiErrorManager::ActivityDisableV2, this, subscriber,
+                       kind, nullptr);
+    RegisterUndoFunction(f);
+  } else {
+    LOG(ERROR) << "ActivityEnableV2() error on activity kind: " << kind;
+  }
+  LOG_AND_DISABLE_IF_ERROR(error);
+  return error;
+}
+
+CUptiResult CuptiErrorManager::ActivityDisableV2(
+    CUpti_SubscriberHandle subscriber, CUpti_ActivityKind kind, void* cfg) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult error = interface_->ActivityDisableV2(subscriber, kind, cfg);
+  if (error != CUPTI_SUCCESS) {
+    LOG(ERROR) << "ActivityDisableV2() error on activity kind: " << kind;
+  }
+  LOG_AND_DISABLE_IF_ERROR(error);
+  return error;
+}
+
+CUptiResult CuptiErrorManager::ActivitySetAttributeV2(
+    CUpti_SubscriberHandle subscriber, CUpti_ActivityAttribute attr,
+    size_t* valueSize, void* value) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult error =
+      interface_->ActivitySetAttributeV2(subscriber, attr, valueSize, value);
+  LOG_AND_DISABLE_IF_ERROR(error);
+  return error;
+}
+
+CUptiResult CuptiErrorManager::ActivityUseSystemThreadIdV2(
+    CUpti_SubscriberHandle subscriber) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult error = interface_->ActivityUseSystemThreadIdV2(subscriber);
+  ALLOW_ERROR(error, CUPTI_ERROR_NOT_SUPPORTED);
+  ALLOW_ERROR(error, CUPTI_ERROR_NOT_COMPATIBLE);
+  LOG_AND_DISABLE_IF_ERROR(error);
+  return error;
+}
+
+CUptiResult CuptiErrorManager::ActivityUsePerThreadBufferV2() {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult error = interface_->ActivityUsePerThreadBufferV2();
+  ALLOW_ERROR(error, CUPTI_ERROR_NOT_SUPPORTED);
+  ALLOW_ERROR(error, CUPTI_ERROR_NOT_COMPATIBLE);
+  LOG_AND_DISABLE_IF_ERROR(error);
+  return error;
+}
+
+CUptiResult CuptiErrorManager::ActivityUsePerThreadBuffer() {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult error = interface_->ActivityUsePerThreadBuffer();
+  // Don't disable cupti just because the gpu driver or cuda don't support
+  // per-thread activity buffer.
+  return error;
+}
+
+CUptiResult CuptiErrorManager::SetActivityFlushPeriod(uint32_t period_ms) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult error = interface_->SetActivityFlushPeriod(period_ms);
+  LOG_AND_DISABLE_IF_ERROR(error);
+  return error;
+};
+
 CUptiResult CuptiErrorManager::GetDeviceId(CUcontext context,
                                            uint32_t* device_id) {
   IGNORE_CALL_IF_DISABLED;
@@ -134,6 +247,23 @@ CUptiResult CuptiErrorManager::GetDeviceId(CUcontext context,
 CUptiResult CuptiErrorManager::GetTimestamp(uint64_t* timestamp) {
   IGNORE_CALL_IF_DISABLED;
   CUptiResult error = interface_->GetTimestamp(timestamp);
+  LOG_AND_DISABLE_IF_ERROR(error);
+  return error;
+}
+
+CUptiResult CuptiErrorManager::GetTimestampV2(CUpti_SubscriberHandle subscriber,
+                                              uint64_t* timestamp) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult error = interface_->GetTimestampV2(subscriber, timestamp);
+  // Treat recoverable V2 timestamp failures as nonfatal so the caller can
+  // clean up the V2 subscriber and fall back to the V1 subscriber API.
+  // NOT_SUPPORTED means subscriber-scoped timestamps are unavailable.
+  // NOT_COMPATIBLE occurs when CUPTI is in legacy V1 timestamp mode.
+  // UNKNOWN preserves fallback for an unclassified failure in the optional V2
+  // path.
+  ALLOW_ERROR(error, CUPTI_ERROR_NOT_SUPPORTED);
+  ALLOW_ERROR(error, CUPTI_ERROR_NOT_COMPATIBLE);
+  ALLOW_ERROR(error, CUPTI_ERROR_UNKNOWN);
   LOG_AND_DISABLE_IF_ERROR(error);
   return error;
 }
@@ -159,6 +289,10 @@ CUptiResult CuptiErrorManager::EnableCallback(uint32_t enable,
                          0 /* DISABLE */, subscriber, domain, callback_id);
       RegisterUndoFunction(f);
     }
+  } else {
+    LOG(ERROR) << "cupti" << __func__
+               << ": error with domain:" << static_cast<int>(domain)
+               << " and callback_id:" << static_cast<int>(callback_id);
   }
   LOG_AND_DISABLE_IF_ERROR(error);
   return error;
@@ -195,245 +329,27 @@ CUptiResult CuptiErrorManager::Subscribe(CUpti_SubscriberHandle* subscriber,
   return error;
 }
 
+CUptiResult CuptiErrorManager::SubscribeV2(CUpti_SubscriberHandle* subscriber,
+                                           CUpti_CallbackFunc callback,
+                                           void* userdata) {
+  IGNORE_CALL_IF_DISABLED;
+  absl::LeakCheckDisabler disabler;
+  CUptiResult error = interface_->SubscribeV2(subscriber, callback, userdata);
+  if (error == CUPTI_SUCCESS) {
+    auto f = std::bind(&CuptiErrorManager::Unsubscribe, this, *subscriber);
+    RegisterUndoFunction(f);
+  }
+  // Optional V2 subscriber path unavailable; callers can fall back to V1.
+  ALLOW_ERROR(error, CUPTI_ERROR_NOT_SUPPORTED);
+  ALLOW_ERROR(error, CUPTI_ERROR_NOT_COMPATIBLE);
+  ALLOW_ERROR(error, CUPTI_ERROR_UNKNOWN);
+  LOG_AND_DISABLE_IF_ERROR(error);
+  return error;
+}
+
 CUptiResult CuptiErrorManager::Unsubscribe(CUpti_SubscriberHandle subscriber) {
   IGNORE_CALL_IF_DISABLED;
   CUptiResult error = interface_->Unsubscribe(subscriber);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::DeviceEnumEventDomains(
-    CUdevice device, size_t* array_size_bytes,
-    CUpti_EventDomainID* domain_array) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->DeviceEnumEventDomains(
-      device, array_size_bytes, domain_array);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::DeviceGetEventDomainAttribute(
-    CUdevice device, CUpti_EventDomainID event_domain,
-    CUpti_EventDomainAttribute attrib, size_t* value_size, void* value) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->DeviceGetEventDomainAttribute(
-      device, event_domain, attrib, value_size, value);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::DisableKernelReplayMode(CUcontext context) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->DisableKernelReplayMode(context);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::EnableKernelReplayMode(CUcontext context) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->EnableKernelReplayMode(context);
-  if (error == CUPTI_SUCCESS) {
-    auto f =
-        std::bind(&CuptiErrorManager::DisableKernelReplayMode, this, context);
-    RegisterUndoFunction(f);
-  }
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::DeviceEnumMetrics(CUdevice device,
-                                                 size_t* arraySizeBytes,
-                                                 CUpti_MetricID* metricArray) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error =
-      interface_->DeviceEnumMetrics(device, arraySizeBytes, metricArray);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::DeviceGetNumEventDomains(CUdevice device,
-                                                        uint32_t* num_domains) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->DeviceGetNumEventDomains(device, num_domains);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::EventDomainEnumEvents(
-    CUpti_EventDomainID event_domain, size_t* array_size_bytes,
-    CUpti_EventID* event_array) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->EventDomainEnumEvents(
-      event_domain, array_size_bytes, event_array);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::EventDomainGetNumEvents(
-    CUpti_EventDomainID event_domain, uint32_t* num_events) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error =
-      interface_->EventDomainGetNumEvents(event_domain, num_events);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::EventGetAttribute(CUpti_EventID event,
-                                                 CUpti_EventAttribute attrib,
-                                                 size_t* value_size,
-                                                 void* value) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error =
-      interface_->EventGetAttribute(event, attrib, value_size, value);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::EventGetIdFromName(CUdevice device,
-                                                  const char* event_name,
-                                                  CUpti_EventID* event) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->EventGetIdFromName(device, event_name, event);
-  ALLOW_ERROR(error, CUPTI_ERROR_INVALID_EVENT_NAME);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::EventGroupDisable(CUpti_EventGroup event_group) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->EventGroupDisable(event_group);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::EventGroupEnable(CUpti_EventGroup event_group) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->EventGroupEnable(event_group);
-  if (error == CUPTI_SUCCESS) {
-    auto f =
-        std::bind(&CuptiErrorManager::EventGroupDisable, this, event_group);
-    RegisterUndoFunction(f);
-  }
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::EventGroupGetAttribute(
-    CUpti_EventGroup event_group, CUpti_EventGroupAttribute attrib,
-    size_t* value_size, void* value) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->EventGroupGetAttribute(event_group, attrib,
-                                                         value_size, value);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::EventGroupReadEvent(
-    CUpti_EventGroup event_group, CUpti_ReadEventFlags flags,
-    CUpti_EventID event, size_t* event_value_buffer_size_bytes,
-    uint64_t* event_value_buffer) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->EventGroupReadEvent(
-      event_group, flags, event, event_value_buffer_size_bytes,
-      event_value_buffer);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::EventGroupSetAttribute(
-    CUpti_EventGroup event_group, CUpti_EventGroupAttribute attrib,
-    size_t value_size, void* value) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->EventGroupSetAttribute(event_group, attrib,
-                                                         value_size, value);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::EventGroupSetsCreate(
-    CUcontext context, size_t event_id_array_size_bytes,
-    CUpti_EventID* event_id_array, CUpti_EventGroupSets** event_group_passes) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->EventGroupSetsCreate(
-      context, event_id_array_size_bytes, event_id_array, event_group_passes);
-  if (error == CUPTI_SUCCESS) {
-    auto f = std::bind(&CuptiErrorManager::EventGroupSetsDestroy, this,
-                       *event_group_passes);
-    RegisterUndoFunction(f);
-  }
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::EventGroupSetsDestroy(
-    CUpti_EventGroupSets* event_group_sets) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->EventGroupSetsDestroy(event_group_sets);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-// CUPTI metric API
-CUptiResult CuptiErrorManager::DeviceGetNumMetrics(CUdevice device,
-                                                   uint32_t* num_metrics) {
-  IGNORE_CALL_IF_DISABLED;
-  // Disable heap checking for the first CUPTI metric API. See b/22091576.
-  absl::LeakCheckDisabler disabler;
-  CUptiResult error = interface_->DeviceGetNumMetrics(device, num_metrics);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::MetricGetIdFromName(CUdevice device,
-                                                   const char* metric_name,
-                                                   CUpti_MetricID* metric) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error =
-      interface_->MetricGetIdFromName(device, metric_name, metric);
-  ALLOW_ERROR(error, CUPTI_ERROR_INVALID_METRIC_NAME);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::MetricGetNumEvents(CUpti_MetricID metric,
-                                                  uint32_t* num_events) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->MetricGetNumEvents(metric, num_events);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::MetricEnumEvents(
-    CUpti_MetricID metric, size_t* event_id_array_size_bytes,
-    CUpti_EventID* event_id_array) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->MetricEnumEvents(
-      metric, event_id_array_size_bytes, event_id_array);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::MetricGetAttribute(CUpti_MetricID metric,
-                                                  CUpti_MetricAttribute attrib,
-                                                  size_t* value_size,
-                                                  void* value) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error =
-      interface_->MetricGetAttribute(metric, attrib, value_size, value);
-  LOG_AND_DISABLE_IF_ERROR(error);
-  return error;
-}
-
-CUptiResult CuptiErrorManager::MetricGetValue(
-    CUdevice device, CUpti_MetricID metric, size_t event_id_array_size_bytes,
-    CUpti_EventID* event_id_array, size_t event_value_array_size_bytes,
-    uint64_t* event_value_array, uint64_t time_duration,
-    CUpti_MetricValue* metric_value) {
-  IGNORE_CALL_IF_DISABLED;
-  CUptiResult error = interface_->MetricGetValue(
-      device, metric, event_id_array_size_bytes, event_id_array,
-      event_value_array_size_bytes, event_value_array, time_duration,
-      metric_value);
   LOG_AND_DISABLE_IF_ERROR(error);
   return error;
 }
@@ -443,7 +359,7 @@ void CuptiErrorManager::UndoAndDisable() {
     return;
   }
   // Iterates undo log and call undo APIs one by one.
-  mutex_lock lock(undo_stack_mu_);
+  absl::MutexLock lock(undo_stack_mu_);
   undo_disabled_ = true;
   while (!undo_stack_.empty()) {
     LOG(ERROR) << "CuptiErrorManager is disabling profiling automatically.";
@@ -457,6 +373,8 @@ void CuptiErrorManager::UndoAndDisable() {
 CUptiResult CuptiErrorManager::GetResultString(CUptiResult result,
                                                const char** str) {
   IGNORE_CALL_IF_DISABLED;
+  // This should be safe no matter the state of CUPTI and is useful to log even
+  // after errors
   CUptiResult error = interface_->GetResultString(result, str);
   LOG_AND_DISABLE_IF_ERROR(error);
   return error;
@@ -480,11 +398,421 @@ CUptiResult CuptiErrorManager::GetStreamIdEx(CUcontext context, CUstream stream,
   return error;
 }
 
+CUptiResult CuptiErrorManager::GetGraphId(CUgraph graph, uint32_t* graph_id) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult error = interface_->GetGraphId(graph, graph_id);
+  LOG_AND_DISABLE_IF_ERROR(error);
+  return error;
+}
+
+CUptiResult CuptiErrorManager::GetGraphNodeId(CUgraphNode node,
+                                              uint64_t* nodeId) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult error = interface_->GetGraphNodeId(node, nodeId);
+  LOG_AND_DISABLE_IF_ERROR(error);
+  return error;
+}
+
+CUptiResult CuptiErrorManager::GetGraphExecId(CUgraphExec graph_exec,
+                                              uint32_t* graph_id) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult error = interface_->GetGraphExecId(graph_exec, graph_id);
+  LOG_AND_DISABLE_IF_ERROR(error);
+  return error;
+}
+
+CUptiResult CuptiErrorManager::SetThreadIdType(
+    CUpti_ActivityThreadIdType type) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult error = interface_->SetThreadIdType(type);
+  LOG_AND_DISABLE_IF_ERROR(error);
+  return error;
+}
+
+CUptiResult CuptiErrorManager::ActivityEnableHWTrace(bool enable) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult error = interface_->ActivityEnableHWTrace(enable);
+  // Don't disable cupti just because the gpu hardware or cuda don't support
+  // hardware event system.
+  return error;
+}
+
+// Profiler Host APIs
+CUptiResult CuptiErrorManager::ProfilerHostInitialize(
+    CUpti_Profiler_Host_Initialize_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerHostInitialize(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerHostDeinitialize(
+    CUpti_Profiler_Host_Deinitialize_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerHostDeinitialize(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerHostGetSupportedChips(
+    CUpti_Profiler_Host_GetSupportedChips_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerHostGetSupportedChips(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerHostGetBaseMetrics(
+    CUpti_Profiler_Host_GetBaseMetrics_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerHostGetBaseMetrics(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerHostGetSubMetrics(
+    CUpti_Profiler_Host_GetSubMetrics_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerHostGetSubMetrics(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerHostGetMetricProperties(
+    CUpti_Profiler_Host_GetMetricProperties_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerHostGetMetricProperties(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerHostGetRangeName(
+    CUpti_Profiler_Host_GetRangeName_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerHostGetRangeName(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerHostEvaluateToGpuValues(
+    CUpti_Profiler_Host_EvaluateToGpuValues_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerHostEvaluateToGpuValues(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerHostConfigAddMetrics(
+    CUpti_Profiler_Host_ConfigAddMetrics_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerHostConfigAddMetrics(params);
+  // INVALID_PARAMETER is expected when the metric is not supported in current
+  // CUPTI.  Can re-try with a different metric set.
+  ALLOW_ERROR(err, CUPTI_ERROR_INVALID_PARAMETER);
+  // Not currently returned but may be in the future.
+  ALLOW_ERROR(err, CUPTI_ERROR_INVALID_METRIC_NAME);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerHostGetConfigImageSize(
+    CUpti_Profiler_Host_GetConfigImageSize_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerHostGetConfigImageSize(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerHostGetConfigImage(
+    CUpti_Profiler_Host_GetConfigImage_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerHostGetConfigImage(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerHostGetNumOfPasses(
+    CUpti_Profiler_Host_GetNumOfPasses_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerHostGetNumOfPasses(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerHostGetMaxNumHardwareMetricsPerPass(
+    CUpti_Profiler_Host_GetMaxNumHardwareMetricsPerPass_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err =
+      interface_->ProfilerHostGetMaxNumHardwareMetricsPerPass(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+// Profiler Target APIs
+CUptiResult CuptiErrorManager::ProfilerInitialize(
+    CUpti_Profiler_Initialize_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerInitialize(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerDeInitialize(
+    CUpti_Profiler_DeInitialize_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerDeInitialize(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerCounterDataImageCalculateSize(
+    CUpti_Profiler_CounterDataImage_CalculateSize_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerCounterDataImageCalculateSize(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerCounterDataImageInitialize(
+    CUpti_Profiler_CounterDataImage_Initialize_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerCounterDataImageInitialize(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult
+CuptiErrorManager::ProfilerCounterDataImageCalculateScratchBufferSize(
+    CUpti_Profiler_CounterDataImage_CalculateScratchBufferSize_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err =
+      interface_->ProfilerCounterDataImageCalculateScratchBufferSize(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerCounterDataImageInitializeScratchBuffer(
+    CUpti_Profiler_CounterDataImage_InitializeScratchBuffer_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err =
+      interface_->ProfilerCounterDataImageInitializeScratchBuffer(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerBeginSession(
+    CUpti_Profiler_BeginSession_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerBeginSession(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerEndSession(
+    CUpti_Profiler_EndSession_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerEndSession(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerSetConfig(
+    CUpti_Profiler_SetConfig_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerSetConfig(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerUnsetConfig(
+    CUpti_Profiler_UnsetConfig_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerUnsetConfig(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerBeginPass(
+    CUpti_Profiler_BeginPass_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerBeginPass(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerEndPass(
+    CUpti_Profiler_EndPass_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerEndPass(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerEnableProfiling(
+    CUpti_Profiler_EnableProfiling_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerEnableProfiling(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerDisableProfiling(
+    CUpti_Profiler_DisableProfiling_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerDisableProfiling(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerIsPassCollected(
+    CUpti_Profiler_IsPassCollected_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerIsPassCollected(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerFlushCounterData(
+    CUpti_Profiler_FlushCounterData_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerFlushCounterData(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerPushRange(
+    CUpti_Profiler_PushRange_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerPushRange(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerPopRange(
+    CUpti_Profiler_PopRange_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerPopRange(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerGetCounterAvailability(
+    CUpti_Profiler_GetCounterAvailability_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerGetCounterAvailability(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::ProfilerDeviceSupported(
+    CUpti_Profiler_DeviceSupported_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->ProfilerDeviceSupported(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::PmSamplingSetConfig(
+    CUpti_PmSampling_SetConfig_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->PmSamplingSetConfig(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::PmSamplingEnable(
+    CUpti_PmSampling_Enable_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->PmSamplingEnable(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::PmSamplingDisable(
+    CUpti_PmSampling_Disable_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->PmSamplingDisable(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::PmSamplingStart(
+    CUpti_PmSampling_Start_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->PmSamplingStart(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::PmSamplingStop(
+    CUpti_PmSampling_Stop_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->PmSamplingStop(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::PmSamplingDecodeData(
+    CUpti_PmSampling_DecodeData_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->PmSamplingDecodeData(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::PmSamplingGetCounterAvailability(
+    CUpti_PmSampling_GetCounterAvailability_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->PmSamplingGetCounterAvailability(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::PmSamplingGetCounterDataSize(
+    CUpti_PmSampling_GetCounterDataSize_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->PmSamplingGetCounterDataSize(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::PmSamplingCounterDataImageInitialize(
+    CUpti_PmSampling_CounterDataImage_Initialize_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->PmSamplingCounterDataImageInitialize(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::PmSamplingGetCounterDataInfo(
+    CUpti_PmSampling_GetCounterDataInfo_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->PmSamplingGetCounterDataInfo(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::PmSamplingCounterDataGetSampleInfo(
+    CUpti_PmSampling_CounterData_GetSampleInfo_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->PmSamplingCounterDataGetSampleInfo(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
+CUptiResult CuptiErrorManager::DeviceGetChipName(
+    CUpti_Device_GetChipName_Params* params) {
+  IGNORE_CALL_IF_DISABLED;
+  CUptiResult err = interface_->DeviceGetChipName(params);
+  LOG_AND_DISABLE_IF_ERROR(err);
+  return err;
+}
+
 void CuptiErrorManager::CleanUp() {
   if (undo_disabled_) {  // prevent deadlock
     return;
   }
-  mutex_lock lock(undo_stack_mu_);
+  absl::MutexLock lock(undo_stack_mu_);
   undo_disabled_ = true;
   while (!undo_stack_.empty()) {
     undo_stack_.pop_back();
@@ -492,9 +820,9 @@ void CuptiErrorManager::CleanUp() {
   undo_disabled_ = false;
 }
 
-std::string CuptiErrorManager::ResultString(CUptiResult error) const {
+std::string CuptiErrorManager::ResultString(CUptiResult result) const {
   const char* error_message = nullptr;
-  if (interface_->GetResultString(error, &error_message) == CUPTI_SUCCESS &&
+  if (interface_->GetResultString(result, &error_message) == CUPTI_SUCCESS &&
       error_message != nullptr) {
     return error_message;
   }

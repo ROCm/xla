@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,6 +17,16 @@ limitations under the License.
 #define XLA_PJRT_C_PJRT_C_API_TPU_H_
 
 #include "xla/pjrt/c/pjrt_c_api.h"
+
+enum PjRtCApiTpuInitType {
+  // Build with static linking and deploy internally.
+  kPjRtCApiTpuInitTypeInternalStaticLinking,
+  // Build with static linking and deploy on cloud.
+  kPjRtCApiTpuInitTypeExternalStaticLinking,
+  // Build with dynamic linking and deploy on cloud.
+  kPjRtCApiTpuInitTypeDynamicLinking
+};
+extern enum PjRtCApiTpuInitType kPjRtCApiTpuInitType;
 
 #ifdef __cplusplus
 extern "C" {

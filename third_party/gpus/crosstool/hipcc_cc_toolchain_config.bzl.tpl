@@ -1,7 +1,24 @@
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 """cc_toolchain_config rule for configuring ROCm toolchain on Linux."""
 
 load(
     "@bazel_tools//tools/cpp:cc_toolchain_config_lib.bzl",
+    "env_entry",
+    "env_set",
     "feature",
     "feature_set",
     "flag_group",
@@ -11,6 +28,11 @@ load(
     "with_feature_set",
 )
 load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "ACTION_NAMES")
+load("@config_rocm_hipcc//rocm:build_defs.bzl", "hipcc_config")
+load("@rules_cc//cc/toolchains:cc_toolchain_config_info.bzl", "CcToolchainConfigInfo")
+
+def hipcc_workspace_prefix():
+    return Label("@config_rocm_hipcc//rocm:build_defs.bzl").workspace_root + "/rocm"
 
 all_compile_actions = [
     ACTION_NAMES.c_compile,
@@ -90,6 +112,23 @@ def _impl(ctx):
     supports_start_end_lib_feature = feature(
         name = "supports_start_end_lib",
         enabled = True,
+    )
+
+    # Set environment variables from action_env dict
+    env_entries = []
+    if ctx.attr.action_env:
+        for key, value in ctx.attr.action_env.items():
+            env_entries.append(env_entry(key = key, value = value))
+
+    compiler_env_feature = feature(
+        name = "compiler_env",
+        enabled = True,
+        env_sets = [
+            env_set(
+                actions = all_compile_actions + all_link_actions,
+                env_entries = env_entries,
+            ),
+        ] if env_entries else [],
     )
 
     default_compile_flags_feature = feature(
@@ -231,11 +270,16 @@ def _impl(ctx):
         flag_sets = [
             flag_set(
                 actions = all_compile_actions,
-                flag_groups = ([
+                flag_groups = [
                     flag_group(
-                        flags = ctx.attr.unfiltered_compile_flags,
+                        flags = [
+                            "-DTENSORFLOW_USE_ROCM=1",
+                            "-D__HIP_PLATFORM_AMD__",
+                            "-DEIGEN_USE_HIP",
+                            "-DUSE_ROCM",
+                        ] + (ctx.attr.unfiltered_compile_flags if ctx.attr.unfiltered_compile_flags else []),
                     ),
-                ] if ctx.attr.unfiltered_compile_flags else []),
+                ],
             ),
         ],
     )
@@ -381,6 +425,10 @@ def _impl(ctx):
         provides = ["profile"],
     )
 
+    # Targets can set features = ["no_solib_rpaths"] to suppress the
+    # automatic solib RPATH entries and rely on their own linkopts instead.
+    no_solib_rpaths_feature = feature(name = "no_solib_rpaths")
+
     runtime_library_search_directories_feature = feature(
         name = "runtime_library_search_directories",
         flag_sets = [
@@ -408,7 +456,10 @@ def _impl(ctx):
                     ),
                 ],
                 with_features = [
-                    with_feature_set(features = ["static_link_cpp_runtimes"]),
+                    with_feature_set(
+                        features = ["static_link_cpp_runtimes"],
+                        not_features = ["no_solib_rpaths"],
+                    ),
                 ],
             ),
             flag_set(
@@ -429,7 +480,7 @@ def _impl(ctx):
                 ],
                 with_features = [
                     with_feature_set(
-                        not_features = ["static_link_cpp_runtimes"],
+                        not_features = ["static_link_cpp_runtimes", "no_solib_rpaths"],
                     ),
                 ],
             ),
@@ -1046,7 +1097,6 @@ def _impl(ctx):
                     flag_group(
                         flags = [
                             "-no-canonical-prefixes",
-                            "-fno-canonical-system-headers",
                         ]
                     ),
                 ],
@@ -1061,6 +1111,61 @@ def _impl(ctx):
             flag_set(
                 actions = all_link_actions,
                 flag_groups = [flag_group(flags = ["-B" + ctx.attr.linker_bin_path])],
+            ),
+        ],
+    )
+
+    clang_compiler_path_feature = feature(
+        name = "clang-compiler-path",
+        enabled = ctx.attr.clang_compiler_path != "",
+        env_sets = [
+            env_set(
+                actions = all_compile_actions + all_link_actions,
+                env_entries = [
+                    env_entry(
+                        key = "HOST_COMPILER",
+                        value = ctx.attr.clang_compiler_path,
+                    ),
+                ],
+            ),
+        ] if ctx.attr.clang_compiler_path else [],
+    )
+
+    # ROCm HIPcc feature from hipcc_config()
+    _hipcc_config = hipcc_config()
+    # Construct full paths - config_rocm_hipcc is in external workspace
+    _workspace_prefix = hipcc_workspace_prefix()
+    _rocm_path = _workspace_prefix + "/" + _hipcc_config.rocm_root
+
+    rocm_hipcc_feature = feature(
+        name = "rocm_hipcc",
+        enabled = True,
+        env_sets = [
+            env_set(
+                actions = all_compile_actions + all_link_actions,
+                env_entries = [
+                    env_entry(
+                        key = "HIPCC_PATH",
+                        value = _workspace_prefix + "/" + _hipcc_config.hipcc_path,
+                    ),
+                    env_entry(
+                        key = "ROCM_PATH",
+                        value = _rocm_path,
+                    ),
+                    env_entry(
+                        key = "AMDGPU_TARGETS",
+                        value = ",".join(_hipcc_config.gpu_architectures),
+                    ),
+                    env_entry(
+                        key = "HIPCC_ENV",
+                        value = _hipcc_config.hipcc_env,
+                    ),
+                ],
+            ),
+        ],
+        flag_sets = [
+            flag_set(
+                actions = all_compile_actions + all_link_actions,
             ),
         ],
     )
@@ -1084,6 +1189,7 @@ def _impl(ctx):
         shared_flag_feature,
         linkstamps_feature,
         output_execpath_flags_feature,
+        no_solib_rpaths_feature,
         runtime_library_search_directories_feature,
         library_search_directories_feature,
         archiver_flags_feature,
@@ -1092,6 +1198,9 @@ def _impl(ctx):
         strip_debug_symbols_feature,
         coverage_feature,
         supports_pic_feature,
+        compiler_env_feature,
+        clang_compiler_path_feature,
+        rocm_hipcc_feature,
     ] + (
         [
             supports_start_end_lib_feature,
@@ -1156,6 +1265,8 @@ cc_toolchain_config = rule(
         "host_compiler_path": attr.string(),
         "host_compiler_prefix": attr.string(),
         "linker_bin_path": attr.string(),
+        "action_env": attr.string_dict(),
+        "clang_compiler_path": attr.string(),
     },
     provides = [CcToolchainConfigInfo],
 )

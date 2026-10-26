@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,12 +16,15 @@ limitations under the License.
 #ifndef XLA_PYTHON_IFRT_INDEX_DOMAIN_H_
 #define XLA_PYTHON_IFRT_INDEX_DOMAIN_H_
 
-#include <cstdint>
 #include <ostream>
-#include <string>
 #include <utility>
 
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "xla/python/ifrt/index.h"
+#include "xla/python/ifrt/index_domain.pb.h"
+#include "xla/python/ifrt/serdes_default_version_accessor.h"
+#include "xla/python/ifrt/serdes_version.h"
 #include "xla/python/ifrt/shape.h"
 
 namespace xla {
@@ -43,7 +46,23 @@ class IndexDomain {
   IndexDomain(const IndexDomain&) = default;
   IndexDomain(IndexDomain&&) = default;
   IndexDomain& operator=(const IndexDomain&) = default;
-  IndexDomain& operator=(IndexDomain&&) = default;
+  IndexDomain& operator=(IndexDomain&&) noexcept = default;
+
+  // Constructs `IndexDomain` from `IndexDomainProto`.
+  static absl::StatusOr<IndexDomain> FromProto(const IndexDomainProto& proto);
+
+  // Converts the index domain to a protobuf.
+  void ToProto(
+      IndexDomainProto& proto,
+      SerDesVersion version = SerDesDefaultVersionAccessor::Get()) const;
+
+  // Returns a `IndexDomainProto` representation.
+  IndexDomainProto ToProto(
+      SerDesVersion version = SerDesDefaultVersionAccessor::Get()) const {
+    IndexDomainProto proto;
+    ToProto(proto, version);
+    return proto;
+  }
 
   const Index& origin() const { return origin_; }
   const Shape& shape() const { return shape_; }
@@ -54,6 +73,10 @@ class IndexDomain {
   bool operator!=(const IndexDomain& other) const {
     return origin_ != other.origin_ || shape_ != other.shape_;
   }
+
+  template <typename H>
+  friend H AbslHashValue(H h, const IndexDomain& index_domain);
+
   IndexDomain operator+(const Index& offset) const {
     return IndexDomain(origin_ + offset, shape_);
   }
@@ -68,7 +91,12 @@ class IndexDomain {
     origin_ -= offset;
     return *this;
   }
-  std::string DebugString() const;
+
+  template <typename Sink>
+  friend void AbslStringify(Sink& sink, const IndexDomain& index_domain) {
+    sink.Append(absl::StrCat("IndexDomain(origin=", index_domain.origin_,
+                             ",shape=", index_domain.shape_, ")"));
+  }
 
  private:
   Index origin_;
@@ -76,6 +104,11 @@ class IndexDomain {
 };
 
 std::ostream& operator<<(std::ostream& os, const IndexDomain& index_domain);
+
+template <typename H>
+H AbslHashValue(H h, const IndexDomain& index_domain) {
+  return H::combine(std::move(h), index_domain.origin_, index_domain.shape_);
+}
 
 }  // namespace ifrt
 }  // namespace xla

@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,12 +13,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "xla/client/xla_builder.h"
-#include "xla/tests/client_library_test_base.h"
+#include <gtest/gtest.h>
+
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/tests/client_library_test_runner_mixin.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
 
 namespace xla {
 namespace {
-TEST_F(ClientLibraryTestBase, DeepGraph) {
+
+class DeepGraphTest : public ClientLibraryTestRunnerMixin<
+                          HloInterpreterReferenceMixin<HloTestBase>> {};
+
+TEST_F(DeepGraphTest, DeepGraph) {
   // TODO(b/62624812): To trigger the stack overflow this test is
   // intended to track, we need to set kDepth to 20000.
   // Unfortunately, setting it that high causes the test to time out.
@@ -32,8 +40,7 @@ TEST_F(ClientLibraryTestBase, DeepGraph) {
   for (int i = 0; i < kDepth; ++i) {
     z = Add(z, y);
   }
-  ComputeAndCompareR0<int32_t>(&b, /*expected=*/kDepth + 3,
-                               {x_data.get(), y_data.get()});
+  ComputeAndCompareR0<int32_t>(&b, /*expected=*/kDepth + 3, {&x_data, &y_data});
 }
 }  // namespace
 }  // namespace xla

@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,20 +16,27 @@ limitations under the License.
 #ifndef XLA_ERROR_SPEC_H_
 #define XLA_ERROR_SPEC_H_
 
+#include "xla/xla_data.pb.h"
+
 namespace xla {
 
 // Structure describing permissible absolute and relative error bounds.
 struct ErrorSpec {
-  explicit ErrorSpec(float aabs, float arel = 0, bool relaxed_nans = false)
+  explicit constexpr ErrorSpec(double aabs, double arel = 0,
+                               bool relaxed_nans = false)
       : abs(aabs), rel(arel), relaxed_nans(relaxed_nans) {}
 
-  float abs;  // Absolute error bound.
-  float rel;  // Relative error bound.
+  double abs;  // Absolute error bound.
+  double rel;  // Relative error bound.
 
   // If relaxed_nans is true then any result is valid if we are expecting NaNs.
   // In effect, this allows the tested operation to produce incorrect results
   // for inputs outside its mathematical domain.
   bool relaxed_nans;
+
+  // If true, then we don't check for bitwise equality of NaNs.  All NaNs are
+  // considered equivalent.
+  bool all_nans_are_equivalent = true;
 
   // If this is true, then we treat each +/-inf in the actual result as
   // equivalent to our choice of either +/-inf or the min/max floating-point
@@ -43,6 +50,34 @@ struct ErrorSpec {
   // (We could have a symmetric more_infs_ok flag if necessary; right now it
   // appears not to be.)
   bool fewer_infs_ok = false;
+
+  // If this is true, then integer comparisons in Near() allow a maximum
+  // difference of 1 between expected and actual values. This accounts for
+  // differences between round-to-nearest semantics in fused hardware
+  // operations (e.g. cuDNN fused convolutions) and standard round-to-zero
+  // (truncation) semantics in reference evaluation.
+  bool allow_integer_rounding_difference = false;
+
+  struct LowPrecisionFPErrorSpec {
+    // Type of low precision floating point to use for error bound calculations.
+    // We can't infer this type from the result because the lower precision
+    // could have been used for intermediate calculations.
+    PrimitiveType type = PrimitiveType::PRIMITIVE_TYPE_INVALID;
+    // Allowable distance in number of representable floats between the expected
+    // and actual once they're converted to the PrimitiveType specified above.
+    // Note:
+    // - this is only valid if the expected value is outside the error bound.
+    // - +/-0 are considered equivalent.
+    int within_n_values = -1;
+  };
+
+  // If the computation uses low precision floating point (e.g. FP8), this field
+  // specifies the error bounds to be used. This allows us to have a per element
+  // error bound measured in floats vs relying on the default relative/absolute
+  // error bounds. We need this for FP8 since it's very sparse and we'd like to
+  // avoid unnecessarily large error bounds. This overrides abserr/relerr when
+  // specified.
+  LowPrecisionFPErrorSpec low_precision_fp_error_spec;
 };
 
 }  // namespace xla

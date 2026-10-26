@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,18 +17,20 @@ limitations under the License.
 #define XLA_SERVICE_FLOAT_SUPPORT_H_
 
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
 
-// This class has methods to query if a certain low-precision floating-point
-// type, such as bfloat16, is supported in certain instructions on a given
-// backend.
+// This class has methods to query if a certain low-precision types, such as
+// bfloat16, is supported in certain instructions on a given backend.
+// TODO(reedwm): Rename this to NumberSupport, as it supports int4 in additional
+// to float types
 class FloatSupport {
  public:
-  explicit FloatSupport(PrimitiveType low_precision_type)
-      : low_precision_type_(low_precision_type) {}
+  explicit FloatSupport(PrimitiveType low_precision_type,
+                        PrimitiveType high_precision_type = F32)
+      : low_precision_type_(low_precision_type),
+        high_precision_type_(high_precision_type) {}
   virtual ~FloatSupport() = default;
 
   // The low-precision type. Callers can use this class to query whether the
@@ -38,16 +40,7 @@ class FloatSupport {
   // A high-precision type that should be used in place of the low-precision
   // type if the backend does not support the low-precision type for a certain
   // instruction.
-  PrimitiveType HighPrecisionType() const {
-    if (low_precision_type_ == F8E5M2 || low_precision_type_ == F8E4M3FN ||
-        low_precision_type_ == F8E4M3B11FNUZ ||
-        low_precision_type_ == F8E5M2FNUZ ||
-        low_precision_type_ == F8E4M3FNUZ) {
-      return F16;
-    }
-    DCHECK_EQ(low_precision_type_, BF16);
-    return F32;
-  }
+  PrimitiveType HighPrecisionType() const { return high_precision_type_; }
 
   // Returns whether the backend supports a low-precision operand for the HLO
   // instruction at the given index.
@@ -80,8 +73,31 @@ class FloatSupport {
   virtual bool EffectiveOperandPrecisionIsLowPrecision(
       const HloInstruction& hlo, int64_t operand_index) const;
 
+  // Returns whether the operand at the given index can be converted to the
+  // low-precision type without changing the result of an HLO whose output is
+  // low-precision: the operand is already low-precision, or the HLO
+  // effectively uses low precision for it anyway
+  // (EffectiveOperandPrecisionIsLowPrecision or
+  // EffectiveOperandPrecisionIsOutputPrecision) and supports a low-precision
+  // operand at that index. FloatNormalization only changes an HLO without
+  // mixed precision support entirely to low precision if this holds for every
+  // operand; BFloat16Propagation relies on the same check.
+  bool CanConvertOperandToLowPrecision(const HloInstruction& hlo,
+                                       int64_t operand_index) const;
+
+  // Returns whether FloatNormalization should skip analyzing the instruction.
+  virtual bool ShouldSkipInstruction(const HloInstruction& hlo) const {
+    return false;
+  }
+
+  // Returns whether FloatNormalization should skip custom fusion computations.
+  virtual bool ShouldSkipComputationsOf(const HloInstruction& hlo) const {
+    return false;
+  }
+
  private:
   PrimitiveType low_precision_type_;
+  PrimitiveType high_precision_type_;
 };
 
 }  // namespace xla

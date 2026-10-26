@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,10 +19,8 @@ limitations under the License.
 #ifndef XLA_SHAPE_UTIL_H_
 #define XLA_SHAPE_UTIL_H_
 
-#include <functional>
+#include <cstdint>
 #include <initializer_list>
-#include <iterator>
-#include <numeric>
 #include <optional>
 #include <ostream>
 #include <string>
@@ -30,13 +28,24 @@ limitations under the License.
 #include <variant>
 #include <vector>
 
+#include "absl/base/macros.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/functional/function_ref.h"
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/types/span.h"
+#include "xla/layout.h"
 #include "xla/layout_util.h"
+#include "xla/overflow_util.h"
 #include "xla/primitive_util.h"
 #include "xla/printer.h"
 #include "xla/shape.h"
+#include "xla/shape_util.pb.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/logging.h"  // IWYU pragma: keep
+#include "xla/util.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -68,8 +77,8 @@ using ShapeIndexView = absl::Span<const int64_t>;
 // For indexing into array shapes, the index is always trivially empty, ie {}.
 struct ShapeIndex : public absl::InlinedVector<int64_t, 2> {
   using InlinedVector::InlinedVector;
-  TF_ATTRIBUTE_NOINLINE ShapeIndex() = default;
 
+  ShapeIndex() = default;
   explicit ShapeIndex(ShapeIndexView view)
       : ShapeIndex(view.begin(), view.end()) {}
 
@@ -78,6 +87,17 @@ struct ShapeIndex : public absl::InlinedVector<int64_t, 2> {
   void pop_front() { erase(begin()); }
 
   std::string ToString() const;
+
+  static ShapeIndex FromProto(const ShapeIndexProto& proto) {
+    auto indexes = proto.indexes();
+    return ShapeIndex{indexes.begin(), indexes.end()};
+  }
+
+  ShapeIndexProto ToProto() const {
+    ShapeIndexProto proto;
+    proto.mutable_indexes()->Assign(begin(), end());
+    return proto;
+  }
 };
 
 std::ostream& operator<<(std::ostream& out, const ShapeIndex& shape_index);
@@ -86,8 +106,16 @@ std::ostream& operator<<(std::ostream& out, const ShapeIndex& shape_index);
 //
 // These are all effectively convenience functions for testing/tweaking proto
 // properties, which do invariant checks before / after the operation.
+//
+// The shape factories must follow the following naming convention:
+//
+//   - MakeValidatedShape*: returns a StatusOr<Shape>, and does
+//     invariant checks before / after the operation.
+//   - MakeShape*: returns a Shape; may crash if an invariant is violated.
 class ShapeUtil {
  public:
+  using DynamicSizeType = int32_t;
+
   // Data structure which describes the coordinates and the shape, of a tuple
   // shaped sub-shape.
   struct IndexedShape {
@@ -98,18 +126,43 @@ class ShapeUtil {
     Shape shape;
   };
 
-  // Returns the number of elements are contained within the provided shape;
+  // Returns the product of the statically bound dimensions.
+  template <bool kBoundedDynamicOk>
+  static inline std::pair<int64_t, bool> ExtentProduct(const Shape& shape) {
+    DCHECK(shape.IsArray()) << ShapeUtil::HumanString(shape);
+    int64_t product = 1;
+    bool any_overflows = false;
+    for (int dim = 0; dim < shape.dimensions().size(); ++dim) {
+      if constexpr (kBoundedDynamicOk) {
+        if (shape.is_unbounded_dynamic_dimension(dim)) {
+          continue;
+        }
+      } else {
+        DCHECK(!shape.is_unbounded_dynamic_dimension(dim));
+      }
+      bool overflow;
+      std::tie(product, overflow) =
+          OverflowSafeMultiply(product, shape.dimensions(dim));
+      any_overflows |= overflow;
+    }
+    return {product, any_overflows};
+  }
+
+  // Returns the product of the statically bound dimensions.
+  static inline int64_t StaticExtentProduct(const Shape& shape) {
+    auto [product, overflow] = ExtentProduct</*kBoundedDynamicOk=*/true>(shape);
+    DCHECK(!overflow);
+    return product;
+  }
+
+  // Returns the number of elements contained within the provided shape;
   // e.g. for rank 0 (scalars) the result is always 1.
   // Precondition: shape.IsArray()
   static inline int64_t ElementsIn(const Shape& shape) {
-    DCHECK(shape.IsArray()) << ShapeUtil::HumanString(shape);
-    DCHECK_EQ(shape.dimensions_size(), shape.rank());
-    if (shape.dimensions().empty()) {
-      return 1LL;
-    }
-    auto begin = shape.dimensions().begin();
-    return std::accumulate(std::next(begin), shape.dimensions().end(), *begin,
-                           std::multiplies<int64_t>());
+    auto [product, overflow] =
+        ExtentProduct</*kBoundedDynamicOk=*/false>(shape);
+    DCHECK(!overflow);
+    return product;
   }
 
   // As ElementsIn(), but recurses through tuples.
@@ -129,9 +182,11 @@ class ShapeUtil {
   // this method only returns the size of the pointer array.
   static int64_t ByteSizeOf(const Shape& shape, int64_t pointer_size = -1);
 
+  static int64_t ByteSizeOfElementsRecursive(const Shape& shape);
+
   // Returns the number of bytes used to store the primitive_type.
   //
-  // Precondition: shape.IsArray()
+  // Precondition: primitive_type is an array type (otherwise crashes)
   static int64_t ByteSizeOfPrimitiveType(PrimitiveType primitive_type);
 
   // Returns the number of bytes required to store the tuple member pointers for
@@ -146,6 +201,21 @@ class ShapeUtil {
   // `ByteSizeOf(shape) == ByteSizeOfElements(shape)`. This
   // size also includes padding if present in the layout.
   static int64_t ByteSizeOfElements(const Shape& shape);
+
+  // Returns the size in bytes for the serialized form of this shape.
+  // This serialized size includes the header of the serialized format, and so
+  // should not be used for subshapes.  Use SerializedSizeOfData for that
+  // purpose.
+  // If `pack_pred` is true, PRED elements are bit-packed (8 elements per byte);
+  // if false, each PRED element occupies 1 byte.
+  static absl::StatusOr<int64_t> SerializedSize(const Shape& shape,
+                                                bool pack_pred = true);
+
+  // As above, but assumes the given ShapeProto is the result of
+  // shape.ToProto().  This can be used to avoid converting the shape to a
+  // protobuf multiple times.
+  static absl::StatusOr<int64_t> SerializedSizeWithProto(
+      const Shape& shape, const ShapeProto& proto, bool pack_pred = true);
 
   // Prints a human-readable string that represents the given shape, with or
   // without layout. e.g. "f32[42x12] {0, 1}" or "f32[64]".
@@ -169,8 +239,8 @@ class ShapeUtil {
   // (param_name: f32[42x12], ...) -> f32[24x42]
   static std::string HumanString(const ProgramShape& program_shape);
 
-  // Returns whether the LHS and RHS shapes have the same dimensions; note: does
-  // not check element type.
+  // Returns whether the LHS and RHS shapes have the same dimensions, ignoring
+  // the unbounded dimension sizes; note: does not check element type.
   // Precondition: IsArray(lhs) && IsArray(rhs)
   static bool SameDimensions(const Shape& lhs, const Shape& rhs);
 
@@ -216,7 +286,8 @@ class ShapeUtil {
   // Returns true if the tuple tree shapes and leaf ranks are identical.
   // Leaf dimensions, element type, and layout are ignored. Tuple elements are
   // compared recursively for compatibility.
-  static bool CompatibleKind(const Shape& lhs, const Shape& rhs);
+  static bool CompatibleKind(const Shape& lhs, const Shape& rhs,
+                             bool ignore_buffer = false);
 
   // As Compatible, but allow one of lhs and rhs to be BF16 while the other
   // being F32. Tuple elements are compared recursively for compatibility.
@@ -241,12 +312,19 @@ class ShapeUtil {
   // ((,),)
   static bool EqualStructure(const Shape& lhs, const Shape& rhs);
 
-  // Returns the number of dimensions for which the dimension is not (trivially)
-  // 1. e.g., f32[2x1x1] has a true rank of 1D, the other dimensions are just
-  // fluff. Note that zero dimensions are included in the true rank, e.g.,
-  // f32[3,0,1] has a true rank of 2D.
-  static int64_t TrueRank(const Shape& shape);
+  // Returns whether expected_prefix shape is a prefix of shape.
+  static bool IsPrefix(const Shape& expected_prefix, const Shape& shape,
+                       absl::FunctionRef<bool(const Shape&, const Shape&)>
+                           equal_fn = Shape::Equal());
 
+  // Returns the number of dimensions for which the dimension is not (trivially)
+  // 1. e.g., f32[2x1x1] has a true dimensionality of 1D, the other dimensions
+  // are just fluff. Note that zero dimensions are included in the true
+  // dimensionality, e.g., f32[3,0,1] has a true dimensionality of 2D.
+  // Precondition: array_shape.IsArray().
+  static int64_t TrueNumDimensions(const Shape& array_shape);
+
+  // Makes a ProgramShape with the given parameters and result shape.
   static ProgramShape MakeProgramShape(std::initializer_list<Shape> parameters,
                                        Shape result);
 
@@ -254,15 +332,18 @@ class ShapeUtil {
   // Scalar-specific
 
   static bool IsScalar(const Shape& shape) {
-    return shape.IsArray() && shape.rank() == 0;
+    return shape.IsArray() && shape.dimensions().size() == 0;
   }
   static bool IsEffectiveScalar(const Shape& shape) {
-    return shape.IsArray() && TrueRank(shape) == 0;
+    return shape.IsArray() && TrueNumDimensions(shape) == 0;
   }
 
   // Returns whether "shape" is a scalar (array) with the given element_type.
   static bool IsScalarWithElementType(const Shape& shape,
                                       PrimitiveType element_type);
+
+  // Creates a `DimensionVector` by copying dimensions from a given shape.
+  static DimensionVector CreateDimensionVectorFromShape(const Shape& shape);
 
   // Extracts the size of the shape's dimension at dimension number
   // GetDimensionNumber(dimension_number).
@@ -281,18 +362,38 @@ class ShapeUtil {
 
   // Returns a shape with the same dimensions as the original, but with the
   // element type changed to type.
-  static Shape ChangeElementType(const Shape& original, PrimitiveType type);
+  [[nodiscard]] static Shape ChangeElementType(const Shape& original,
+                                               PrimitiveType type);
 
   // Returns a shape with same dimensions but with all dimensions set to static.
-  static Shape MakeStaticShape(const Shape& original);
+  // If the shape has a layout, its dynamic_shape_metadata_prefix_bytes will be
+  // set to zero.
+  [[nodiscard]] static Shape MakeStaticShape(const Shape& original);
 
   // Creates a tuple shape from a slice of element shapes within the tuple.
-  static Shape MakeTupleShape(absl::Span<const Shape> shapes);
-  static Shape MakeTupleShapeWithPtrs(absl::Span<const Shape* const> shapes);
+  // Crashes if the result is invalid.
+  static Shape MakeTupleShape(absl::Span<const Shape> shapes) {
+    return MakeValidatedTupleShape(shapes).value();
+  }
+  static Shape MakeTupleShapeWithPtrs(absl::Span<const Shape* const> shapes) {
+    return MakeValidatedTupleShapeWithPtrs(shapes).value();
+  }
+
+  // Creates a tuple shape from a slice of element shapes within the tuple.
+  static absl::StatusOr<Shape> MakeValidatedTupleShape(
+      absl::Span<const Shape> shapes);
+  static absl::StatusOr<Shape> MakeValidatedTupleShapeWithPtrs(
+      absl::Span<const Shape* const> shapes);
 
   // Creates a tuple shape from a slice of element shapes within the tuple. If
-  // only one shape is passed, returns that.
-  static Shape MakeMaybeTupleShape(absl::Span<const Shape> shapes);
+  // only one shape is passed, returns that. Crashes if the result is invalid.
+  static Shape MakeMaybeTupleShape(absl::Span<const Shape> shapes) {
+    return MakeValidatedMaybeTupleShape(shapes).value();
+  }
+
+  // Creates a tuple shape from a slice of element shapes within the tuple.
+  static absl::StatusOr<Shape> MakeValidatedMaybeTupleShape(
+      absl::Span<const Shape> shapes);
 
   // Creates an opaque shape. These are generally used for threading a context
   // into a custom operation.
@@ -317,10 +418,25 @@ class ShapeUtil {
   static void AppendMajorDimension(int bound, Shape* shape);
 
   // Prepends a major dimension sized `bound` to the shape.
-  static Shape PrependMajorDimension(int64_t bound, Shape shape);
+  [[nodiscard]] static Shape PrependMajorDimension(int64_t bound, Shape shape);
 
   // Appends a minor dimension to the shape with the given bound.
   static void AppendMinorDimension(int bound, Shape* shape);
+
+  // Inserts a dimension at dim_idx. In the layout, the new dimension is
+  // next-major to the existing dimension at that index, or minor if it's
+  // inserted at the end (i.e. with the normalized layout it's inserted at the
+  // "natural" position).
+  [[nodiscard]] static Shape InsertDimensionAtIndex(Shape shape,
+                                                    int64_t dim_idx,
+                                                    int64_t bound);
+
+  // Inserts a list of dimensions at dim_idx. In the layout, the new dimensions
+  // are next-major to the existing dimension at that index, or minor if it's
+  // inserted at the end (i.e. with the normalized layout it's inserted at the
+  // "natural" position).
+  [[nodiscard]] static Shape InsertDimensionsAtIndex(
+      Shape shape, int64_t dim_idx, absl::Span<const int64_t> bounds);
 
   // Copy the dynamic dimensions property from one shape to another.
   static void CopyDynamicDimensions(Shape* to, const Shape& from);
@@ -331,8 +447,44 @@ class ShapeUtil {
   static bool IsEffectivelyMostMajorDimension(const Shape& shape,
                                               int64_t dimension);
 
+  // In this case, we care about transposes that permute dimensions of a shape
+  // that can be viewed as several logical components in the order of major to
+  // minor. As an example, let's consider a 0-2-1 transpose:
+  //
+  // If a shape can be viewed as three logical components 0-1-2 in the order of
+  // major to minor, a 0-2-1-transpose changes the order of such logical
+  // components to 0-2-1. We call the shape being transposed the input shape and
+  // the transposed shape the output shape. The logical view of the input/output
+  // shapes for the transpose are called the 0-1-2/0-2-1 shapes or the
+  // normalized shapes. The original input/output shapes are called unnormalized
+  // shapes.
+  //
+  // 'output_shape' should have the default layout (enforced by the caller).
+  //
+  // 'dimensions' specifies the kind of the unnormalized transpose and defines
+  // the permutation of the input shape that will result in the provided output
+  // shape. So to compute the input shape, we need to apply the inverse
+  // permutation of 'dimensions'.
+  //
+  // 'permutation' is an output parameter and specifies the kind of the
+  // normalized transpose.
+  //
+  // The method returns the dimensions for the normalized transpose shape.
+  //
+  // Example: Suppose the unnormalized output shape is [32, 1, 10, 11], and
+  // 'dimensions' is set to {3, 1, 0, 2}. This means the corresponding input
+  // shape is [10, 1, 11, 32]. The normalized output shape is [32, 110] with
+  // 'permutation' set to {1,0}.
+  // Note: the method fails if the input shape or the output shape has a
+  // non-monotonic layout.
+  static absl::StatusOr<absl::InlinedVector<int64_t, 3>>
+  GetNormalizedLogicalTransposeShape(
+      const Shape& input_shape, const Shape& output_shape,
+      absl::Span<int64_t const> dimensions,
+      absl::InlinedVector<int64_t, 3>& permutation);
+
   // Returns an empty tuple shape. Can be used as a sentinel Shape value.
-  static Shape MakeNil() { return MakeTupleShape({}); }
+  static Shape MakeNil() { return Shape(std::vector<Shape>{}); }
 
   // Checks whether the shape is initialized.
   static bool IsInitialized(const Shape& shape) {
@@ -342,10 +494,18 @@ class ShapeUtil {
   // Constructs a new shape with the given element type and sequence of
   // dimensions.
   static Shape MakeShape(PrimitiveType element_type,
-                         absl::Span<const int64_t> dimensions);
+                         absl::Span<const int64_t> dimensions) {
+    return MakeValidatedShape(element_type, dimensions).value();
+  }
 
   // Make a scalar shape with given primitive type.
-  static Shape MakeScalarShape(PrimitiveType element_type);
+  static absl::StatusOr<Shape> MakeValidatedScalarShape(
+      PrimitiveType element_type) {
+    return MakeValidatedShape(element_type, {});
+  }
+  static Shape MakeScalarShape(PrimitiveType element_type) {
+    return MakeValidatedScalarShape(element_type).value();
+  }
 
   // Constructs a new shape with the given element type and sequence of
   // potentially dynamic dimensions. The argument 'dynamic_dimensions' indicates
@@ -355,46 +515,74 @@ class ShapeUtil {
   // the same size.
   static Shape MakeShape(PrimitiveType element_type,
                          absl::Span<const int64_t> dimensions,
-                         const std::vector<bool>& dynamic_dimensions);
+                         const std::vector<bool>& dynamic_dimensions) {
+    return MakeValidatedShape(element_type, dimensions, dynamic_dimensions)
+        .value();
+  }
+
+  // Constructs a new buffer shape with the given element type, and sequence of
+  // dimensions.
+  static absl::StatusOr<Shape> MakeValidatedBufferShape(
+      PrimitiveType element_type, absl::Span<const int64_t> dimensions);
+
+  // Creates a buffer shape. `element_shape` must be a valid array shape.
+  static absl::StatusOr<Shape> MakeValidatedBufferShape(Shape element_shape);
 
   // Constructs a new shape with the given element type and sequence of
-  // dimensions. Method checks if the element type is valid and the shape's
-  // size fits in std::numeric_limits<int64_t>::max().
-  static StatusOr<Shape> MakeValidatedShape(
+  // dimensions. Method checks if the element type is valid, the shape's
+  // size fits in std::numeric_limits<int64_t>::max(), and dynamic size is not
+  // marked static.
+  static absl::StatusOr<Shape> MakeValidatedShape(
       PrimitiveType element_type, absl::Span<const int64_t> dimensions);
-  static StatusOr<Shape> MakeValidatedShape(
+  static absl::StatusOr<Shape> MakeValidatedShape(
       PrimitiveType element_type, absl::Span<const int64_t> dimensions,
       const std::vector<bool>& dynamic_dimensions);
 
   // Creates a Shape with element type corresponding to T and the given
   // dimensions
   template <typename T>
+  static absl::StatusOr<Shape> MakeValidatedShapeWithType(
+      absl::Span<const int64_t> dimensions) {
+    return MakeValidatedShape(primitive_util::NativeToPrimitiveType<T>(),
+                              dimensions);
+  }
+  template <typename T>
   static Shape MakeShapeWithType(absl::Span<const int64_t> dimensions) {
-    return ShapeUtil::MakeShape(primitive_util::NativeToPrimitiveType<T>(),
-                                dimensions);
+    return MakeValidatedShapeWithType<T>(dimensions).value();
+  }
+
+  // Constructs a new dense array shape with the given minor_to_major order in
+  // its Layout. Returns a value shape such that shape.has_layout(). Crashes if
+  // the result is invalid.
+  static Shape MakeShapeWithDenseLayout(
+      PrimitiveType element_type, absl::Span<const int64_t> dimensions,
+      absl::Span<const int64_t> minor_to_major,
+      absl::Span<const Tile> tiles = {},
+      int64_t tail_padding_alignment_in_elements = 1,
+      int64_t element_size_in_bits = 0, int64_t memory_space = 0,
+      absl::Span<const SplitConfig> split_configs = {}) {
+    return MakeValidatedShapeWithDenseLayout(
+               element_type, dimensions, minor_to_major, tiles,
+               tail_padding_alignment_in_elements, element_size_in_bits,
+               memory_space, split_configs)
+        .value();
   }
 
   // Constructs a new dense array shape with the given minor_to_major order in
   // its Layout. Returns a value shape such that shape.has_layout().
-  static Shape MakeShapeWithDenseLayout(
+  static absl::StatusOr<Shape> MakeValidatedShapeWithDenseLayout(
       PrimitiveType element_type, absl::Span<const int64_t> dimensions,
       absl::Span<const int64_t> minor_to_major,
-      absl::Span<const Tile> tiles = {}, int64_t element_size_in_bits = 0,
-      int64_t memory_space = 0);
-
-  // Constructs a new sparse array shape with the given minor_to_major order and
-  // dim_level_types in its Layout. Returns a value shape such that
-  // shape.has_layout().
-  static Shape MakeShapeWithSparseLayout(
-      PrimitiveType element_type, absl::Span<const int64_t> dimensions,
-      absl::Span<const int64_t> minor_to_major,
-      absl::Span<const DimLevelType> dim_level_types,
-      absl::Span<const bool> dim_unique = {},
-      absl::Span<const bool> dim_ordered = {},
-      PrimitiveType index_primitive_type = PRIMITIVE_TYPE_INVALID,
-      PrimitiveType pointer_primitive_type = PRIMITIVE_TYPE_INVALID,
+      absl::Span<const Tile> tiles = {},
+      int64_t tail_padding_alignment_in_elements = 1,
       int64_t element_size_in_bits = 0, int64_t memory_space = 0,
-      std::optional<Shape> physical_shape = std::nullopt);
+      absl::Span<const SplitConfig> split_configs = {});
+
+  // Constructs a new sparse array shape with the given minor_to_major order
+  // in its Layout. Returns a value shape such that shape.has_layout().
+  static absl::StatusOr<Shape> MakeValidatedShapeWithSparseLayout(
+      PrimitiveType element_type, absl::Span<const int64_t> dimensions,
+      absl::Span<const int64_t> minor_to_major);
 
   // Constructs a new shape with the given dimension `dim` as the most major
   // dimension in the layout. If the shape does not have a layout, assumes a
@@ -403,34 +591,58 @@ class ShapeUtil {
   static Shape MoveDimToMajor(const Shape& shape, int64_t dim);
 
   // Returns the same shape except with all dimensions set to be static.
-  static Shape MakeShapeWithStaticDimensions(const Shape& shape);
+  [[nodiscard]] static Shape MakeShapeWithStaticDimensions(const Shape& shape);
 
   // Constructs a new shape with major-first layout (i.e. {n, n-1, ..., 0}).
+  // Crashes if the result is invalid.
   static Shape MakeShapeWithDescendingLayout(
+      PrimitiveType element_type, absl::Span<const int64_t> dimensions) {
+    return MakeValidatedShapeWithDescendingLayout(element_type, dimensions)
+        .value();
+  }
+
+  // Constructs a new shape with major-first layout (i.e. {n, n-1, ..., 0}).
+  static absl::StatusOr<Shape> MakeValidatedShapeWithDescendingLayout(
       PrimitiveType element_type, absl::Span<const int64_t> dimensions);
+
+  // Returns a new Shape based on the given Shape with low-dimension-major
+  // layout (i.e. {n, n-1, ..., 0}, like Fortran), and with the dimensions
+  // rearranged so that it has the same in-memory layout as the given shape.
+  // Crashes if the result is invalid.
+  //
+  // For example, transforms f32[B,H,W,C]{0,3,2,1} to f32[H,W,C,B]{3,2,1,0}.
+  static Shape MakeShapeWithDescendingLayoutAndSamePhysicalLayout(
+      const Shape& shape) {
+    return MakeValidatedShapeWithDescendingLayoutAndSamePhysicalLayout(shape)
+        .value();
+  }
 
   // Returns a new Shape based on the given Shape with low-dimension-major
   // layout (i.e. {n, n-1, ..., 0}, like Fortran), and with the dimensions
   // rearranged so that it has the same in-memory layout as the given shape.
   //
   // For example, transforms f32[B,H,W,C]{0,3,2,1} to f32[H,W,C,B]{3,2,1,0}.
-  static Shape MakeShapeWithDescendingLayoutAndSamePhysicalLayout(
+  static absl::StatusOr<Shape>
+  MakeValidatedShapeWithDescendingLayoutAndSamePhysicalLayout(
       const Shape& shape);
 
-  // As MakeShape, but the object to write to is passed in.
-  static Status PopulateShape(PrimitiveType element_type,
-                              absl::Span<const int64_t> dimensions,
-                              Shape* shape);
+  // Like MakeShape, but the object to write to is passed in.
+  // Precondition:
+  //   - if element_type is a non-array type, dimensions must be empty.
+  //   - shape must not be null.
+  static absl::Status PopulateShape(PrimitiveType element_type,
+                                    absl::Span<const int64_t> dimensions,
+                                    Shape* shape);
 
   // Validates that the provided shape satisfies invariants.
-  static Status ValidateShape(const Shape& shape);
+  static absl::Status ValidateShape(const Shape& shape);
 
   // Validates the provided shape satisfies invariants, except those that
   // pertain to layout.
   //
   // Layout is optional for client-provided shapes, so that the compiler may
   // determine and assign an optimized layout.
-  static Status ValidateShapeWithOptionalLayout(const Shape& shape);
+  static absl::Status ValidateShapeWithOptionalLayout(const Shape& shape);
 
   // Returns whether the element type of the shape is integral (signed or
   // unsigned). Note that predicates are not considered integral here, since
@@ -453,9 +665,6 @@ class ShapeUtil {
   // Returns whether the element type of the shape is signed. Note
   // that floating point numbers are signed.
   static bool ElementIsSigned(const Shape& shape);
-
-  // Returns whether the given primitive type corresponds to an array shape.
-  static bool IsArrayPrimitiveType(PrimitiveType primitive_type);
 
   // Returns whether the shape is a tuple with at least one element which is
   // also a tuple.
@@ -490,8 +699,9 @@ class ShapeUtil {
   // the given Shape argument. The non-Try variants check fail if index is
   // invalid.
   static const Shape& GetSubshape(const Shape& shape, ShapeIndexView index);
-  static StatusOr<const Shape*> TryGetSubshape(const Shape& shape,
-                                               ShapeIndexView index);
+
+  static absl::StatusOr<const Shape*> TryGetSubshape(const Shape& shape,
+                                                     ShapeIndexView index);
   static Shape* GetMutableSubshape(Shape* shape, ShapeIndexView index);
 
   // Returns whether the given index in the given shape is a leaf element of the
@@ -500,6 +710,7 @@ class ShapeUtil {
 
   // Returns the number of leaves in the shape.
   static int64_t GetLeafCount(const Shape& shape);
+  static int64_t GetLeafCountTuple(const Shape& shape);
 
   // Retrieves all the leaf shapes and their indexes, in the order walked by
   // the ForEachSubshape() API.
@@ -513,51 +724,97 @@ class ShapeUtil {
   //
   //   void fn(const Shape& subshape, const ShapeIndex& index), or
   //   void fn(Shape* subshape, const ShapeIndex& index) (mutable version)
-  template <typename Fn>
-  static void ForEachSubshape(const Shape& shape, Fn&& fn) {
-    ForEachSubshapeWithStatus(shape, [&](const Shape& subshape,
-                                         const ShapeIndex& index) {
-      fn(subshape, index);
-      return OkStatus();
-    }).IgnoreError();
-  }
-  template <typename Fn>
-  static void ForEachMutableSubshape(Shape* shape, Fn&& fn) {
-    ForEachMutableSubshapeWithStatus(shape, [&](Shape* subshape,
-                                                const ShapeIndex& index) {
-      fn(subshape, index);
-      return OkStatus();
-    }).IgnoreError();
-  }
+  using VisitorFunction = absl::FunctionRef<void(const Shape& /*subshape*/,
+                                                 const ShapeIndex& /*index*/)>;
+  using MutableVisitorFunction =
+      absl::FunctionRef<void(Shape* /*subshape*/, const ShapeIndex& /*index*/)>;
 
-  // Variants of ForEach(Mutable)Subshape which propagate Status from the
+  static void ForEachSubshape(const Shape& shape, VisitorFunction fn);
+  static void ForEachMutableSubshape(Shape* shape, MutableVisitorFunction fn);
+
+  // Calls the given visitor function for each leaf subshape of the given shape.
+  // Subshapes are visited in DFS pre-order starting with the entire shape
+  // (index {}).
+  //
+  // The visitor function must have the signature
+  //
+  //   absl::Status fn(const Shape& subshape, const ShapeIndex& index)
+  //   void fn(Shape* subshape, const ShapeIndex& index) (mutable version)
+  using StatusVisitorFunction = absl::FunctionRef<absl::Status(
+      const Shape& /*subshape*/, const ShapeIndex& /*index*/)>;
+  using MutableStatusVisitorFunction = absl::FunctionRef<absl::Status(
+      Shape* /*subshape*/, const ShapeIndex& /*index*/)>;
+
+  static absl::Status ForEachLeafShapeWithStatus(const Shape& shape,
+                                                 StatusVisitorFunction fn);
+  static absl::Status ForEachMutableLeafShapeWithStatus(
+      Shape* shape, MutableStatusVisitorFunction fn);
+
+  // Calls the given visitor function for each leaf subshape of the given shape.
+  // Subshapes are visited in DFS pre-order starting with the entire shape
+  // (index {}).
+  //
+  // The visitor function must have the signature
+  //   void fn(const Shape& subshape, const ShapeIndex& index)
+  //   void fn(Shape* subshape, const ShapeIndex& index) (mutable version)
+  static void ForEachLeafShape(const Shape& shape, VisitorFunction fn);
+  static void ForEachMutableLeafShape(Shape* shape, MutableVisitorFunction fn);
+
+  // Variants of ForEach(Mutable)Subshape which propagate absl::Status from the
   // visitor function.
   //
   // Visitor function must have the signature
   //
-  //   Status fn(const Shape& subshape, const ShapeIndex& index), or
-  //   Status fn(Shape* subshape, const ShapeIndex& index) (mutable version)
+  //   absl::Status fn(const Shape& subshape, const ShapeIndex& index), or
+  //   absl::Status fn(Shape* subshape, const ShapeIndex& index) (mutable
+  //   version)
   //
-  template <typename Fn>
-  static Status ForEachSubshapeWithStatus(const Shape& shape, Fn&& fn) {
-    return ForEachMutableSubshapeWithStatus(
-        const_cast<Shape*>(&shape),
-        [&](Shape* subshape, const ShapeIndex& index) -> Status {
-          return fn(*const_cast<const Shape*>(subshape), index);
-        });
-  }
-  template <typename Fn>
-  static Status ForEachMutableSubshapeWithStatus(Shape* shape, Fn&& fn) {
-    ShapeIndex index;
-    return ForEachMutableSubshapeWithStatusHelper(shape, fn, &index);
-  }
+  static absl::Status ForEachSubshapeWithStatus(const Shape& shape,
+                                                StatusVisitorFunction fn);
+  static absl::Status ForEachMutableSubshapeWithStatus(
+      Shape* shape, MutableStatusVisitorFunction fn);
+
+  // Calls the given visitor function for each subshape of the given shape.
+  // Subshapes are visited in DFS post-order starting with the entire shape
+  // (index {}).
+  //
+  // The visitor function must have the signature
+  //
+  //   void fn(const Shape& subshape, const ShapeIndex& index), or
+  //   void fn(Shape* subshape, const ShapeIndex& index) (mutable version)
+  static void ForEachSubshapePostOrder(const Shape& shape, VisitorFunction fn);
+  static void ForEachMutableSubshapePostOrder(Shape* shape,
+                                              MutableVisitorFunction fn);
+
+  // Variants of ForEach(Mutable)SubshapePostOrder which propagate absl::Status
+  // from the visitor function.
+  //
+  // Visitor function must have the signature
+  //
+  //   absl::Status fn(const Shape& subshape, const ShapeIndex& index), or
+  //   absl::Status fn(Shape* subshape, const ShapeIndex& index) (mutable
+  //   version)
+  //
+  static absl::Status ForEachSubshapePostOrderWithStatus(
+      const Shape& shape, StatusVisitorFunction fn);
+  static absl::Status ForEachMutableSubshapePostOrderWithStatus(
+      Shape* shape, MutableStatusVisitorFunction fn);
 
   // Returns true if `shape` (which must be an array) with degenerate dimensions
   // (dimensions with bound 1).
   static bool HasDegenerateDimensions(const Shape& shape);
 
+  // Extracts the packing factor for a 1D interleaved array based on the layout.
+  // For example, bf16[1024]{0:T(1024)(128)(2,1)} -> 2
+  static absl::StatusOr<int64_t> PackedFactorFor1DInterleavedArray(
+      const Shape& shape);
+
   // Drops any degenerate dimensions (i.e. dimensions of size 1)
   static Shape DropDegenerateDimensions(const Shape& shape);
+
+  // Permutes the dimensions of `shape` without changing the layout, if present.
+  static Shape PermuteDimensionsIgnoringLayout(
+      absl::Span<const int64_t> permutation, const Shape& shape);
 
   // Permutes the dimensions by the given permutation, so
   // return_value.dimensions[i] = argument.dimensions[permutation[i]].
@@ -652,10 +909,13 @@ class ShapeUtil {
                                           bool ignore_element_type = false);
 
   // If the given bitcast is a transpose, deduce and return `dimensions`
-  // attribute of such a transpose. Otherwise, return nullptr.
+  // attribute of such a transpose. Otherwise, return std::nullopt.
   static std::optional<std::vector<int64_t>>
   DeduceTransposeDimensionsForBitcast(const Shape& input_shape,
                                       const Shape& output_shape);
+
+  static bool IsDecomposableBitcast(const Shape& input_shape,
+                                    const Shape& output_shape);
 
   // This means that the bitcast can be decomposed to a single reshape.
   struct BitcastDecompositionReshape {};
@@ -665,7 +925,8 @@ class ShapeUtil {
     std::vector<int64_t> transpose_dims;
   };
 
-  // Every bitcast from A to B can be represented as a sequence of:
+  // Every bitcast from A to B of same bitwidth can be represented as a sequence
+  // of:
   // 1) Transpose to a normalized layout of A
   // 2) Reshape to a normalized layout of B
   // 3) Transpose from (2) to B
@@ -688,14 +949,14 @@ class ShapeUtil {
   };
 
   // A variant type holding one of the possible bitcast decompositions.
-  using BitcastDecomposition =
+  using BitcastDecomposition = std::optional<
       std::variant<BitcastDecompositionReshape, BitcastDecompositionTranspose,
-                   BitcastDecompositionTrt>;
+                   BitcastDecompositionTrt>>;
 
   // Decomposes a bitcast to a sequence of transpose, reshape, transpose.
   //
   // See the comment on BitcastDecompositionTrt.
-  static BitcastDecompositionTrt DecomposeBitcastToTrt(
+  static std::optional<BitcastDecompositionTrt> DecomposeBitcastToTrt(
       const Shape& input_shape, const Shape& output_shape);
 
   // Decomposes a bitcast to one of the possible decompositions.
@@ -710,6 +971,11 @@ class ShapeUtil {
   // otherwise.
   static std::optional<Shape> AlignLayouts(const Shape& input_shape,
                                            const Shape& output_shape);
+
+  // Returns a shape with the given logical dimensions reordered, updating the
+  // layout so that physical dimensions are preserved.
+  static Shape ReorderLogicalDimensions(const Shape& shape,
+                                        absl::Span<const int64_t> permutation);
 
   // Returns a shape with the given dimension deleted.
   // For example:
@@ -738,7 +1004,7 @@ class ShapeUtil {
                                        const xla::Shape& bounded_shape);
 
   using ForEachVisitorFunction =
-      absl::FunctionRef<StatusOr<bool>(absl::Span<const int64_t>)>;
+      absl::FunctionRef<absl::StatusOr<bool>(absl::Span<const int64_t>)>;
 
   using ForEachVisitorFunctionNoStatus =
       absl::FunctionRef<bool(absl::Span<const int64_t>)>;
@@ -748,7 +1014,7 @@ class ShapeUtil {
   // count (index[i] < base[i] + count[i]), and calls the visitor_function
   // with the current index. The visitor_function visitor function should
   // return true if it wants to continue, or false otherwise.
-  static Status ForEachIndexWithStatus(
+  static absl::Status ForEachIndexWithStatus(
       const Shape& shape, absl::Span<const int64_t> base,
       absl::Span<const int64_t> count, absl::Span<const int64_t> incr,
       const ForEachVisitorFunction& visitor_function);
@@ -761,7 +1027,7 @@ class ShapeUtil {
   };
 
   template <typename FnTy>
-  static Status ForEachIndexWithStatus(
+  static absl::Status ForEachIndexWithStatus(
       const Shape& shape, const IndexIterationSpace& iteration_space,
       FnTy&& function) {
     return ShapeUtil::ForEachIndexWithStatus(
@@ -782,10 +1048,10 @@ class ShapeUtil {
   // These convenience wrappers don't take `base`, `count` and `incr`
   // explicitly, but iterate over every element in `shape` instead.
 
-  static Status ForEachIndexWithStatus(
+  static absl::Status ForEachIndexWithStatus(
       const Shape& shape, const ForEachVisitorFunction& visitor_function) {
-    std::vector<int64_t> base(shape.dimensions_size());
-    std::vector<int64_t> incr(shape.dimensions_size(), 1);
+    std::vector<int64_t> base(shape.dimensions().size());
+    std::vector<int64_t> incr(shape.dimensions().size(), 1);
     return ForEachIndexWithStatus(shape, base,
                                   /*count=*/shape.dimensions(), incr,
                                   visitor_function);
@@ -794,8 +1060,8 @@ class ShapeUtil {
   static void ForEachIndexNoStatus(
       const Shape& shape,
       const ForEachVisitorFunctionNoStatus& visitor_function) {
-    std::vector<int64_t> base(shape.dimensions_size());
-    std::vector<int64_t> incr(shape.dimensions_size(), 1);
+    std::vector<int64_t> base(shape.dimensions().size());
+    std::vector<int64_t> incr(shape.dimensions().size(), 1);
     ForEachIndexNoStatus(shape, base,
                          /*count=*/shape.dimensions(), incr, visitor_function);
   }
@@ -803,12 +1069,12 @@ class ShapeUtil {
   static void ForEachIndex(const Shape& shape,
                            const ForEachVisitorFunction& visitor_function) {
     ForEachIndexWithStatus(shape, [&](absl::Span<const int64_t> indices) {
-      return StatusOr<bool>(visitor_function(indices));
+      return absl::StatusOr<bool>(visitor_function(indices));
     }).IgnoreError();
   }
 
   using ForEachParallelVisitorFunction =
-      absl::FunctionRef<StatusOr<bool>(absl::Span<const int64_t>, int)>;
+      absl::FunctionRef<absl::StatusOr<bool>(absl::Span<const int64_t>, int)>;
 
   // A parallel version of ForEachIndex(WithStatus). This can only be used if
   // the visitor_function is thread-safe and the order of iteration does not
@@ -826,7 +1092,7 @@ class ShapeUtil {
   // Returns the number of threads in the threadpool of ForEachIndexParallel*.
   static int GetForEachIndexParallelThreadCount();
 
-  static Status ForEachIndexParallelWithStatus(
+  static absl::Status ForEachIndexParallelWithStatus(
       const Shape& shape, absl::Span<const int64_t> base,
       absl::Span<const int64_t> count, absl::Span<const int64_t> incr,
       const ForEachParallelVisitorFunction& visitor_function);
@@ -837,36 +1103,13 @@ class ShapeUtil {
       const Shape& shape,
       const ForEachParallelVisitorFunction& visitor_function);
 
-  static Status ForEachIndexParallelWithStatus(
+  static absl::Status ForEachIndexParallelWithStatus(
       const Shape& shape,
       const ForEachParallelVisitorFunction& visitor_function);
 
-  // In this case, we care about transposes that swap two dimensions of a
-  // a shape that can be viewed as three logical components 0-1-2 in the order
-  // of major to minor.
-  // As an example, let's consider a 0-2-1 transpose:
-  //
-  // If a shape can be viewed as three logical components 0-1-2 in the order of
-  // major to minor, a 0-2-1-transpose changes the order of such logical
-  // components to 0-2-1. We call the shape being transposed the input shape and
-  // the transposed shape the output shape. The logical view of the input/output
-  // shapes for the transpose are called the 0-1-2/0-2-1 shapes or the
-  // normalized shapes. The original input/output shapes are called unnormalized
-  // shapes.
-  //
-  // 'permutation' specifies the kind of transpose. For a 0-2-1 transpose, it
-  // should be set to {0, 2, 1}.
-  // If `b` is a 0-2-1 transpose of `a` in 0-1-2, return the dimensions for the
-  // normalized shape of `b` or the 0-2-1 shape. In general, the
-  // permutation[0]-permutation[1]-permutation[2] shape is returned.
-  static std::optional<Vector3> GetNormalizedTransposeShape(
-      const Shape& input_shape, const Shape& output_shape,
-      const Vector3& permutation);
-
-  // Entry point for physical + logical transposition.
-  static std::optional<Vector3> GetNormalizedLogicalTransposeShape(
-      const Shape& input_shape, const Shape& output_shape,
-      absl::Span<int64_t const> dimensions, const Vector3& permutation);
+  // Returns true if the shape doesn't have any device-specific information,
+  // namely tiling and memory-space information.
+  static bool DeviceShapeIsHostShape(const Shape& shape);
 
   // Strips device-specific information, namely tiling and memory-space
   // information, from a shape.
@@ -878,8 +1121,22 @@ class ShapeUtil {
 
   // Computes byte strides of an array shape `shape`. `shape` must have a
   // layout. Ignores tiling. `strides` must have size equal to the number of
-  // dimensions of `shape`.
-  static Status ByteStrides(const Shape& shape, absl::Span<int64_t> strides);
+  // dimensions of `shape`. Ignores element_size_in_bits - uses its default
+  // value, ByteSizeOfPrimitiveType - therefore `unpacked`.
+  static absl::Status UnpackedByteStrides(const Shape& shape,
+                                          absl::Span<int64_t> strides);
+  ABSL_DEPRECATE_AND_INLINE()
+  static absl::Status ByteStrides(const Shape& shape,
+                                  absl::Span<int64_t> strides);
+  // Same as above but returns the stride array, or std::nullopt if error.
+  static std::optional<absl::InlinedVector<int64_t, 4>> UnpackedByteStrides(
+      const Shape& shape);
+  // Same as above but returns std::nullopt if elements are not byte-aligned.
+  static std::optional<absl::InlinedVector<int64_t, 4>> ByteStrides(
+      const Shape& shape);
+
+  // Returns the size of the tensor element in bits.
+  static int64_t ElementSizeInBits(const Shape& shape);
 
   // Returns the array size in bytes (layout/tiling required), all paddings are
   // included.
@@ -889,36 +1146,50 @@ class ShapeUtil {
   // due to the tiling requirement.
   static int64_t ArrayDataSize(const Shape& shape);
 
+  // Updates element_size_in_bits on each subshape's layout. If
+  // 'pack_subbyte_types' is true, sets the element size to the dtype bitwidth
+  // for subbyte types (S4, U4, etc) and 0 for non-subbyte types, which
+  // indicates that for arrays of subbyte types, multiple elements are packed in
+  // a single byte. If 'pack_subbyte_types' is false, sets the element size to 0
+  // for all types.
+  static void UpdateElementSizeInBits(Shape* s, bool pack_subbyte_types);
+
+  // Recursively flattens a tuple shape into a vector of subshapes.
+  static void FlattenTupleShape(const Shape& shape,
+                                std::vector<const Shape*>& flattened);
+  static std::vector<const Shape*> FlattenTupleShape(const Shape& shape);
+
+  static inline bool LastDimIsMinorMost(const Shape& shape) {
+    if (!shape.has_layout()) {
+      return true;
+    }
+    return LayoutUtil::Minor(shape.layout(), 0) ==
+           shape.dimensions().size() - 1;
+  };
+
  private:
-  // Fills *shape. Returns true on success.
-  // REQUIRES: *shape is empty.
-  static bool FillNewShape(PrimitiveType element_type,
-                           absl::Span<const int64_t> dimensions, Shape* shape);
-
-  // Validates the shape size is sane. This makes sure it's safe to do
-  // calculations in int64_t without overflowing.
-  static Status ValidateShapeSize(const Shape& shape);
-
-  // Validates all of the non-layout properties of the shape -- this is a helper
-  // used by both the layout-optional and layout-required public method.
-  static Status ValidateShapeWithOptionalLayoutInternal(const Shape& shape);
-
   // Helper for ForEachSubshape which visits the subshapes of the given shape in
   // DFS pre-order starting with the index.
-  template <typename Fn>
-  static Status ForEachMutableSubshapeWithStatusHelper(Shape* shape, Fn&& fn,
-                                                       ShapeIndex* index) {
-    TF_RETURN_IF_ERROR(fn(shape, *index));
-    if (shape->IsTuple()) {
-      for (int64_t i = 0; i < ShapeUtil::TupleElementCount(*shape); ++i) {
-        index->push_back(i);
-        TF_RETURN_IF_ERROR(ForEachMutableSubshapeWithStatusHelper(
-            shape->mutable_tuple_shapes(i), fn, index));
-        index->pop_back();
-      }
-    }
-    return OkStatus();
-  }
+  template <typename ShapeT, typename Fn>
+  static void ForEachSubshapeHelper(ShapeT* shape, Fn&& fn, ShapeIndex* index);
+
+  // Helper for ForEachSubshapeWithStatus which visits the subshapes of the
+  // given shape in DFS pre-order starting with the index.
+  template <typename ShapeT, typename Fn>
+  static absl::Status ForEachSubshapeWithStatusHelper(ShapeT* shape, Fn&& fn,
+                                                      ShapeIndex* index);
+
+  // Helper for ForEachSubshapePostOrder which visits the subshapes of the given
+  // shape in DFS post-order.
+  template <typename ShapeT, typename Fn>
+  static void ForEachSubshapePostOrderHelper(ShapeT* shape, Fn&& fn,
+                                             ShapeIndex* index);
+
+  // Helper for ForEachSubshapePostOrderWithStatus which visits the subshapes of
+  // the given shape in DFS post-order.
+  template <typename ShapeT, typename Fn>
+  static absl::Status ForEachSubshapePostOrderWithStatusHelper(
+      ShapeT* shape, Fn&& fn, ShapeIndex* index);
 
   // Keeps track of the iteration state for the ForEach...Internal routines
   struct ForEachState {
@@ -947,7 +1218,7 @@ class ShapeUtil {
     int64_t CalculateNumSteps() const;
   };
 
-  static Status ForEachIndexInternal(
+  static absl::Status ForEachIndexInternal(
       const Shape& shape, absl::Span<const int64_t> base,
       absl::Span<const int64_t> count, absl::Span<const int64_t> incr,
       const ForEachVisitorFunction& visitor_function);
@@ -957,7 +1228,7 @@ class ShapeUtil {
       absl::Span<const int64_t> count, absl::Span<const int64_t> incr,
       const ForEachVisitorFunctionNoStatus& visitor_function);
 
-  static Status ForEachIndexInternalParallel(
+  static absl::Status ForEachIndexInternalParallel(
       const Shape& shape, absl::Span<const int64_t> base,
       absl::Span<const int64_t> count, absl::Span<const int64_t> incr,
       const ForEachParallelVisitorFunction& visitor_function);
@@ -977,9 +1248,9 @@ inline ShapeUtil::ForEachState::ForEachState(const Shape& s,
       minor_to_major(shape.layout().minor_to_major().data()),
       rank(LayoutUtil::MinorToMajor(shape).size()),
       indexes(b.begin(), b.end()),
-      indexes_ptr((rank == 0) ? nullptr : &indexes[0]),
+      indexes_ptr((rank == 0) ? nullptr : indexes.data()),
       indexes_span(indexes) {
-  CHECK_EQ(shape.rank(), b.size());
+  CHECK_EQ(shape.dimensions().size(), b.size());
   CHECK_EQ(i.size(), b.size());
   CHECK_EQ(c.size(), b.size());
 }

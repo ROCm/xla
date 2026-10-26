@@ -1,95 +1,99 @@
-load("//xla:glob_lit_test.bzl", "glob_lit_tests")
-load("//xla:xla.bzl", "xla_cc_test")
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+load("//xla:lit.bzl", "lit_test_suite")
+load("//xla:xla.default.bzl", "xla_cc_binary")
+load("//xla/tsl:tsl.bzl", "internal_visibility")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
+    default_visibility = internal_visibility(["//xla/python/ifrt/ir:internal"]),
     licenses = ["notice"],
 )
 
-glob_lit_tests(
+lit_test_suite(
     name = "all_tests",
-    data = [":test_utilities"],
-    driver = "//xla:run_lit.sh",
-    test_file_exts = ["mlir"],
-)
-
-filegroup(
-    name = "test_utilities",
-    testonly = True,
-    data = [
+    srcs = glob(["*.mlir"]),
+    cfg = "//xla:lit.cfg.py",
+    tools = [
         ":ifrt-opt",
         "@llvm-project//llvm:FileCheck",
-        "@llvm-project//mlir:run_lit.sh",
     ],
 )
 
-cc_binary(
+xla_cc_binary(
     name = "ifrt-opt",
+    testonly = True,
     srcs = ["ifrt-opt.cc"],
     deps = [
-        "//xla/python/ifrt/ir",
-        "//xla/python/ifrt/ir/transforms:built_in_spmd_expansions",
-        "//xla/python/ifrt/ir/transforms:passes",
-        "@llvm-project//mlir:AllPassesAndDialects",
-        "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:MlirOptLib",
-    ],
-)
-
-cc_library(
-    name = "executable_impl_test_base",
-    testonly = True,
-    srcs = ["executable_impl_test_base.cc"],
-    hdrs = ["executable_impl_test_base.h"],
-    visibility = ["//xla/python/ifrt:friends"],
-    deps = [
-        "//xla:status_macros",
+        "//xla:xla_data_proto_cc",
         "//xla/mlir_hlo:hlo_dialect_registration",
-        "//xla/python/ifrt",
-        "//xla/python/ifrt:test_util",
-        "//xla/python/ifrt/ir",
-        "//xla/python/ifrt/ir/transforms:built_in_spmd_expansions",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/types:span",
-        "@llvm-project//mlir:AllPassesAndDialects",
-        "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:Parser",
-        "@tf_runtime//:ref_count",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/platform:test",
-    ],
-)
-
-cc_library(
-    name = "executable_impl_test_lib",
-    testonly = True,
-    srcs = ["executable_impl_test_lib.cc"],
-    visibility = ["//xla/python/ifrt:friends"],
-    deps = [
-        ":executable_impl_test_base",
         "//xla/pjrt:pjrt_executable",
         "//xla/python/ifrt",
-        "//xla/python/ifrt:test_util",
+        "//xla/python/ifrt:mock",
+        "//xla/python/ifrt/hlo:hlo_program",
         "//xla/python/ifrt/ir",
-        "//xla/python/ifrt/ir:compiler",
-        "//xla/python/pjrt_ifrt:xla_ifrt",
-        "@com_google_absl//absl/types:span",
+        "//xla/python/ifrt/ir:atom_program_compiler",
+        "//xla/python/ifrt/ir:ifrt_ir_program",
+        "//xla/python/ifrt/ir/conversions/mpmd:lower_to_ifrt",
+        "//xla/python/ifrt/ir/support:module_parsing",
+        "//xla/python/ifrt/ir/transforms:passes",
+        "//xla/tsl/concurrency:future",
+        "//xla/tsl/concurrency:ref_count",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_googletest//:gtest",
+        "@llvm-project//mlir:AllPassesAndDialects",
         "@llvm-project//mlir:IR",
-        "@tf_runtime//:ref_count",
-        "@tsl//tsl/lib/core:status_test_util",
-        "@tsl//tsl/platform:status_matchers",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/platform:test",
+        "@llvm-project//mlir:MathDialect",
+        "@llvm-project//mlir:MlirOptLib",
+        "@llvm-project//mlir:RegisterAllDialects",  # buildcleaner: keep
+        "@llvm-project//mlir:RegisterAllPasses",  # buildcleaner: keep
+        "@shardy//shardy/dialect/mpmd/ir:dialect",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@tsl//tsl/platform:path",
+        "@tsl//tsl/platform:platform_port",
     ],
-    alwayslink = True,
 )
 
-xla_cc_test(
-    name = "executable_test_no_impl",
-    srcs = [],
+xla_cc_binary(
+    name = "ifrt-translate",
+    testonly = True,
+    srcs = ["ifrt-translate.cc"],
     deps = [
-        ":executable_impl_test_lib",
-        "//xla/python/ifrt:no_impl_test_main",
+        "//xla/python/ifrt:serdes",
+        "//xla/python/ifrt:serdes_proto_cc",
+        "//xla/python/ifrt/ir",
+        "//xla/python/ifrt/ir:ifrt_ir_program",
+        "//xla/python/ifrt/ir:ifrt_ir_program_serdes",  # build_cleaner: keep
+        "//xla/python/ifrt/ir:version",
+        "//xla/python/ifrt/ir:vifrt",
+        "@com_google_absl//absl/strings",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:Transforms",
+        "@llvm-project//mlir:TranslateLib",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@stablehlo//:register",
+        "@stablehlo//:version",
     ],
 )

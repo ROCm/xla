@@ -1,13 +1,33 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 # Description:
 #    Libraries for helping construct LLVM IR for XLA backends.
 
-load("@tsl//tsl:tsl.default.bzl", "filegroup")
-load("@tsl//tsl/platform:rules_cc.bzl", "cc_library")
-load("//xla:xla.bzl", "xla_cc_test")
+load("//xla:xla.default.bzl", "xla_cc_test")
+load("//xla/tsl:tsl.bzl", "internal_visibility")
+load("//xla/tsl:tsl.default.bzl", "filegroup")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
+load(
+    "//xla/tsl/platform/default:cuda_build_defs.bzl",
+    "if_cuda_is_configured",
+)
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
-    default_visibility = [":friends"],
+    default_visibility = internal_visibility([":friends"]),
     licenses = ["notice"],
 )
 
@@ -34,29 +54,16 @@ cc_library(
     deps = [
         ":ir_array",
         ":llvm_type_conversion_util",
+        "//xla:shape_util",
         "//xla:types",
         "//xla/hlo/ir:hlo",
         "//xla/service:buffer_assignment",
+        "//xla/service:hlo_value",
         "//xla/service:logical_buffer",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/strings",
         "@llvm-project//llvm:Core",
-        "@tsl//tsl/platform:logging",
-    ],
-)
-
-xla_cc_test(
-    name = "alias_analysis_test",
-    srcs = ["alias_analysis_test.cc"],
-    deps = [
-        ":alias_analysis",
-        "//xla/service:custom_call_status_public_headers",
-        "//xla/service:custom_call_target_registry",
-        "//xla/service:hlo_parser",
-        "//xla/service/cpu/tests:cpu_codegen_test",
-        "//xla/tests:filecheck",
-        "@tsl//tsl/platform:test",
     ],
 )
 
@@ -64,31 +71,45 @@ cc_library(
     name = "llvm_util",
     srcs = ["llvm_util.cc"],
     hdrs = ["llvm_util.h"],
+    local_defines = if_cuda_is_configured(["GOOGLE_CUDA=1"]),
     deps = [
         ":llvm_type_conversion_util",
-        "//xla:debug_options_flags",
         "//xla:literal",
         "//xla:shape_util",
-        "//xla:types",
         "//xla:util",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/service:dump",
         "//xla/service:hlo_module_config",
-        "//xla/service:name_uniquer",
         "//xla/service/cpu:cpu_options",
+        "//xla/tsl/platform:byte_order",
+        "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/types:span",
         "@llvm-project//llvm:Core",
         "@llvm-project//llvm:Support",
-        "@llvm-project//llvm:Target",
         "@llvm-project//llvm:TargetParser",
         "@llvm-project//llvm:TransformUtils",
         "@llvm-project//mlir:IR",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/profiler/lib:scoped_annotation",
+    ],
+)
+
+xla_cc_test(
+    name = "llvm_util_test",
+    srcs = ["llvm_util_test.cc"],
+    deps = [
+        ":llvm_util",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//llvm:AsmParser",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//llvm:ir_headers",
     ],
 )
 
@@ -104,11 +125,29 @@ cc_library(
 
 cc_library(
     name = "llvm_command_line_options",
+    srcs = ["llvm_command_line_options.cc"],
     hdrs = ["llvm_command_line_options.h"],
     deps = [
+        "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/hash",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
         "@llvm-project//llvm:Support",
-        "@tsl//tsl/platform:logging",
+    ],
+)
+
+xla_cc_test(
+    name = "llvm_command_line_options_test",
+    srcs = ["llvm_command_line_options_test.cc"],
+    deps = [
+        ":llvm_command_line_options",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -121,15 +160,16 @@ cc_library(
         ":llvm_util",
         "//xla:permutation_util",
         "//xla:shape_util",
-        "//xla:statusor",
         "//xla:types",
         "//xla:util",
         "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
         "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@llvm-project//llvm:Core",
-        "@tsl//tsl/platform:logging",
+        "@llvm-project//llvm:Support",
     ],
 )
 
@@ -143,11 +183,13 @@ cc_library(
         "//xla:shape_util",
         "//xla:types",
         "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
         "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@llvm-project//llvm:Core",
-        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/platform",
     ],
 )
 
@@ -159,15 +201,17 @@ cc_library(
         ":ir_array",
         ":llvm_loop",
         "//xla:shape_util",
-        "//xla:status_macros",
-        "//xla:statusor",
-        "//xla:types",
-        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
         "@llvm-project//llvm:Core",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:protobuf",
     ],
 )
 
@@ -178,19 +222,20 @@ cc_library(
     deps = [
         ":ir_array",
         ":llvm_util",
-        ":tuple_ops",
+        ":loop_emitter",
         "//xla:shape_util",
-        "//xla:status_macros",
-        "//xla:statusor",
         "//xla:util",
         "//xla/hlo/ir:hlo",
         "//xla/service:elemental_ir_emitter",
-        "//xla/service:fusion_node_indexing_evaluation",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
         "@llvm-project//llvm:Core",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:statusor",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//llvm:TargetParser",
     ],
 )
 
@@ -203,35 +248,20 @@ cc_library(
         ":ir_array",
         ":llvm_util",
         ":loop_emitter",
+        "//xla:shape_util",
         "//xla/hlo/ir:hlo",
         "//xla/service:buffer_assignment",
-        "//xla/service:elemental_ir_emitter",
         "//xla/service/cpu:backend_config_proto_cc",
-        "//xla/service/gpu:launch_dimensions",
-        "//xla/service/gpu:parallel_loop_emitter",
-    ],
-)
-
-cc_library(
-    name = "sort_util",
-    srcs = ["sort_util.cc"],
-    hdrs = ["sort_util.h"],
-    deps = [
-        ":ir_array",
-        ":kernel_support_library",
-        ":llvm_loop",
-        ":llvm_util",
-        ":loop_emitter",
-        "//xla:shape_util",
-        "//xla:util",
-        "//xla/service/gpu:launch_dimensions",
-        "//xla/service/gpu:parallel_loop_emitter",
-        "//xla/service/gpu:target_util",
-        "@com_google_absl//absl/strings",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
-        "@llvm-project//llvm:Core",
-        "@llvm-project//llvm:Support",
-        "@tsl//tsl/platform:status",
+        "@llvm-project//llvm:ir_headers",
     ],
 )
 
@@ -244,11 +274,13 @@ cc_library(
         ":llvm_type_conversion_util",
         ":llvm_util",
         "//xla:shape_util",
-        "//xla:types",
         "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@llvm-project//llvm:Core",
-        "@tsl//tsl/platform:logging",
     ],
 )
 
@@ -260,7 +292,15 @@ cc_library(
         ":llvm_loop",
         ":llvm_type_conversion_util",
         ":llvm_util",
+        "//xla/service:hlo_module_config",
+        "//xla/tsl/platform:errors",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
         "@llvm-project//llvm:Core",
     ],
 )
@@ -270,18 +310,12 @@ cc_library(
     srcs = ["buffer_assignment_util.cc"],
     hdrs = ["buffer_assignment_util.h"],
     deps = [
+        "//xla:literal",
+        "//xla/hlo/ir:hlo",
         "//xla/service:buffer_assignment",
+        "//xla/service:buffer_value",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
-    ],
-)
-
-cc_library(
-    name = "math_ops",
-    srcs = ["math_ops.cc"],
-    hdrs = ["math_ops.h"],
-    deps = [
-        ":llvm_util",
-        "@llvm-project//llvm:Core",
     ],
 )
 
@@ -294,12 +328,48 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "error_handler",
+    srcs = ["error_handler.cc"],
+    hdrs = ["error_handler.h"],
+    deps = [
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/strings:string_view",
+        "@llvm-project//llvm:Support",
+        "@tsl//tsl/platform:stacktrace",
+    ],
+)
+
+xla_cc_test(
+    name = "error_handler_test",
+    srcs = ["error_handler_test.cc"],
+    deps = [
+        ":error_handler",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//llvm:Support",
+    ],
+)
+
 xla_cc_test(
     name = "ir_array_test",
     srcs = ["ir_array_test.cc"],
     deps = [
         ":ir_array",
-        "//xla:test",
+        ":llvm_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/testlib:filecheck",
         "//xla/tests:xla_internal_test_main",
+        "@com_google_googletest//:gtest",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//llvm:ir_headers",
     ],
 )

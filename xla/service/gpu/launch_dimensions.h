@@ -1,4 +1,4 @@
-/* Copyright 2020 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2020 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,11 +16,17 @@ limitations under the License.
 #ifndef XLA_SERVICE_GPU_LAUNCH_DIMENSIONS_H_
 #define XLA_SERVICE_GPU_LAUNCH_DIMENSIONS_H_
 
-#include <ostream>
+#include <cstdint>
 #include <string>
+#include <tuple>
 
-#include "xla/service/gpu/gpu_device_info.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
+#include "xla/runtime/work_dimensions.h"
+#include "xla/service/gpu/launch_dimensions.pb.h"
 #include "xla/shape.h"
+#include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/launch_dim.h"
 
 namespace xla {
 namespace gpu {
@@ -29,114 +35,83 @@ namespace gpu {
 // number of threads per block.
 class LaunchDimensions {
  public:
-  struct Dim3D {
-    int64_t x, y, z;
-
-    bool operator==(const Dim3D& other) const {
-      return x == other.x && y == other.y && z == other.z;
-    }
-
-    bool operator!=(const Dim3D& other) const { return !(*this == other); }
-  };
-
   // The default constructor creates a launch dimension that indicate
   // single-threaded execution.
-  LaunchDimensions()
-      : block_counts_({1, 1, 1}), thread_counts_per_block_({1, 1, 1}) {}
+  constexpr LaunchDimensions() = default;
 
-  LaunchDimensions(int64_t block_x_count, int64_t thread_x_count_per_block)
-      : block_counts_({block_x_count, 1, 1}),
-        thread_counts_per_block_({thread_x_count_per_block, 1, 1}) {}
+  constexpr LaunchDimensions(uint64_t block_x_count,
+                             uint64_t thread_x_count_per_block)
+      : block_counts_(block_x_count, 1, 1),
+        thread_counts_per_block_(thread_x_count_per_block, 1, 1) {}
 
-  LaunchDimensions(const Dim3D& block_counts,
-                   const Dim3D& thread_counts_per_block)
+  constexpr LaunchDimensions(const se::BlockDim& block_counts,
+                             const se::ThreadDim& thread_counts_per_block)
       : block_counts_(block_counts),
         thread_counts_per_block_(thread_counts_per_block) {}
 
-  Dim3D block_counts() const { return block_counts_; }
+  const se::BlockDim& block_counts() const { return block_counts_; }
 
-  Dim3D thread_counts_per_block() const { return thread_counts_per_block_; }
+  const se::ThreadDim& thread_counts_per_block() const {
+    return thread_counts_per_block_;
+  }
+
+  // Returns the total number of blocks.
+  uint64_t num_blocks() const {
+    return block_counts_.x * block_counts_.y * block_counts_.z;
+  }
 
   // Returns the total number of threads in a block.
-  int64_t total_nb_threads() const {
+  uint64_t num_threads_per_block() const {
     return thread_counts_per_block_.x * thread_counts_per_block_.y *
            thread_counts_per_block_.z;
   }
 
-  int64_t launch_bound() const {
-    return block_counts_.x * thread_counts_per_block_.x * block_counts_.y *
-           thread_counts_per_block_.y * block_counts_.z *
-           thread_counts_per_block_.z;
+  uint64_t launch_bound() const {
+    return num_blocks() * num_threads_per_block();
   }
 
   std::string ToString() const {
-    return absl::StrCat(
-        "blocks: {", block_counts_.x, ", ", block_counts_.y, ", ",
-        block_counts_.z, "}, threads/block: {", thread_counts_per_block_.x,
-        ", ", thread_counts_per_block_.y, ", ", thread_counts_per_block_.z,
-        "}, shared memory [B]: ", shared_mem_bytes_);
+    return absl::StrCat("blocks: {", block_counts_.x, ", ", block_counts_.y,
+                        ", ", block_counts_.z, "}, threads/block: {",
+                        thread_counts_per_block_.x, ", ",
+                        thread_counts_per_block_.y, ", ",
+                        thread_counts_per_block_.z, "}");
   }
 
-  void SetSharedMemBytes(uint32_t shared_mem_bytes) {
-    shared_mem_bytes_ = shared_mem_bytes;
+  static absl::StatusOr<LaunchDimensions> FromWorkDimensions(
+      const WorkDimensions& work_dimensions);
+  WorkDimensions AsWorkDimensions() const;
+
+  LaunchDimensionsProto ToProto() const;
+  static absl::StatusOr<LaunchDimensions> FromProto(
+      const LaunchDimensionsProto& proto);
+
+  friend bool operator==(const LaunchDimensions& lhs,
+                         const LaunchDimensions& rhs) {
+    return std::tie(lhs.block_counts_, lhs.thread_counts_per_block_) ==
+           std::tie(rhs.block_counts_, rhs.thread_counts_per_block_);
   }
 
-  uint32_t SharedMemBytes() const { return shared_mem_bytes_; }
-
-  bool operator==(const LaunchDimensions& other) const {
-    return block_counts_ == other.block_counts_ &&
-           thread_counts_per_block_ == other.thread_counts_per_block_ &&
-           shared_mem_bytes_ == other.shared_mem_bytes_;
-  }
-
-  bool operator!=(const LaunchDimensions& other) const {
-    return !(*this == other);
+  friend bool operator!=(const LaunchDimensions& lhs,
+                         const LaunchDimensions& rhs) {
+    return !(lhs == rhs);
   }
 
  private:
-  Dim3D block_counts_;
-  Dim3D thread_counts_per_block_;
-
-  // Dynamic shared memory size.
-  uint32_t shared_mem_bytes_ = 0;
-};
-
-std::ostream& operator<<(std::ostream& out,
-                         const LaunchDimensions& launch_dims);
-
-struct LaunchDimensionsConfig {
-  // The kernel implementation will be unrolled if `unroll_factor` is
-  // greater than one.
-  int unroll_factor = 1;
-  // A wave is a group of blocks that execute at the same time on the
-  // GPU. If there are more blocks then the number that can run
-  // concurrently, there are multiple waves of blocks running
-  // sequentially.  If `few_waves` is true, each thread will loop over
-  // a block of unroll_factor elements. Otherwise each thread will
-  // handle only unroll_factor.
-  bool few_waves = false;
-  // If `row_optimized` is true, then the block size will equal to
-  // `hlo.shape().dimensions().back()/unroll_factor`.
-  // Currently few_waves and row_vectorized do not work together.
-  bool row_vectorized = false;
-
-  std::string ToString() {
-    return absl::StrCat("unroll_factor=", unroll_factor,
-                        ", few_waves=", few_waves,
-                        ", row_vectorized=", row_vectorized);
-  }
+  se::BlockDim block_counts_;
+  se::ThreadDim thread_counts_per_block_;
 };
 
 // Returns -1 if the shape doesn't allow the row vectorization code path.
 // If supported, return the number of threads to use in that case.
-int64_t ThreadsPerBlockRowVectorized(const Shape& shape,
-                                     const GpuDeviceInfo& gpu_device_info,
-                                     LaunchDimensionsConfig dim_config);
+int64_t ThreadsPerBlockRowVectorized(
+    const Shape& shape, const se::DeviceDescription& gpu_device_info,
+    int unroll_factor);
 
 // Calculates the launch dimensions used to invoke `hlo`.
-StatusOr<LaunchDimensions> CalculateLaunchDimensions(
-    const Shape& shape, const GpuDeviceInfo& gpu_device_info,
-    bool use_experimental_block_size, LaunchDimensionsConfig dim_config = {});
+LaunchDimensions CalculateLaunchDimensions(
+    const Shape& shape, const se::DeviceDescription& gpu_device_info,
+    int unroll_factor = 1);
 
 }  // namespace gpu
 }  // namespace xla

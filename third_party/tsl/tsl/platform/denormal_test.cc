@@ -15,10 +15,11 @@ limitations under the License.
 // Testing configuration of denormal state.
 #include "tsl/platform/denormal.h"
 
+#include <cstdint>
 #include <cstring>
 #include <limits>
 
-#include "tsl/platform/test.h"
+#include "xla/tsl/platform/test.h"
 
 namespace tsl {
 namespace port {

@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,12 +15,16 @@ limitations under the License.
 
 #include "xla/array4d.h"
 
+#include <cstdint>
 #include <initializer_list>
 #include <numeric>
 #include <vector>
 
+#include "Eigen/Core"
+#include "absl/log/log.h"
 #include "absl/types/span.h"
-#include "xla/test.h"
+#include "xla/array2d.h"
+#include "xla/hlo/testlib/test.h"
 
 namespace xla {
 namespace {
@@ -179,7 +183,9 @@ TEST(Array4dTest, FillRasterDimensionDepthOne) {
 TEST(Array4dTest, FillWithPzTestDepthOne) {
   Array2D<float> matrix(3, 2);
   std::initializer_list<std::initializer_list<float>> values = {
-      {-3.f, -0.1f}, {0.f, -0.1f}, {3.f, 0.2f},
+      {-3.f, -0.1f},
+      {0.f, -0.1f},
+      {3.f, 0.2f},
   };
   int rowno = 0;
   for (auto row : values) {

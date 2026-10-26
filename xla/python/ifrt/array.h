@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,25 +16,31 @@ limitations under the License.
 #ifndef XLA_PYTHON_IFRT_ARRAY_H_
 #define XLA_PYTHON_IFRT_ARRAY_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
-#include <string>
-#include <utility>
 #include <vector>
 
-#include "llvm/Support/ExtensibleRTTI.h"
+#include "absl/base/attributes.h"
+#include "absl/log/check.h"
+#include "absl/status/statusor.h"
+#include "absl/types/span.h"
+#include "xla/pjrt/pjrt_layout.h"
+#include "xla/python/ifrt/array_spec.h"
 #include "xla/python/ifrt/dtype.h"
-#include "xla/python/ifrt/future.h"
+#include "xla/python/ifrt/layout.h"
+#include "xla/python/ifrt/rtti.h"
 #include "xla/python/ifrt/shape.h"
 #include "xla/python/ifrt/sharding.h"
 #include "xla/python/ifrt/value.h"
-#include "xla/status.h"
-#include "tfrt/concurrency/ref_count.h"  // from @tf_runtime
+#include "xla/tsl/concurrency/future.h"
+#include "xla/tsl/concurrency/ref_count.h"
 
 namespace xla {
 namespace ifrt {
 
 class Client;
+class Array;
 
 // Semantics for operations that may copy or move sharded buffers in an array.
 enum class ArrayCopySemantics : int {
@@ -53,9 +59,11 @@ enum class ArrayCopySemantics : int {
   kDonateInput,
 };
 
+using ArrayRef = tsl::RCReference<Array>;
+
 // Represents a single logical array from one or more sharded buffers.
 // Implementations must be thread-safe.
-class Array : public llvm::RTTIExtends<Array, Value> {
+class Array : public RTTIExtends<Array, Value> {
  public:
   Array() = default;
 
@@ -65,21 +73,36 @@ class Array : public llvm::RTTIExtends<Array, Value> {
   Array& operator=(const Array&) = delete;
   Array& operator=(Array&&) = delete;
 
+  // Gets dtype shape sharding layout in a single call.
+  virtual const ArraySpec& array_spec() const = 0;
+
+  // TODO(zuguang) make these methods non-virtual, the sharding and layout
+  // methods need some clean up though.
   virtual DType dtype() const = 0;
   virtual const Shape& shape() const = 0;
   virtual const Sharding& sharding() const = 0;
-  virtual std::shared_ptr<const Sharding> shared_ptr_sharding() const = 0;
+  virtual ShardingRef shared_ptr_sharding() const = 0;
+  // The device memory layout for each shard of the Array. All shards are
+  // assumed to have the same layout. `nullptr` indicates a default layout; the
+  // user can obtain a concrete layout by calling
+  // `Client::GetDefaultPjRtLayout()`.
+  virtual absl::StatusOr<std::shared_ptr<const xla::PjRtLayout>> pjrt_layout()
+      const = 0;
+  virtual LayoutRef layout() const = 0;
 
   // Breaks an array up into per-device arrays. This is the elimination
   // counterpart of `Client::AssembleArrayFromSingleDeviceArrays()`.
-  virtual StatusOr<std::vector<tsl::RCReference<Array>>>
-  DisassembleIntoSingleDeviceArrays(ArrayCopySemantics semantics) = 0;
+  virtual absl::StatusOr<std::vector<ArrayRef>>
+  DisassembleIntoSingleDeviceArrays(
+      ArrayCopySemantics array_copy_semantics,
+      SingleDeviceShardSemantics single_device_shard_semantics) = 0;
+
   // Returns a shard of an Array which is fully replicated. This is an
   // optimization so that instead of disassembling into all the shards when
   // the Array is fully replicated, we can just get 1 shard out and create an
   // Array from it.
-  virtual StatusOr<tsl::RCReference<Array>> FullyReplicatedShard(
-      ArrayCopySemantics semantics);
+  virtual absl::StatusOr<ArrayRef> FullyReplicatedShard(
+      ArrayCopySemantics semantics) = 0;
 
   // Fetches the array to host and stores it as unreplicated, unsharded data.
   //
@@ -108,29 +131,9 @@ class Array : public llvm::RTTIExtends<Array, Value> {
   // they use DMA) and across different `DType` and `Shape`. We may need to add
   // an API that lets users query the alignment requirement of the specific
   // implementation.
-  ABSL_MUST_USE_RESULT
-  virtual Future<Status> CopyToHostBuffer(
+  [[nodiscard]]
+  virtual tsl::Future<> CopyToHostBuffer(
       void* data, std::optional<absl::Span<const int64_t>> byte_strides,
-      ArrayCopySemantics semantics) = 0;
-
-  // Copies the array with a new sharding, creating a new array.
-  //
-  // Resharding falls into one of the three cases:
-  //
-  // * Metadata-only resharding: Use a new sharding for the array that expects
-  //   the same physical layout of underlying buffers on the same devices.
-  // * 1-to-1 buffer copy: Copy individual buffers to different devices without
-  //   altering their physical layout.
-  // * M-to-N buffer resharding: Shuffle the buffer data across the boundary of
-  //   the buffers, changing their physical layout.
-  //
-  // Implementations may return `UNIMPLEMENTED` if they do not know how to copy
-  // or reshuffle the data to match the new sharding.
-  //
-  // It may fail if the buffer data would be sent from/to an unaddressable
-  // device.
-  virtual StatusOr<tsl::RCReference<Array>> Reshard(
-      std::shared_ptr<const Sharding> new_sharding,
       ArrayCopySemantics semantics) = 0;
 
   static char ID;  // NOLINT
@@ -138,8 +141,7 @@ class Array : public llvm::RTTIExtends<Array, Value> {
 
 // Convenience function to create a list of pointer Arrays from a list of
 // RCReference<Array>s.
-std::vector<Array*> MakeArrayPointerList(
-    absl::Span<const tsl::RCReference<Array>> arrays);
+std::vector<Array*> MakeArrayPointerList(absl::Span<const ArrayRef> arrays);
 
 }  // namespace ifrt
 }  // namespace xla

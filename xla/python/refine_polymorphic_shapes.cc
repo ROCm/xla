@@ -14,28 +14,50 @@ limitations under the License.
 ==============================================================================*/
 #include "xla/python/refine_polymorphic_shapes.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/strings/str_cat.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/Regex.h"
+#include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/Bytecode/BytecodeWriter.h"  // from @llvm-project
-#include "mlir/Dialect/Func/Extensions/AllExtensions.h"  // from @llvm-project
-#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
-#include "mlir/IR/ValueRange.h"  // from @llvm-project
-#include "mlir/IR/Verifier.h"  // from @llvm-project
-#include "mlir/Parser/Parser.h"  // from @llvm-project
-#include "mlir/Pass/PassManager.h"  // from @llvm-project
-#include "mlir/Support/LogicalResult.h"  // from @llvm-project
-#include "mlir/Transforms/Passes.h"  // from @llvm-project
-#include "stablehlo/dialect/ChloOps.h"  // from @stablehlo
-#include "stablehlo/dialect/StablehloOps.h"  // from @stablehlo
-#include "stablehlo/transforms/Passes.h"  // from @stablehlo
+#include "mlir/Bytecode/BytecodeWriter.h"
+#include "mlir/Dialect/Func/Extensions/AllExtensions.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/IR/OwningOpRef.h"
+#include "mlir/IR/Region.h"
+#include "mlir/IR/Value.h"
+#include "mlir/IR/ValueRange.h"
+#include "mlir/IR/Verifier.h"
+#include "mlir/Parser/Parser.h"
+#include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Support/LogicalResult.h"
+#include "mlir/Support/TypeID.h"
+#include "mlir/Transforms/Passes.h"
+#include "shardy/dialect/sdy/ir/dialect.h"
+#include "stablehlo/dialect/Base.h"
+#include "stablehlo/dialect/ChloOps.h"
+#include "stablehlo/dialect/StablehloOps.h"
 #include "xla/mlir/utils/error_util.h"
-#include "tsl/platform/errors.h"
+#include "xla/mlir_hlo/mhlo/transforms/passes.h"
+#include "xla/mlir_hlo/stablehlo_ext/transforms/passes.h"
+#include "xla/service/spmd/shardy/round_trip_common/import_constants.h"
+#include "xla/service/spmd/shardy/sdy_round_trip/pipelines.h"
+#include "xla/service/spmd/shardy/utils.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/logging.h"
 
 namespace xla {
 
@@ -68,7 +90,7 @@ struct CheckShapeAssertionsPass
     this->enable_shape_assertions = enable_shape_assertions;
   }
 
-  CheckShapeAssertionsPass(const CheckShapeAssertionsPass &pass) {
+  CheckShapeAssertionsPass(const CheckShapeAssertionsPass& pass) {
     enable_shape_assertions = pass.enable_shape_assertions;
   }
 
@@ -76,7 +98,7 @@ struct CheckShapeAssertionsPass
   void runOnOperation() final {
     mlir::func::FuncOp func_op = getOperation();
     func_op.walk([this](mlir::stablehlo::CustomCallOp op) {
-      if (!op.getCallTargetName().equals(shapeAssertionName)) return;
+      if (op.getCallTargetName() != shapeAssertionName) return;
       if (!enable_shape_assertions) {
         op.erase();
         return;
@@ -122,7 +144,7 @@ struct CheckShapeAssertionsPass
     int nrErrorMessageInputs = op.getNumOperands() - 1;
     if (op->getNumResults() != 0)
       return op.emitError("expects size(results) = 0");
-    for (const auto &attr : op->getAttrs()) {
+    for (const auto& attr : op->getAttrs()) {
       if (attr.getName() != "api_version" &&
           attr.getName() != "backend_config" &&
           attr.getName() != "call_target_name" &&
@@ -131,16 +153,14 @@ struct CheckShapeAssertionsPass
         return op.emitError()
                << attr.getName() << " is not a supported attribute";
     }
-    if (!op.getBackendConfig().empty())
+    if (!op.hasEmptyBackendConfig())
       return op.emitError() << "expects an empty backend_config";
-    if (!op.getCallTargetName().equals(shapeAssertionName))
+    if (op.getCallTargetName() != shapeAssertionName)
       return op.emitError() << "expects @shape_assertion";
-    if (!op.getHasSideEffect())
-      return op.emitError() << "expects has_side_effect=true";
 
     // input[0] (assert_what) : tensor<i1>
     auto assertWhatType =
-        op.getInputs()[0].getType().dyn_cast<mlir::ShapedType>();
+        mlir::dyn_cast<mlir::ShapedType>(op.getInputs()[0].getType());
     if (!assertWhatType || !assertWhatType.hasRank() ||
         assertWhatType.getRank() != 0 ||
         !assertWhatType.getElementType().isSignlessInteger() ||
@@ -151,7 +171,7 @@ struct CheckShapeAssertionsPass
     // input[1:] (error_message_inputs) : tensor<i32> or tensor<i64>
     for (int i = 0; i < nrErrorMessageInputs; ++i) {
       auto errorMessageInputType =
-          op.getInputs()[i + 1].getType().dyn_cast<mlir::ShapedType>();
+          mlir::dyn_cast<mlir::ShapedType>(op.getInputs()[i + 1].getType());
       if (!errorMessageInputType || !errorMessageInputType.hasRank() ||
           errorMessageInputType.getRank() != 0 ||
           !errorMessageInputType.getElementType().isSignlessInteger() ||
@@ -166,36 +186,43 @@ struct CheckShapeAssertionsPass
       return op.emitError() << "expects an error_message attribute";
 
     // error_message contains valid format specifiers.
-    std::string errorMessage = getErrorMessage(op).data();
+    llvm::StringRef errorMessage = getErrorMessage(op);
+
     // format specs: "{" index ["," layout] [":" format] "}"
-    llvm::Regex formatSpecifierRE = llvm::Regex("{([0-9]+)[,:}]");
-    do {
-      mlir::SmallVector<llvm::StringRef> formatSpec;
-      if (!formatSpecifierRE.match(errorMessage, &formatSpec)) {
-        break;
-      }
-      int index = std::stoi(formatSpec[1].data());
-      if (!(0 <= index && index < nrErrorMessageInputs)) {
+    size_t spec_begin = errorMessage.find_first_of('{');
+    size_t spec_end = errorMessage.find_first_of(",:}", spec_begin);
+
+    // Check that all specs reference valid input indices.
+    while (spec_begin != llvm::StringRef::npos &&
+           spec_end != llvm::StringRef::npos) {
+      llvm::StringRef index_str =
+          errorMessage.substr(spec_begin + 1, spec_end - spec_begin - 1);
+
+      int32_t index;
+      if (!index_str.getAsInteger(10, index) &&
+          !(0 <= index && index < nrErrorMessageInputs)) {
         return op.emitError()
                << "expects error_message to contain format specifiers with "
                << "error_message_input index less than " << nrErrorMessageInputs
-               << ". Found specifier " << formatSpec[0];
+               << ". Found specifier "
+               << errorMessage.substr(spec_begin, spec_end - spec_begin + 1);
       }
-      errorMessage = formatSpecifierRE.sub("", errorMessage);
-    } while (true);
+
+      spec_begin = errorMessage.find_first_of('{', spec_begin + 1);
+      spec_end = errorMessage.find_first_of(",:}", spec_begin);
+    }
 
     return mlir::success();
   }
 
   llvm::StringRef getErrorMessage(mlir::stablehlo::CustomCallOp op) const {
-    return op->getAttr(errorMessageAttrName)
-        .cast<mlir::StringAttr>()
+    return mlir::cast<mlir::StringAttr>(op->getAttr(errorMessageAttrName))
         .getValue();
   }
 
   std::string formatErrorMessage(
       llvm::StringRef errorMessage,
-      const mlir::SmallVector<int64_t> &errorMessageInputs) const {
+      const mlir::SmallVector<int64_t>& errorMessageInputs) const {
     int nrErrorMessageInputs = errorMessageInputs.size();
     auto errorMessageFormat = errorMessage.data();
     if (nrErrorMessageInputs == 0) return errorMessageFormat;
@@ -203,13 +230,13 @@ struct CheckShapeAssertionsPass
       return (idx < nrErrorMessageInputs ? errorMessageInputs[idx] : -1);
     };
     return llvm::formatv(
-        errorMessageFormat, errInput(0), errInput(1), errInput(2), errInput(3),
-        errInput(4), errInput(5), errInput(6), errInput(7), errInput(8),
-        errInput(9), errInput(10), errInput(11), errInput(12), errInput(13),
-        errInput(14), errInput(15), errInput(16), errInput(17), errInput(18),
-        errInput(19), errInput(20), errInput(21), errInput(22), errInput(23),
-        errInput(24), errInput(25), errInput(26), errInput(27), errInput(28),
-        errInput(29), errInput(30), errInput(31));
+        false, errorMessageFormat, errInput(0), errInput(1), errInput(2),
+        errInput(3), errInput(4), errInput(5), errInput(6), errInput(7),
+        errInput(8), errInput(9), errInput(10), errInput(11), errInput(12),
+        errInput(13), errInput(14), errInput(15), errInput(16), errInput(17),
+        errInput(18), errInput(19), errInput(20), errInput(21), errInput(22),
+        errInput(23), errInput(24), errInput(25), errInput(26), errInput(27),
+        errInput(28), errInput(29), errInput(30), errInput(31));
   }
 
   mlir::StringRef getArgument() const override {
@@ -230,7 +257,7 @@ struct CheckShapeAssertionsPass
 
 absl::Status RefinePolymorphicShapes(mlir::ModuleOp module,
                                      bool enable_shape_assertions) {
-  mlir::MLIRContext *context = module->getContext();
+  mlir::MLIRContext* context = module->getContext();
   if (VLOG_IS_ON(3)) context->disableMultithreading();
 
   // Verify the module before running passes on it.
@@ -246,8 +273,8 @@ absl::Status RefinePolymorphicShapes(mlir::ModuleOp module,
 
   mlir::PassManager pm(context);
   if (VLOG_IS_ON(3)) {
-    auto print_before = [](mlir::Pass *, mlir::Operation *) { return true; };
-    auto print_after = [](mlir::Pass *, mlir::Operation *) { return true; };
+    auto print_before = [](mlir::Pass*, mlir::Operation*) { return true; };
+    auto print_after = [](mlir::Pass*, mlir::Operation*) { return true; };
     pm.enableIRPrinting(print_before, print_after, /*printModuleScope=*/true,
                         /*printAfterOnlyOnChange=*/true);
   }
@@ -255,9 +282,12 @@ absl::Status RefinePolymorphicShapes(mlir::ModuleOp module,
   // TODO(necula): we should not need the inliner.
   pm.addPass(mlir::createInlinerPass());
   pm.addPass(mlir::createCSEPass());
-  pm.addPass(mlir::stablehlo::createStablehloRefineShapesPass());
   pm.addNestedPass<mlir::func::FuncOp>(
-      mlir::stablehlo::createStablehloCanonicalizeDynamismPass());
+      mlir::stablehlo_ext::createChloRecomposeOpsPass());
+  pm.addPass(mlir::stablehlo_ext::createStablehloRefineShapesPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::stablehlo_ext::createStablehloCanonicalizeDynamismPass());
+  pm.addPass(mlir::createSymbolDCEPass());
   pm.addNestedPass<mlir::func::FuncOp>(
       std::make_unique<CheckShapeAssertionsPass>(enable_shape_assertions));
   if (!mlir::succeeded(pm.run(module))) {
@@ -269,14 +299,16 @@ absl::Status RefinePolymorphicShapes(mlir::ModuleOp module,
 }
 
 absl::Status RefinePolymorphicShapes(llvm::StringRef module_str,
-                                     llvm::raw_ostream &os,
+                                     llvm::raw_ostream& os,
                                      bool enable_shape_assertions,
-                                     bool validate_static_shapes) {
+                                     bool validate_static_shapes,
+                                     bool enable_shardy) {
   mlir::MLIRContext context;
   if (VLOG_IS_ON(3)) context.disableMultithreading();
   context.loadDialect<mlir::func::FuncDialect>();
   context.loadDialect<mlir::stablehlo::StablehloDialect>();
   context.loadDialect<mlir::chlo::ChloDialect>();
+  context.loadDialect<mlir::sdy::SdyDialect>();
 
   mlir::DialectRegistry registry;
   mlir::func::registerAllExtensions(registry);
@@ -288,10 +320,27 @@ absl::Status RefinePolymorphicShapes(llvm::StringRef module_str,
   if (!module) {
     return absl::InvalidArgumentError("Cannot parse module.");
   }
-  TF_RETURN_IF_ERROR(RefinePolymorphicShapes(*module, enable_shape_assertions));
-  if (validate_static_shapes) TF_RETURN_IF_ERROR(ValidateStaticShapes(*module));
+
+  ABSL_RETURN_IF_ERROR(
+      RefinePolymorphicShapes(*module, enable_shape_assertions));
+  if (validate_static_shapes)
+    ABSL_RETURN_IF_ERROR(ValidateStaticShapes(*module));
   if (mlir::failed(mlir::writeBytecodeToFile(*module, os))) {
     return absl::InternalError("Cannot serialize module.");
+  }
+  // NOTE: JAX shape refinement has `@shape_assertion` custom calls that
+  // require constant folding. As such, we have to delay it until after shape
+  // refinement.
+  if (enable_shardy) {
+    mlir::PassManager pm(module.get()->getName(),
+                         mlir::OpPassManager::Nesting::Implicit);
+    pm.addNestedPass<mlir::func::FuncOp>(xla::sdy::createImportConstantsPass());
+    mlir::BaseScopedDiagnosticHandler diag_handler(module.get()->getContext());
+    if (mlir::failed(pm.run(*module))) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Error importing Sdy constants: ",
+                       diag_handler.ConsumeStatus().ToString()));
+    }
   }
   return absl::OkStatus();
 }
@@ -301,16 +350,16 @@ absl::Status ValidateStaticShapes(mlir::ModuleOp module) {
   bool moduleHasDynamicShapes = false;
   bool moduleHasShapeAssertions = false;
 
-  module->walk([&](mlir::Operation *op) {
+  module->walk([&](mlir::Operation* op) {
     // It's sufficient to only check results because operands either come from
     // results or from block arguments which are checked below.
     auto hasDynamicShape = [](mlir::Value value) {
-      auto shaped_type = value.getType().dyn_cast<mlir::ShapedType>();
+      auto shaped_type = mlir::dyn_cast<mlir::ShapedType>(value.getType());
       return shaped_type ? !shaped_type.hasStaticShape() : false;
     };
     bool opHasDynamicShapes = false;
     opHasDynamicShapes |= llvm::any_of(op->getResults(), hasDynamicShape);
-    for (mlir::Region &region : op->getRegions()) {
+    for (mlir::Region& region : op->getRegions()) {
       opHasDynamicShapes |=
           llvm::any_of(region.getArguments(), hasDynamicShape);
     }
@@ -320,8 +369,7 @@ absl::Status ValidateStaticShapes(mlir::ModuleOp module) {
     }
 
     auto customCall = mlir::dyn_cast<mlir::stablehlo::CustomCallOp>(op);
-    if (customCall &&
-        customCall.getCallTargetName().equals(shapeAssertionName)) {
+    if (customCall && customCall.getCallTargetName() == shapeAssertionName) {
       moduleHasShapeAssertions = true;
       op->emitOpError() << "has residual shape assertions";
     }

@@ -1,4 +1,4 @@
-/* Copyright 2020 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2020 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,26 +16,58 @@ limitations under the License.
 #ifndef XLA_SERVICE_SPMD_SPMD_PARTITIONER_UTIL_H_
 #define XLA_SERVICE_SPMD_SPMD_PARTITIONER_UTIL_H_
 
+#include <algorithm>
+#include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "xla/hlo/ir/hlo_casting_utils.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/types/span.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/ir/hlo_sharding.h"
+#include "xla/hlo/ir/replica_group.h"
+#include "xla/hlo/transforms/simplifiers/hlo_dce.h"
 #include "xla/hlo/utils/hlo_sharding_util.h"
+#include "xla/literal.h"
 #include "xla/literal_util.h"
+#include "xla/service/collective_ops_utils.h"
 #include "xla/service/spmd/spmd_partitioner.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/util.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace spmd {
+
+Window GenNewWindow(const HloInstruction* original_dot,
+                    const HloInstruction* dot_lhs,
+                    const HloInstruction* dot_rhs, int64_t lhs_concat_dim,
+                    int64_t rhs_concat_dim, bool windowed_at_contracting_dims,
+                    bool windowed_at_batch_dims);
+
+ConvolutionDimensionNumbers GenNewConvDNums(
+    const HloInstruction* original_dot, const HloInstruction* dot_lhs,
+    const HloInstruction* dot_rhs, int64_t lhs_concat_dim,
+    int64_t rhs_concat_dim, bool windowed_at_contracting_dims,
+    bool windowed_at_batch_dims,
+    absl::Span<const int64_t> lhs_to_output_indices,
+    absl::Span<const int64_t> rhs_to_output_indices,
+    const Shape& new_dot_shape);
 
 template <typename T>
 using IsCompOrCompBuilder =
@@ -58,6 +90,7 @@ HloInstruction* CreateConstantBase(const Shape& shape, Literal value, T* b,
                                                               PrimitiveType)) {
   if (shape.IsTuple()) {
     std::vector<HloInstruction*> elements;
+    elements.reserve(ShapeUtil::TupleElementCount(shape));
     for (int64_t i = 0; i < ShapeUtil::TupleElementCount(shape); ++i) {
       elements.push_back(
           CreateConstantBase(ShapeUtil::GetTupleElementShape(shape, i),
@@ -71,7 +104,7 @@ HloInstruction* CreateConstantBase(const Shape& shape, Literal value, T* b,
   }
   auto c = b->AddInstruction(HloInstruction::CreateConstant(
       literal_creator(std::move(value), shape.element_type())));
-  if (shape.rank() == 0) {
+  if (shape.dimensions().size() == 0) {
     return c;
   }
   return b->AddInstruction(HloInstruction::CreateBroadcast(shape, c, {}));
@@ -190,7 +223,7 @@ HloInstruction* PadToShape(HloInstruction* hlo, const Shape& padded_shape, T* b,
     return hlo;
   }
   PaddingConfig padding_config;
-  for (int64_t i = 0; i < padded_shape.rank(); ++i) {
+  for (int64_t i = 0; i < padded_shape.dimensions().size(); ++i) {
     auto padding_config_dim = padding_config.add_dimensions();
     padding_config_dim->set_edge_padding_low(0);
     padding_config_dim->set_interior_padding(0);
@@ -407,8 +440,8 @@ GetReshardAllToAllSourceTargetDims(const HloSharding& source,
                                    const HloSharding& target);
 
 // Returns whether the resharding can be done via collective-permute.
-bool CanReshardWithCollectivePermute(const HloSharding& source,
-                                     const HloSharding& target);
+bool CanReshardWithCollectivePermute(const HloSharding& source_input,
+                                     const HloSharding& target_input);
 
 // Returns a new GroupedSharding that has the same group definition of
 // `reference`.
@@ -439,20 +472,23 @@ Shape GetPerGroupBaseShape(
 // Returns the partition id within a group.
 HloInstruction* GetInGroupPartitionId(
     HloInstruction* partition_id,
-    const std::vector<std::vector<int64_t>>& device_groups, SpmdBuilder* b);
+    const hlo_sharding_util::DeviceGroupTileAssignment& device_groups,
+    SpmdBuilder* b);
 
 // Creates the nested partitioner state for in-group partitioning.
 PartitionedHlo::PartitioningState CreatePerGroupPartitioningState(
     const PartitionedHlo::PartitioningState& state,
-    const std::vector<std::vector<int64_t>>& device_groups, SpmdBuilder* b);
+    const hlo_sharding_util::DeviceGroupTileAssignment& device_groups,
+    SpmdBuilder* b);
 
 // Partially shards a replicated HLO into groups along the group dimensions, and
 // within each group data is still replicated.
 HloInstruction* PerGroupSliceFromReplicated(
     HloInstruction* replicated, HloInstruction* partition_id,
-    const std::vector<std::vector<int64_t>>& device_groups,
+    const hlo_sharding_util::DeviceGroupTileAssignment& device_groups,
     absl::Span<const int64_t> group_dims,
-    absl::Span<const int64_t> group_dim_sizes, SpmdBuilder* b);
+    absl::Span<const int64_t> group_dim_sizes, SpmdBuilder* b,
+    std::optional<Literal> pad_value = std::nullopt);
 
 // Pad the shape from partial replicate shape for `dst_sharding`.
 // If dst_sharding needs more padding and per_shard_size increased in
@@ -460,7 +496,7 @@ HloInstruction* PerGroupSliceFromReplicated(
 std::optional<HloInstruction*> PadFromPartialReplicateShape(
     HloInstruction* hlo, const Shape& base_shape,
     const HloSharding& src_sharding, const HloSharding& dst_sharding,
-    const std::vector<int64_t>& expand_tile_dims,
+    absl::Span<const int64_t> expand_tile_dims,
     const SPMDCollectiveOpsCreator& collective_ops_creator,
     int64_t* next_channel_id, HloInstruction* partition_id, SpmdBuilder* b);
 
@@ -472,18 +508,19 @@ std::optional<HloInstruction*> PadFromPartialReplicateShape(
 // {devices=[1,2,2]0,1,2,3 last_tile_dim_replicate}
 // Target sharding is {devices=[2,2]0,1,2,3}, the returned compatible sharding
 // will be sharding={devices=[2,2]0,2,1,3}.
-// If patial replicate sharding is not partial replicate or can't reshard to
+// If partial_sharding is not partial replicate or can't reshard to
 // target_tile_dims by dynamic slice, return std::nullopt.
 // If target_sharding is already compatible, returns it.
 std::optional<HloSharding> PartialReplicateReshardCompatibleSharding(
-    const HloSharding& partial_sharding, const HloSharding& target_sharding);
+    const HloSharding& raw_partial_sharding,
+    const HloSharding& raw_target_sharding);
 
 // Do left halo exchange if all-reduce directly from tile sharding to partial
 // replicate sharding will remove useful data from the source.
 std::optional<HloInstruction*> TileToPartialReplicateHaloExchange(
     HloInstruction* hlo, const Shape& base_shape,
     const HloSharding& src_sharding, const HloSharding& dst_sharding,
-    const std::vector<int64_t>& replicate_dims,
+    absl::Span<const int64_t> replicate_dims,
     const SPMDCollectiveOpsCreator& collective_ops_creator,
     int64_t* next_channel_id, HloInstruction* partition_id, SpmdBuilder* b);
 
@@ -491,7 +528,7 @@ std::optional<HloInstruction*> TileToPartialReplicateHaloExchange(
 // specified device groups. Group order and dimension order are ignored.
 std::optional<std::vector<int64_t>> FindMatchingPartitionedDimsForGrouping(
     const HloSharding& sharding,
-    const std::vector<std::vector<int64_t>>& device_groups);
+    const hlo_sharding_util::DeviceGroupTileAssignment& device_groups);
 
 // Create a sharding that matches the provided source sharding on the
 // specified dimensions. 'target_dims' and 'source_dims' represent the
@@ -509,17 +546,15 @@ HloSharding CreateMatchingShardingOnDims(const Shape& target_shape,
 std::optional<GatherScatterParallelDimSharding>
 GatherScatterOperandsShardedAcrossParallelDims(
     const HloInstruction& operand, const HloInstruction& indices,
-    const hlo_sharding_util::GatherScatterParallelDims& parallel_dims);
+    const hlo_sharding_util::GatherScatterDims& parallel_dims);
 
 // Pattern rewrite preprocessing utilities.
 
 // Returns rotate_amount if the concat(lhs, rhs) is equivalent to rotating the
 // elements along the concat dimension to the right by rotate_amount, where the
-// input of rotation is the shard operand of lhs and rhs. Returns -1 if the
-// pattern is not found.
-int64_t FindRotateRightPattern(const HloInstruction* concat,
-                               const HloInstruction* lhs,
-                               const HloInstruction* rhs);
+// input of rotation is the shard operand of lhs and rhs. Returns std::nullopt
+// if the pattern is not found.
+std::optional<int64_t> FindRotateRightPattern(const HloInstruction* concat);
 
 // Describes the pad with wrap pattern.
 struct PadWithWrapPattern {
@@ -529,12 +564,11 @@ struct PadWithWrapPattern {
   std::vector<const HloInstruction*> rhs_modifiers;
 };
 
-// Returns the `PadWithWrapPattern` if the concat(lhs,mid,rhs) is equivalent to
-// padding mid with wrapping (i.e., padding mid with slices of itself). Return
-// std::nullopt if the pattern is not found.
+// Returns the `PadWithWrapPattern` if the concat(lhs, mid, rhs) is equivalent
+// to padding mid with wrapping (i.e., padding mid with slices of itself).
+// Returns std::nullopt if the pattern is not found.
 std::optional<PadWithWrapPattern> FindPadWithWrapPattern(
-    const HloInstruction* concat, const HloInstruction* lhs,
-    const HloInstruction* mid, const HloInstruction* rhs);
+    const HloInstruction* concat);
 
 // Reshards data for a slice to be happening on such data with the passed
 // parameters.
@@ -561,6 +595,414 @@ std::optional<PartitionedHlo::WindowedInputShardReturnValue> ReshardDataForPad(
 HloInstruction* PadDataFromWindowReshard(
     const PartitionedHlo::WindowedInputShardReturnValue& reshard_operand,
     HloInstruction* pad_value, SpmdBuilder* b);
+
+// Generates partition groups (groups of devices that will communicate via a
+// collective) from the sharding and provided replication_dims. Will prioritize
+// generating V3 format and fallback to V2 or V1 if needed.
+std::unique_ptr<CollectiveDeviceListBase> GetPartitionGroupsForReplication(
+    const HloSharding& sharding, absl::Span<const int64_t> replication_dims,
+    bool enable_rgv3 = true);
+
+// Generates partition groups (groups of devices that will communicate via a
+// collective) across provided target dims with provided group sizes.
+std::unique_ptr<CollectiveDeviceListBase> GetPartitionGroupsAcrossTargetDims(
+    const HloSharding& sharding, absl::Span<const int64_t> target_dims,
+    absl::Span<const int64_t> group_sizes, bool enable_rgv3 = true);
+
+// Expands partition group list across all replicas. Expects that provided
+// partition_group_list utilizes all the partitions.
+IotaReplicaGroupList ExpandPartitionGroupListAcrossReplicas(
+    const IotaReplicaGroupList& partition_group_list, int64_t num_replicas,
+    int64_t num_partitions);
+
+// Expands partition group list across all replicas. Expects that provided
+// partition_group_list utilizes all the partitions.
+MeshAxesReplicaGroupList ExpandPartitionGroupListAcrossReplicas(
+    const MeshAxesReplicaGroupList& partition_group_list, int64_t num_replicas,
+    int64_t num_partitions);
+
+namespace detail {
+
+// Check if a type is SpmdPartitioningVisitor* type.
+template <typename T, typename = void>
+struct IsSpmdPartitioningVisitorPointerType : std::false_type {};
+
+template <typename T>
+struct IsSpmdPartitioningVisitorPointerType<
+    T, std::enable_if_t<std::is_same_v<std::remove_reference_t<T>,
+                                       SpmdPartitioningVisitor*>>>
+    : std::true_type {};
+
+template <typename T>
+inline constexpr bool IsSpmdPartitioningVisitorPointerType_v =
+    IsSpmdPartitioningVisitorPointerType<T>::value;
+
+template <typename T>
+using IsSpmdPartitioningVisitorPointer =
+    std::enable_if_t<IsSpmdPartitioningVisitorPointerType_v<T>, int>;
+
+template <typename T>
+using IsNotSpmdPartitioningVisitorPointer =
+    std::enable_if_t<!IsSpmdPartitioningVisitorPointerType_v<T>, int>;
+
+// Check if a type is SpmdBuilder* type.
+template <typename T, typename = void>
+struct IsSpmdBuilderPointerType : std::false_type {};
+
+template <typename T>
+struct IsSpmdBuilderPointerType<
+    T,
+    std::enable_if_t<std::is_same_v<std::remove_reference_t<T>, SpmdBuilder*>>>
+    : std::true_type {};
+
+template <typename T>
+inline constexpr bool IsSpmdBuilderPointerType_v =
+    IsSpmdBuilderPointerType<T>::value;
+
+template <typename T>
+using IsSpmdBuilderPointer =
+    std::enable_if_t<IsSpmdBuilderPointerType_v<T>, int>;
+
+template <typename T>
+using IsNotSpmdBuilderPointer =
+    std::enable_if_t<!IsSpmdBuilderPointerType_v<T>, int>;
+
+// Check if a type is HloModule* type.
+template <typename T, typename = void>
+struct IsHloModulePointerType : std::false_type {};
+
+template <typename T>
+struct IsHloModulePointerType<
+    T, std::enable_if_t<std::is_same_v<std::remove_reference_t<T>, HloModule*>>>
+    : std::true_type {};
+
+template <typename T>
+inline constexpr bool IsHloModulePointerType_v =
+    IsHloModulePointerType<T>::value;
+
+template <typename T>
+using IsHloModulePointer = std::enable_if_t<IsHloModulePointerType_v<T>, int>;
+
+template <typename T>
+using IsNotHloModulePointer =
+    std::enable_if_t<!IsHloModulePointerType_v<T>, int>;
+
+// Check if a type is PartitionedHlo type.
+template <typename T, typename = void>
+struct IsPartitionedHloType : std::false_type {};
+
+template <typename T>
+struct IsPartitionedHloType<
+    T, std::enable_if_t<std::is_same_v<std::decay_t<T>, PartitionedHlo>>>
+    : std::true_type {};
+
+template <typename T>
+inline constexpr bool IsPartitionedHloType_v = IsPartitionedHloType<T>::value;
+
+template <typename T>
+using IsPartitionedHlo = std::enable_if_t<IsPartitionedHloType_v<T>, int>;
+
+template <typename T>
+using IsNotPartitionedHlo = std::enable_if_t<!IsPartitionedHloType_v<T>, int>;
+
+// Check if a type is iterable type.
+template <typename T, typename = void>
+struct is_iterable : std::false_type {};
+
+template <typename T>
+struct is_iterable<T, std::void_t<decltype(std::declval<T>().begin()),
+                                  decltype(std::declval<T>().end())>>
+    : std::true_type {};
+
+template <typename T>
+inline constexpr bool is_iterable_v = is_iterable<T>::value;
+
+template <typename T>
+using iterable_element_type =
+    std::decay_t<decltype(*std::declval<T>().begin())>;
+
+// Check if a type is iterable container type of PartitionedHlo.
+template <typename T, typename = void>
+struct IsIterablePartitionedHloContainerType : std::false_type {};
+
+template <typename T>
+struct IsIterablePartitionedHloContainerType<
+    T,
+    std::enable_if_t<is_iterable_v<T> &&
+                     std::is_same_v<iterable_element_type<T>, PartitionedHlo>>>
+    : std::true_type {};
+
+template <typename T>
+inline constexpr bool IsIterablePartitionedHloContainerType_v =
+    IsIterablePartitionedHloContainerType<T>::value;
+
+template <typename T>
+using IsIterablePartitionedHloContainer =
+    std::enable_if_t<IsIterablePartitionedHloContainerType_v<T>, int>;
+
+template <typename T>
+using IsNotIterablePartitionedHloContainer =
+    std::enable_if_t<!IsIterablePartitionedHloContainerType_v<T>, int>;
+
+// Create a fake PartitionedHlo object in a fake builder/module as a new
+// parameter.
+template <typename Arg, IsPartitionedHlo<Arg> = 0>
+std::decay_t<Arg> FakePartitionedHlo(Arg&& phlo, HloModule* module,
+                                     int* parameter_count,
+                                     SpmdPartitioningVisitor* fake_visitor) {
+  HloInstruction* param =
+      fake_visitor->builder()
+          ->AddParameter(HloInstruction::CreateParameter(
+              *parameter_count, phlo.hlo()->shape(),
+              "fake_parameter." + std::to_string(*parameter_count)))
+          .value();
+  *parameter_count = *parameter_count + 1;
+  PartitionedHlo fake_phlo = phlo.CloneWithNewHlo(param);
+  PartitionedHlo::PartitioningState fake_state =
+      fake_visitor->MakePartitioningState();
+  fake_state.module = module;
+  fake_phlo.set_state(fake_state);
+  return fake_phlo;
+}
+
+// Create a fake PartitionedHlo container object in a fake builder/module as a
+// number new parameters.
+template <typename Arg, IsIterablePartitionedHloContainer<Arg> = 0>
+std::decay_t<Arg> FakeIterablePartitionedHloContainer(
+    Arg&& phlo_container, HloModule* module, int* parameter_count,
+    SpmdPartitioningVisitor* fake_visitor) {
+  std::vector<iterable_element_type<Arg>> phlos;
+  phlos.reserve(phlo_container.size());
+  for (const PartitionedHlo& phlo : phlo_container) {
+    phlos.push_back(std::move(
+        FakePartitionedHlo(phlo, module, parameter_count, fake_visitor)));
+  }
+  bool is_constructible_from_iterators =
+      std::is_constructible_v<std::decay_t<Arg>, decltype(phlos.begin()),
+                              decltype(phlos.end())>;
+  CHECK(is_constructible_from_iterators);
+  return std::decay_t<Arg>(phlos.begin(), phlos.end());
+}
+
+// Create a fake SpmdPartitioningVisitor*.
+template <typename Arg, IsSpmdPartitioningVisitorPointer<Arg> = 0>
+std::decay_t<Arg> FakeSpmdPartitioningVisitor(
+    Arg&& visitor, SpmdPartitioningVisitor* fake_visitor) {
+  return fake_visitor;
+}
+
+// Create a fake SpmdBuilder*.
+template <typename Arg, IsSpmdBuilderPointer<Arg> = 0>
+std::decay_t<Arg> FakeSpmdBuilder(Arg&& builder,
+                                  SpmdPartitioningVisitor* fake_visitor) {
+  return fake_visitor->builder();
+}
+// Create a fake HloModule*.
+template <typename Arg, IsHloModulePointer<Arg> = 0>
+std::decay_t<Arg> FakeHloModule(Arg&& module, HloModule* fake_module) {
+  return fake_module;
+}
+
+// Modifies SpmdPartitioningVisitor* type objects.
+template <typename Arg, IsSpmdPartitioningVisitorPointer<Arg> = 0>
+std::decay_t<Arg> ArgModifier(Arg&& arg, HloModule* module,
+                              int* parameter_count,
+                              SpmdPartitioningVisitor* fake_visitor) {
+  VLOG(5) << "Faking argument type: " << typeid(arg).name();
+  return FakeSpmdPartitioningVisitor(std::forward<Arg>(arg), fake_visitor);
+}
+
+// Modifies SpmdBuilder* type objects.
+template <typename Arg, IsSpmdBuilderPointer<Arg> = 0>
+std::decay_t<Arg> ArgModifier(Arg&& arg, HloModule* module,
+                              int* parameter_count,
+                              SpmdPartitioningVisitor* fake_visitor) {
+  VLOG(5) << "Faking argument type: " << typeid(arg).name();
+  return FakeSpmdBuilder(std::forward<Arg>(arg), fake_visitor);
+}
+
+// Modifies SpmdPartitioningVisitor* type objects.
+template <typename Arg, IsHloModulePointer<Arg> = 0>
+std::decay_t<Arg> ArgModifier(Arg&& arg, HloModule* module,
+                              int* parameter_count,
+                              SpmdPartitioningVisitor* fake_visitor) {
+  VLOG(5) << "Faking argument type: " << typeid(arg).name();
+  return FakeHloModule(std::forward<Arg>(arg), module);
+}
+
+// Modifies PartitionedHlo type objects.
+template <typename Arg, IsPartitionedHlo<Arg> = 0>
+std::decay_t<Arg> ArgModifier(Arg&& arg, HloModule* module,
+                              int* parameter_count,
+                              SpmdPartitioningVisitor* fake_visitor) {
+  VLOG(5) << "Faking argument type: " << typeid(arg).name();
+  return FakePartitionedHlo(std::forward<Arg>(arg), module, parameter_count,
+                            fake_visitor);
+}
+
+// Modifies PartitionedHlo container type objects.
+template <typename Arg, IsIterablePartitionedHloContainer<Arg> = 0>
+std::decay_t<Arg> ArgModifier(Arg&& arg, HloModule* module,
+                              int* parameter_count,
+                              SpmdPartitioningVisitor* fake_visitor) {
+  VLOG(5) << "Faking argument type: " << typeid(arg).name();
+  return FakeIterablePartitionedHloContainer(std::forward<Arg>(arg), module,
+                                             parameter_count, fake_visitor);
+}
+
+// Modifies nothing, equivalent to no-op.
+template <typename Arg, IsNotSpmdPartitioningVisitorPointer<Arg> = 0,
+          IsNotSpmdBuilderPointer<Arg> = 0, IsNotHloModulePointer<Arg> = 0,
+          IsNotIterablePartitionedHloContainer<Arg> = 0,
+          IsNotPartitionedHlo<Arg> = 0>
+std::decay_t<Arg> ArgModifier(Arg&& arg, HloModule* module,
+                              int* parameter_count,
+                              SpmdPartitioningVisitor* fake_visitor) {
+  VLOG(5) << "Passing through argument type: " << typeid(arg).name();
+  return arg;
+}
+
+// Finds SpmdPartitioningVisitor* object in an arg list.
+template <typename Arg, IsSpmdPartitioningVisitorPointer<Arg> = 0>
+absl::StatusOr<SpmdPartitioningVisitor*> FindSpmdPartitioningVisitor(
+    Arg&& arg) {
+  return arg;
+}
+
+template <typename Arg, typename... Args,
+          IsSpmdPartitioningVisitorPointer<Arg> = 0>
+absl::StatusOr<SpmdPartitioningVisitor*> FindSpmdPartitioningVisitor(
+    Arg&& arg, Args&&... args) {
+  return arg;
+}
+
+template <typename Arg, typename... Args,
+          IsNotSpmdPartitioningVisitorPointer<Arg> = 0>
+absl::StatusOr<SpmdPartitioningVisitor*> FindSpmdPartitioningVisitor(
+    Arg&& arg, Args&&... args) {
+  return FindSpmdPartitioningVisitor(std::forward<Args>(args)...);
+}
+
+}  // namespace detail
+
+// Evaluate the memory and communication cost for any arbitrary partitioning
+// methods.
+template <typename F, typename... Args>
+absl::StatusOr<std::pair<int64_t, int64_t>> EvaluatePartitionCost(
+    const HloInstruction* original_hlo, F partition_method,
+    Args&&... partition_method_args) {
+  HloModule* module = original_hlo->GetModule();
+  auto comp_env =
+      std::make_unique<CompilationEnvironments>(module->comp_envs());
+  // Create a fake module and run partitioning with this fake module later.
+  HloModule fake_module("fake_module", module->config(), std::move(comp_env));
+  auto temp_b = HloComputation::Builder("temp_entry");
+  auto temp_p = temp_b.AddInstruction(HloInstruction::CreateParameter(
+      0, ShapeUtil::MakeShape(F32, {}), "input"));
+  HloComputation* temp_entry = fake_module.AddEntryComputation(temp_b.Build());
+
+  ABSL_ASSIGN_OR_RETURN(SpmdPartitioningVisitor * visitor,
+                        detail::FindSpmdPartitioningVisitor(
+                            std::forward<Args>(partition_method_args)...));
+  SpmdPartitioner* partitioner = visitor->partitioner();
+  std::unique_ptr<SpmdPartitioningVisitor> fake_visitor = visitor->Clone();
+  fake_visitor->set_module(&fake_module);
+  auto* fake_b = fake_visitor->builder();
+  fake_b->set_visiting_hlo(temp_p);
+  auto parameter_count = std::make_unique<int>(0);
+  ABSL_ASSIGN_OR_RETURN(
+      HloInstruction * new_hlo,
+      partition_method(detail::ArgModifier(
+          std::forward<Args>(partition_method_args), &fake_module,
+          parameter_count.get(), fake_visitor.get())...));
+
+  if (new_hlo == nullptr) {
+    return std::make_pair(INT64_MAX, INT64_MAX);
+  }
+  auto new_entry = fake_module.AddEmbeddedComputation(fake_b->Build(new_hlo));
+  // Replace the original computation with the new SPMD computation.
+  absl::flat_hash_map<HloComputation*, HloComputation*> replacement;
+  replacement[temp_entry] = new_entry;
+  for (HloInstruction* hlo : new_entry->instructions()) {
+    for (HloComputation* comp : hlo->called_computations()) {
+      if (comp->parent() != &fake_module) {
+        replacement[comp] = fake_module.AddEmbeddedComputation(comp->Clone());
+      }
+    }
+  }
+  fake_module.ReplaceComputations(replacement);
+
+  HloDCE hlo_dce;
+  ABSL_ASSIGN_OR_RETURN(
+      auto _, hlo_dce.Run(&fake_module, partitioner->execution_threads()));
+  (void)_;  // Suppress unused variable warning in OSS
+  VLOG(5) << "Dry-run partitioning for op: " << original_hlo->ToString() << "\n"
+          << fake_module.ToString();
+
+  int64_t max_memory = 0;
+  int64_t total_communication = 0;
+  for (HloComputation* computation : fake_module.computations()) {
+    for (HloInstruction* hlo : computation->instructions()) {
+      // Check the memory cost for the partitioned hlo op, as well as the
+      // memory cost for collectives for potential overhead from full remat.
+      if (hlo->opcode() == original_hlo->opcode() || IsCollective(hlo)) {
+        int64_t memory_cost = partitioner->MemoryCostInBytes(hlo);
+        if (memory_cost > max_memory) {
+          VLOG(5) << hlo->ToString() << " has memory cost of " << memory_cost;
+          max_memory = memory_cost;
+        }
+      }
+      if (IsCollective(hlo)) {
+        total_communication += partitioner->CommunicationCostInBytes(hlo);
+      }
+    }
+  }
+  if (max_memory != 0) {
+    return std::make_pair(max_memory, total_communication);
+  }
+  return std::make_pair(INT64_MAX, INT64_MAX);
+}
+
+// Creates a copy for the HloInstruction in the PartitionedHlo and returns a
+// new PartitionedHlo for the copy.
+PartitionedHlo MakeACopyAndReturnItsPartitionedHlo(const PartitionedHlo& phlo,
+                                                   SpmdBuilder* b);
+
+// For dynamic-update-slice, we focus on the partitioned slice dimensions,
+// ignoring batch dimensions and replicated slice dimensions. We have three
+// methods to handle the partitioned slice dimensions.
+//
+// 1. **Default.** Replicate all tensors along the slice dimensions.
+// 2. **Single Partition Update.** The update is entirely contained within a
+//    single partition. All partitioned slice dimensions satisfy
+//    2.1 The slice size is 1, OR
+//    2.2 The update indices are compile-time constants, and the start and end
+//        indices reside in the same partition.
+// 3. **Constant Indices.** All partitioned slice dimensions have compile-time
+//    constant indices.
+//
+// If both optimizations (2 and 3) are feasible, we prioritize (2) over (3).
+// Refer to go/dus-spmd for more details.
+enum class DynamicUpdateSliceMethod {
+  // Replicate all tensors along the slice dimensions.
+  kDefault,
+
+  // The update is fully contained in a single partition.
+  kUpdateOnASinglePartition,
+
+  // All partitioned slice dimensions have compile-time constant indices.
+  kAllPartitionedSliceDimsHaveConstantIndices,
+};
+
+struct DynamicUpdateSliceAnalysis {
+  DynamicUpdateSliceMethod method;
+  // All slice dimensions of the dynamic update slice instruction.
+  std::vector<int64_t> slice_dims;
+  // The slice dimensions that are partitioned.
+  std::vector<int64_t> partitioned_slice_dims;
+};
+
+DynamicUpdateSliceAnalysis AnalyzeDynamicUpdateSlice(const HloInstruction* hlo);
 
 }  // namespace spmd
 }  // namespace xla

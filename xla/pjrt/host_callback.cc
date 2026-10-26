@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,15 +15,35 @@ limitations under the License.
 
 #include "xla/pjrt/host_callback.h"
 
+#include <cstddef>
+#include <cstring>
 #include <memory>
 #include <utility>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "xla/ffi/ffi_api.h"
+#include "xla/pjrt/pjrt_client.h"
+#include "xla/pjrt/pjrt_executable.h"
+#include "xla/shape_util.h"
+
 namespace xla {
 
-Status HostCallbackContext::OnSend(int arg_num,
-                                   const PjRtTransferMetadata& metadata,
-                                   PjRtChunk data) {
+static thread_local int on_send_guard = 0;
+
+void EnterHostCallback() { ++on_send_guard; }
+void LeaveHostCallback() { --on_send_guard; }
+
+HostCallbackScope::HostCallbackScope() { ++on_send_guard; }
+HostCallbackScope::~HostCallbackScope() { --on_send_guard; }
+
+bool ThisThreadIsInsideHostCallback() { return on_send_guard > 0; }
+
+absl::Status HostCallbackContext::OnSend(int arg_num,
+                                         const PjRtTransferMetadata& metadata,
+                                         PjRtChunk data) {
   if (!use_major_to_minor_data_layout_for_callbacks_) {
     const auto& arg_info = host_callback_.operands.at(arg_num);
     const auto& host_shape = arg_info.shape;
@@ -33,7 +53,7 @@ Status HostCallbackContext::OnSend(int arg_num,
     DCHECK_GE(data.size(), host_size);
 
     auto delinearized = PjRtChunk::AllocateDefault(host_size);
-    TF_CHECK_OK(host_memory_for_device_manager_->ToHostLayout(
+    CHECK_OK(host_memory_for_device_manager_->ToHostLayout(
         data.data(), data.size(), device_shape, delinearized.data(),
         delinearized.size(), host_shape));
 
@@ -47,7 +67,7 @@ Status HostCallbackContext::OnSend(int arg_num,
 
   DCHECK_GE(ready_count_.load(), 1);
   if (ready_count_.fetch_sub(1) != 1) {
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   // This atomic store won't race against the next invocation of OnSend()
@@ -72,8 +92,11 @@ Status HostCallbackContext::OnSend(int arg_num,
     result_ptrs.push_back(results.back().data());
   }
 
-  auto status = host_callback_.callback(result_ptrs.data(), arg_ptrs.data());
-  // TODO(chky): Consider populating garbage data in results upon errors.
+  absl::Status status;
+  {
+    xla::HostCallbackScope scope;
+    status = host_callback_.callback(result_ptrs.data(), arg_ptrs.data());
+  }
 
   // Clear the arguments for this invocation. This won't race with next
   // invocation as send callbacks are supposed to be invoked sequentially.
@@ -85,6 +108,9 @@ Status HostCallbackContext::OnSend(int arg_num,
   // this point, this callback can be invoked again (e.g. in a loop) anytime.
   for (int i = 0; i < result_channels_.size(); ++i) {
     auto& result_channel = result_channels_[i];
+    if (!status.ok()) {
+      std::memset(results[i].data(), 0, results[i].size());
+    }
     result_channel->Push(std::move(results[i]));
   }
 
@@ -97,18 +123,20 @@ void HostCallbackContext::Receive(int res_num,
   auto& result_channel = result_channels_.at(res_num);
   result_channel->Pop().OnReady(
       [this, res_num, metadata,
-       stream = std::move(stream)](PjRtChunk chunk) mutable {
+       stream = std::move(stream)](absl::StatusOr<PjRtChunk> chunk) mutable {
+        CHECK_OK(chunk.status());
+
         if (!use_major_to_minor_data_layout_for_callbacks_) {
           const auto& host_shape = host_callback_.results.at(res_num).shape;
           const auto& device_shape = metadata.device_shape;
           auto statusor_linearized =
               host_memory_for_device_manager_->ToDeviceLayout(
-                  chunk.data(), chunk.size(), host_shape, device_shape);
+                  chunk->data(), chunk->size(), host_shape, device_shape);
           chunk = std::move(statusor_linearized.value());
         }
 
-        stream->AddChunk(std::move(chunk)).OnReady([](Status s) {
-          TF_CHECK_OK(s);
+        stream->AddChunk(*std::move(chunk)).OnReady([](absl::Status s) {
+          CHECK_OK(s);
         });
       });
 }
@@ -149,5 +177,14 @@ CreateHostCallbackStateAndAppendSendRecvCallbacks(
 
   return context;
 }
+
+// First 64 bits of SHA-512 of "xla::FfiLoadedHostCallbacks".
+ffi::TypeId FfiLoadedHostCallbacks::id = {7357244197867843242};
+ffi::TypeInfo FfiLoadedHostCallbacks::info =
+    ffi::MakeTypeInfo<FfiLoadedHostCallbacks>();
+
+XLA_FFI_REGISTER_TYPE(ffi::GetXlaFfiApi(), "FfiLoadedHostCallbacks",
+                      &FfiLoadedHostCallbacks::id,
+                      &FfiLoadedHostCallbacks::info);
 
 }  // namespace xla

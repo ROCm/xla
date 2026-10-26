@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,27 +15,53 @@ limitations under the License.
 
 #include "xla/python/pjrt_ifrt/pjrt_tuple.h"
 
-#include <memory>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "absl/algorithm/container.h"
 #include "absl/container/inlined_vector.h"
-#include "llvm/Support/ExtensibleRTTI.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/types/span.h"
 #include "xla/python/ifrt/array.h"
 #include "xla/python/ifrt/client.h"
-#include "tfrt/concurrency/ref_count.h"  // from @tf_runtime
+#include "xla/python/ifrt/rtti.h"
+#include "xla/python/ifrt/value.h"
+#include "xla/python/pjrt_ifrt/pjrt_client.h"
+#include "xla/tsl/concurrency/future.h"
+#include "xla/tsl/concurrency/ref_count.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/util.h"
 
 namespace xla {
 namespace ifrt {
 
-/*static*/ StatusOr<tsl::RCReference<PjRtTuple>> PjRtTuple::Create(
-    PjRtCompatibleClient* client, absl::Span<tsl::RCReference<Value>> values) {
+/*static*/ absl::StatusOr<tsl::RCReference<PjRtTuple>> PjRtTuple::Create(
+    PjRtCompatibleClient* client, absl::Span<ValueRef> values) {
   return tsl::MakeRef<PjRtTuple>(client, values);
 }
 
-Future<Status> PjRtTuple::GetReadyFuture() const {
-  std::vector<Future<Status>> futures;
+absl::StatusOr<std::optional<int64_t>> PjRtTuple::ByteSize() const {
+  int64_t byte_size = 0;
+  for (const auto& value : values_) {
+    ABSL_ASSIGN_OR_RETURN(std::optional<int64_t> element_byte_size,
+                          value->ByteSize());
+    if (!element_byte_size.has_value()) {
+      return std::nullopt;
+    }
+    byte_size += *element_byte_size;
+  }
+  return byte_size;
+}
+
+tsl::Future<> PjRtTuple::GetReadyFuture() const {
+  std::vector<tsl::Future<>> futures;
   futures.reserve(values_.size());
   for (const auto& value : values_) {
     futures.push_back(value->GetReadyFuture());
@@ -43,19 +69,14 @@ Future<Status> PjRtTuple::GetReadyFuture() const {
   return JoinFutures(absl::MakeSpan(futures));
 }
 
-Future<Status> PjRtTuple::Delete() {
+tsl::Future<> PjRtTuple::Delete() {
   {
-    absl::MutexLock lock(&mu_);
+    absl::MutexLock lock(mu_);
     if (!is_deleted_.HasBeenNotified()) {
       is_deleted_.Notify();
     }
   }
-  std::vector<Future<Status>> futures;
-  futures.reserve(values_.size());
-  for (const auto& value : values_) {
-    futures.push_back(value->Delete());
-  }
-  return JoinFutures(absl::MakeSpan(futures));
+  return client_->DeleteValues(absl::MakeSpan(values_));
 }
 
 bool PjRtTuple::IsDeleted() const {
@@ -73,14 +94,13 @@ bool PjRtTuple::IsDeleted() const {
 std::string PjRtTuple::DebugString() const {
   return absl::StrFormat(
       "PjRtTuple(%s)",
-      absl::StrJoin(values_, ",",
-                    [](std::string* out, const tsl::RCReference<Value>& value) {
-                      out->append(value->DebugString());
-                    }));
+      absl::StrJoin(values_, ",", [](std::string* out, const ValueRef& value) {
+        out->append(value->DebugString());
+      }));
 }
 int PjRtTuple::Arity() { return values_.size(); }
 
-Status PjRtTuple::Unpack(absl::Span<tsl::RCReference<Value>> values_out) {
+absl::Status PjRtTuple::Unpack(absl::Span<ValueRef> values_out) {
   if (values_out.size() != values_.size()) {
     return InvalidArgument(
         "Wrong number of output values for "
@@ -88,13 +108,12 @@ Status PjRtTuple::Unpack(absl::Span<tsl::RCReference<Value>> values_out) {
         values_out.size(), values_.size());
   }
   absl::c_copy(values_, values_out.begin());
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 char PjRtTuple::ID = 0;
 
-PjRtTuple::PjRtTuple(PjRtCompatibleClient* client,
-                     absl::Span<tsl::RCReference<Value>> values)
+PjRtTuple::PjRtTuple(PjRtCompatibleClient* client, absl::Span<ValueRef> values)
     : client_(client), values_(values.begin(), values.end()) {}
 
 }  // namespace ifrt

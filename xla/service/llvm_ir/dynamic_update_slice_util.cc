@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,16 +15,37 @@ limitations under the License.
 
 #include "xla/service/llvm_ir/dynamic_update_slice_util.h"
 
+#include <cstdint>
+#include <functional>
+#include <tuple>
 #include <utility>
+#include <vector>
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Value.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/layout_util.h"
+#include "xla/service/buffer_assignment.h"
 #include "xla/service/cpu/backend_config.pb.h"
-#include "xla/service/gpu/launch_dimensions.h"
-#include "xla/service/gpu/parallel_loop_emitter.h"
+#include "xla/service/llvm_ir/fused_ir_emitter.h"
+#include "xla/service/llvm_ir/ir_array.h"
 #include "xla/service/llvm_ir/llvm_util.h"
 #include "xla/service/llvm_ir/loop_emitter.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace llvm_ir {
@@ -97,21 +118,21 @@ bool CanEmitFusedDynamicUpdateSliceInPlace(HloInstruction* fusion,
 // Shared implementation of EmitDynamicUpdateSliceInPlace and
 // EmitFusedDynamicUpdateSliceInPlace.
 //
-// Emits a sequential loop if launch_dimensions is null.
-using IndexGenerator = std::function<StatusOr<llvm::Value*>(int64_t)>;
+// Emits a sequential loop.
+using IndexGenerator = std::function<absl::StatusOr<llvm::Value*>(int64_t)>;
 
-static Status EmitDynamicUpdateSliceInPlaceImpl(
+static absl::Status EmitDynamicUpdateSliceInPlaceImpl(
     const Shape& update_shape, const IndexGenerator& start_indices_generator,
     bool is_signed, ElementGenerator update_array_generator,
-    const IrArray& output_array, const gpu::LaunchDimensions* launch_dimensions,
-    absl::string_view name, llvm::IRBuilder<>* b) {
+    const IrArray& output_array, absl::string_view name,
+    llvm::IRBuilderBase* b) {
   const Shape& output_shape = output_array.GetShape();
 
   // Read start indices from start_indices_generator.
-  const int64_t rank = output_shape.rank();
+  const int64_t rank = output_shape.dimensions().size();
   std::vector<llvm::Value*> start_multi_index(rank);
   for (int64_t i = 0; i < rank; ++i) {
-    TF_ASSIGN_OR_RETURN(start_multi_index[i], start_indices_generator(i));
+    ABSL_ASSIGN_OR_RETURN(start_multi_index[i], start_indices_generator(i));
     llvm::Value* output_dim_size = llvm::ConstantInt::get(
         start_multi_index[i]->getType(), output_shape.dimensions(i));
     llvm::Value* update_dim_size = llvm::ConstantInt::get(
@@ -135,7 +156,8 @@ static Status EmitDynamicUpdateSliceInPlaceImpl(
                         max_bound, start_multi_index[i]);
   }
 
-  auto loop_body_emitter = [&](const IrArray::Index& update_index) -> Status {
+  auto loop_body_emitter =
+      [&](const IrArray::Index& update_index) -> absl::Status {
     // Calculate output_index, where we'll write the value from update.  For
     // each dimension,
     //
@@ -143,32 +165,25 @@ static Status EmitDynamicUpdateSliceInPlaceImpl(
     //
     std::vector<llvm::Value*> output_multi_index(rank);
     for (int64_t i = 0; i < rank; ++i) {
-      llvm::Value* start_index0 = b->CreateSExtOrBitCast(
-          start_multi_index[i], update_index[i]->getType());
+      llvm::Value* start_index0 = b->CreateIntCast(
+          start_multi_index[i], update_index[i]->getType(), is_signed);
       output_multi_index[i] = b->CreateAdd(start_index0, update_index[i]);
     }
 
     // Do output[output_index] = update[update_index].
     IrArray::Index output_index(output_multi_index, output_shape,
                                 b->getInt64Ty());
-    TF_ASSIGN_OR_RETURN(llvm::Value * update_data,
-                        update_array_generator(update_index));
+    ABSL_ASSIGN_OR_RETURN(llvm::Value * update_data,
+                          update_array_generator(update_index));
     output_array.EmitWriteArrayElement(output_index, update_data, b);
-    return OkStatus();
+    return absl::OkStatus();
   };
-
-  if (launch_dimensions != nullptr) {
-    return gpu::ParallelLoopEmitter(loop_body_emitter, update_shape,
-                                    *launch_dimensions, b)
-        .EmitLoop(name);
-  }
   return LoopEmitter(loop_body_emitter, update_shape, b).EmitLoop(name);
 }
 
-Status EmitDynamicUpdateSliceInPlace(absl::Span<const IrArray> operand_arrays,
-                                     const IrArray& output_array,
-                                     absl::string_view name,
-                                     llvm::IRBuilder<>* b) {
+absl::Status EmitDynamicUpdateSliceInPlace(
+    absl::Span<const IrArray> operand_arrays, const IrArray& output_array,
+    absl::string_view name, llvm::IRBuilderBase* b) {
   VLOG(2) << "EmitDynamicUpdateSliceInPlace for " << name;
 
   // No need to use operand_arrays[0], the input array of the
@@ -189,19 +204,18 @@ Status EmitDynamicUpdateSliceInPlace(absl::Span<const IrArray> operand_arrays,
   bool is_signed = ShapeUtil::ElementIsSigned(start_indices_array.GetShape());
   return EmitDynamicUpdateSliceInPlaceImpl(
       update_shape, start_indices_generator, is_signed, update_array_generator,
-      output_array, /*launch_dimensions=*/nullptr, name, b);
+      output_array, name, b);
 }
 
 // Shared implementation for EmitFusedDynamicUpdateSliceInPlace and
 // EmitParallelFusedDynamicUpdateSliceInPlace.
 //
 // Emits a sequential loop if launch_dimensions is null.
-static Status EmitFusedDynamicUpdateSliceInPlaceImpl(
+static absl::Status EmitFusedDynamicUpdateSliceInPlaceImpl(
     const HloComputation* fusion,
     const std::vector<std::pair<const HloInstruction*, const IrArray>>&
         dus_and_output_array,
-    FusedIrEmitter* fused_emitter,
-    const gpu::LaunchDimensions* launch_dimensions, llvm::IRBuilder<>* b) {
+    FusedIrEmitter* fused_emitter, llvm::IRBuilderBase* b) {
   VLOG(2) << "EmitFusedDynamicUpdateSliceInPlace for " << fusion->ToString();
 
   CHECK_GE(dus_and_output_array.size(), 1);
@@ -227,53 +241,41 @@ static Status EmitFusedDynamicUpdateSliceInPlaceImpl(
     // through the chain of ops that gives us the update operand and use the
     // layout of its source buffer(s).  But this is no worse than we do with
     // fusion elsewhere.)
-    TF_RETURN_IF_ERROR(LayoutUtil::CopyLayoutBetweenShapes(
+    ABSL_RETURN_IF_ERROR(LayoutUtil::CopyLayoutBetweenShapes(
         dynamic_update_slice->shape(), &update_shape));
 
     // Create element generators for update and start_indices.
-    TF_ASSIGN_OR_RETURN(ElementGenerator update_array_generator,
-                        fused_emitter->GetGenerator(*update));
+    ABSL_ASSIGN_OR_RETURN(ElementGenerator update_array_generator,
+                          fused_emitter->GetGenerator(*update));
 
     IndexGenerator start_indices_generator =
-        [&](int64_t index) -> StatusOr<llvm::Value*> {
-      TF_ASSIGN_OR_RETURN(ElementGenerator element_generator,
-                          fused_emitter->GetGenerator(
-                              *dynamic_update_slice->operand(2 + index)));
+        [&](int64_t index) -> absl::StatusOr<llvm::Value*> {
+      ABSL_ASSIGN_OR_RETURN(ElementGenerator element_generator,
+                            fused_emitter->GetGenerator(
+                                *dynamic_update_slice->operand(2 + index)));
       return element_generator(IrArray::Index(b->getInt64Ty()));
     };
     bool is_signed = ShapeUtil::ElementIsSigned(start_indices->shape());
 
-    TF_RETURN_IF_ERROR(EmitDynamicUpdateSliceInPlaceImpl(
+    ABSL_RETURN_IF_ERROR(EmitDynamicUpdateSliceInPlaceImpl(
         update_shape, start_indices_generator, is_signed,
-        update_array_generator, fusion_output_array, launch_dimensions,
+        update_array_generator, fusion_output_array,
         IrName(dynamic_update_slice), b));
   }
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status EmitFusedDynamicUpdateSliceInPlace(HloInstruction* fusion,
-                                          const IrArray& fusion_output_array,
-                                          FusedIrEmitter* fused_emitter,
-                                          llvm::IRBuilder<>* b) {
+absl::Status EmitFusedDynamicUpdateSliceInPlace(
+    HloInstruction* fusion, const IrArray& fusion_output_array,
+    FusedIrEmitter* fused_emitter, llvm::IRBuilderBase* b) {
   HloInstruction* dus = fusion->called_computations()[0]->root_instruction();
   CHECK_EQ(dus->opcode(), HloOpcode::kDynamicUpdateSlice);
   std::vector<std::pair<const HloInstruction*, const IrArray>>
       dus_and_output_array{std::make_pair(dus, fusion_output_array)};
 
   return EmitFusedDynamicUpdateSliceInPlaceImpl(
-      fusion->called_computations()[0], dus_and_output_array, fused_emitter,
-      /*launch_dimensions=*/nullptr, b);
-}
-
-Status EmitParallelFusedDynamicUpdateSliceInPlace(
-    const HloComputation* fusion,
-    const std::vector<std::pair<const HloInstruction*, const IrArray>>&
-        dus_and_output_array,
-    FusedIrEmitter* fused_emitter,
-    const gpu::LaunchDimensions& launch_dimensions, llvm::IRBuilder<>* b) {
-  return EmitFusedDynamicUpdateSliceInPlaceImpl(
-      fusion, dus_and_output_array, fused_emitter, &launch_dimensions, b);
+      fusion->called_computations()[0], dus_and_output_array, fused_emitter, b);
 }
 
 }  // namespace llvm_ir

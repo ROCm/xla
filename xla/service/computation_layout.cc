@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,14 +15,18 @@ limitations under the License.
 
 #include "xla/service/computation_layout.h"
 
-#include <algorithm>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "absl/algorithm/container.h"
+#include "absl/status/status_macros.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/str_join.h"
+#include "xla/layout.h"
 #include "xla/printer.h"
-#include "xla/types.h"
+#include "xla/shape.h"
+#include "xla/shape_layout.h"
+#include "xla/shape_util.h"
 
 namespace xla {
 
@@ -34,8 +38,6 @@ ComputationLayout::ComputationLayout(const ProgramShape& program_shape,
   }
   if (ignore_layouts) {
     SetToDefaultLayout();
-  } else {
-    SetToDefaultLayoutIfEmpty();
   }
 }
 
@@ -45,22 +47,89 @@ void ComputationLayout::SetToDefaultLayout() {
   }
   result_layout_.SetToDefaultLayout();
 }
-
-void ComputationLayout::SetToDefaultLayoutIfEmpty() {
-  for (auto& parameter_layout : parameter_layouts_) {
-    if (!parameter_layout.LayoutIsSet()) {
-      parameter_layout.SetToDefaultLayout();
-    }
-  }
-  if (!result_layout_.LayoutIsSet()) {
-    result_layout_.SetToDefaultLayout();
-  }
-}
-
 bool ComputationLayout::LayoutIsSet() const {
   return absl::c_all_of(parameter_layouts_,
                         [](const ShapeLayout& s) { return s.LayoutIsSet(); }) &&
          result_layout_.LayoutIsSet();
+}
+
+bool ComputationLayout::AnyLayoutSet() const {
+  return absl::c_any_of(
+             parameter_layouts_,
+             [](const ShapeLayout& s) { return s.AnyLayoutIsSet(); }) ||
+         result_layout_.AnyLayoutIsSet();
+}
+bool ComputationLayout::MinorToMajorInLayoutIsSet() const {
+  return absl::c_all_of(parameter_layouts_,
+                        [](const ShapeLayout& s) {
+                          return s.MinorToMajorInLayoutIsSet();
+                        }) &&
+         result_layout_.MinorToMajorInLayoutIsSet();
+}
+bool ComputationLayout::AnyMinorToMajorInLayoutIsSet() const {
+  return absl::c_any_of(parameter_layouts_,
+                        [](const ShapeLayout& s) {
+                          return s.AnyMinorToMajorInLayoutIsSet();
+                        }) ||
+         result_layout_.AnyMinorToMajorInLayoutIsSet();
+}
+
+absl::StatusOr<std::vector<Layout>>
+ComputationLayout::FlattenedParameterLayouts() const {
+  std::vector<Layout> result;
+  for (int i = 0; i < parameter_count(); ++i) {
+    ABSL_RETURN_IF_ERROR(ShapeUtil::ForEachSubshapeWithStatus(
+        parameter_shape(i),
+        [this, &result](const Shape& subshape,
+                        const ShapeIndex& index) -> absl::Status {
+          if (subshape.IsTuple()) {
+            return absl::OkStatus();
+          }
+          if (!subshape.IsArray()) {
+            return Unimplemented(
+                "ComputationLayout::FlattenedParameterLayouts doesn't support "
+                "token or opaque parameters (got: %s)",
+                ToString());
+          }
+          if (!subshape.has_layout()) {
+            return InvalidArgument(
+                "ComputationLayout::FlattenedParameterLayouts can only be "
+                "called after all parameters have layouts assigned (got: %s)",
+                ToString());
+          }
+          result.push_back(subshape.layout());
+          return absl::OkStatus();
+        }));
+  }
+  return result;
+}
+
+absl::StatusOr<std::vector<Layout>> ComputationLayout::FlattenedResultLayouts()
+    const {
+  std::vector<Layout> result;
+  ABSL_RETURN_IF_ERROR(ShapeUtil::ForEachSubshapeWithStatus(
+      result_shape(),
+      [this, &result](const Shape& subshape,
+                      const ShapeIndex& index) -> absl::Status {
+        if (subshape.IsTuple()) {
+          return absl::OkStatus();
+        }
+        if (!subshape.IsArray()) {
+          return Unimplemented(
+              "ComputationLayout::FlattenedResultLayouts doesn't support "
+              "token or opaque outputs (got: %s)",
+              ToString());
+        }
+        if (!subshape.has_layout()) {
+          return InvalidArgument(
+              "ComputationLayout::FlattenedResultLayouts can only be called "
+              "after all outputs have layouts assigned (got: %s)",
+              ToString());
+        }
+        result.push_back(subshape.layout());
+        return absl::OkStatus();
+      }));
+  return result;
 }
 
 void ComputationLayout::Print(Printer* printer) const {
@@ -89,8 +158,8 @@ std::string ComputationLayout::ToString() const {
 ProgramShape ComputationLayout::ComputeProgramShape() const {
   ProgramShape program_shape;
   for (int64_t i = 0; i < parameter_layouts_.size(); ++i) {
-    *program_shape.add_parameters() = parameter_layouts_[i].shape();
-    *program_shape.add_parameter_names() = absl::StrCat("p", i);
+    program_shape.AddParameter(parameter_layouts_[i].shape(),
+                               absl::StrCat("p", i));
   }
   *program_shape.mutable_result() = result_layout_.shape();
   return program_shape;

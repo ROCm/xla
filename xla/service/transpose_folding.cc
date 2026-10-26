@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,24 +15,27 @@ limitations under the License.
 
 #include "xla/service/transpose_folding.h"
 
-#include <algorithm>
+#include <cstdint>
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/shape_util.h"
 #include "xla/status_macros.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/status.h"
 
 namespace xla {
 namespace {
@@ -45,12 +48,30 @@ TransposeFolding::OperandIndices CanFoldOperandsIntoConvolution(
     return {};
   }
 
-  TransposeFolding::OperandIndices operand_set;
-  for (int64_t i = 0; i < convolution.operand_count(); ++i) {
-    auto& operand = *convolution.operand(i);
-    if (operand.opcode() == HloOpcode::kTranspose) {
-      operand_set.push_back(i);
+  const SparsityConfig& sparsity_config = convolution.sparsity_config();
+  auto is_sparsity_metadata = [&](int64_t index) {
+    return (sparsity_config.has_lhs() &&
+            sparsity_config.lhs().idx() == index) ||
+           (sparsity_config.has_rhs() && sparsity_config.rhs().idx() == index);
+  };
+  // Extra operands, such as block scales, may need to be transformed with the
+  // lhs or rhs. Only sparsity metadata can be preserved unchanged here.
+  for (int64_t i = 2; i < convolution.operand_count(); ++i) {
+    if (!is_sparsity_metadata(i)) {
+      return {};
     }
+  }
+
+  TransposeFolding::OperandIndices operand_set;
+  // Do not fold a transpose into a sparse operand, since its sparsity
+  // descriptor would no longer match the operand.
+  if (!sparsity_config.has_lhs() &&
+      convolution.operand(0)->opcode() == HloOpcode::kTranspose) {
+    operand_set.push_back(0);
+  }
+  if (!sparsity_config.has_rhs() &&
+      convolution.operand(1)->opcode() == HloOpcode::kTranspose) {
+    operand_set.push_back(1);
   }
 
   return transposable_conv_operands(convolution, operand_set);
@@ -78,7 +99,7 @@ using InstructionOperandsPair =
     std::pair<HloInstruction*, TransposeFolding::OperandIndices>;
 
 // Folds the operands of `dot` that are foldable transposes.
-Status FoldTransposeIntoDot(InstructionOperandsPair& pair) {
+absl::Status FoldTransposeIntoDot(InstructionOperandsPair& pair) {
   HloInstruction* dot = pair.first;
 
   DotDimensionNumbers new_dot_dims = dot->dot_dimension_numbers();
@@ -101,10 +122,11 @@ Status FoldTransposeIntoDot(InstructionOperandsPair& pair) {
       rhs = rhs->mutable_operand(0);
     }
   }
-
-  return dot->parent()->ReplaceWithNewInstruction(
-      dot, HloInstruction::CreateDot(dot->shape(), lhs, rhs, new_dot_dims,
-                                     dot->precision_config()));
+  HloInstruction* new_dot =
+      dot->parent()->AddInstruction(HloInstruction::CreateDot(
+          dot->shape(), lhs, rhs, new_dot_dims, dot->precision_config()));
+  dot->SetupDerivedInstruction(new_dot);
+  return dot->parent()->ReplaceInstruction(dot, new_dot);
 }
 
 // Folds the operands of `convolution` that are foldable transposes.
@@ -169,11 +191,19 @@ bool FoldTransposeIntoConvolution(InstructionOperandsPair& pair) {
     new_rhs = convolution.mutable_operand(kRhsIdx);
   }
 
-  auto new_conv = HloInstruction::CreateConvolve(
-      convolution.shape(), new_lhs, new_rhs, convolution.feature_group_count(),
-      convolution.batch_group_count(), convolution.window(), new_dnums,
-      convolution.precision_config());
-  TF_CHECK_OK(convolution.parent()->ReplaceWithNewInstruction(
+  // Replace the lhs and rhs while preserving auxiliary operands such as
+  // sparsity metadata.
+  std::vector<HloInstruction*> new_operands(convolution.operands().begin(),
+                                            convolution.operands().end());
+  new_operands[kLhsIdx] = new_lhs;
+  new_operands[kRhsIdx] = new_rhs;
+
+  // Clone the convolution to preserve all of its attributes without copying
+  // them individually.
+  auto new_conv =
+      convolution.CloneWithNewOperands(convolution.shape(), new_operands);
+  new_conv->set_convolution_dimension_numbers(new_dnums);
+  CHECK_OK(convolution.parent()->ReplaceWithNewInstruction(
       &convolution, std::move(new_conv)));
 
   return true;
@@ -188,7 +218,7 @@ TransposeFolding::TransposeFolding(
           std::move(dot_can_fold_transpose_operand)),
       transposable_conv_operands_(std::move(transposable_conv_operands)) {}
 
-StatusOr<bool> TransposeFolding::Run(
+absl::StatusOr<bool> TransposeFolding::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   // Modifying the graph while traversing is dangerous, so we find all folding
@@ -199,10 +229,11 @@ StatusOr<bool> TransposeFolding::Run(
   FunctionVisitor visit_fn([this, &foldable_dots, &foldable_convolutions](
                                HloInstruction* instruction) {
     if (instruction->opcode() == HloOpcode::kDot) {
-      // Don't fold dots with a 1D operand.
-      if ((instruction->operand(0)->shape().rank() < 2) ||
-          (instruction->operand(1)->shape().rank() < 2)) {
-        return OkStatus();
+      // Don't fold dots with extra scaling/sparsity operands or a 1D operand.
+      if (instruction->operand_count() > 2 ||
+          (instruction->operand(0)->shape().dimensions().size() < 2) ||
+          (instruction->operand(1)->shape().dimensions().size() < 2)) {
+        return absl::OkStatus();
       }
 
       OperandIndices operand_indices;
@@ -211,8 +242,8 @@ StatusOr<bool> TransposeFolding::Run(
           continue;
         }
 
-        TF_ASSIGN_OR_RETURN(bool can_fold_operand,
-                            dot_can_fold_transpose_operand_(*instruction, i));
+        ABSL_ASSIGN_OR_RETURN(bool can_fold_operand,
+                              dot_can_fold_transpose_operand_(*instruction, i));
 
         if (can_fold_operand) {
           operand_indices.push_back(i);
@@ -231,16 +262,16 @@ StatusOr<bool> TransposeFolding::Run(
         foldable_convolutions.emplace_back(instruction, operand_indices);
       }
     }
-    return OkStatus();
+    return absl::OkStatus();
   });
 
   for (auto* comp : module->MakeNonfusionComputations(execution_threads)) {
-    TF_RETURN_IF_ERROR(comp->Accept(&visit_fn));
+    ABSL_RETURN_IF_ERROR(comp->Accept(&visit_fn));
   }
 
   bool changed = false;
   for (InstructionOperandsPair& pair : foldable_dots) {
-    TF_RETURN_IF_ERROR(FoldTransposeIntoDot(pair));
+    ABSL_RETURN_IF_ERROR(FoldTransposeIntoDot(pair));
     changed = true;
   }
   for (InstructionOperandsPair& pair : foldable_convolutions) {
@@ -249,8 +280,9 @@ StatusOr<bool> TransposeFolding::Run(
   return changed;
 }
 
-/*static*/ StatusOr<bool> TransposeFolding::IsRowColumnTransposeDotOperand(
-    const HloInstruction& dot, int64_t operand_idx) {
+/*static*/ absl::StatusOr<bool>
+TransposeFolding::IsRowColumnTransposeDotOperand(const HloInstruction& dot,
+                                                 int64_t operand_idx) {
   TF_RET_CHECK(dot.opcode() == HloOpcode::kDot);
   TF_RET_CHECK(dot.operand_count() > operand_idx);
 
@@ -266,7 +298,7 @@ StatusOr<bool> TransposeFolding::Run(
                               ? dot_dims.lhs_contracting_dimensions()
                               : dot_dims.rhs_contracting_dimensions();
 
-  return (batch_dims.size() == transpose.shape().rank() - 2) &&
+  return (batch_dims.size() == transpose.shape().dimensions().size() - 2) &&
          (contracting_dims.size() == 1) &&
          absl::c_all_of(batch_dims, [&](int64_t dim) {
            return transpose.dimensions(dim) == dim;

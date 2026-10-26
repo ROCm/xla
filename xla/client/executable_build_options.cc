@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,27 +15,38 @@ limitations under the License.
 
 #include "xla/client/executable_build_options.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "xla/debug_options_flags.h"
 #include "xla/execution_options_util.h"
+#include "xla/layout_util.h"
+#include "xla/pjrt/proto/compile_options.pb.h"
+#include "xla/service/compilation_environments.h"
+#include "xla/service/computation_placer.h"
+#include "xla/service/gpu_topology.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/util.h"
 #include "xla/xla.pb.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 
 ExecutableBuildOptions& ExecutableBuildOptions::set_device_allocator(
-    se::DeviceMemoryAllocator* allocator) {
+    se::DeviceAddressAllocator* allocator) {
   device_allocator_ = allocator;
   return *this;
 }
 
-se::DeviceMemoryAllocator* ExecutableBuildOptions::device_allocator() const {
+se::DeviceAddressAllocator* ExecutableBuildOptions::device_allocator() const {
   return device_allocator_;
 }
 
@@ -100,14 +111,14 @@ ExecutableBuildOptions& ExecutableBuildOptions::set_use_auto_spmd_partitioning(
 ExecutableBuildOptions&
 ExecutableBuildOptions::set_auto_spmd_partitioning_mesh_shape(
     std::vector<int64_t> mesh_shape) {
-  auto_spmd_partitioning_mesh_shape_ = mesh_shape;
+  auto_spmd_partitioning_mesh_shape_ = std::move(mesh_shape);
   return *this;
 }
 
 ExecutableBuildOptions&
 ExecutableBuildOptions::set_auto_spmd_partitioning_mesh_ids(
     std::vector<int64_t> mesh_ids) {
-  auto_spmd_partitioning_mesh_ids_ = mesh_ids;
+  auto_spmd_partitioning_mesh_ids_ = std::move(mesh_ids);
   return *this;
 }
 
@@ -134,7 +145,8 @@ std::string ExecutableBuildOptions::ToString() const {
       device_ordinal_, result_layout, num_replicas_);
 }
 
-StatusOr<ExecutableBuildOptionsProto> ExecutableBuildOptions::ToProto() const {
+absl::StatusOr<ExecutableBuildOptionsProto> ExecutableBuildOptions::ToProto()
+    const {
   ExecutableBuildOptionsProto output;
   output.set_device_ordinal(device_ordinal());
   if (result_layout()) {
@@ -151,17 +163,28 @@ StatusOr<ExecutableBuildOptionsProto> ExecutableBuildOptions::ToProto() const {
         "Cannot serialize "
         "ExecutableBuildOptions::layout_canonicalization_callback");
   }
+  if (compile_thread_pool() != nullptr) {
+    return InvalidArgument(
+        "Cannot serialize ExecutableBuildOptions::compile_thread_pool");
+  }
   output.set_num_replicas(num_replicas());
   output.set_num_partitions(num_partitions());
   output.set_use_spmd_partitioning(use_spmd_partitioning());
   output.set_use_auto_spmd_partitioning(use_auto_spmd_partitioning());
+  output.set_optimization_level(optimization_level());
+  output.set_memory_fitting_level(memory_fitting_level());
   output.set_deduplicate_hlo(deduplicate_hlo());
   if (has_device_assignment()) {
-    TF_RETURN_IF_ERROR(
-        device_assignment().Serialize(output.mutable_device_assignment()));
+    device_assignment().Serialize(output.mutable_device_assignment());
   }
   output.set_alias_passthrough_params(alias_passthrough_params());
   output.set_run_backend_only(run_backend_only());
+  if (!allow_spmd_sharding_propagation_to_parameters().empty()) {
+    output.mutable_allow_spmd_sharding_propagation_to_parameters()->Clear();
+    for (bool v : allow_spmd_sharding_propagation_to_parameters()) {
+      output.mutable_allow_spmd_sharding_propagation_to_parameters()->Add(v);
+    }
+  }
   if (!allow_spmd_sharding_propagation_to_output().empty()) {
     output.mutable_allow_spmd_sharding_propagation_to_output()->Clear();
     for (bool v : allow_spmd_sharding_propagation_to_output()) {
@@ -170,20 +193,34 @@ StatusOr<ExecutableBuildOptionsProto> ExecutableBuildOptions::ToProto() const {
   }
   *output.mutable_fdo_profile() = fdo_profile();
   output.set_device_memory_size(device_memory_size());
+  for (int64_t s : auto_spmd_partitioning_mesh_shape()) {
+    output.mutable_auto_spmd_partitioning_mesh_shape()->Add(s);
+  }
+  for (int64_t s : auto_spmd_partitioning_mesh_ids()) {
+    output.mutable_auto_spmd_partitioning_mesh_ids()->Add(s);
+  }
+  output.set_use_shardy_partitioner(use_shardy_partitioner());
+  output.set_process_index(process_index());
+  output.set_process_count(process_count());
+  if (gpu_topology().has_value()) {
+    *output.mutable_gpu_topology() = gpu_topology()->ToProto();
+  }
   return output;
 }
 
-StatusOr<ExecutableBuildOptions> ExecutableBuildOptionsFromProto(
+absl::StatusOr<ExecutableBuildOptions> ExecutableBuildOptionsFromProto(
     const ExecutableBuildOptionsProto& input) {
   xla::ExecutableBuildOptions output;
   if (input.device_ordinal() != -1) {
     output.set_device_ordinal(input.device_ordinal());
   }
   if (input.has_result_layout()) {
-    output.set_result_layout(xla::Shape(input.result_layout()));
+    ABSL_ASSIGN_OR_RETURN(Shape result_layout,
+                          Shape::FromProto(input.result_layout()));
+    output.set_result_layout(result_layout);
   }
   if (input.has_comp_envs()) {
-    TF_ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         auto comp_envs,
         xla::CompilationEnvironments::CreateFromProto(input.comp_envs()));
     *output.mutable_comp_envs() = std::move(*comp_envs);
@@ -195,19 +232,37 @@ StatusOr<ExecutableBuildOptions> ExecutableBuildOptionsFromProto(
   output.set_num_partitions(input.num_partitions());
   output.set_use_spmd_partitioning(input.use_spmd_partitioning());
   output.set_use_auto_spmd_partitioning(input.use_auto_spmd_partitioning());
+  output.set_optimization_level(input.optimization_level());
+  output.set_memory_fitting_level(input.memory_fitting_level());
   output.set_deduplicate_hlo(input.deduplicate_hlo());
   if (input.has_device_assignment()) {
-    TF_ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         std::unique_ptr<xla::DeviceAssignment> assignment,
         xla::DeviceAssignment::Deserialize(input.device_assignment()));
     output.set_device_assignment(*assignment);
   }
   output.set_alias_passthrough_params(input.alias_passthrough_params());
   output.set_run_backend_only(input.run_backend_only());
+  output.set_allow_spmd_sharding_propagation_to_parameters(
+      input.allow_spmd_sharding_propagation_to_parameters());
   output.set_allow_spmd_sharding_propagation_to_output(
       input.allow_spmd_sharding_propagation_to_output());
   *output.mutable_fdo_profile() = input.fdo_profile();
   output.set_device_memory_size(input.device_memory_size());
+  output.set_auto_spmd_partitioning_mesh_shape(
+      std::vector<int64_t>(input.auto_spmd_partitioning_mesh_shape().begin(),
+                           input.auto_spmd_partitioning_mesh_shape().end()));
+  output.set_auto_spmd_partitioning_mesh_ids(
+      std::vector<int64_t>(input.auto_spmd_partitioning_mesh_ids().begin(),
+                           input.auto_spmd_partitioning_mesh_ids().end()));
+  output.set_use_shardy_partitioner(input.use_shardy_partitioner());
+  output.set_process_index(input.process_index());
+  output.set_process_count(input.process_count());
+  if (input.has_gpu_topology()) {
+    ABSL_ASSIGN_OR_RETURN(std::unique_ptr<const GpuTopology> gpu_topology,
+                          GpuTopology::FromProto(input.gpu_topology()));
+    output.set_gpu_topology(*gpu_topology);
+  }
   return output;
 }
 
@@ -239,7 +294,19 @@ ExecutionOptions CreateExecutionOptions(
   for (auto t : build_options.auto_spmd_partitioning_mesh_ids()) {
     execution_options.mutable_auto_spmd_partitioning_mesh_ids()->Add(t);
   }
+  execution_options.set_optimization_level(build_options.optimization_level());
+  execution_options.set_memory_fitting_level(
+      build_options.memory_fitting_level());
   execution_options.set_deduplicate_hlo(build_options.deduplicate_hlo());
+  if (!build_options.allow_spmd_sharding_propagation_to_parameters().empty()) {
+    execution_options.mutable_allow_spmd_sharding_propagation_to_parameters()
+        ->Clear();
+    for (bool v :
+         build_options.allow_spmd_sharding_propagation_to_parameters()) {
+      execution_options.mutable_allow_spmd_sharding_propagation_to_parameters()
+          ->Add(v);
+    }
+  }
   if (!build_options.allow_spmd_sharding_propagation_to_output().empty()) {
     execution_options.mutable_allow_spmd_sharding_propagation_to_output()
         ->Clear();
@@ -249,14 +316,16 @@ ExecutionOptions CreateExecutionOptions(
     }
   }
   if (build_options.has_device_assignment()) {
-    TF_CHECK_OK(build_options.device_assignment().Serialize(
-        execution_options.mutable_device_assignment()));
+    build_options.device_assignment().Serialize(
+        execution_options.mutable_device_assignment());
   }
   execution_options.set_alias_passthrough_params(
       build_options.alias_passthrough_params());
   execution_options.set_fdo_profile(build_options.fdo_profile().data(),
                                     build_options.fdo_profile().size());
   execution_options.set_device_memory_size(build_options.device_memory_size());
+  execution_options.set_use_shardy_partitioner(
+      build_options.use_shardy_partitioner());
   return execution_options;
 }
 

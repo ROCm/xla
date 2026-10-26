@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,12 +16,13 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_PLATFORM_INITIALIZE_H_
 #define XLA_STREAM_EXECUTOR_PLATFORM_INITIALIZE_H_
 
-#include "xla/stream_executor/platform/platform.h"
+#include "tsl/platform/platform.h"
 
-#if defined(PLATFORM_GOOGLE) || defined(PLATFORM_CHROMIUMOS)
-#include "xla/stream_executor/platform/google/initialize.h"
+#if defined(PLATFORM_GOOGLE) || \
+    (defined(PLATFORM_PORTABLE_GOOGLE) && !defined(__EMSCRIPTEN__))
+#include "xla/stream_executor/platform/google/initialize.h"  // IWYU pragma: export
 #else
-#include "xla/stream_executor/platform/default/initialize.h"
+#include "xla/stream_executor/platform/default/initialize.h"  // IWYU pragma: export
 #endif
 
 #endif  // XLA_STREAM_EXECUTOR_PLATFORM_INITIALIZE_H_

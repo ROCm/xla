@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,10 +13,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
+#include <string>
+
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/testlib/test.h"
 #include "xla/service/cpu/ir_emission_utils.h"
-#include "xla/service/cpu/target_machine_features_fake.h"
-#include "xla/test.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/service/cpu/target_machine_features_stub.h"
 
 namespace xla {
 namespace cpu {
@@ -25,7 +28,7 @@ namespace {
 // Test that we don't call into Eigen with tensors too small to be aligned
 // reliably.
 
-using CpuEigenTensorAlignmentTest = HloTestBase;
+using CpuEigenTensorAlignmentTest = HloHardwareIndependentTestBase;
 
 TEST_F(CpuEigenTensorAlignmentTest, EigenConvAlignment) {
   std::string hlo_string = R"(
@@ -38,19 +41,18 @@ ENTRY ConvOperation {
 }
 )";
 
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
 
   HloInstruction* conv = module->entry_computation()->root_instruction();
 
-  TargetMachineFeaturesWithFakeAlignmentLogic target_machine_with_no_alignment(
+  TargetMachineFeaturesStub target_machine_with_no_alignment(
       [](int64_t size) { return 1; });
 
   EXPECT_FALSE(PotentiallyImplementedAsEigenConvolution(
       *conv, target_machine_with_no_alignment));
 
-  TargetMachineFeaturesWithFakeAlignmentLogic
-      target_machine_with_full_alignment([](int64_t size) {
+  TargetMachineFeaturesStub target_machine_with_full_alignment(
+      [](int64_t size) {
         return TargetMachineFeatures::kEigenExpectedTensorAlignment;
       });
 

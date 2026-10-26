@@ -58,6 +58,10 @@ limitations under the License.
 // files.
 #define PLATFORM_GOOGLE
 
+#elif defined(__CHROME__)
+#define PLATFORM_POSIX
+#define PLATFORM_PORTABLE_GOOGLE
+
 #else
 // If no platform specified, use:
 #define PLATFORM_POSIX
@@ -72,7 +76,7 @@ limitations under the License.
 #define PLATFORM_IS_X86
 #endif
 
-// Check if we are compmiling for an arm device.
+// Check if we are compiling for an arm device.
 #if defined(__arm__) || defined(__aarch64__)
 #define PLATFORM_IS_ARM
 #if defined(__aarch64__)
@@ -80,6 +84,21 @@ limitations under the License.
 #else
 #define PLATFORM_IS_ARM32
 #endif
+#endif
+
+#define TSL_IS_IN_OSS 1
+
+#ifdef __cplusplus
+namespace tsl {
+// Constant which is false internally and true in open source.
+inline constexpr bool kIsOpenSource = TSL_IS_IN_OSS;
+
+#ifdef NDEBUG
+inline constexpr bool kIsDebugBuild = false;
+#else
+inline constexpr bool kIsDebugBuild = true;
+#endif
+}  // namespace tsl
 #endif
 
 #endif  // TENSORFLOW_TSL_PLATFORM_PLATFORM_H_

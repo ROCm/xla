@@ -102,7 +102,7 @@ def InvokeNvcc(argv, log=False):
   """
 
   src_files = [f for f in argv if
-               re.search('\.cpp$|\.cc$|\.c$|\.cxx$|\.C$', f)]
+               re.search(r'\.cpp$|\.cc$|\.c$|\.cxx$|\.C$', f)]
   if len(src_files) == 0:
     raise Error('No source files found for cuda compilation.')
 
@@ -122,7 +122,11 @@ def InvokeNvcc(argv, log=False):
   includes = ["-I " + include for include in include_options]
 
   defines, argv = GetOptionValue(argv, '/D')
-  defines = ['-D' + define for define in defines]
+  defines = [
+      '-D' + define
+      for define in defines
+      if 'BAZEL_CURRENT_REPOSITORY' not in define
+  ]
 
   undefines, argv = GetOptionValue(argv, '/U')
   undefines = ['-U' + define for define in undefines]
@@ -177,6 +181,9 @@ def InvokeNvcc(argv, log=False):
   nvccopts += ['--keep', '--keep-dir', tempdir]
   # Force C++17 dialect (note, everything in just one string!)
   nvccopts += ['--std c++17']
+  # This is so that nvcc does not complain about MSVC or CLANG.
+  nvccopts += ['-allow-unsupported-compiler']
+  nvccopts += ['--expt-extended-lambda', '--expt-relaxed-constexpr']
   if log:
     Log([NVCC_PATH] + nvccopts)
 

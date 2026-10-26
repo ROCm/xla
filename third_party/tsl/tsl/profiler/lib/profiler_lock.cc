@@ -16,10 +16,11 @@ limitations under the License.
 
 #include <atomic>
 
-#include "tsl/platform/errors.h"
-#include "tsl/platform/macros.h"
-#include "tsl/platform/statusor.h"
-#include "tsl/util/env_var.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/macros.h"
+#include "xla/tsl/util/env_var.h"
 
 namespace tsl {
 namespace profiler {
@@ -39,7 +40,7 @@ static_assert(ATOMIC_INT_LOCK_FREE == 2, "Assumed atomic<int> was lock free");
   return g_session_active.load(std::memory_order_relaxed) != 0;
 }
 
-/*static*/ StatusOr<ProfilerLock> ProfilerLock::Acquire() {
+/*static*/ absl::StatusOr<ProfilerLock> ProfilerLock::Acquire() {
   // Use environment variable to permanently lock the profiler.
   // This allows running TensorFlow under an external profiling tool with all
   // built-in profiling disabled.
@@ -49,13 +50,13 @@ static_assert(ATOMIC_INT_LOCK_FREE == 2, "Assumed atomic<int> was lock free");
     return disabled;
   }();
   if (TF_PREDICT_FALSE(tf_profiler_disabled)) {
-    return errors::AlreadyExists(
+    return absl::AlreadyExistsError(
         "TensorFlow Profiler is permanently disabled by env var "
         "TF_DISABLE_PROFILING.");
   }
   int already_active = g_session_active.exchange(1, std::memory_order_acq_rel);
   if (already_active) {
-    return errors::AlreadyExists(kProfilerLockContention);
+    return absl::AlreadyExistsError(kProfilerLockContention);
   }
   return ProfilerLock(/*active=*/true);
 }

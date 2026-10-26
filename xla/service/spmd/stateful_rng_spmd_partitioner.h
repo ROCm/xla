@@ -1,4 +1,4 @@
-/* Copyright 2021 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2021 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,12 +16,20 @@ limitations under the License.
 #ifndef XLA_SERVICE_SPMD_STATEFUL_RNG_SPMD_PARTITIONER_H_
 #define XLA_SERVICE_SPMD_STATEFUL_RNG_SPMD_PARTITIONER_H_
 
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <utility>
 
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
-#include "xla/service/hlo_pass_interface.h"
+#include "xla/hlo/pass/hlo_pass_interface.h"
+#include "xla/service/call_graph.h"
 #include "xla/service/spmd/spmd_partitioner.h"
 
 namespace xla {
@@ -40,14 +48,42 @@ class StatefulRngSpmdPartitioningVisitor
                                       collective_ops_creator, next_channel_id,
                                       logger, std::move(options), partitioner,
                                       call_graph) {}
-  Status HandleRngGetAndUpdateState(HloInstruction* hlo) override;
+  absl::Status HandleRngGetAndUpdateState(HloInstruction* hlo) override;
 };
 
 class StatefulRngSpmdPartitioner : public spmd::SpmdPartitioner {
  public:
-  StatefulRngSpmdPartitioner(int64_t num_partitions, int64_t num_replicas)
+  static spmd::SpmdPartitionerOptions GetDefaultOptions() {
+    spmd::SpmdPartitionerOptions options;
+    options.allow_module_signature_change = true;
+    options.threshold_for_windowed_einsum_mib = 100000;
+    return options;
+  }
+
+  StatefulRngSpmdPartitioner(int64_t num_partitions, int64_t num_replicas,
+                             spmd::SpmdPartitionerOptions options)
       : spmd::SpmdPartitioner(num_partitions, num_replicas,
-                              GetSpmdPartitionerOptions()) {}
+                              std::move(options)) {}
+
+  StatefulRngSpmdPartitioner(
+      int64_t num_partitions, int64_t num_replicas,
+      int64_t threshold_for_windowed_einsum_mib = 100000,
+      bool windowed_einsum_use_multiple_streams = false,
+      bool skip_checking_windowed_einsum_users = false,
+      bool disable_ag_rewrite_for_multiple_consumers = false,
+      bool enable_partial_windowed_einsums = false,
+      std::optional<int64_t> total_bytes_windowed_einsum_threshold =
+          std::nullopt,
+      int64_t max_windowed_einsum_iteration = 32)
+      : StatefulRngSpmdPartitioner(
+            num_partitions, num_replicas,
+            GetSpmdPartitionerOptions(threshold_for_windowed_einsum_mib,
+                                      windowed_einsum_use_multiple_streams,
+                                      skip_checking_windowed_einsum_users,
+                                      disable_ag_rewrite_for_multiple_consumers,
+                                      enable_partial_windowed_einsums,
+                                      total_bytes_windowed_einsum_threshold,
+                                      max_windowed_einsum_iteration)) {}
 
  protected:
   std::unique_ptr<spmd::SpmdPartitioningVisitor> CreateVisitor(
@@ -57,19 +93,37 @@ class StatefulRngSpmdPartitioner : public spmd::SpmdPartitioner {
       spmd::SpmdPartitionerOptions options,
       const CallGraph& call_graph) override;
 
-  Status PreprocessSharding(
+  absl::Status PreprocessSharding(
       HloModule* module,
       const absl::flat_hash_set<absl::string_view>& execution_threads) override;
+
   bool CanSideEffectingHaveReplicatedSharding(
       const HloInstruction* hlo) override;
 
  private:
-  static spmd::SpmdPartitionerOptions GetSpmdPartitionerOptions() {
-    spmd::SpmdPartitionerOptions options;
-    options.allow_module_signature_change = true;
-    // Setting windowed einsum threshold to be large to disable it for GPU by
-    // default.
-    options.threshold_for_windowed_einsum_mib = 100000;
+  static spmd::SpmdPartitionerOptions GetSpmdPartitionerOptions(
+      int64_t threshold_for_windowed_einsum_mib,
+      bool windowed_einsum_use_multiple_streams = false,
+      bool skip_checking_windowed_einsum_users = false,
+      bool disable_ag_rewrite_for_multiple_consumers = false,
+      bool enable_partial_windowed_einsums = false,
+      std::optional<int64_t> total_bytes_windowed_einsum_threshold =
+          std::nullopt,
+      int64_t max_windowed_einsum_iteration = 32) {
+    spmd::SpmdPartitionerOptions options = GetDefaultOptions();
+    options.threshold_for_windowed_einsum_mib =
+        threshold_for_windowed_einsum_mib;
+    options.unroll_windowed_einsum = windowed_einsum_use_multiple_streams;
+    options.skip_checking_windowed_einsum_users =
+        skip_checking_windowed_einsum_users;
+    options.disable_ag_rewrite_for_multiple_consumers =
+        disable_ag_rewrite_for_multiple_consumers;
+    options.total_bytes_windowed_einsum_threshold =
+        total_bytes_windowed_einsum_threshold;
+    options.max_windowed_einsum_iteration = max_windowed_einsum_iteration;
+    VLOG(3) << "Set SPMD max windowed einsum iteration to "
+            << options.max_windowed_einsum_iteration;
+    options.partial_windowed_einsum = enable_partial_windowed_einsums;
     return options;
   }
 };

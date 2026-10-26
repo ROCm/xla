@@ -1,4 +1,4 @@
-/* Copyright 2020 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2020 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,11 +21,15 @@ limitations under the License.
 #include <optional>
 #include <utility>
 
+#include "absl/container/flat_hash_set.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "xla/comparison_util.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_module.h"
-#include "xla/service/hlo_pass_interface.h"
+#include "xla/hlo/pass/hlo_pass_interface.h"
 
 namespace xla {
 
@@ -40,17 +44,17 @@ class TopkRewriter : public HloModulePass {
 
   absl::string_view name() const override { return "topk-rewriter"; }
 
-  using HloPassInterface::Run;
-  StatusOr<bool> Run(
+ protected:
+  absl::StatusOr<bool> RunImpl(
       HloModule* module,
       const absl::flat_hash_set<absl::string_view>& execution_threads) override;
 
- protected:
   // Check if the sort instruction is in TopK.
-  std::optional<int64_t> SortIsInTopK(HloInstruction* inst);
+  std::optional<int64_t> SortIsInTopK(HloInstruction* inst,
+                                      ComparisonOrder* order = nullptr);
 
   // Transform to CustomCall.
-  StatusOr<bool> TransformToCustomCall(
+  absl::StatusOr<bool> TransformToCustomCall(
       HloModule* module,
       const absl::flat_hash_set<absl::string_view>& execution_threads);
 
@@ -59,6 +63,11 @@ class TopkRewriter : public HloModulePass {
   // converted into a custom call.
   std::function<bool(const HloSortInstruction*, int64_t)>
       is_profitable_to_convert_;
+
+  // Matches the input to the sort+iota+slice pattern and converts to custom
+  // call if profitable. Returns the custom call if one was created.
+  absl::StatusOr<HloInstruction*> TransformPatternToCustomCall(
+      HloInstruction* inst);
 };
 
 class TopkDecomposer : public HloModulePass {
@@ -68,8 +77,8 @@ class TopkDecomposer : public HloModulePass {
   explicit TopkDecomposer(HloPredicate should_decompose = {})
       : should_decompose_(should_decompose) {}
 
-  using HloPassInterface::Run;
-  StatusOr<bool> Run(
+ protected:
+  absl::StatusOr<bool> RunImpl(
       HloModule* module,
       const absl::flat_hash_set<absl::string_view>& execution_threads) override;
 

@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,6 +15,14 @@ limitations under the License.
 
 #include "xla/service/cpu/conv_canonicalization.h"
 
+#include <cstdint>
+#include <vector>
+
+#include "absl/container/flat_hash_set.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "tsl/platform/errors.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
@@ -24,12 +32,11 @@ limitations under the License.
 #include "xla/shape_util.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/errors.h"
 
 namespace xla {
 namespace cpu {
 
-StatusOr<bool> ConvCanonicalization::Run(
+absl::StatusOr<bool> ConvCanonicalization::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   bool changed = false;
@@ -134,15 +141,16 @@ StatusOr<bool> ConvCanonicalization::Run(
       // example, input height and width are the same as before the reshapes.
       HloInstruction* new_conv = module->entry_computation()->AddInstruction(
           HloInstruction::CreateConvolve(
-              new_conv_shape, new_input, new_kernel, hlo->feature_group_count(),
-              hlo->batch_group_count(), hlo->window(), new_dnums,
-              hlo->precision_config()));
+              new_conv_shape, {new_input, new_kernel},
+              hlo->feature_group_count(), hlo->batch_group_count(),
+              hlo->window(), new_dnums, hlo->precision_config()));
 
       // Reshape the output back to the shape of the original convolution.
-      TF_RETURN_IF_ERROR(module->entry_computation()->ReplaceWithNewInstruction(
-          hlo, HloInstruction::CreateTranspose(
-                   hlo->shape(), new_conv,
-                   InversePermutation(new_output_dim_order))));
+      ABSL_RETURN_IF_ERROR(
+          module->entry_computation()->ReplaceWithNewInstruction(
+              hlo, HloInstruction::CreateTranspose(
+                       hlo->shape(), new_conv,
+                       InversePermutation(new_output_dim_order))));
       changed = true;
     }
   }

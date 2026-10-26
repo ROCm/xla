@@ -1,4 +1,4 @@
-/* Copyright 2019 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2019 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,24 +15,34 @@ limitations under the License.
 
 #include "xla/stream_executor/allocator_stats.h"
 
+#include <string>
+
 #include "absl/strings/str_format.h"
+#include "tsl/platform/numbers.h"
 
 namespace stream_executor {
 
 std::string AllocatorStats::DebugString() const {
   return absl::StrFormat(
-      "Limit:            %20lld\n"
-      "InUse:            %20lld\n"
-      "MaxInUse:         %20lld\n"
+      "Limit:            %20s\n"
+      "InUse:            %20s\n"
+      "MaxInUse:         %20s\n"
       "NumAllocs:        %20lld\n"
-      "MaxAllocSize:     %20lld\n"
-      "Reserved:         %20lld\n"
-      "PeakReserved:     %20lld\n"
-      "LargestFreeBlock: %20lld\n",
-      this->bytes_limit ? *this->bytes_limit : 0, this->bytes_in_use,
-      this->peak_bytes_in_use, this->num_allocs, this->largest_alloc_size,
-      this->bytes_reserved, this->peak_bytes_reserved,
-      this->largest_free_block_bytes);
+      "MaxAllocSize:     %20s\n"
+      "Reserved:         %20s\n"
+      "PeakReserved:     %20s\n"
+      "PeakAllocated:    %20s\n"
+      "LargestFreeBlock: %20s\n",
+      tsl::strings::HumanReadableNumBytes(this->bytes_limit ? *this->bytes_limit
+                                                            : 0),
+      tsl::strings::HumanReadableNumBytes(this->bytes_in_use),
+      tsl::strings::HumanReadableNumBytes(this->peak_bytes_in_use),
+      this->num_allocs,
+      tsl::strings::HumanReadableNumBytes(this->largest_alloc_size),
+      tsl::strings::HumanReadableNumBytes(this->bytes_reserved),
+      tsl::strings::HumanReadableNumBytes(this->peak_bytes_reserved),
+      tsl::strings::HumanReadableNumBytes(this->peak_allocated_bytes),
+      tsl::strings::HumanReadableNumBytes(this->largest_free_block_bytes));
 }
 
 }  // namespace stream_executor

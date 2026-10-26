@@ -1,39 +1,30 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 # Description:
 #   A tool for reducing a HLO module that produces incorrect results.
 load(
-    "//xla:xla.bzl",
-    "xla_cc_binary",
+    "//xla:xla.default.bzl",
     "xla_cc_test",
 )
-load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda")
-load("@bazel_skylib//rules:build_test.bzl", "build_test")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = ["//xla:internal"],
-)
-
-build_test(
-    name = "hlo_bisect_build_test",
-    targets = [
-        ":hlo_bisect",
-    ],
-)
-
-xla_cc_binary(
-    name = "hlo_bisect",
-    testonly = True,
-    srcs = ["hlo_bisect.cc"],
-    deps = [
-        ":hlo_bisect_utils",
-        "//xla:debug_options_flags",
-        "//xla/service:backend",
-        "//xla/service:cpu_plugin",
-        "//xla/service:gpu_plugin",
-        "//xla/service:interpreter_plugin",
-        "@tsl//tsl/platform:platform_port",
-        "@tsl//tsl/util:command_line_flags",
-    ] + if_cuda(["//xla/stream_executor/cuda:cublas_plugin"]),
 )
 
 cc_library(
@@ -42,15 +33,16 @@ cc_library(
     hdrs = ["hlo_bisect_state.h"],
     deps = [
         "//xla:literal",
-        "//xla:status",
-        "//xla:statusor",
+        "//xla:literal_util",
         "//xla:util",
         "//xla/hlo/ir:hlo",
-        "//xla/service:hlo_dce",
-        "//xla/tests:test_utils",
+        "//xla/hlo/transforms/simplifiers:hlo_dce",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:span",
     ],
 )
@@ -61,41 +53,13 @@ xla_cc_test(
     deps = [
         ":hlo_bisect_state",
         "//xla:literal",
-        "//xla:statusor",
         "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
+        "//xla/hlo/testlib:pattern_matcher_gmock",
         "//xla/service:pattern_matcher",
-        "//xla/service:pattern_matcher_gmock",
-        "//xla/tests:hlo_test_base",
         "//xla/tests:xla_internal_test_main",
         "@com_google_absl//absl/algorithm:container",
-    ],
-)
-
-cc_library(
-    name = "hlo_bisect_utils",
-    testonly = True,
-    srcs = ["hlo_bisect_utils.cc"],
-    hdrs = ["hlo_bisect_utils.h"],
-    deps = [
-        ":hlo_bisect_state",
-        "//xla:error_spec",
-        "//xla:literal",
-        "//xla:protobuf_util",
-        "//xla:util",
-        "//xla/hlo/ir:hlo",
-        "//xla/service:hlo_parser",
-        "//xla/service:hlo_proto_cc",
-        "//xla/service:hlo_proto_util",
-        "//xla/service:hlo_runner",
-        "//xla/service:hlo_runner_interface",
-        "//xla/service:hlo_verifier",
-        "//xla/service:platform_util",
-        "//xla/tests:literal_test_util",
-        "//xla/tests:test_utils",
-        "//xla/tools:prepare_reference_module",
-        "@com_google_absl//absl/cleanup",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@tsl//tsl/platform:path",
-        "@tsl//tsl/platform:subprocess",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
     ],
 )

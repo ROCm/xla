@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/mlir/tools/mlir_replay/mlir_replay_lib.h"
 
+#include <cstdint>
 #include <iterator>
 #include <memory>
 #include <numeric>
@@ -25,33 +26,49 @@ limitations under the License.
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/random/bit_gen_ref.h"
+#include "absl/random/gaussian_distribution.h"
 #include "absl/random/random.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Sequence.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
-#include "mlir/IR/Operation.h"  // from @llvm-project
-#include "mlir/IR/OwningOpRef.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
-#include "mlir/Support/LogicalResult.h"  // from @llvm-project
-#include "mlir/Tools/ParseUtilities.h"  // from @llvm-project
-#include "xla/mlir/framework/ir/xla_framework.h"
-#include "xla/mlir/tools/mlir_replay/public/execution_trace_utils.h"
-#include "xla/mlir_hlo/tools/mlir_interpreter/framework/interpreter.h"
-#include "xla/mlir_hlo/tools/mlir_interpreter/framework/interpreter_value.h"
-#include "xla/service/hlo.pb.h"
-#include "tsl/platform/errors.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/OwningOpRef.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/TypeRange.h"
+#include "mlir/IR/Types.h"
+#include "mlir/IR/Value.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Support/LogicalResult.h"
+#include "mlir/Tools/ParseUtilities.h"
 #include "tsl/platform/statusor.h"
+#include "xla/mlir/tools/mlir_interpreter/framework/interpreter.h"
+#include "xla/mlir/tools/mlir_interpreter/framework/interpreter_value.h"
+#include "xla/mlir/tools/mlir_interpreter/framework/tensor_or_memref.h"
+#include "xla/mlir/tools/mlir_replay/public/execution_trace.pb.h"
+#include "xla/mlir/tools/mlir_replay/public/execution_trace_utils.h"
+#include "xla/service/hlo.pb.h"
 
 namespace mlir {
 namespace interpreter {
 namespace {
 
-tsl::StatusOr<SmallVector<InterpreterValue>> LoadArgs(
+absl::StatusOr<SmallVector<InterpreterValue>> LoadArgs(
     const xla::HloSnapshot& snapshot, TypeRange types) {
   SmallVector<InterpreterValue> result;
   for (const auto& [arg, type] : llvm::zip(snapshot.arguments(), types)) {
-    TF_ASSIGN_OR_RETURN(auto converted, LiteralToValue(arg, type));
+    ABSL_ASSIGN_OR_RETURN(auto converted, LiteralToValue(arg, type));
     result.push_back(std::move(converted));
   }
   return result;
@@ -62,14 +79,14 @@ template <typename T, template <typename _> class rng_t>
 mlir::interpreter::InterpreterValue RandomTensor(absl::BitGenRef bitgen,
                                                  mlir::Type type) {
   llvm::SmallVector<int64_t> shape;
-  auto shaped_ty = type.dyn_cast<mlir::ShapedType>();
+  auto shaped_ty = mlir::dyn_cast<mlir::ShapedType>(type);
   if (shaped_ty) {
     shape = llvm::to_vector(shaped_ty.getShape());
   }
 
   auto rng = rng_t<T>{};
-  auto result = mlir::interpreter::TensorOrMemref<T>::empty(shape);
-  for (const auto& index : result.view.indices()) {
+  auto result = mlir::interpreter::TensorOrMemref<T>::Empty(shape);
+  for (const auto& index : result.view.Indices()) {
     auto& elem = result.at(index) = rng(bitgen);
     // Ints are typically indices, so scale them down to a more reasonable
     // range.
@@ -86,8 +103,9 @@ mlir::interpreter::InterpreterValue RandomTensor(absl::BitGenRef bitgen,
 
 mlir::FailureOr<mlir::interpreter::InterpreterValue> MakeRandomInput(
     absl::BitGenRef bitgen, mlir::Type type) {
-  auto elem_ty =
-      type.isa<ShapedType>() ? type.cast<ShapedType>().getElementType() : type;
+  auto elem_ty = mlir::isa<ShapedType>(type)
+                     ? mlir::cast<ShapedType>(type).getElementType()
+                     : type;
   if (elem_ty.isF32()) {
     return RandomTensor<float, absl::gaussian_distribution>(bitgen, type);
   }
@@ -104,7 +122,8 @@ mlir::FailureOr<mlir::interpreter::InterpreterValue> MakeRandomInput(
     return RandomTensor<int64_t, absl::uniform_int_distribution>(bitgen, type);
   }
   if (elem_ty.isInteger(1)) {
-    return {{TensorOrMemref<bool>::empty(type.cast<ShapedType>().getShape())}};
+    return {
+        {TensorOrMemref<bool>::Empty(mlir::cast<ShapedType>(type).getShape())}};
   }
 
   llvm::errs() << "Unsupported type: ";
@@ -118,7 +137,7 @@ mlir::FailureOr<mlir::interpreter::InterpreterValue> MakeRandomInput(
 // Extracts a mapping from function arguments to allocated buffers.
 // The buffer assignment is only relevant once the program is bufferized and
 // memref results were converted to arguments.
-std::vector<int64_t> extractXlaBufferAssignment(func::FuncOp main) {
+std::vector<int64_t> ExtractXlaBufferAssignment(func::FuncOp main) {
   std::vector<int64_t> buffer_assignment(main.getNumArguments());
   auto result_mapping =
       main->getAttrOfType<IntegerAttr>("xla_framework.result_mapping");
@@ -155,17 +174,17 @@ std::vector<int64_t> extractXlaBufferAssignment(func::FuncOp main) {
 
 }  // namespace
 
-tsl::StatusOr<SmallVector<InterpreterValue>> Run(
+absl::StatusOr<SmallVector<InterpreterValue>> Run(
     MLIRContext& context, const std::string& mlir_ir,
     const xla::HloSnapshot& snapshot, ExecutionTrace* trace,
     const std::vector<std::string>& entry) {
-  auto sourceMgr = std::make_shared<llvm::SourceMgr>();
-  sourceMgr->AddNewSourceBuffer(llvm::MemoryBuffer::getMemBuffer(mlir_ir),
-                                mlir::SMLoc());
+  auto source_mgr = std::make_shared<llvm::SourceMgr>();
+  source_mgr->AddNewSourceBuffer(llvm::MemoryBuffer::getMemBuffer(mlir_ir),
+                                 mlir::SMLoc());
   mlir::OwningOpRef<mlir::Operation*> module =
-      mlir::parseSourceFileForTool(sourceMgr, &context, false);
+      mlir::parseSourceFileForTool(source_mgr, &context, false);
   if (!module) {
-    return tsl::errors::InvalidArgument("failed to parse MLIR");
+    return absl::InvalidArgumentError("failed to parse MLIR");
   }
 
   SymbolTable symbols(*module);
@@ -178,7 +197,7 @@ tsl::StatusOr<SmallVector<InterpreterValue>> Run(
   }
 
   if (!main) {
-    return tsl::errors::InvalidArgument("failed to find entry point");
+    return absl::InvalidArgumentError("failed to find entry point");
   }
 
   if (trace) {
@@ -186,21 +205,17 @@ tsl::StatusOr<SmallVector<InterpreterValue>> Run(
     (*module)->print(os, OpPrintingFlags().printGenericOpForm());
   }
 
-  // After xla-rt-export-functions, we have an execution context as the first
-  // argument. The interpreter currently cannot deal with these things, so we
-  // fail in that case.
   auto function_args = main.getBody().getBlocks().front().getArguments();
-  auto buffer_type = xla_framework::BufferType::get(main.getContext());
   if (!llvm::all_of(function_args, [&](Value arg) {
-        return arg.getType().isa<ShapedType>() || arg.getType() == buffer_type;
+        return isa<ShapedType>(arg.getType());
       })) {
-    return tsl::errors::InvalidArgument(
+    return absl::InvalidArgumentError(
         "expected all function arguments to be shaped types");
   }
 
-  auto args_to_buffers = extractXlaBufferAssignment(main);
-  TF_ASSIGN_OR_RETURN(auto args,
-                      LoadArgs(snapshot, main.getBody().getArgumentTypes()));
+  auto args_to_buffers = ExtractXlaBufferAssignment(main);
+  ABSL_ASSIGN_OR_RETURN(auto args,
+                        LoadArgs(snapshot, main.getBody().getArgumentTypes()));
   auto out_args =
       main.getBody().getBlocks().front().getArguments().drop_front(args.size());
 
@@ -216,14 +231,6 @@ tsl::StatusOr<SmallVector<InterpreterValue>> Run(
   // Add random inputs for output arguments and unspecified inputs.
   for (auto arg : out_args) {
     auto ty = arg.getType();
-    if (ty == buffer_type) {
-      // Buffers are used exactly once, in a buffer_to_mem op.
-      if (!arg.hasOneUse()) {
-        return tsl::errors::InvalidArgument(
-            "expected buffer argument to be used eactly once");
-      }
-      ty = arg.getUsers().begin()->getResultTypes().front();
-    }
 
     int64_t buffer_index = args_to_buffers[arg.getArgNumber()];
     // If we already have a buffer for this argument, use it.
@@ -236,7 +243,7 @@ tsl::StatusOr<SmallVector<InterpreterValue>> Run(
 
     auto arg_or = MakeRandomInput(bitgen, ty);
     if (!succeeded(arg_or)) {
-      return tsl::errors::InvalidArgument("failed to create input");
+      return absl::InvalidArgumentError("failed to create input");
     }
     out_buffers.push_back(*arg_or);
     args.push_back(*arg_or);
@@ -248,15 +255,13 @@ tsl::StatusOr<SmallVector<InterpreterValue>> Run(
   if (trace) {
     options.listener = &tracer;
   }
-  auto results_or = runInterpreter(symbols, main, args, options);
-  if (!succeeded(results_or)) {
-    return tsl::errors::Internal("interpreter failed");
-  }
+  ABSL_ASSIGN_OR_RETURN(auto results,
+                        RunInterpreter(symbols, main, args, options));
 
-  if (results_or->empty()) {
+  if (results.empty()) {
     return out_buffers;
   }
-  return *results_or;
+  return results;
 }
 
 }  // namespace interpreter

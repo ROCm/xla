@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,12 +17,13 @@ limitations under the License.
 
 #include <string>
 
-#include "absl/strings/str_format.h"
-#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "absl/log/log.h"
+#include "llvm/Support/Casting.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/Pass/Pass.h"
 #include "xla/service/llvm_ir/llvm_util.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/path.h"
+#include "xla/tsl/platform/logging.h"
 
 namespace mlir {
 namespace interpreter {
@@ -40,20 +41,6 @@ void MlirCompilerTraceInstrumentation::runAfterPass(Pass* pass, Operation* op) {
   auto* item = trace_.mutable_passes()->Add();
   item->set_after_pass(pass->getName().str());
   *item->mutable_mlir_module() = xla::llvm_ir::DumpToString(module);
-}
-
-MlirCompilerTraceInstrumentation::~MlirCompilerTraceInstrumentation() {
-  if (!trace_.passes().empty()) {
-    std::string filename;
-    absl::StrAppendFormat(&filename, "module_%04d", unique_id_);
-    if (!module_name_.empty()) {
-      absl::StrAppend(&filename, ".", module_name_);
-    }
-    absl::StrAppend(&filename, ".mlir-trace.pb");
-    filename = tsl::io::JoinPath(dirname_, filename);
-    TF_CHECK_OK(tsl::Env::Default()->RecursivelyCreateDir(dirname_));
-    TF_CHECK_OK(tsl::WriteBinaryProto(tsl::Env::Default(), filename, trace_));
-  }
 }
 
 }  // namespace interpreter

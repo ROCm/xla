@@ -1,7 +1,22 @@
+// Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// ==============================================================================
 // RUN: ifrt-opt %s -ifrt-duplicated-callee-elimination | FileCheck %s
 
 // CHECK-LABEL: @main
-func.func @main(%arg0: !ifrt.array<tensor<2x2xi32>, 1x1 to [0] on 1, [0]>)
+func.func @main(%arg0: !ifrt.array<tensor<2x2xi32>,
+                                   #ifrt.sharding_param<1x1 to [0] on 1>, [0]>)
     attributes {ifrt.function} {
   // CHECK: %[[CTRL:.+]] = ifrt.Call @callee
   %ctrl_0 = ifrt.Call @callee() on devices [0,1] : () -> ()
@@ -17,7 +32,8 @@ func.func @main(%arg0: !ifrt.array<tensor<2x2xi32>, 1x1 to [0] on 1, [0]>)
   // CHECK-NOT: ifrt.Call @callee
   // CHECK: ifrt.Call @callee_different_signature
   %ctrl_4 = ifrt.Call @callee_different_signature(%arg0) on devices [0,1]
-      : (!ifrt.array<tensor<2x2xi32>, 1x1 to [0] on 1, [0]>) -> ()
+      : (!ifrt.array<tensor<2x2xi32>,
+                     #ifrt.sharding_param<1x1 to [0] on 1>, [0]>) -> ()
   return
 }
 

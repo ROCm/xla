@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,7 +16,9 @@ limitations under the License.
 #ifndef XLA_CLIENT_EXECUTABLE_BUILD_OPTIONS_H_
 #define XLA_CLIENT_EXECUTABLE_BUILD_OPTIONS_H_
 
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -24,17 +26,23 @@ limitations under the License.
 
 #include "absl/algorithm/container.h"
 #include "absl/container/inlined_vector.h"
-#include "xla/pjrt/compile_options.pb.h"
+#include "absl/log/check.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "xla/pjrt/distributed/key_value_store_interface.h"
+#include "xla/pjrt/proto/compile_options.pb.h"
 #include "xla/service/compilation_environments.h"
 #include "xla/service/computation_placer.h"
+#include "xla/service/gpu_topology.h"
 #include "xla/shape.h"
+#include "xla/tsl/platform/threadpool.h"
 #include "xla/xla.pb.h"
-#include "tsl/platform/threadpool.h"
 
 namespace stream_executor {
 
 // Forward-declared to avoid StreamExecutor dependency.
-class DeviceMemoryAllocator;
+class DeviceAddressAllocator;
 
 }  // namespace stream_executor
 
@@ -80,11 +88,11 @@ class ExecutableBuildOptions {
   // want to run various algorithms on the device and pick the fastest one -- it
   // might allocate buffers for use by these algorithms using this allocator.
   //
-  // This does not need to be the same as the se::DeviceMemoryAllocator passed
+  // This does not need to be the same as the se::DeviceAddressAllocator passed
   // when running the executable.
   ExecutableBuildOptions& set_device_allocator(
-      se::DeviceMemoryAllocator* allocator);
-  se::DeviceMemoryAllocator* device_allocator() const;
+      se::DeviceAddressAllocator* allocator);
+  se::DeviceAddressAllocator* device_allocator() const;
 
   // The number of replicas of this computation that are to be executed.
   // Defaults to 1.
@@ -118,6 +126,24 @@ class ExecutableBuildOptions {
   }
   ExecutableBuildOptions& set_auto_spmd_partitioning_mesh_ids(
       std::vector<int64_t> mesh_ids);
+
+  ExecutionOptions::EffortLevel optimization_level() const {
+    return optimization_level_;
+  }
+  ExecutableBuildOptions& set_optimization_level(
+      ExecutionOptions::EffortLevel optimization_level) {
+    optimization_level_ = optimization_level;
+    return *this;
+  }
+
+  ExecutionOptions::EffortLevel memory_fitting_level() const {
+    return memory_fitting_level_;
+  }
+  ExecutableBuildOptions& set_memory_fitting_level(
+      ExecutionOptions::EffortLevel memory_fitting_level) {
+    memory_fitting_level_ = memory_fitting_level;
+    return *this;
+  }
 
   bool deduplicate_hlo() const { return deduplicate_hlo_; }
   ExecutableBuildOptions& set_deduplicate_hlo(bool deduplicate_hlo);
@@ -153,12 +179,33 @@ class ExecutableBuildOptions {
     return *this;
   }
 
+  absl::Span<const bool> allow_spmd_sharding_propagation_to_parameters() const {
+    return allow_spmd_sharding_propagation_to_parameters_;
+  }
   absl::Span<const bool> allow_spmd_sharding_propagation_to_output() const {
     return allow_spmd_sharding_propagation_to_output_;
+  }
+  bool any_allow_spmd_sharding_propagation_to_parameters() const {
+    return absl::c_linear_search(allow_spmd_sharding_propagation_to_parameters_,
+                                 true);
   }
   bool any_allow_spmd_sharding_propagation_to_output() const {
     return absl::c_linear_search(allow_spmd_sharding_propagation_to_output_,
                                  true);
+  }
+  // Allows sharding propagation to propagate to the inputs. This changes the
+  // input shape of the computation (which is undesirable), but it can be used
+  // to allow to run partial compilation to determine what would be the input
+  // sharding of a computation if XLA would be allowed to propagate the sharding
+  // which can be used by higher level framework as a way to query intermediate
+  // sharding of operations when multiple computation would be chained and
+  // merged together.
+  ExecutableBuildOptions& set_allow_spmd_sharding_propagation_to_parameters(
+      absl::Span<const bool> allow_spmd_sharding_propagation_to_parameters) {
+    allow_spmd_sharding_propagation_to_parameters_.assign(
+        allow_spmd_sharding_propagation_to_parameters.begin(),
+        allow_spmd_sharding_propagation_to_parameters.end());
+    return *this;
   }
   // Allows sharding propagation to propagate to the outputs. This changes the
   // output shape of the computation (which is undesirable), but it can be used
@@ -186,7 +233,7 @@ class ExecutableBuildOptions {
   }
 
   using LayoutCanonicalizationCallback =
-      std::function<StatusOr<std::pair<std::vector<Shape>, Shape>>(
+      std::function<absl::StatusOr<std::pair<std::vector<Shape>, Shape>>(
           const HloModule& module)>;
   void set_layout_canonicalization_callback(
       LayoutCanonicalizationCallback callback) {
@@ -197,8 +244,8 @@ class ExecutableBuildOptions {
   }
 
   absl::string_view fdo_profile() const { return fdo_profile_; }
-  void set_fdo_profile(const std::string& fdo_profile) {
-    fdo_profile_ = fdo_profile;
+  void set_fdo_profile(std::string fdo_profile) {
+    fdo_profile_ = std::move(fdo_profile);
   }
   std::string* mutable_fdo_profile() { return &fdo_profile_; }
 
@@ -209,11 +256,41 @@ class ExecutableBuildOptions {
     return *this;
   }
 
+  bool use_shardy_partitioner() const { return use_shardy_partitioner_; }
+  ExecutableBuildOptions& set_use_shardy_partitioner(
+      bool use_shardy_partitioner) {
+    use_shardy_partitioner_ = use_shardy_partitioner;
+    return *this;
+  }
+
   // Returns a string representation of the build options, suitable for
   // debugging.
   std::string ToString() const;
 
-  StatusOr<ExecutableBuildOptionsProto> ToProto() const;
+  absl::StatusOr<ExecutableBuildOptionsProto> ToProto() const;
+
+  int process_index() const { return process_index_; }
+  void set_process_index(const int process_index) {
+    process_index_ = process_index;
+  }
+  int process_count() const { return process_count_; }
+  void set_process_count(const int process_count) {
+    process_count_ = process_count;
+  }
+
+  std::shared_ptr<KeyValueStoreInterface> key_value_store() const {
+    return key_value_store_;
+  }
+  void set_key_value_store(std::shared_ptr<KeyValueStoreInterface> kv_store) {
+    key_value_store_ = kv_store;
+  }
+
+  const std::optional<GpuTopology>& gpu_topology() const {
+    return gpu_topology_;
+  }
+  void set_gpu_topology(const GpuTopology& gpu_topology) {
+    gpu_topology_ = gpu_topology;
+  }
 
  private:
   int device_ordinal_ = -1;
@@ -221,27 +298,38 @@ class ExecutableBuildOptions {
   bool result_layout_set_ = false;
   std::optional<CompilationEnvironments> comp_envs_;
   std::optional<DebugOptions> debug_options_;
-  se::DeviceMemoryAllocator* device_allocator_ = nullptr;
+  se::DeviceAddressAllocator* device_allocator_ = nullptr;
   int num_replicas_ = 1;
   int num_partitions_ = 1;
   bool use_spmd_partitioning_ = false;
   bool use_auto_spmd_partitioning_ = false;
   std::vector<int64_t> auto_spmd_partitioning_mesh_shape_;
   std::vector<int64_t> auto_spmd_partitioning_mesh_ids_;
+  ExecutionOptions::EffortLevel optimization_level_ =
+      ExecutionOptions::EFFORT_UNKNOWN;
+  ExecutionOptions::EffortLevel memory_fitting_level_ =
+      ExecutionOptions::EFFORT_UNKNOWN;
   bool deduplicate_hlo_ = false;
   bool broadcast_replicated_params_ = false;
   std::optional<DeviceAssignment> device_assignment_;
   bool alias_passthrough_params_ = false;
   bool run_backend_only_ = false;
+  absl::InlinedVector<bool, 1> allow_spmd_sharding_propagation_to_parameters_ =
+      {false};
   absl::InlinedVector<bool, 1> allow_spmd_sharding_propagation_to_output_ = {
       false};
   tsl::thread::ThreadPool* compile_thread_pool_ = nullptr;
   LayoutCanonicalizationCallback layout_canonicalization_callback_;
   std::string fdo_profile_;
   int64_t device_memory_size_ = 0;
+  bool use_shardy_partitioner_ = false;
+  int process_index_ = 0;
+  int process_count_ = 1;
+  std::shared_ptr<KeyValueStoreInterface> key_value_store_;
+  std::optional<GpuTopology> gpu_topology_;
 };
 
-StatusOr<ExecutableBuildOptions> ExecutableBuildOptionsFromProto(
+absl::StatusOr<ExecutableBuildOptions> ExecutableBuildOptionsFromProto(
     const ExecutableBuildOptionsProto& input);
 
 // Creates an ExecutionOptions based on a given ExecutableBuildOptions and

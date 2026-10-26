@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,26 +14,59 @@ limitations under the License.
 ==============================================================================*/
 
 #include <memory>
+#include <string>
 #include <utility>
 
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+#include "llvm/Support/Casting.h"
+#include "xla/hlo/analysis/alias_info.h"
+#include "xla/hlo/analysis/hlo_ordering.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/testlib/filecheck.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/literal.h"
+#include "xla/literal_util.h"
 #include "xla/service/buffer_assignment.h"
-#include "xla/service/cpu/tests/cpu_codegen_test.h"
+#include "xla/service/compiler.h"
 #include "xla/service/llvm_ir/alias_analysis.h"
+#include "xla/service/llvm_ir/ir_array.h"
 #include "xla/service/llvm_ir/llvm_util.h"
+#include "xla/service/logical_buffer.h"
+#include "xla/service/platform_util.h"
 #include "xla/shape_util.h"
-#include "xla/tests/filecheck.h"
+#include "xla/stream_executor/platform.h"
+#include "xla/tsl/platform/test.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/test.h"
 
 namespace xla {
 namespace cpu {
+namespace {
 
-class CpuNoAliasTest : public CpuCodegenTest {};
+std::unique_ptr<Compiler> GetCpuCompiler() {
+  absl::StatusOr<std::string> name = PlatformUtil::CanonicalPlatformName("cpu");
+  CHECK_OK(name.status());
+  absl::StatusOr<stream_executor::Platform::Id> platform_id =
+      PlatformUtil::GetPlatformIdFromCanonicalName(*name);
+  CHECK_OK(platform_id.status());
+  absl::StatusOr<std::unique_ptr<Compiler>> compiler =
+      Compiler::GetForPlatform(*platform_id);
+  CHECK_OK(compiler.status());
+  return std::move(*compiler);
+}
+
+class CpuNoAliasTest : public HloHardwareIndependentTestBase {};
 
 // Creates a simple HLO ir_module (runs concat(concat(x, y), x)), and then
 // inspects the aliasing information for loads to its buffers.
@@ -61,12 +94,15 @@ TEST_F(CpuNoAliasTest, Concat) {
   hlo_module->AddEntryComputation(std::move(computation));
 
   // Now that we have an HLO module, build an llvm_ir::AliasAnalysis for it.
+  AliasInfo alias_info;
+  auto compiler = GetCpuCompiler();
   auto status_or_buffer_assn = BufferAssigner::Run(
       hlo_module.get(),
       std::make_unique<DependencyHloOrdering>(hlo_module.get()),
-      backend().compiler()->BufferSizeBytesFunction(),
-      [](LogicalBuffer::Color) { return /*alignment=*/1; });
-  ASSERT_EQ(status_or_buffer_assn.status(), OkStatus());
+      compiler->BufferSizeBytesFunction(), &alias_info,
+      [](LogicalBuffer::Color) { return /*alignment=*/1; },
+      BufferAssigner::Options{});
+  ASSERT_EQ(status_or_buffer_assn.status(), absl::OkStatus());
 
   llvm::LLVMContext context;
   llvm_ir::AliasAnalysis aa(*hlo_module, *status_or_buffer_assn.value(),
@@ -144,11 +180,12 @@ TEST_F(CpuNoAliasTest, Concat) {
     CHECK-DAG: [[concat1_noalias]] = !{[[buf_size48]]}
   )";
 
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       bool filecheck_match,
       RunFileCheck(llvm_ir::DumpToString(&ir_module), filecheck_pattern));
   EXPECT_TRUE(filecheck_match);
 }
 
+}  // namespace
 }  // namespace cpu
 }  // namespace xla

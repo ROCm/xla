@@ -1,52 +1,160 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 # Description:
 #   Computationally expensive, exhaustive tests for XLA
 
-load("//xla/tests:build_defs.bzl", "xla_test")
-load("@tsl//tsl/platform:rules_cc.bzl", "cc_library")
+load("//xla/tests:build_defs.bzl", "GPU_BACKENDS", "xla_test")
+load("//xla/tests/exhaustive:build_defs.bzl", "exhaustive_xla_test")
+load("//xla/tsl:tsl.default.bzl", "filegroup", "get_compatible_with_portable")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
-    default_visibility = [":friends"],
+    default_visibility = ["//xla:friends"],
     licenses = ["notice"],
 )
 
-package_group(
-    name = "friends",
-    includes = [
-        "//xla:friends",
+filegroup(
+    name = "exhaustive_op_test_utils_shared_hdrs",
+    testonly = True,
+    srcs = [
+        "error_spec.h",
+        "exhaustive_op_test_base.h",
+        "exhaustive_op_test_utils.h",
     ],
-    packages = [
-        "//platforms/testing/tests/...",
+    compatible_with = get_compatible_with_portable(),
+)
+
+filegroup(
+    name = "exhaustive_op_test_utils_shared_srcs",
+    testonly = True,
+    srcs = [
+        "exhaustive_op_test_base.cc",
+        "exhaustive_op_test_utils.cc",
     ],
+    compatible_with = get_compatible_with_portable(),
 )
 
 cc_library(
     name = "exhaustive_op_test_utils",
     testonly = True,
-    srcs = ["exhaustive_op_test_utils.cc"],
-    hdrs = ["exhaustive_op_test_utils.h"],
-    tags = ["no_pip"],
+    srcs = [
+        "platform.cc",
+        ":exhaustive_op_test_utils_shared_srcs",
+    ],
+    hdrs = [
+        "exhaustive_op_test.h",
+        "platform.h",
+        "test_op.h",
+        ":exhaustive_op_test_utils_shared_hdrs",
+    ],
+    visibility = ["//visibility:private"],
     deps = [
         "//xla:bit_cast",
+        "//xla:fp_util",
+        "//xla:literal",
+        "//xla:literal_util",
         "//xla:shape_util",
+        "//xla:types",
         "//xla:xla_data_proto_cc",
-        "//xla/client:xla_builder",
-        "//xla/client/lib:constants",
-        "//xla/client/lib:math",
-        "//xla/service:shaped_buffer",
-        "//xla/tests:client_library_test_base",
-        "//xla/tests:literal_test_util",
-        "//xla/tests:test_macros_header",
-        "//xla/tests:xla_internal_test_main",
+        "//xla/client:executable_build_options",
+        "//xla/hlo/builder:xla_builder",
+        "//xla/hlo/builder:xla_computation",
+        "//xla/service:hlo_module_config",
+        "//xla/service:hlo_runner_interface",
+        "//xla/tests:client_library_test_runner_mixin",
+        "//xla/tests:hlo_pjrt_interpreter_reference_mixin",
+        "//xla/tests:hlo_pjrt_test_base",
+        "//xla/tests:xla_test_backend_predicates",
+        "//xla/tsl/lib/core:status_test_util",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test",
+        "//xla/tsl/util:command_line_flags",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/meta:type_traits",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/types:span",
+        "@tsl//tsl/platform:path",
     ],
 )
 
-xla_test(
-    name = "exhaustive_unary_test_f32_or_smaller",
-    srcs = ["exhaustive_unary_test_f32_or_smaller.cc"],
-    real_hardware_only = True,  # Very slow on the interpreter.
-    shard_count = 48,
+cc_library(
+    name = "exhaustive_unary_test_textual_hdrs",
+    textual_hdrs = [
+        "exhaustive_unary_test_definitions.inc",
+        "exhaustive_unary_test_f32_and_smaller_instantiation.inc",
+        "exhaustive_unary_test_f64_instantiation.inc",
+        "exhaustive_unary_test_ops.inc",
+    ],
+)
+
+cc_library(
+    name = "exhaustive_test_main",
+    testonly = True,
+    srcs = ["exhaustive_test_main.cc"],
+    deps = [
+        ":exhaustive_op_test_utils",
+        "//xla/tsl/util:command_line_flags",
+        "@com_google_googletest//:gtest_for_library",
+        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/platform:test",
+    ],
+    alwayslink = True,
+)
+
+exhaustive_xla_test(
+    name = "exhaustive_unary",
+    timeout = "long",
+    srcs = [
+        "exhaustive_unary_test_definitions.h",
+        "exhaustive_unary_test_functions.cc",
+    ],
+    # Nvidia close-sourced libraries are not TSAN friendly, but are doing their
+    # own synchronization. This can lead to TSAN false positives that are hard
+    # to track down.
+    backend_tags = {
+        gpu: ["notsan"]
+        for gpu in GPU_BACKENDS
+        if gpu != "nvgpu_any" and gpu != "amdgpu_any"
+    },
+    backends = ["cpu"] + [
+        gpu
+        for gpu in GPU_BACKENDS
+        if gpu != "nvgpu_any" and gpu != "amdgpu_any"
+    ],
+    # Partition goal is to get under ~5 minute execution time without needlessly
+    # reserving hardware for each shard.
+    #
+    # exhaustive_xla_test needs to have all partition names added to allow other
+    # build tools to function.
+    partitions = {
+        "f32_and_smaller": [
+            "exhaustive_unary_test_f32_and_smaller_instantiation.cc",
+        ],
+        "f64": [
+            ":exhaustive_unary_test_f64_instantiation.cc",
+        ],
+    },
+    shard_count = 50,
     tags = [
         "optonly",
         # This is a big test that we skip for capacity reasons in OSS testing.
@@ -54,61 +162,47 @@ xla_test(
     ],
     deps = [
         ":exhaustive_op_test_utils",
-        "//xla:util",
-        "//xla/tests:client_library_test_base",
+        ":exhaustive_test_main",
+        ":exhaustive_unary_test_textual_hdrs",
+        "//xla:literal",
+        "//xla:types",
+        "//xla/hlo/builder:xla_builder",
+        "//xla/hlo/builder/lib:constants",
+        "//xla/hlo/builder/lib:math",
+        "//xla/tests:xla_test_backend_predicates",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/types:span",
+        "@tsl//tsl/platform:test",
     ],
 )
 
 xla_test(
-    name = "exhaustive_unary_test_f64",
-    srcs = ["exhaustive_unary_test_f64.cc"],
-    backends = [
-        "gpu",
-        "cpu",
+    name = "exhaustive_unary_complex",
+    timeout = "long",
+    srcs = [
+        "exhaustive_unary_complex_test.cc",
     ],
-    shard_count = 48,
-    tags = [
-        "optonly",
-        # This is a big test that we skip for capacity reasons in OSS testing.
-        "no_oss",
-        # TODO(b/151340488): Timed out on 2020-03-18.
-        "nozapfhahn",
+    # Nvidia close-sourced libraries are not TSAN friendly, but are doing their
+    # own synchronization. This can lead to TSAN false positives that are hard
+    # to track down.
+    backend_tags = {
+        "h100": [
+            "full",
+            "notsan",
+        ],
+        "gpu": [
+            "notsan",
+        ],
+        "gb200": ["broken"],  # TODO(b/505945608): re-enable when fixed.
+        "gb300": ["broken"],  # TODO(b/505944727): re-enable when fixed.
+    },
+    backends = ["cpu"] + [
+        gpu
+        for gpu in GPU_BACKENDS
+        if gpu != "nvgpu_any" and gpu != "amdgpu_any"
     ],
-    deps = [
-        ":exhaustive_op_test_utils",
-        "//xla:util",
-        "//xla/tests:client_library_test_base",
-    ],
-)
-
-xla_test(
-    name = "exhaustive_unary_test_complex",
-    srcs = ["exhaustive_unary_test_complex.cc"],
-    backends = [
-        "gpu",
-        "cpu",
-    ],
-    shard_count = 48,
-    tags = [
-        "optonly",
-        # This is a big test that we skip for capacity reasons in OSS testing.
-        "no_oss",
-    ],
-    deps = [
-        ":exhaustive_op_test_utils",
-        "//xla:util",
-        "//xla/tests:client_library_test_base",
-    ],
-)
-
-xla_test(
-    name = "exhaustive_binary_16_bit_test",
-    srcs = ["exhaustive_binary_16_bit_test.cc"],
-    backends = [
-        "gpu",
-        "cpu",
-    ],
-    shard_count = 48,
+    shard_count = 50,
     tags = [
         "optonly",
         # This is a big test that we skip for capacity reasons in OSS testing.
@@ -116,23 +210,80 @@ xla_test(
     ],
     deps = [
         ":exhaustive_op_test_utils",
+        ":exhaustive_test_main",
+        "//xla:literal",
+        "//xla:types",
+        "//xla/hlo/builder:xla_builder",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/types:span",
+        "@tsl//tsl/platform:test",
     ],
 )
 
-xla_test(
-    name = "exhaustive_binary_test_f32_f64",
-    srcs = ["exhaustive_binary_test_f32_f64.cc"],
-    backends = [
-        "gpu",
-        "cpu",
+cc_library(
+    name = "exhaustive_binary_test_textual_hdrs",
+    textual_hdrs = [
+        "exhaustive_binary_test_definitions.inc",
+        "exhaustive_binary_test_f16_and_smaller_instantiation.inc",
+        "exhaustive_binary_test_f32_instantiation.inc",
+        "exhaustive_binary_test_f64_instantiation.inc",
+        "exhaustive_binary_test_ops.inc",
     ],
-    shard_count = 48,
+)
+
+exhaustive_xla_test(
+    name = "exhaustive_binary",
+    timeout = "long",
+    srcs = [
+        "exhaustive_binary_test_definitions.h",
+        "exhaustive_binary_test_functions.cc",
+    ],
+    # Nvidia close-sourced libraries are not TSAN friendly, but are doing their
+    # own synchronization. This can lead to TSAN false positives that are hard
+    # to track down.
+    backend_tags = {
+        gpu: ["notsan"]
+        for gpu in GPU_BACKENDS
+        if gpu != "nvgpu_any" and gpu != "amdgpu_any"
+    },
+    backends = ["cpu"] + [
+        gpu
+        for gpu in GPU_BACKENDS
+        if gpu != "nvgpu_any" and gpu != "amdgpu_any"
+    ],
+    # Partition goal is to get under ~5 minute execution time without needlessly
+    # reserving hardware for each shard.
+    #
+    # exhaustive_xla_test needs to have all partition names added to allow other
+    # build tools to function.
+    partitions = {
+        "f16_and_smaller": [
+            "exhaustive_binary_test_f16_and_smaller_instantiation.cc",
+        ],
+        "f32": [
+            "exhaustive_binary_test_f32_instantiation.cc",
+        ],
+        "f64": [
+            "exhaustive_binary_test_f64_instantiation.cc",
+        ],
+    },
+    shard_count = 50,
     tags = [
         "optonly",
         # This is a big test that we skip for capacity reasons in OSS testing.
         "no_oss",
     ],
     deps = [
+        ":exhaustive_binary_test_textual_hdrs",
         ":exhaustive_op_test_utils",
+        ":exhaustive_test_main",
+        "//xla:literal",
+        "//xla:types",
+        "//xla/hlo/builder:xla_builder",
+        "//xla/tests:xla_test_backend_predicates",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/types:span",
+        "@tsl//tsl/platform:test",
     ],
 )

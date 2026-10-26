@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,17 +15,21 @@ limitations under the License.
 
 #include "xla/service/gpu/hlo_fusion_stats.h"
 
+#include <gtest/gtest.h>
+
 #include <string>
 
-#include "xla/service/hlo_parser.h"
-#include "xla/tests/hlo_test_base.h"
-#include "tsl/lib/core/status_test_util.h"
+#include "absl/status/status_matchers.h"
+#include "absl/strings/match.h"
+#include "xla/hlo/parser/hlo_parser.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/tsl/lib/core/status_test_util.h"
 
 namespace xla {
 namespace gpu {
 namespace {
 
-using HloFusionStatsTest = HloTestBase;
+using HloFusionStatsTest = HloHardwareIndependentTestBase;
 
 TEST_F(HloFusionStatsTest, LoopFusionAndReduceFusion) {
   auto module = ParseAndReturnVerifiedModule(R"(
@@ -84,8 +88,7 @@ TEST_F(HloFusionStatsTest, LoopFusionAndReduceFusion) {
     })")
                     .value();
   HloFusionStatsVisitor fusion_stats_visitor;
-  TF_ASSERT_OK(
-      module.get()->entry_computation()->Accept(&fusion_stats_visitor));
+  ASSERT_OK(module.get()->entry_computation()->Accept(&fusion_stats_visitor));
   SCOPED_TRACE(module->ToString());
 
   std::string stats = fusion_stats_visitor.ToString();
@@ -113,8 +116,7 @@ TEST_F(HloFusionStatsTest, AggregateCwiseOps) {
     })")
                     .value();
   HloFusionStatsVisitor fusion_stats_visitor;
-  TF_ASSERT_OK(
-      module.get()->entry_computation()->Accept(&fusion_stats_visitor));
+  ASSERT_OK(module.get()->entry_computation()->Accept(&fusion_stats_visitor));
   SCOPED_TRACE(module->ToString());
 
   std::string stats = fusion_stats_visitor.ToString();

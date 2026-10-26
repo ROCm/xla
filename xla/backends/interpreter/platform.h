@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,11 +18,14 @@ limitations under the License.
 #include <memory>
 #include <string>
 
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "tsl/platform/statusor.h"
 #include "xla/backends/interpreter/platform_id.h"
+#include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/executor_cache.h"
-#include "xla/stream_executor/plugin.h"
+#include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/stream_executor.h"
-#include "xla/stream_executor/trace_listener.h"
 
 namespace stream_executor {
 namespace interpreter {
@@ -30,8 +33,9 @@ namespace interpreter {
 class XlaInterpreterPlatform : public Platform {
  public:
   XlaInterpreterPlatform()
-      : XlaInterpreterPlatform("Interpreter", kXlaInterpreterPlatformId) {}
-  XlaInterpreterPlatform(const std::string& name, const Platform::Id& id);
+      : XlaInterpreterPlatform(kXlaInterpreterPlatformId->ToName(),
+                               kXlaInterpreterPlatformId) {}
+  XlaInterpreterPlatform(absl::string_view name, const Platform::Id& id);
   ~XlaInterpreterPlatform() override;
 
   Platform::Id id() const override;
@@ -40,23 +44,18 @@ class XlaInterpreterPlatform : public Platform {
 
   const std::string& Name() const override;
 
-  tsl::StatusOr<std::unique_ptr<DeviceDescription>> DescriptionForDevice(
+  absl::StatusOr<std::unique_ptr<DeviceDescription>> DescriptionForDevice(
       int ordinal) const override;
 
-  tsl::StatusOr<StreamExecutor*> ExecutorForDevice(int ordinal) override;
+  absl::StatusOr<StreamExecutor*> ExecutorForDevice(int ordinal) override;
 
-  tsl::StatusOr<StreamExecutor*> ExecutorForDeviceWithPluginConfig(
-      int ordinal, const PluginConfig& config) override;
+  absl::StatusOr<StreamExecutor*> FindExisting(int ordinal) override;
 
-  tsl::StatusOr<StreamExecutor*> GetExecutor(
-      const StreamExecutorConfig& config) override;
-
-  tsl::StatusOr<std::unique_ptr<StreamExecutor>> GetUncachedExecutor(
-      const StreamExecutorConfig& config) override;
-
-  void RegisterTraceListener(std::unique_ptr<TraceListener> listener) override;
-
-  void UnregisterTraceListener(TraceListener* listener) override;
+  // Returns a device constructed with ordinal without
+  // looking in or storing to the Platform's executor cache.
+  // Ownership IS transferred to the caller.
+  absl::StatusOr<std::unique_ptr<StreamExecutor>> GetUncachedExecutor(
+      int ordinal);
 
  private:
   // This platform's name.
@@ -67,7 +66,8 @@ class XlaInterpreterPlatform : public Platform {
   // Cache of created StreamExecutors.
   ExecutorCache executor_cache_;
 
-  SE_DISALLOW_COPY_AND_ASSIGN(XlaInterpreterPlatform);
+  XlaInterpreterPlatform(const XlaInterpreterPlatform&) = delete;
+  void operator=(const XlaInterpreterPlatform&) = delete;
 };
 
 }  // namespace interpreter

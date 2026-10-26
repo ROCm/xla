@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,12 +15,18 @@ limitations under the License.
 
 #include "xla/mlir/tools/mlir_bisect/bisect_lib.h"
 
+#include <cassert>
 #include <functional>
 #include <iterator>
-#include <tuple>
 #include <utility>
 
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/OwningOpRef.h"
+#include "mlir/Support/LLVM.h"
 
 namespace mlir {
 namespace bisect {
@@ -62,7 +68,7 @@ GetStrategies() {
 void RegisterReduceStrategy(
     StringRef name,
     std::function<CandidateVector(BisectState&, Operation*)> fn) {
-  GetStrategies()[name] = fn;
+  GetStrategies()[name] = std::move(fn);
 }
 
 CandidateVector GetCandidates(
@@ -70,8 +76,8 @@ CandidateVector GetCandidates(
     BisectState& state, ModuleOp op) {
   assert(strategy && "GetCandidates was passed a null strategy");
   CandidateVector result;
-  op.lookupSymbol("main")->walk([&](Operation* subOp) {
-    llvm::move(strategy(state, subOp), std::back_inserter(result));
+  op.lookupSymbol("main")->walk([&](Operation* sub_op) {
+    llvm::move(strategy(state, sub_op), std::back_inserter(result));
   });
   return result;
 }

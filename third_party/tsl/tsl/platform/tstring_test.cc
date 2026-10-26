@@ -15,12 +15,17 @@ limitations under the License.
 
 #include "tsl/platform/tstring.h"
 
-#include <memory>
+#include <cstddef>
+#include <sstream>
 #include <string>
+#include <utility>
 
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "tsl/platform/cord.h"
+#include "tsl/platform/platform.h"
 #include "tsl/platform/stringpiece.h"
-#include "tsl/platform/test.h"
+#include "xla/tsl/platform/test.h"
 
 using ::tsl::tstring;
 
@@ -37,7 +42,7 @@ TEST(TF_TStringTest, Construction) {
   tstring s11("a\0a", 3);
   tstring s12(kLongString);
   tstring s13(3, 'b');
-  tstring s14(tsl::StringPiece("hi"));
+  tstring s14(absl::string_view("hi"));
   tstring s15(std::string("bye"));
 
   EXPECT_EQ("", s10);
@@ -109,7 +114,7 @@ TEST(TF_TStringTest, Assignment) {
   s32 = std::string(kLongString);
 
   EXPECT_EQ(kLongString, s32);
-  EXPECT_EQ(tstring::Type::LARGE, s32.type());
+  EXPECT_EQ(tstring::Type::VIEW, s32.type());
   EXPECT_EQ(kLongStringLen, s32.size());
 
   // LARGE -> SMALL
@@ -125,7 +130,7 @@ TEST(TF_TStringTest, Assignment) {
   EXPECT_EQ(tstring::Type::SMALL, s33.type());
   EXPECT_EQ(1, s33.size());
 
-  s32 = tsl::StringPiece(kLongString);
+  s32 = absl::string_view(kLongString);
 
   EXPECT_EQ(kLongString, s32);
   EXPECT_EQ(tstring::Type::LARGE, s32.type());
@@ -134,7 +139,7 @@ TEST(TF_TStringTest, Assignment) {
   // LARGE -> SMALL but still LARGE
   s32.resize(TF_TString_SmallCapacity * 2);
 
-  EXPECT_EQ(tsl::StringPiece(kLongString, TF_TString_SmallCapacity * 2), s32);
+  EXPECT_EQ(absl::string_view(kLongString, TF_TString_SmallCapacity * 2), s32);
   EXPECT_EQ(tstring::Type::LARGE, s32.type());
   EXPECT_EQ(TF_TString_SmallCapacity * 2, s32.size());
 
@@ -173,7 +178,7 @@ TEST(TF_TStringTest, Assignment) {
 
   EXPECT_EQ(2, s33.size());
 
-  s32.assign_as_view(tsl::StringPiece(kLongString));
+  s32.assign_as_view(absl::string_view(kLongString));
 
   EXPECT_EQ(tstring::Type::VIEW, s32.type());
   EXPECT_EQ(kLongString, s32.c_str());
@@ -181,15 +186,29 @@ TEST(TF_TStringTest, Assignment) {
 #ifdef PLATFORM_GOOGLE
   s33 = absl::Cord(kLongString);
 
+  // Check flat cord.
   EXPECT_EQ(kLongString, s33);
-  EXPECT_EQ(tstring::Type::LARGE, s33.type());
+  EXPECT_EQ(tstring::Type::VIEW, s33.type());
   EXPECT_EQ(kLongStringLen, s33.size());
 
   tstring s34((absl::Cord(kLongString)));
 
   EXPECT_EQ(kLongString, s34);
-  EXPECT_EQ(tstring::Type::LARGE, s34.type());
+  EXPECT_EQ(tstring::Type::VIEW, s34.type());
   EXPECT_EQ(kLongStringLen, s34.size());
+
+  // Check non-flat cord.
+  absl::Cord c1(kLongString);
+  absl::Cord c2(std::string(500, 'x'));
+  c1.Append(c2);
+  if (!c1.TryFlat()) {
+    tstring s35(c1);
+    EXPECT_EQ(tstring::Type::LARGE, s35.type());
+    EXPECT_EQ(c1.size(), s35.size());
+    s33 = c1;
+    EXPECT_EQ(tstring::Type::LARGE, s33.type());
+    EXPECT_EQ(c1.size(), s33.size());
+  }
 #endif  // PLATFORM_GOOGLE
 }
 
@@ -205,18 +224,24 @@ TEST(TF_TStringTest, Comparison) {
   tstring nullaa("\0aa", 3);
 
   EXPECT_TRUE(a < b);
+  EXPECT_TRUE(a <= b);
   EXPECT_TRUE(a != b);
   EXPECT_FALSE(a > b);
+  EXPECT_FALSE(a >= b);
   EXPECT_FALSE(a == b);
 
   EXPECT_TRUE(a < aa);
+  EXPECT_TRUE(a <= aa);
   EXPECT_TRUE(a != aa);
   EXPECT_FALSE(a > aa);
+  EXPECT_FALSE(a >= aa);
   EXPECT_FALSE(a == aa);
 
   EXPECT_TRUE(b > a);
+  EXPECT_TRUE(b >= a);
   EXPECT_TRUE(b != a);
   EXPECT_FALSE(b < a);
+  EXPECT_FALSE(b <= a);
   EXPECT_FALSE(b == a);
   EXPECT_FALSE(a == b);
 
@@ -224,28 +249,38 @@ TEST(TF_TStringTest, Comparison) {
   EXPECT_TRUE(b != c);
 
   EXPECT_TRUE(empty < a);
+  EXPECT_TRUE(empty <= a);
   EXPECT_TRUE(empty != a);
   EXPECT_FALSE(empty > a);
+  EXPECT_FALSE(empty >= a);
   EXPECT_FALSE(empty == a);
 
   EXPECT_TRUE(a > empty);
+  EXPECT_TRUE(a >= empty);
   EXPECT_TRUE(a != empty);
   EXPECT_FALSE(a < empty);
+  EXPECT_FALSE(a <= empty);
   EXPECT_FALSE(a == empty);
 
   EXPECT_FALSE(a < a_);
+  EXPECT_TRUE(a <= a_);
   EXPECT_FALSE(a != a_);
   EXPECT_FALSE(a > a_);
+  EXPECT_TRUE(a >= a_);
   EXPECT_TRUE(a == a_);
 
   EXPECT_TRUE(nulla < nullaa);
+  EXPECT_TRUE(nulla <= nullaa);
   EXPECT_TRUE(nulla != nullaa);
   EXPECT_FALSE(nulla > nullaa);
+  EXPECT_FALSE(nulla >= nullaa);
   EXPECT_FALSE(nulla == nullaa);
 
   EXPECT_TRUE(nulla < nullb);
+  EXPECT_TRUE(nulla <= nullb);
 
   EXPECT_TRUE(nullaa > nulla);
+  EXPECT_TRUE(nullaa >= nulla);
   EXPECT_TRUE(nullaa != nulla);
   EXPECT_FALSE(nullaa < nulla);
   EXPECT_FALSE(nullaa == nulla);
@@ -254,18 +289,18 @@ TEST(TF_TStringTest, Comparison) {
 TEST(TF_TStringTest, Conversion) {
   tstring s50(kLongString);
   std::string s51(s50);
-  tsl::StringPiece s52(s50);
+  absl::string_view s52(s50);
   EXPECT_EQ(kLongString, s51);
   EXPECT_EQ(kLongStringLen, s51.size());
   EXPECT_EQ(kLongString, s52);
   EXPECT_EQ(kLongStringLen, s52.size());
 
-#ifdef PLATFORM_GOOGLE
-  absl::AlphaNum s53(s50);
+  std::string s53 = absl::StrCat(s50);
 
   EXPECT_STREQ(kLongString, s53.data());
   EXPECT_EQ(kLongStringLen, s53.size());
-#endif  // PLATFORM_GOOGLE
+
+  EXPECT_EQ(std::string("\0a", 2), absl::StrCat(tstring("\0a", 2)));
 }
 
 TEST(TF_TStringTest, Allocation) {
@@ -404,4 +439,127 @@ TEST(TF_TStringTest, Friends) {
   ss << s91;
 
   EXPECT_EQ(std::string("\0a\0", 3), ss.str());
+}
+
+struct DeletionMarker {
+  bool* deleted = nullptr;
+  DeletionMarker() = default;
+  explicit DeletionMarker(bool* d) : deleted(d) {
+    if (deleted) *deleted = false;
+  }
+  DeletionMarker(DeletionMarker&& other) : deleted(other.deleted) {
+    other.deleted = nullptr;
+  }
+  DeletionMarker& operator=(DeletionMarker&& other) {
+    deleted = other.deleted;
+    other.deleted = nullptr;
+    return *this;
+  }
+  ~DeletionMarker() {
+    if (deleted) *deleted = true;
+  }
+};
+
+TEST(OwnerTest, RefUnref) {
+  bool deleted = false;
+  auto* owner =
+      new tsl::tstring::owner<DeletionMarker>(DeletionMarker(&deleted));
+  EXPECT_FALSE(deleted);
+
+  tsl::tstring s1;
+  s1.assign_as_shared_view("hello", owner);
+  owner->Unref();
+  EXPECT_FALSE(deleted);
+
+  tsl::tstring s2 = s1;
+  EXPECT_FALSE(deleted);
+
+  s1.clear();
+  EXPECT_FALSE(deleted);
+
+  s2.clear();
+  EXPECT_TRUE(deleted);
+}
+
+TEST(OwnerTest, Assign) {
+  bool deleted = false;
+  auto* owner =
+      new tsl::tstring::owner<DeletionMarker>(DeletionMarker(&deleted));
+  EXPECT_FALSE(deleted);
+
+  tsl::tstring s1;
+  s1.assign_as_shared_view("hello", owner);
+  owner->Unref();
+
+  tsl::tstring s2;
+  s2 = s1;
+
+  tsl::tstring s3;
+  s3 = std::move(s1);
+
+  s2.clear();
+  EXPECT_FALSE(deleted);
+
+  s3.clear();
+  EXPECT_TRUE(deleted);
+}
+
+TEST(TStringStdStringRvalueTest, ConstructShort) {
+  std::string s = "short";
+  tsl::tstring ts(std::move(s));
+  EXPECT_EQ(ts, "short");
+  EXPECT_EQ(ts.type(), tsl::tstring::Type::SMALL);
+}
+
+TEST(TStringStdStringRvalueTest, AssignShort) {
+  std::string s = "short";
+  tsl::tstring ts;
+  ts = std::move(s);
+  EXPECT_EQ(ts, "short");
+  EXPECT_EQ(ts.type(), tsl::tstring::Type::SMALL);
+}
+
+TEST(TStringStdStringRvalueTest, ConstructLong) {
+  std::string s = "this is a long string that will not fit in small capacity";
+  tsl::tstring ts(std::move(s));
+  EXPECT_EQ(ts, "this is a long string that will not fit in small capacity");
+  EXPECT_EQ(ts.type(), tsl::tstring::Type::VIEW);
+}
+
+TEST(TStringStdStringRvalueTest, AssignLong) {
+  std::string s = "this is a long string that will not fit in small capacity";
+  tsl::tstring ts;
+  ts = std::move(s);
+  EXPECT_EQ(ts, "this is a long string that will not fit in small capacity");
+  EXPECT_EQ(ts.type(), tsl::tstring::Type::VIEW);
+}
+
+TEST(TStringStdStringLvalueTest, ConstructLvalueLong) {
+  std::string s = "this is a long string that will not fit in small capacity";
+  tsl::tstring ts(s);
+  EXPECT_EQ(ts, "this is a long string that will not fit in small capacity");
+  EXPECT_EQ(ts.type(), tsl::tstring::Type::LARGE);
+}
+
+TEST(TStringStdStringLvalueTest, AssignLvalueLong) {
+  std::string s = "this is a long string that will not fit in small capacity";
+  tsl::tstring ts;
+  ts = s;
+  EXPECT_EQ(ts, "this is a long string that will not fit in small capacity");
+  EXPECT_EQ(ts.type(), tsl::tstring::Type::LARGE);
+}
+
+TEST(TStringStdStringLvalueTest, ConstructLvalueShort) {
+  std::string s = "short";
+  tsl::tstring ts(s);
+  EXPECT_EQ(ts, "short");
+  EXPECT_EQ(ts.type(), tsl::tstring::Type::SMALL);
+}
+
+TEST(TStringStdStringLvalueTest, AssignLvalueShort) {
+  std::string s = "short";
+  tsl::tstring ts;
+  ts = s;
+  EXPECT_EQ(ts, "short");
+  EXPECT_EQ(ts.type(), tsl::tstring::Type::SMALL);
 }

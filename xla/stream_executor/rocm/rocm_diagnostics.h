@@ -1,4 +1,4 @@
-/* Copyright 2015 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2026 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,24 +16,13 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_ROCM_ROCM_DIAGNOSTICS_H_
 #define XLA_STREAM_EXECUTOR_ROCM_ROCM_DIAGNOSTICS_H_
 
-#include "xla/stream_executor/gpu/gpu_diagnostics.h"
-
 namespace stream_executor {
 namespace rocm {
 
-// e.g. DriverVersion{346, 3, 4}
-using DriverVersion = gpu::DriverVersion;
-
-// Converts a parsed driver version to string form.
-string DriverVersionToString(DriverVersion version);
-
-// Converts a parsed driver version or status value to natural string form.
-string DriverVersionStatusToString(tsl::StatusOr<DriverVersion> version);
-
-// Converts a string of a form like "331.79" to a DriverVersion{331, 79}.
-tsl::StatusOr<DriverVersion> StringToDriverVersion(const string& value);
-
-using Diagnostician = gpu::Diagnostician;
+// Logs HIP visibility, runtime/driver version, and device 0 when ROCm looks
+// misconfigured (for example hipInit failed). Best-effort: HIP errors are
+// logged, not returned.
+void LogDiagnosticInformation();
 
 }  // namespace rocm
 }  // namespace stream_executor

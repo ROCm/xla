@@ -1,4 +1,4 @@
-/* Copyright 2021 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2021 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,17 +15,21 @@ limitations under the License.
 
 #include "xla/service/sharding_remover.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/parser/hlo_parser.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/hlo/utils/hlo_matchers.h"
-#include "xla/service/hlo_parser.h"
-#include "xla/status_macros.h"
-#include "xla/tests/hlo_test_base.h"
 
 namespace op = xla::testing::opcode_matchers;
 
 namespace xla {
 namespace {
 
-using ShardingRemoverTest = HloTestBase;
+using ShardingRemoverTest = HloHardwareIndependentTestBase;
 
 TEST_F(ShardingRemoverTest, RemoveSharding) {
   const char* const hlo_string = R"(
@@ -37,12 +41,23 @@ ENTRY entry {
    custom_call_target="Sharding", sharding={replicated}
  ROOT %reshape.6032 = f32[] reshape(f32[1,1]{1,0} %custom-call.3380)
 })";
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
-  TF_ASSERT_OK_AND_ASSIGN(bool changed, ShardingRemover().Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
+  ASSERT_OK_AND_ASSIGN(bool changed, ShardingRemover().Run(module.get()));
   EXPECT_TRUE(changed);
   auto root = module->entry_computation()->root_instruction();
   EXPECT_THAT(root, op::Reshape(op::Parameter()));
+  // Check that sharding custom-call is replaced with a DCE-able copy.
+  auto parameter = root->operand(0);
+  EXPECT_EQ(parameter->user_count(), 2);
+  bool replaced = false;
+  for (HloInstruction* user : parameter->users()) {
+    if (user->opcode() == HloOpcode::kCopy) {
+      replaced = true;
+      EXPECT_THAT(user, op::Copy(op::Parameter()));
+      break;
+    }
+  }
+  EXPECT_TRUE(replaced);
 }
 
 TEST_F(ShardingRemoverTest, RemoveSPMDShardingToFullShape) {
@@ -55,9 +70,8 @@ ENTRY entry {
    custom_call_target="SPMDShardToFullShape", sharding={replicated}
  ROOT %reshape.6032 = f32[] reshape(f32[1,1]{1,0} %custom-call.3380)
 })";
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
-  TF_ASSERT_OK_AND_ASSIGN(bool changed, ShardingRemover().Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
+  ASSERT_OK_AND_ASSIGN(bool changed, ShardingRemover().Run(module.get()));
   EXPECT_TRUE(changed);
   auto root = module->entry_computation()->root_instruction();
   EXPECT_THAT(root, op::Reshape(op::Parameter()));
@@ -73,9 +87,8 @@ ENTRY entry {
    custom_call_target="SPMDFullToShardShape", sharding={replicated}
  ROOT %reshape.6032 = f32[] reshape(f32[1,1]{1,0} %custom-call.3380)
 })";
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
-  TF_ASSERT_OK_AND_ASSIGN(bool changed, ShardingRemover().Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
+  ASSERT_OK_AND_ASSIGN(bool changed, ShardingRemover().Run(module.get()));
   EXPECT_TRUE(changed);
   auto root = module->entry_computation()->root_instruction();
   EXPECT_THAT(root, op::Reshape(op::Parameter()));
@@ -100,9 +113,8 @@ ENTRY %cluster_2013453984438090939__.47
     %get-tuple-element.1),
     metadata={op_name="XLA_Retvals"}
 })";
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
-  TF_ASSERT_OK_AND_ASSIGN(bool changed, ShardingRemover().Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
+  ASSERT_OK_AND_ASSIGN(bool changed, ShardingRemover().Run(module.get()));
   EXPECT_FALSE(changed);
 }
 

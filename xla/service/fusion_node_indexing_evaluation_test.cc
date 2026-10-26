@@ -1,4 +1,4 @@
-/* Copyright 2020 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2020 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,16 +16,17 @@ limitations under the License.
 #include "xla/service/fusion_node_indexing_evaluation.h"
 
 #include "absl/container/flat_hash_map.h"
+#include "tsl/platform/test.h"
+#include "xla/hlo/analysis/alias_info.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/service/hlo_parser.h"
+#include "xla/hlo/parser/hlo_parser.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/service/instruction_fusion.h"
-#include "xla/tests/hlo_test_base.h"
-#include "tsl/platform/test.h"
 
 namespace xla {
 
-using FusionNodeIndexingEvaluationTest = HloTestBase;
+using FusionNodeIndexingEvaluationTest = HloHardwareIndependentTestBase;
 
 // Subclass of InstructionFusion exposing the protected methods Fuse and
 // FuseInstruction for testing. Also adds the FusionNodeIndexingEvaluation to
@@ -34,7 +35,7 @@ using FusionNodeIndexingEvaluationTest = HloTestBase;
 class InstructionFusionForTesting : public InstructionFusion {
  public:
   explicit InstructionFusionForTesting()
-      : InstructionFusion(InstructionFusion::IsExpensive) {}
+      : InstructionFusion(InstructionFusion::IsExpensive, &own_alias_info_) {}
 
   HloInstruction* FuseInstruction(HloInstruction* fusion_instruction,
                                   HloInstruction* producer) override {
@@ -84,6 +85,7 @@ class InstructionFusionForTesting : public InstructionFusion {
  private:
   absl::flat_hash_map<const HloInstruction*, FusionNodeIndexingEvaluation>
       fusion_node_evaluations_;
+  AliasInfo own_alias_info_;
 };
 
 TEST_F(FusionNodeIndexingEvaluationTest, FuseTwoInstructions) {

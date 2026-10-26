@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,20 +17,21 @@ limitations under the License.
 
 #include <cstdint>
 
+#include "absl/status/status_macros.h"
+#include "tsl/platform/statusor.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/ir/hlo_sharding_metadata.h"
 #include "xla/service/hlo_domain_remover.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 
 namespace {
 
 // Add domains which are used as users of a specific instruction.
-StatusOr<int64_t> AddExitDomains(HloInstruction* instruction,
-                                 HloDomainIsolator::DomainCreator* creator) {
+absl::StatusOr<int64_t> AddExitDomains(
+    HloInstruction* instruction, HloDomainIsolator::DomainCreator* creator) {
   int64_t added_domains = 0;
   if (instruction->opcode() == HloOpcode::kDomain) {
     return added_domains;
@@ -47,7 +48,7 @@ StatusOr<int64_t> AddExitDomains(HloInstruction* instruction,
       // Call ReplaceUseWithDifferentShape even though the shapes are
       // expected to match to avoid an expensive shape check between the
       // original and the new instruction.
-      TF_RETURN_IF_ERROR(
+      ABSL_RETURN_IF_ERROR(
           instruction->ReplaceUseWithDifferentShape(user, domain));
       ++added_domains;
     }
@@ -55,7 +56,7 @@ StatusOr<int64_t> AddExitDomains(HloInstruction* instruction,
   return added_domains;
 }
 
-StatusOr<bool> RunInternal(
+absl::StatusOr<bool> RunInternal(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads,
     HloDomainIsolator::DomainCreator* creator) {
@@ -82,7 +83,7 @@ StatusOr<bool> RunInternal(
           // Call ReplaceUseWithDifferentShape even though the shapes are
           // expected to match to avoid an expensive shape check between the
           // original and the new instruction.
-          TF_RETURN_IF_ERROR(
+          ABSL_RETURN_IF_ERROR(
               operand->ReplaceUseWithDifferentShape(instruction, domain));
           ++added_domains;
         }
@@ -98,31 +99,32 @@ StatusOr<bool> RunInternal(
 HloDomainIsolator::HloDomainIsolator(DomainCreatorFactory creator_factory)
     : creator_factory_(std::move(creator_factory)) {}
 
-StatusOr<bool> HloDomainIsolator::UpdateDomains(HloInstruction* instruction) {
+absl::StatusOr<bool> HloDomainIsolator::UpdateDomains(
+    HloInstruction* instruction) {
   DomainCreator creator = creator_factory_();
   bool changed = false;
   // Update exit domains.
-  TF_ASSIGN_OR_RETURN(const int64_t removed_domains,
-                      HloDomainRemover::RemoveExitDomains(
-                          instruction, ShardingMetadata::KindName()));
-  TF_ASSIGN_OR_RETURN(const int64_t added_domains,
-                      AddExitDomains(instruction, &creator));
+  ABSL_ASSIGN_OR_RETURN(const int64_t removed_domains,
+                        HloDomainRemover::RemoveExitDomains(
+                            instruction, ShardingMetadata::KindName()));
+  ABSL_ASSIGN_OR_RETURN(const int64_t added_domains,
+                        AddExitDomains(instruction, &creator));
   changed |= (removed_domains > 0 || added_domains > 0);
   // Update the instruction itself if it's a domain.
   if (instruction->opcode() == HloOpcode::kDomain) {
     for (HloInstruction* operand : instruction->operands()) {
-      TF_ASSIGN_OR_RETURN(const int64_t removed_domains,
-                          HloDomainRemover::RemoveExitDomains(
-                              operand, ShardingMetadata::KindName()));
-      TF_ASSIGN_OR_RETURN(const int64_t added_domains,
-                          AddExitDomains(operand, &creator));
+      ABSL_ASSIGN_OR_RETURN(const int64_t removed_domains,
+                            HloDomainRemover::RemoveExitDomains(
+                                operand, ShardingMetadata::KindName()));
+      ABSL_ASSIGN_OR_RETURN(const int64_t added_domains,
+                            AddExitDomains(operand, &creator));
       changed |= (removed_domains > 0 || added_domains > 0);
     }
   }
   return changed;
 }
 
-StatusOr<bool> HloDomainIsolator::Run(
+absl::StatusOr<bool> HloDomainIsolator::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   DomainCreator creator = creator_factory_();

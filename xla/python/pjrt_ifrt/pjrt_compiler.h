@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,8 +18,16 @@ limitations under the License.
 
 #include <memory>
 
-#include "llvm/Support/ExtensibleRTTI.h"
+#include "absl/status/status.h"
+#include "absl/strings/cord.h"
+#include "absl/strings/string_view.h"
 #include "xla/python/ifrt/compiler.h"
+#include "xla/python/ifrt/device_list.h"
+#include "xla/python/ifrt/executable.h"
+#include "xla/python/ifrt/program.h"
+#include "xla/python/ifrt/rtti.h"
+#include "xla/python/ifrt/topology.h"
+#include "xla/tsl/concurrency/future.h"
 
 namespace xla {
 namespace ifrt {
@@ -30,20 +38,30 @@ class PjRtClient;
 //
 // TODO(hyeontaek): Move executable loading to `PjRtClient` and remove the
 // requirement of `PjRtClient`, which will enable ahead-of-time compilation.
-class PjRtCompiler final : public llvm::RTTIExtends<PjRtCompiler, Compiler> {
+class PjRtCompiler final : public RTTIExtends<PjRtCompiler, Compiler> {
  public:
-  explicit PjRtCompiler(PjRtClient* client) : client_(client) {}
+  explicit PjRtCompiler(PjRtClient* client);
 
   // Compiler implementation.
 
   ~PjRtCompiler() override = default;
 
-  StatusOr<std::unique_ptr<LoadedExecutable>> Compile(
+  tsl::Future<LoadedExecutableRef> CompileAndLoad(
       std::unique_ptr<Program> program,
       std::unique_ptr<CompileOptions> options) override;
 
-  StatusOr<std::unique_ptr<LoadedExecutable>> DeserializeLoadedExecutable(
-      absl::string_view serialized,
+  tsl::Future<ExecutableRef> Compile(
+      std::unique_ptr<Program> program, const Topology& topology,
+      std::unique_ptr<CompileOptions> options) override;
+
+  absl::Status IsExecutableVersionCompatible(
+      const xla::ifrt::ExecutableVersion& executable_version,
+      const xla::ifrt::DeviceListRef& devices) const override {
+    return absl::UnimplementedError("Not implemented");
+  }
+
+  tsl::Future<LoadedExecutableRef> DeserializeLoadedExecutable(
+      const absl::Cord& serialized,
       std::unique_ptr<DeserializeExecutableOptions> options) override;
 
   static char ID;  // NOLINT

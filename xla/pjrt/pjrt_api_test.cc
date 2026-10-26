@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,31 +14,64 @@ limitations under the License.
 ==============================================================================*/
 #include "xla/pjrt/pjrt_api.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/status_matchers.h"
-#include "tsl/protobuf/error_codes.pb.h"
+
+#include <string>
+
+#include "absl/status/status_matchers.h"
+#include "xla/pjrt/c/pjrt_c_api.h"
+#include "xla/pjrt/c/pjrt_c_api_wrapper_impl.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/protobuf/error_codes.pb.h"
 namespace {
 
 using ::testing::HasSubstr;
-using ::tsl::testing::StatusIs;
 
 TEST(PjRtApiTest, SetAndGetGlobalPjRtApi) {
   PJRT_Api api;
+  api.struct_size = PJRT_Api_STRUCT_SIZE;
+  api.pjrt_api_version.major_version = PJRT_API_MAJOR;
+  api.pjrt_api_version.minor_version = PJRT_API_MINOR;
 
   TF_ASSERT_OK(pjrt::SetPjrtApi("CPU", &api));
   TF_ASSERT_OK_AND_ASSIGN(const PJRT_Api* output, pjrt::PjrtApi("CPU"));
   TF_ASSERT_OK_AND_ASSIGN(const PJRT_Api* output_lowercase,
                           pjrt::PjrtApi("cpu"));
+  TF_ASSERT_OK_AND_ASSIGN(bool is_initialized,
+                          pjrt::IsPjrtPluginInitialized("CPU"));
 
+  EXPECT_FALSE(is_initialized);
   EXPECT_EQ(output, &api);
   EXPECT_EQ(output_lowercase, &api);
   EXPECT_THAT(pjrt::SetPjrtApi("CPU", &api),
-              StatusIs(tensorflow::error::ALREADY_EXISTS,
-                       HasSubstr("PJRT_Api already exists for device type")));
+              absl_testing::StatusIs(
+                  tensorflow::error::ALREADY_EXISTS,
+                  HasSubstr("PJRT_Api already exists for device type")));
   EXPECT_THAT(pjrt::PjrtApi("TPU"),
-              StatusIs(tensorflow::error::NOT_FOUND,
-                       HasSubstr("PJRT_Api not found for device type tpu")));
+              absl_testing::StatusIs(
+                  tensorflow::error::NOT_FOUND,
+                  HasSubstr("PJRT_Api not found for device type tpu")));
+}
+
+TEST(PjRtApiTest, InitPjRtPlugin) {
+  PJRT_Api api;
+  api.struct_size = PJRT_Api_STRUCT_SIZE;
+  api.pjrt_api_version.major_version = PJRT_API_MAJOR;
+  api.pjrt_api_version.minor_version = PJRT_API_MINOR;
+  api.PJRT_Plugin_Initialize = pjrt::PJRT_Plugin_Initialize_NoOp;
+  std::string plugin_name = "plugin";
+  TF_ASSERT_OK(pjrt::SetPjrtApi(plugin_name, &api));
+  TF_ASSERT_OK_AND_ASSIGN(bool is_initialized,
+                          pjrt::IsPjrtPluginInitialized(plugin_name));
+  EXPECT_FALSE(is_initialized);
+
+  TF_ASSERT_OK(pjrt::InitializePjrtPlugin(plugin_name));
+
+  TF_ASSERT_OK_AND_ASSIGN(is_initialized,
+                          pjrt::IsPjrtPluginInitialized(plugin_name));
+  EXPECT_TRUE(is_initialized);
 }
 
 }  // namespace

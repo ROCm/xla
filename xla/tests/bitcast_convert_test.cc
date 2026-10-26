@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,30 +13,31 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <vector>
 
-#include "xla/client/local_client.h"
-#include "xla/client/xla_builder.h"
+#include "absl/strings/string_view.h"
+#include "tsl/platform/ml_dtypes.h"
+#include "xla/error_spec.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/pjrt/interpreter/interpreter_client.h"
 #include "xla/shape_util.h"
-#include "xla/stream_executor/stream_executor.h"
-#include "xla/tests/client_library_test_base.h"
-#include "xla/tests/hlo_test_base.h"
-#include "xla/tests/literal_test_util.h"
-#include "xla/tests/test_macros.h"
+#include "xla/tests/client_library_test_runner_mixin.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/tsl/platform/test.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/float8.h"
-#include "tsl/platform/test.h"
 
 namespace xla {
 namespace {
 
-class BitcastConvertTest : public ClientLibraryTestBase {
+class BitcastConvertTest : public ClientLibraryTestRunnerMixin<
+                               HloInterpreterReferenceMixin<HloTestBase>> {
  public:
-  explicit BitcastConvertTest(se::Platform* platform = nullptr)
-      : ClientLibraryTestBase(platform) {
+  BitcastConvertTest() {
     mutable_debug_options()->add_xla_disable_hlo_passes("algsimp");
     mutable_debug_options()->add_xla_disable_hlo_passes("inline");
   }
@@ -72,7 +73,7 @@ TEST_F(BitcastConvertTest, BitcastR1S32ToR1F32) {
   ComputeAndCompareR1<float>(&builder, expected, {});
 }
 
-XLA_TEST_F(BitcastConvertTest, ConvertR1S0S32ToR1S0F32) {
+TEST_F(BitcastConvertTest, ConvertR1S0S32ToR1S0F32) {
   XlaBuilder builder(TestName());
   auto a = ConstantR1<int32_t>(&builder, {});
   BitcastConvertType(a, F32);
@@ -142,15 +143,16 @@ TEST_F(BitcastConvertTest, ConvertMapToF32) {
 TEST_F(BitcastConvertTest, ConvertReshape) {
   XlaBuilder builder(TestName());
   auto input = ConstantR1<int32_t>(&builder, {0x42280000});
-  auto reshape = Reshape(input, /*dimensions=*/{0}, /*new_sizes=*/{});
+  auto reshape = Reshape(input, /*dimensions=*/{});
   BitcastConvertType(reshape, F32);
 
   ComputeAndCompareR0<float>(&builder, 42.0f, {});
 }
 
-class BitcastConvertHloTest : public HloTestBase {};
+class BitcastConvertHloTest : public HloInterpreterReferenceMixin<HloTestBase> {
+};
 
-XLA_TEST_F(BitcastConvertHloTest, S32to4S8) {
+TEST_F(BitcastConvertHloTest, S32to4S8) {
   absl::string_view hlo_string = R"(
 HloModule bitcast_to_smaller
 
@@ -162,7 +164,7 @@ ENTRY main {
   EXPECT_TRUE(RunAndCompare(hlo_string, ErrorSpec{0, 0}));
 }
 
-XLA_TEST_F(BitcastConvertHloTest, FourS8toS32) {
+TEST_F(BitcastConvertHloTest, FourS8toS32) {
   absl::string_view hlo_string = R"(
 HloModule bitcast_to_larger
 
@@ -174,7 +176,7 @@ ENTRY main {
   EXPECT_TRUE(RunAndCompare(hlo_string, ErrorSpec{0, 0}));
 }
 
-XLA_TEST_F(BitcastConvertHloTest, F32to2F16) {
+TEST_F(BitcastConvertHloTest, F32to2F16) {
   absl::string_view hlo_string = R"(
 HloModule bitcast_to_smaller
 
@@ -186,13 +188,37 @@ ENTRY main {
   EXPECT_TRUE(RunAndCompare(hlo_string, ErrorSpec{1e-5, 1e-5}));
 }
 
-XLA_TEST_F(BitcastConvertHloTest, TwoF16toF32) {
+TEST_F(BitcastConvertHloTest, TwoF16toF32) {
   absl::string_view hlo_string = R"(
 HloModule bitcast_to_smaller
 
 ENTRY main {
   p = f16[10,2] parameter(0)
   ROOT out = f32[10] bitcast-convert(p)
+}
+)";
+  EXPECT_TRUE(RunAndCompare(hlo_string, ErrorSpec{1e-5, 1e-5}));
+}
+
+TEST_F(BitcastConvertHloTest, FourPredToF32) {
+  absl::string_view hlo_string = R"(
+HloModule bitcast_to_smaller
+
+ENTRY main {
+  p = pred[10,4] parameter(0)
+  ROOT out = f32[10] bitcast-convert(p)
+}
+)";
+  EXPECT_TRUE(RunAndCompare(hlo_string, ErrorSpec{1e-5, 1e-5}));
+}
+
+TEST_F(BitcastConvertTest, S8ToPred) {
+  absl::string_view hlo_string = R"(
+HloModule bitcast_to_smaller
+
+ENTRY main {
+  p = s8[10] parameter(0)
+  ROOT out = pred[10] bitcast-convert(p)
 }
 )";
   EXPECT_TRUE(RunAndCompare(hlo_string, ErrorSpec{1e-5, 1e-5}));

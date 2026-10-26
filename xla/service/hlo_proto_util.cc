@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,45 +15,45 @@ limitations under the License.
 
 #include "xla/service/hlo_proto_util.h"
 
-#include <memory>
 #include <string>
 #include <vector>
 
-#include "xla/service/hlo_verifier.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
+#include "google/protobuf/repeated_ptr_field.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/service/buffer_assignment.h"
 #include "xla/util.h"
 
 namespace xla {
 
 HloProto MakeHloProto(const HloModule& module,
-                      const BufferAssignment& assignment) {
-  BufferAssignmentProto proto_assignment = assignment.ToProto();
-  HloProto proto = MakeHloProto(module);
-  proto.mutable_buffer_assignment()->Swap(&proto_assignment);
-  return proto;
-}
-
-HloProto MakeHloProto(const HloModule& module) {
-  HloModuleProto proto_module = module.ToProto();
+                      const BufferAssignment& assignment,
+                      HloProtoOptions options) {
   HloProto proto;
-  proto.mutable_hlo_module()->Swap(&proto_module);
+  MakeHloProto(module, assignment, &proto, options);
   return proto;
 }
 
-StatusOr<std::unique_ptr<HloModule>> CreateModuleFromProto(
-    const HloModuleProto& proto, const HloModuleConfig& module_config,
-    bool is_module_post_optimizations) {
-  VLOG(4) << proto.ShortDebugString();
-  TF_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> module,
-                      HloModule::CreateFromProto(proto, module_config));
-  TF_RETURN_IF_ERROR(
-      HloVerifier(/*layout_sensitive=*/false,
-                  /*allow_mixed_precision=*/is_module_post_optimizations)
-          .Run(module.get())
-          .status());
-  return module;
+void MakeHloProto(const HloModule& module, const BufferAssignment& assignment,
+                  HloProto* proto, HloProtoOptions options) {
+  MakeHloProto(module, proto, options);
+  assignment.ToProto(proto->mutable_buffer_assignment());
 }
 
-StatusOr<std::vector<const ShapeProto*>> EntryComputationParameterShapes(
+HloProto MakeHloProto(const HloModule& module, HloProtoOptions options) {
+  HloProto proto;
+  MakeHloProto(module, &proto, options);
+  return proto;
+}
+
+void MakeHloProto(const HloModule& module, HloProto* proto,
+                  HloProtoOptions options) {
+  module.ToProto(proto->mutable_hlo_module(), options);
+}
+
+absl::StatusOr<std::vector<const ShapeProto*>> EntryComputationParameterShapes(
     const HloProto& hlo_proto) {
   if (!hlo_proto.has_hlo_module()) {
     return NotFound("HloProto missing HloModuleProto.");
@@ -70,7 +70,7 @@ StatusOr<std::vector<const ShapeProto*>> EntryComputationParameterShapes(
   return parameter_shapes;
 }
 
-StatusOr<const ShapeProto*> EntryComputationOutputShape(
+absl::StatusOr<const ShapeProto*> EntryComputationOutputShape(
     const HloProto& hlo_proto) {
   if (!hlo_proto.has_hlo_module()) {
     return NotFound("HloProto missing HloModuleProto.");
@@ -83,6 +83,53 @@ StatusOr<const ShapeProto*> EntryComputationOutputShape(
   }
 
   return &hlo_proto.hlo_module().host_program_shape().result();
+}
+
+absl::StatusOr<std::string> GetBackendConfigString(
+    const HloInstructionProto& instruction, const HloModuleProto* module) {
+  const tsl::protobuf::RepeatedPtrField<std::string>* payloads =
+      module ? &module->payloads() : nullptr;
+
+  if (instruction.has_backend_config_payload()) {
+    const Payload& payload = instruction.backend_config_payload();
+    if (payload.has_id()) {
+      if (module == nullptr) {
+        return absl::InvalidArgumentError(
+            "Module must be provided for external payload lookup.");
+      }
+      if (payload.id() < 0 || payload.id() >= payloads->size()) {
+        return absl::InvalidArgumentError(absl::StrFormat(
+            "Payload requested ID %d but payloads array has size %d",
+            payload.id(), payloads ? payloads->size() : 0));
+      }
+      return payloads->at(payload.id());
+    }
+    return payload.value();
+  }
+  return instruction.backend_config();
+}
+
+static void InlinePayloadIfReferenced(Payload* payload,
+                                      const HloModuleProto* module) {
+  if (payload == nullptr || !payload->has_id() || module == nullptr) {
+    return;
+  }
+  const auto& payloads = module->payloads();
+  if (payload->id() >= 0 && payload->id() < payloads.size()) {
+    payload->set_value(payloads.at(payload->id()));
+  }
+}
+
+HloInstructionProto ToProtoWithInlinedPayloads(HloInstructionProto proto,
+                                               const HloModuleProto* module) {
+  if (proto.has_backend_config_payload()) {
+    InlinePayloadIfReferenced(proto.mutable_backend_config_payload(), module);
+  }
+  if (proto.has_metadata() && proto.metadata().has_metadata_payload()) {
+    InlinePayloadIfReferenced(
+        proto.mutable_metadata()->mutable_metadata_payload(), module);
+  }
+  return proto;
 }
 
 }  // namespace xla

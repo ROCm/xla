@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,11 +17,16 @@ limitations under the License.
 
 #include "xla/service/graphcycles/graphcycles.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
 #include <optional>
 #include <random>
+#include <string>
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/random/random.h"
 #include "tsl/platform/logging.h"
 #include "tsl/platform/test.h"
 #include "tsl/platform/test_benchmark.h"
@@ -37,12 +42,12 @@ struct Edge {
 typedef std::vector<Edge> Edges;
 
 // Return whether "to" is reachable from "from".
-static bool IsReachable(Edges *edges, int from, int to,
-                        absl::flat_hash_set<int> *seen) {
+static bool IsReachable(Edges* edges, int from, int to,
+                        absl::flat_hash_set<int>* seen) {
   seen->insert(from);  // we are investigating "from"; don't do it again
   if (from == to) return true;
   for (int i = 0; i != edges->size(); i++) {
-    Edge *edge = &(*edges)[i];
+    Edge* edge = &(*edges)[i];
     if (edge->from == from) {
       if (edge->to == to) {  // success via edge directly
         return true;
@@ -55,14 +60,14 @@ static bool IsReachable(Edges *edges, int from, int to,
   return false;
 }
 
-static void PrintNodes(Nodes *nodes) {
+static void PrintNodes(Nodes* nodes) {
   LOG(INFO) << "NODES (" << nodes->size() << ")";
   for (int i = 0; i != nodes->size(); i++) {
     LOG(INFO) << (*nodes)[i];
   }
 }
 
-static void PrintEdges(Edges *edges) {
+static void PrintEdges(Edges* edges) {
   LOG(INFO) << "EDGES (" << edges->size() << ")";
   for (int i = 0; i != edges->size(); i++) {
     int a = (*edges)[i].from;
@@ -72,7 +77,7 @@ static void PrintEdges(Edges *edges) {
   LOG(INFO) << "---";
 }
 
-static void PrintGCEdges(Nodes *nodes, tensorflow::GraphCycles *gc) {
+static void PrintGCEdges(Nodes* nodes, xla::GraphCycles* gc) {
   LOG(INFO) << "GC EDGES";
   for (int i = 0; i != nodes->size(); i++) {
     for (int j = 0; j != nodes->size(); j++) {
@@ -86,8 +91,8 @@ static void PrintGCEdges(Nodes *nodes, tensorflow::GraphCycles *gc) {
   LOG(INFO) << "---";
 }
 
-static void PrintTransitiveClosure(Nodes *nodes, Edges *edges,
-                                   tensorflow::GraphCycles *gc) {
+static void PrintTransitiveClosure(Nodes* nodes, Edges* edges,
+                                   xla::GraphCycles* gc) {
   LOG(INFO) << "Transitive closure";
   for (int i = 0; i != nodes->size(); i++) {
     for (int j = 0; j != nodes->size(); j++) {
@@ -102,8 +107,7 @@ static void PrintTransitiveClosure(Nodes *nodes, Edges *edges,
   LOG(INFO) << "---";
 }
 
-static void PrintGCTransitiveClosure(Nodes *nodes,
-                                     tensorflow::GraphCycles *gc) {
+static void PrintGCTransitiveClosure(Nodes* nodes, xla::GraphCycles* gc) {
   LOG(INFO) << "GC Transitive closure";
   for (int i = 0; i != nodes->size(); i++) {
     for (int j = 0; j != nodes->size(); j++) {
@@ -117,8 +121,8 @@ static void PrintGCTransitiveClosure(Nodes *nodes,
   LOG(INFO) << "---";
 }
 
-static void CheckTransitiveClosure(Nodes *nodes, Edges *edges,
-                                   tensorflow::GraphCycles *gc) {
+static void CheckTransitiveClosure(Nodes* nodes, Edges* edges,
+                                   xla::GraphCycles* gc) {
   absl::flat_hash_set<int> seen;
   for (int i = 0; i != nodes->size(); i++) {
     for (int j = 0; j != nodes->size(); j++) {
@@ -140,8 +144,7 @@ static void CheckTransitiveClosure(Nodes *nodes, Edges *edges,
   }
 }
 
-static void CheckEdges(Nodes *nodes, Edges *edges,
-                       tensorflow::GraphCycles *gc) {
+static void CheckEdges(Nodes* nodes, Edges* edges, xla::GraphCycles* gc) {
   int count = 0;
   for (int i = 0; i != edges->size(); i++) {
     int a = (*edges)[i].from;
@@ -170,20 +173,20 @@ static void CheckEdges(Nodes *nodes, Edges *edges,
 
 // Returns the index of a randomly chosen node in *nodes.
 // Requires *nodes be non-empty.
-static int RandomNode(std::mt19937 *rnd, Nodes *nodes) {
+static int RandomNode(std::mt19937* rnd, Nodes* nodes) {
   std::uniform_int_distribution<int> distribution(0, nodes->size() - 1);
   return distribution(*rnd);
 }
 
 // Returns the index of a randomly chosen edge in *edges.
 // Requires *edges be non-empty.
-static int RandomEdge(std::mt19937 *rnd, Edges *edges) {
+static int RandomEdge(std::mt19937* rnd, Edges* edges) {
   std::uniform_int_distribution<int> distribution(0, edges->size() - 1);
   return distribution(*rnd);
 }
 
 // Returns the index of edge (from, to) in *edges or -1 if it is not in *edges.
-static int EdgeIndex(Edges *edges, int from, int to) {
+static int EdgeIndex(Edges* edges, int from, int to) {
   int i = 0;
   while (i != edges->size() &&
          ((*edges)[i].from != from || (*edges)[i].to != to)) {
@@ -195,7 +198,7 @@ static int EdgeIndex(Edges *edges, int from, int to) {
 TEST(GraphCycles, RandomizedTest) {
   Nodes nodes;
   Edges edges;  // from, to
-  tensorflow::GraphCycles graph_cycles;
+  xla::GraphCycles graph_cycles;
   static const int kMaxNodes = 7;     // use <= 7 nodes to keep test short
   static const int kDataOffset = 17;  // an offset to the node-specific data
   int n = 100000;
@@ -229,7 +232,7 @@ TEST(GraphCycles, RandomizedTest) {
           VLOG(1) << "adding node " << new_node;
           ASSERT_EQ(nullptr, graph_cycles.GetNodeData(new_node));
           graph_cycles.SetNodeData(
-              new_node, reinterpret_cast<void *>(
+              new_node, reinterpret_cast<void*>(
                             static_cast<intptr_t>(new_node + kDataOffset)));
           ASSERT_GE(new_node, 0);
           for (int i = 0; i != nodes.size(); i++) {
@@ -342,7 +345,7 @@ TEST(GraphCycles, RandomizedTest) {
         ASSERT_GE(new_node, 0);
         ASSERT_EQ(nullptr, graph_cycles.GetNodeData(new_node));
         graph_cycles.SetNodeData(
-            new_node, reinterpret_cast<void *>(
+            new_node, reinterpret_cast<void*>(
                           static_cast<intptr_t>(new_node + kDataOffset)));
         for (int j = 0; j != nodes.size(); j++) {
           ASSERT_NE(nodes[j], new_node);
@@ -374,7 +377,7 @@ TEST(GraphCycles, RandomizedTest) {
 
 class GraphCyclesTest : public ::testing::Test {
  public:
-  tensorflow::GraphCycles g_;
+  xla::GraphCycles g_;
 
   // Test relies on ith NewNode() call returning Node numbered i
   GraphCyclesTest() {
@@ -507,12 +510,12 @@ TEST_F(GraphCyclesTest, CanContractEdge) {
   EXPECT_TRUE(g_.CanContractEdge(3, 4));
 }
 
-static void BM_StressTest(::testing::benchmark::State &state) {
+static void BM_StressTest(::testing::benchmark::State& state) {
   const int num_nodes = state.range(0);
 
-  for (auto s : state) {
-    tensorflow::GraphCycles g;
-    int32_t *nodes = new int32_t[num_nodes];
+  while (state.KeepRunningBatch(num_nodes)) {
+    xla::GraphCycles g;
+    int32_t* nodes = new int32_t[num_nodes];
     for (int i = 0; i < num_nodes; i++) {
       nodes[i] = g.NewNode();
     }
@@ -529,12 +532,12 @@ static void BM_StressTest(::testing::benchmark::State &state) {
 }
 BENCHMARK(BM_StressTest)->Range(2048, 1048576);
 
-static void BM_ContractEdge(::testing::benchmark::State &state) {
+static void BM_ContractEdge(::testing::benchmark::State& state) {
   const int num_nodes = state.range(0);
 
-  for (auto s : state) {
+  while (state.KeepRunningBatch(num_nodes)) {
     state.PauseTiming();
-    tensorflow::GraphCycles g;
+    xla::GraphCycles g;
     std::vector<int32_t> nodes;
     nodes.reserve(num_nodes);
     for (int i = 0; i < num_nodes; i++) {
@@ -553,3 +556,50 @@ static void BM_ContractEdge(::testing::benchmark::State &state) {
   }
 }
 BENCHMARK(BM_ContractEdge)->Arg(1000)->Arg(10000);
+
+static void BM_IsReachableNonConst(testing::benchmark::State& state) {
+  const int num_nodes = state.range(0);
+
+  xla::GraphCycles g;
+  std::vector<uint32_t> nodes;
+  nodes.reserve(num_nodes);
+  for (int i = 0; i < num_nodes; i++) {
+    nodes.push_back(g.NewNode());
+  }
+
+  // Add forward edges.
+  absl::BitGen bitgen;
+  for (int i = 0; i < num_nodes; i++) {
+    int max = num_nodes - 1 - i;
+    if (max == 0) break;
+    constexpr int branch_factor = 2;
+    for (int b = 0; b < branch_factor; b++) {
+      int j = i + 1 + absl::Uniform(bitgen, 0, max);
+      CHECK_LT(j, num_nodes);
+      CHECK(g.InsertEdge(nodes[i], nodes[j]));
+    }
+  }
+
+  auto get_random_node = [&]() {
+    return nodes[absl::Uniform(bitgen, 0, num_nodes)];
+  };
+
+  uint32_t src, dst;
+  int i = 0;
+  for (auto s : state) {
+    if (i % 256 == 0) {
+      src = get_random_node();
+      dst = get_random_node();
+    }
+    bool reachable = g.IsReachableNonConst(src, dst);
+    benchmark::DoNotOptimize(reachable);
+    i++;
+  }
+}
+BENCHMARK(BM_IsReachableNonConst)
+    ->Arg(10)
+    ->Arg(50)
+    ->Arg(100)
+    ->Arg(200)
+    ->Arg(1000)
+    ->Arg(30000);

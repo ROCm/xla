@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,11 +17,13 @@ syntax = "proto3";
 
 package xla.ifrt;
 
-import "xla/python/ifrt/types.proto";
+import "xla/python/ifrt/device.proto";
 import "xla/xla_data.proto";
 
 // Wire format for `HloSharding`.
 message HloShardingProto {
+  int32 version_number = 4;
+
   DeviceListProto devices = 1;
   optional string memory_kind = 3;
   xla.OpSharding xla_op_sharding = 2;

@@ -1,4 +1,4 @@
-/* Copyright 2021 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2021 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,17 +14,20 @@ limitations under the License.
 ==============================================================================*/
 
 #include <algorithm>
-#include <cctype>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <iterator>
-#include <memory>
 #include <utility>
 
+#include "llvm/ADT/StringExtras.h"
 #include "mhlo/IR/hlo_ops.h"
 #include "mhlo/transforms/passes.h"
 #include "mhlo/transforms/rewriters.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir {
@@ -39,7 +42,7 @@ struct EinsumToDotGeneralPattern : public OpRewritePattern<EinsumOp> {
   using OpRewritePattern<EinsumOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(EinsumOp einsum,
-                                PatternRewriter &rewriter) const override {
+                                PatternRewriter& rewriter) const override {
     StringRef equation = einsum.getEinsumConfig();
     SmallVector<char> lhsTokens, rhsTokens;
     SmallVector<char> resultTokens;
@@ -47,7 +50,7 @@ struct EinsumToDotGeneralPattern : public OpRewritePattern<EinsumOp> {
     enum EquationVariable { kIsLhs, kIsRhs, kIsResult };
     EquationVariable currentVariable = kIsLhs;
     while (index < equation.size()) {
-      if (std::isalpha(equation[index])) {
+      if (llvm::isAlpha(equation[index])) {
         if (currentVariable == kIsLhs) {
           lhsTokens.push_back(equation[index]);
         } else if (currentVariable == kIsRhs) {
@@ -68,22 +71,22 @@ struct EinsumToDotGeneralPattern : public OpRewritePattern<EinsumOp> {
       index++;
     }
 
-    auto lhsType = einsum.getLhs().getType().cast<RankedTensorType>();
-    auto rhsType = einsum.getRhs().getType().cast<RankedTensorType>();
+    auto lhsType = mlir::cast<RankedTensorType>(einsum.getLhs().getType());
+    auto rhsType = mlir::cast<RankedTensorType>(einsum.getRhs().getType());
     assert(static_cast<int64_t>(lhsTokens.size()) == lhsType.getRank());
     assert(static_cast<int64_t>(rhsTokens.size()) == rhsType.getRank());
 
     auto collectOperandDims =
         [resultTokens](
             RankedTensorType operandType, SmallVector<char> operandTokens,
-            SmallVector<char> others, SmallVectorImpl<int64_t> &contractingDims,
-            SmallVectorImpl<int64_t> &batchingDims,
-            SmallVector<char> &dotResultTokens,
-            SmallVector<int64_t> &dotResultShape) {
+            SmallVector<char> others, SmallVectorImpl<int64_t>& contractingDims,
+            SmallVectorImpl<int64_t>& batchingDims,
+            SmallVector<char>& dotResultTokens,
+            SmallVector<int64_t>& dotResultShape) {
           llvm::SmallDenseSet<char> othersSet(others.begin(), others.end());
           llvm::SmallDenseSet<char> resultTokensSet(resultTokens.begin(),
                                                     resultTokens.end());
-          for (const auto &en : llvm::enumerate(operandTokens)) {
+          for (const auto& en : llvm::enumerate(operandTokens)) {
             bool isResultToken = resultTokensSet.contains(en.value());
             bool isOtherToken = othersSet.contains(en.value());
 
@@ -112,7 +115,7 @@ struct EinsumToDotGeneralPattern : public OpRewritePattern<EinsumOp> {
                        rhsBatchingDims, dotResultTokens, dotResultShape);
 
     // Prepend batch tokens.
-    for (const auto &it : llvm::enumerate(lhsBatchingDims)) {
+    for (const auto& it : llvm::enumerate(lhsBatchingDims)) {
       char batchingToken = lhsTokens[it.value()];
       int64_t batchingShapeDim = lhsType.getShape()[it.value()];
       dotResultTokens.insert(dotResultTokens.begin() + it.index(),
@@ -132,7 +135,7 @@ struct EinsumToDotGeneralPattern : public OpRewritePattern<EinsumOp> {
     SmallVector<int64_t> resultPerms;
     bool isNaturalOrder = true;
     for (char resultToken : resultTokens) {
-      auto *foundIt = std::find(dotResultTokens.begin(), dotResultTokens.end(),
+      auto* foundIt = std::find(dotResultTokens.begin(), dotResultTokens.end(),
                                 resultToken);
       if (foundIt == dotResultTokens.end()) {
         return rewriter.notifyMatchFailure(
@@ -155,10 +158,10 @@ struct EinsumToDotGeneralPattern : public OpRewritePattern<EinsumOp> {
     auto dimNumbers = mhlo::DotDimensionNumbersAttr::get(
         rewriter.getContext(), lhsBatchingDims, rhsBatchingDims,
         lhsContractingDims, rhsContractingDims);
-    auto dotGeneralOp = rewriter.create<DotGeneralOp>(
-        einsum.getLoc(), dotGeneralResultType, einsum.getLhs(), einsum.getRhs(),
-        dimNumbers,
-        /*precision_config=*/ArrayAttr{});
+    auto dotGeneralOp = DotGeneralOp::create(
+        rewriter, einsum.getLoc(), dotGeneralResultType, einsum.getLhs(),
+        einsum.getRhs(), dimNumbers,
+        /*precision_config=*/ArrayAttr{}, /*algorithm=*/DotAlgorithmAttr{});
 
     if (isNaturalOrder) {
       // The dot_general is already in an appropriate result order.
@@ -178,22 +181,16 @@ struct LegalizeEinsumToDotGeneralPass
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
     populateEinsumToDotGeneralPatterns(&getContext(), &patterns);
-    if (failed(applyPatternsAndFoldGreedily(getOperation(),
-                                            std::move(patterns)))) {
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       return signalPassFailure();
     }
   }
 };
 }  // namespace
 
-void populateEinsumToDotGeneralPatterns(mlir::MLIRContext *context,
-                                        RewritePatternSet *patterns) {
+void populateEinsumToDotGeneralPatterns(mlir::MLIRContext* context,
+                                        RewritePatternSet* patterns) {
   patterns->add<EinsumToDotGeneralPattern>(context);
-}
-
-std::unique_ptr<OperationPass<func::FuncOp>>
-createLegalizeEinsumToDotGeneralPass() {
-  return std::make_unique<LegalizeEinsumToDotGeneralPass>();
 }
 
 }  // namespace mhlo

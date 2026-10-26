@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ package mlir.interpreter;
 message TracedValue {
   // The shape - includes vector dimensions.
   // TODO(jreiffers): Model vector dimensions separately.
-  repeated int64 shape = 1;
+  repeated int64 shape = 1 [packed = true];
   optional bool is_scalar = 2;
 
   enum ElementType {

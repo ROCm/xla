@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,8 +26,11 @@ limitations under the License.
 #ifndef XLA_SERVICE_CPU_CPU_RUNTIME_H_
 #define XLA_SERVICE_CPU_CPU_RUNTIME_H_
 
+#include <cstdint>
+
+#include "absl/strings/string_view.h"
+#include "xla/backends/cpu/runtime/xfeed_manager.h"
 #include "xla/executable_run_options.h"
-#include "xla/service/cpu/xfeed_manager.h"
 
 namespace xla {
 namespace cpu {
@@ -35,176 +38,112 @@ namespace runtime {
 
 // Names of runtime functions. These get resolved from the generated code to the
 // right symbol at link time in one of two ways:
-// 1. When using the JIT, the symbol resolver (SimpleResolver in
-//    third_party/tensorflow/compiler/xla/service/cpu/simple_orc_jit.cc) maps
-//    this symbol name to
-//    the actual symbol.
+// 1. When using the JIT, the symbol resolver (xla::cpu::RuntimeSymbolGenerator)
+//    maps this symbol name to the actual symbol.
 // 2. When using ahead-of-time compilation, the linker can resolve the name
 //    because it is a symbol in the cpu_runtime library.
-extern const char* const kEigenMatMulF16SymbolName;
-extern const char* const kEigenMatMulF32SymbolName;
-extern const char* const kEigenMatMulF64SymbolName;
-extern const char* const kEigenMatMulC64SymbolName;
-extern const char* const kEigenMatMulC128SymbolName;
-extern const char* const kEigenMatMulS32SymbolName;
-extern const char* const kEigenBatchMatMulF32SymbolName;
-extern const char* const kMKLConv2DF32SymbolName;
-extern const char* const kACLConv2DF32SymbolName;
-extern const char* const kMKLMatMulF32SymbolName;
-extern const char* const kMKLMatMulF64SymbolName;
-extern const char* const kACLMatMulF32SymbolName;
-extern const char* const kACLBatchMatMulF32SymbolName;
-extern const char* const kMKLSingleThreadedMatMulF32SymbolName;
-extern const char* const kMKLSingleThreadedMatMulF64SymbolName;
-extern const char* const kEigenConv2DF16SymbolName;
-extern const char* const kEigenConv2DF32SymbolName;
-extern const char* const kEigenConv3DF16SymbolName;
-extern const char* const kEigenConv3DF32SymbolName;
-extern const char* const kEigenFftSymbolName;
-extern const char* const kEigenSingleThreadedFftSymbolName;
-extern const char* const kEigenSingleThreadedMatMulF16SymbolName;
-extern const char* const kEigenSingleThreadedMatMulF32SymbolName;
-extern const char* const kEigenSingleThreadedMatMulF64SymbolName;
-extern const char* const kEigenSingleThreadedMatMulC64SymbolName;
-extern const char* const kEigenSingleThreadedMatMulC128SymbolName;
-extern const char* const kEigenSingleThreadedMatMulS32SymbolName;
-extern const char* const kEigenSingleThreadedConv2DF16SymbolName;
-extern const char* const kEigenSingleThreadedConv2DF32SymbolName;
-extern const char* const kEigenSingleThreadedConv3DF16SymbolName;
-extern const char* const kEigenSingleThreadedConv3DF32SymbolName;
-extern const char* const kAcquireInfeedBufferForDequeueSymbolName;
-extern const char* const kReleaseInfeedBufferAfterDequeueSymbolName;
-extern const char* const kAcquireOutfeedBufferForPopulationSymbolName;
-extern const char* const kReleaseOutfeedBufferAfterPopulationSymbolName;
-extern const char* const kParallelForkJoinSymbolName;
-extern const char* const kPrintfToStderrSymbolName;
-extern const char* const kStatusIsSuccessSymbolName;
-extern const char* const kKeyValueSortSymbolName;
-extern const char* const kTopKF32SymbolName;
-extern const char* const kAllReduceSymbolName;
-extern const char* const kCollectivePermuteSymbolName;
-extern const char* const kPartitionIdSymbolName;
-extern const char* const kReplicaIdSymbolName;
-extern const char* const kTracingStartSymbolName;
-extern const char* const kTracingEndSymbolName;
-extern const char* const kAllToAllSymbolName;
+inline constexpr absl::string_view kEigenMatMulF16SymbolName =
+    "__xla_cpu_runtime_EigenMatMulF16";
+inline constexpr absl::string_view kEigenMatMulF32SymbolName =
+    "__xla_cpu_runtime_EigenMatMulF32";
+inline constexpr absl::string_view kEigenMatMulF64SymbolName =
+    "__xla_cpu_runtime_EigenMatMulF64";
+inline constexpr absl::string_view kEigenMatMulC64SymbolName =
+    "__xla_cpu_runtime_EigenMatMulC64";
+inline constexpr absl::string_view kEigenMatMulC128SymbolName =
+    "__xla_cpu_runtime_EigenMatMulC128";
+inline constexpr absl::string_view kEigenMatMulS32SymbolName =
+    "__xla_cpu_runtime_EigenMatMulS32";
+extern const char* const kEigenMatMulU8SymbolName;
+inline constexpr absl::string_view kEigenBatchMatMulF32SymbolName =
+    "__xla_cpu_runtime_EigenBatchMatMulF32";
+inline constexpr absl::string_view kACLConv2DF32SymbolName =
+    "__xla_cpu_runtime_ACLConv2DF32";
+inline constexpr absl::string_view kACLMatMulF32SymbolName =
+    "__xla_cpu_runtime_ACLMatMulF32";
+inline constexpr absl::string_view kACLBatchMatMulF32SymbolName =
+    "__xla_cpu_runtime_ACLBatchMatMulF32";
+inline constexpr absl::string_view kEigenConv2DF16SymbolName =
+    "__xla_cpu_runtime_EigenConv2DF16";
+inline constexpr absl::string_view kEigenConv2DF32SymbolName =
+    "__xla_cpu_runtime_EigenConv2DF32";
+inline constexpr absl::string_view kEigenConv3DF16SymbolName =
+    "__xla_cpu_runtime_EigenConv3DF16";
+inline constexpr absl::string_view kEigenConv3DF32SymbolName =
+    "__xla_cpu_runtime_EigenConv3DF32";
+inline constexpr absl::string_view kEigenSingleThreadedMatMulF16SymbolName =
+    "__xla_cpu_runtime_EigenSingleThreadedMatMulF16";
+inline constexpr absl::string_view kEigenSingleThreadedMatMulF32SymbolName =
+    "__xla_cpu_runtime_EigenSingleThreadedMatMulF32";
+inline constexpr absl::string_view kEigenSingleThreadedMatMulF64SymbolName =
+    "__xla_cpu_runtime_EigenSingleThreadedMatMulF64";
+inline constexpr absl::string_view
+    kEigenSingleThreadedMatMulF8E4M3FNSymbolName =
+        "__xla_cpu_runtime_EigenSingleThreadedMatMulF8E4M3FN";
+inline constexpr absl::string_view kEigenSingleThreadedMatMulF8E5M2SymbolName =
+    "__xla_cpu_runtime_EigenSingleThreadedMatMulF8E5M2";
+inline constexpr absl::string_view kEigenSingleThreadedMatMulC64SymbolName =
+    "__xla_cpu_runtime_EigenSingleThreadedMatMulC64";
+inline constexpr absl::string_view kEigenSingleThreadedMatMulC128SymbolName =
+    "__xla_cpu_runtime_EigenSingleThreadedMatMulC128";
+inline constexpr absl::string_view kEigenSingleThreadedMatMulS32SymbolName =
+    "__xla_cpu_runtime_EigenSingleThreadedMatMulS32";
+inline constexpr absl::string_view kEigenSingleThreadedMatMulU8SymbolName =
+    "__xla_cpu_runtime_EigenSingleThreadedMatMulU8";
+inline constexpr absl::string_view kEigenSingleThreadedConv2DF16SymbolName =
+    "__xla_cpu_runtime_EigenSingleThreadedConv2DF16";
+inline constexpr absl::string_view kEigenSingleThreadedConv2DF32SymbolName =
+    "__xla_cpu_runtime_EigenSingleThreadedConv2DF32";
+inline constexpr absl::string_view kEigenSingleThreadedConv3DF16SymbolName =
+    "__xla_cpu_runtime_EigenSingleThreadedConv3DF16";
+inline constexpr absl::string_view kEigenSingleThreadedConv3DF32SymbolName =
+    "__xla_cpu_runtime_EigenSingleThreadedConv3DF32";
+inline constexpr absl::string_view kAcquireInfeedBufferForDequeueSymbolName =
+    "__xla_cpu_runtime_AcquireInfeedBufferForDequeue";
+inline constexpr absl::string_view kReleaseInfeedBufferAfterDequeueSymbolName =
+    "__xla_cpu_runtime_ReleaseInfeedBufferAfterDequeue";
+inline constexpr absl::string_view
+    kAcquireOutfeedBufferForPopulationSymbolName =
+        "__xla_cpu_runtime_AcquireOutfeedBufferForPopulation";
+inline constexpr absl::string_view
+    kReleaseOutfeedBufferAfterPopulationSymbolName =
+        "__xla_cpu_runtime_ReleaseOutfeedBufferAfterPopulation";
+inline constexpr absl::string_view kPrintfToStderrSymbolName =
+    "__xla_cpu_runtime_PrintfToStderr";
+inline constexpr absl::string_view kStatusIsSuccessSymbolName =
+    "__xla_cpu_runtime_StatusIsSuccess";
+inline constexpr absl::string_view kKeyValueSortSymbolName =
+    "__xla_cpu_runtime_KeyValueSort";
+inline constexpr absl::string_view kTopKF32SymbolName =
+    "__xla_cpu_runtime_TopKF32";
+inline constexpr absl::string_view kAllReduceSymbolName =
+    "__xla_cpu_runtime_AllReduce";
+inline constexpr absl::string_view kCollectivePermuteSymbolName =
+    "__xla_cpu_runtime_CollectivePermute";
+inline constexpr absl::string_view kPartitionIdSymbolName =
+    "__xla_cpu_runtime_PartitionId";
+inline constexpr absl::string_view kReplicaIdSymbolName =
+    "__xla_cpu_runtime_ReplicaId";
+inline constexpr absl::string_view kTracingStartSymbolName =
+    "__xla_cpu_runtime_TracingStart";
+inline constexpr absl::string_view kTracingEndSymbolName =
+    "__xla_cpu_runtime_TracingEnd";
+inline constexpr absl::string_view kAllToAllSymbolName =
+    "__xla_cpu_runtime_AllToAll";
+inline constexpr absl::string_view kAllGatherSymbolName =
+    "__xla_cpu_runtime_AllGather";
+inline constexpr absl::string_view kReduceScatterSymbolName =
+    "__xla_cpu_runtime_ReduceScatter";
+inline constexpr absl::string_view kHandleFfiCallSymbolName =
+    "__xla_cpu_runtime_HandleFfiCall";
 
 // All symbol names for XLA CPU runtime functions need to start with this
 // prefix.
-extern const char* const kXlaCpuRuntimeSymbolNamePrefix;
-
-// Returns the infeed manager used by the CPU runtime for the CPU device
-// `device_ordinal`.  Note the device ordinal does not name a CPU
-XfeedManager* GetXfeedManager(int device_ordinal);
+inline constexpr absl::string_view kXlaCpuRuntimeSymbolNamePrefix =
+    "__xla_cpu_runtime_";
 
 }  // namespace runtime
 }  // namespace cpu
 }  // namespace xla
-
-extern "C" {
-
-extern int __xla_cpu_runtime_PrintfToStderr(const char* format, ...);
-
-extern int64_t __xla_cpu_runtime_TracingStart(
-    const void* /* xla::ExecutableRunOptions* */ run_options_ptr,
-    const char* name);
-extern void __xla_cpu_runtime_TracingEnd(
-    const void* /* xla::ExecutableRunOptions* */ run_options_ptr, int64_t id);
-
-// Some things common to all of the runtime entry points below:
-//
-//  * The shape pointer and shape_length reflect values that can be deserialized
-//    via llvm_ir::DecodeSelfDescribingShapeConstant. This is the way we pass
-//    reified type information from the generated program to the runtime, which
-//    helps check the type safety and contract for the emitted-code/runtime
-//    communication.
-//
-//  * run_options is used to look up the device ordinal for the stream executor
-//    we're executing under.  If it is null the device ordinal is assumed to be
-//    0 (this behavior helps in writing tests).
-
-// Note: in the runtime entry points below, the shape pointer and shape_length
-// reflect values that can be deserialized via
-// llvm_ir::DecodeSelfDescribingShapeConstant. This is the way we pass reified
-// type information from the generated program to the runtime, which helps check
-// the type safety and contract for the emitted-code/runtime communication.
-
-// Blocks until the next infeed buffer is ready to be dequeued, then
-// returns it. Fails catastrophically if the next enqueued buffer is
-// not of the correct length in bytes. Checking the shape rather than
-// the length would be more exact, but the length check is chosen as a
-// tradeoff between error checking and speed/simplicity.
-extern void* __xla_cpu_runtime_AcquireInfeedBufferForDequeue(
-    const xla::ExecutableRunOptions* run_options, int32_t buffer_length,
-    const void* shape, int32_t shape_length);
-
-// Relinquishes the next infeed buffer that was returned by
-// __xla_cpu_runtime_AcquireInfeedBufferForDequeue. Once this call
-// completes the data at buffer_ptr may no longer be
-// accessed. buffer_length must match the length passed to the call to
-// __xla_cpu_runtime_AcquireInfeedBufferForDequeue that returned
-// buffer_ptr. This function must be called before the next buffer is
-// acquired, i.e., there may only be one outstanding infeed buffer in
-// use by the runtime.  TODO(b/31340454) investigate whether or not it
-// is worth supporting zero-copy infeed where the buffer is retained
-// by the compiled code until it has been used. If zero-copy infeed is
-// implemented we will add support for multiple outstanding buffers
-// that can be returned out of order.
-extern void __xla_cpu_runtime_ReleaseInfeedBufferAfterDequeue(
-    const xla::ExecutableRunOptions* run_options, int32_t buffer_length,
-    void* buffer_ptr, const void* shape_ptr, int32_t shape_length);
-
-// Blocks until the next outfeed buffer is available to be populated, then
-// returns it.
-extern void* __xla_cpu_runtime_AcquireOutfeedBufferForPopulation(
-    const xla::ExecutableRunOptions* run_options, int32_t buffer_length,
-    const void* shape_ptr, int32_t shape_length);
-
-// Relinquishes the outfeed buffer after it has been populated.
-// buffer_ptr must have been previously returned by
-// __xla_cpu_runtime_AcquireOutfeedBufferForPopulation.
-// Once this call completes, buffer_ptr may no longer be accessed.
-// buffer_length must match the length passed to the call to
-// __xla_cpu_runtime_AcquireInfeedBufferForDequeue that returned
-// buffer_ptr. This function must be called before the next buffer is
-// acquired, i.e., there may only be one outstanding outfeed buffer in
-// use by the runtime.
-extern void __xla_cpu_runtime_ReleaseOutfeedBufferAfterPopulation(
-    const xla::ExecutableRunOptions* run_options, int32_t buffer_length,
-    void* buffer_ptr, const void* shape_ptr, int32_t shape_length);
-
-// Perform all reduce on a CPU.
-//
-// participating_replicas: array of replica IDs participating in the reduction,
-// cf. GetParticipatingIDs.
-// channel_id_present, op_id: whether op_id is a channel ID or a module ID.
-// reduction_kind: operator used for a reduction, cf. ReductionKind.
-// shape_ptr: shape of all input/output buffers.
-extern void __xla_cpu_runtime_AllReduce(
-    const xla::ExecutableRunOptions* run_options,
-    const void* replica_groups_str, int32_t replica_groups_str_size,
-    int32_t channel_id_present, int32_t use_global_device_ids, int64_t op_id,
-    int32_t reduction_kind, const void* shape_ptr, int32_t shape_length,
-    int32_t num_buffers, void** input_buffers, void** output_buffers);
-
-extern void __xla_cpu_runtime_CollectivePermute(
-    const xla::ExecutableRunOptions* run_options, int32_t channel_id_present,
-    int64_t op_id, int32_t byte_size, void* input_buffer, void* output_buffer,
-    const void* source_target_pairs, int32_t source_target_pairs_size);
-
-extern void __xla_cpu_runtime_AllToAll(
-    const xla::ExecutableRunOptions* run_options, int32_t channel_id_present,
-    int64_t op_id, const void* replica_groups_str,
-    int32_t replica_groups_str_size, int32_t num_buffers, int64_t buffer_size,
-    void** source_buffers, void** destination_buffers);
-
-// Write the partition ID into the output buffer.
-extern void __xla_cpu_runtime_PartitionId(
-    const xla::ExecutableRunOptions* run_options, void* output_buffer);
-// Write the replica ID into the output buffer.
-extern void __xla_cpu_runtime_ReplicaId(
-    const xla::ExecutableRunOptions* run_options, void* output_buffer);
-
-}  // extern "C"
 
 #endif  // XLA_SERVICE_CPU_CPU_RUNTIME_H_

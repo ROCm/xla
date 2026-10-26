@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,15 +15,28 @@ limitations under the License.
 
 #include "xla/hlo/ir/hlo_sharding_metadata.h"
 
-#include <functional>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/types/span.h"
 #include "xla/hlo/ir/hlo_computation.h"
+#include "xla/hlo/ir/hlo_domain_metadata.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/ir/hlo_sharding.h"
 #include "xla/shape_tree.h"
 #include "xla/shape_util.h"
+#include "xla/status_macros.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -121,8 +134,8 @@ std::vector<PassThrough> LocatePassThroughDomainLinks(
   return pass_through;
 }
 
-Status FixupPassThroughDomainLinks(const DomainMetadata::Domain& domain,
-                                   const HloSharding& sharding) {
+absl::Status FixupPassThroughDomainLinks(const DomainMetadata::Domain& domain,
+                                         const HloSharding& sharding) {
   for (auto& pass_through : LocatePassThroughDomainLinks(domain)) {
     HloInstruction* tuple = pass_through.operand->parent()->AddInstruction(
         HloInstruction::CreateTuple({pass_through.operand}));
@@ -131,13 +144,13 @@ Status FixupPassThroughDomainLinks(const DomainMetadata::Domain& domain,
                                               tuple, 0));
     gte->set_sharding(sharding.NormalizeTupleSharding(gte->shape()));
     if (pass_through.user != nullptr) {
-      TF_RETURN_IF_ERROR(
+      ABSL_RETURN_IF_ERROR(
           pass_through.operand->ReplaceUseWith(pass_through.user, gte));
     } else {
       pass_through.operand->parent()->set_root_instruction(gte);
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 // For tuple shardings if every element have the same sharding then we want to
@@ -153,8 +166,8 @@ std::shared_ptr<const HloSharding> CloneShardingForDomain(
   return std::make_shared<const HloSharding>(*single_sharding);
 }
 
-Status ApplyDomainSingleSharding(const DomainMetadata::Domain& domain,
-                                 const HloSharding& sharding) {
+absl::Status ApplyDomainSingleSharding(const DomainMetadata::Domain& domain,
+                                       const HloSharding& sharding) {
   VLOG(4) << "Applying " << sharding << " sharding";
   for (HloInstruction* instruction : domain.instructions) {
     // We only change instructions without sharding, since otherwise we might
@@ -166,7 +179,7 @@ Status ApplyDomainSingleSharding(const DomainMetadata::Domain& domain,
               << instruction->sharding();
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 // Return the ShapeTree<HloSharding> of the user argument. The user argument
@@ -174,7 +187,7 @@ Status ApplyDomainSingleSharding(const DomainMetadata::Domain& domain,
 // If user is a tuple instruction, return the tuple subsharding corresponding to
 // the operand matching the instruction argument, because that is the
 // subsharding corresponding to instruction.
-StatusOr<ShapeTree<HloSharding>> GetShardingTreeFromUser(
+absl::StatusOr<ShapeTree<HloSharding>> GetShardingTreeFromUser(
     const HloInstruction& instruction, const HloInstruction& user) {
   if (user.opcode() == HloOpcode::kTuple) {
     return user.sharding()
@@ -188,8 +201,8 @@ StatusOr<ShapeTree<HloSharding>> GetShardingTreeFromUser(
 // then no assignment is made. Therefore kUnassignedDevice is never propagated.
 // kConflict is returned if lhs is already assigned and rhs is assigned to a
 // different device.
-StatusOr<AssignmentKind> AssignLeafSharding(HloSharding* lhs,
-                                            const HloSharding& rhs) {
+absl::StatusOr<AssignmentKind> AssignLeafSharding(HloSharding* lhs,
+                                                  const HloSharding& rhs) {
   TF_RET_CHECK(!lhs->IsTuple() && !rhs.IsTuple());
   if (rhs.UsesDevice(kUnassignedDevice)) {
     return AssignmentKind::kUnassigned;
@@ -207,7 +220,7 @@ StatusOr<AssignmentKind> AssignLeafSharding(HloSharding* lhs,
 // In case of conflicting assignment AssignmentKind::kConflict is returned. In
 // this case lhs_tree is partially assigned, up to the conflicting leaf. It is
 // up to the caller to discard the partial assignment in case of conflict.
-StatusOr<AssignmentKind> AssignTreeSharding(
+absl::StatusOr<AssignmentKind> AssignTreeSharding(
     ShapeTree<HloSharding>* lhs_tree, ShapeTree<HloSharding>::iterator lhs_it,
     const ShapeTree<HloSharding>& rhs_tree) {
   AssignmentKind assigned = AssignmentKind::kUnassigned;
@@ -217,8 +230,9 @@ StatusOr<AssignmentKind> AssignTreeSharding(
     // TODO(b/112885211): Add ShapeTree::IsLeaf(const ShapeTreeIterator &it)
     if (rhs_tree.IsLeaf(rhs_it->first)) {
       TF_RET_CHECK(lhs_tree->IsLeaf(lhs_it->first));
-      TF_ASSIGN_OR_RETURN(AssignmentKind sub_assigned,
-                          AssignLeafSharding(&lhs_it->second, rhs_it->second));
+      ABSL_ASSIGN_OR_RETURN(
+          AssignmentKind sub_assigned,
+          AssignLeafSharding(&lhs_it->second, rhs_it->second));
       if (sub_assigned == AssignmentKind::kConflict) {
         // In case of conflict we return conflict to the caller. At this point
         // partial assignments to lhs_tree may have been made already. It is up
@@ -233,9 +247,9 @@ StatusOr<AssignmentKind> AssignTreeSharding(
   return assigned;
 }
 
-StatusOr<bool> ApplyShardingFromUsers(HloInstruction* instruction,
-                                      const DomainMetadata::Domain& domain,
-                                      const HloSharding& domain_sharding) {
+absl::StatusOr<bool> ApplyShardingFromUsers(
+    HloInstruction* instruction, const DomainMetadata::Domain& domain,
+    const HloSharding& domain_sharding) {
   if (instruction->users().empty()) {
     // No sharding from users, use domain_sharding, after checking
     // compatibility.
@@ -255,7 +269,7 @@ StatusOr<bool> ApplyShardingFromUsers(HloInstruction* instruction,
   // In any case, kUnassignedDevice is never propagated, from the implementation
   // of AssignLeafSharding.
   ShapeTree<HloSharding> sharding_tree(
-      instruction->shape(), HloSharding::AssignDevice(kUnassignedDevice));
+      instruction->shape(), HloSharding::SingleDevice(kUnassignedDevice));
   for (HloInstruction* user : instruction->users()) {
     if (user->opcode() == HloOpcode::kDomain &&
         domain.exit_domains.contains(user)) {
@@ -269,8 +283,8 @@ StatusOr<bool> ApplyShardingFromUsers(HloInstruction* instruction,
       continue;
     }
     AssignmentKind sub_assigned = AssignmentKind::kUnassigned;
-    TF_ASSIGN_OR_RETURN(ShapeTree<HloSharding> user_sharding_tree,
-                        GetShardingTreeFromUser(*instruction, *user));
+    ABSL_ASSIGN_OR_RETURN(ShapeTree<HloSharding> user_sharding_tree,
+                          GetShardingTreeFromUser(*instruction, *user));
     if (instruction->shape().IsTuple()) {
       // For tuple-shaped instructions collect individual tuple subshardings
       // from the uses, and then combine them into the tuple sharding.
@@ -281,14 +295,14 @@ StatusOr<bool> ApplyShardingFromUsers(HloInstruction* instruction,
           user->opcode() == HloOpcode::kGetTupleElement
               ? sharding_tree.find({user->tuple_index()})
               : sharding_tree.begin();
-      TF_ASSIGN_OR_RETURN(
+      ABSL_ASSIGN_OR_RETURN(
           sub_assigned, AssignTreeSharding(&sharding_tree, sharding_tree_begin,
                                            user_sharding_tree));
     } else {
       // Non-tuple shape: assign common users sharding.
       TF_RET_CHECK(user_sharding_tree.leaf_count() == 1)
           << "Expected non-tuple user sharding";
-      TF_ASSIGN_OR_RETURN(
+      ABSL_ASSIGN_OR_RETURN(
           sub_assigned,
           AssignTreeSharding(&sharding_tree, sharding_tree.begin(),
                              user_sharding_tree));
@@ -317,8 +331,8 @@ StatusOr<bool> ApplyShardingFromUsers(HloInstruction* instruction,
 // Tries to propagate the sharding information into the instructions that are
 // part of the domain, in a reverse post order manner (users propagate to
 // instruction).
-StatusOr<int64_t> ApplyDomainShardingPass(const DomainMetadata::Domain& domain,
-                                          const HloSharding& domain_sharding) {
+absl::StatusOr<int64_t> ApplyDomainShardingPass(
+    const DomainMetadata::Domain& domain, const HloSharding& domain_sharding) {
   int64_t assigned = 0;
   // domain.instructions are ordered in a post-order manner. As we do
   // user->operand propagation we process instructions in reverse order. In so
@@ -330,7 +344,7 @@ StatusOr<int64_t> ApplyDomainShardingPass(const DomainMetadata::Domain& domain,
       continue;
     }
     // Take the sharding from the users.
-    TF_ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         bool instruction_assigned,
         ApplyShardingFromUsers(instruction, domain, domain_sharding));
     if (instruction_assigned) {
@@ -342,8 +356,8 @@ StatusOr<int64_t> ApplyDomainShardingPass(const DomainMetadata::Domain& domain,
   return assigned;
 }
 
-Status ApplyDomainSharding(const DomainMetadata::Domain& domain,
-                           const HloSharding& sharding) {
+absl::Status ApplyDomainSharding(const DomainMetadata::Domain& domain,
+                                 const HloSharding& sharding) {
   // None of the external normalizers handled the domain sharding, try to see
   // whether this is a single sharding first.
   auto single_sharding = sharding.ExtractSingleSharding();
@@ -354,7 +368,7 @@ Status ApplyDomainSharding(const DomainMetadata::Domain& domain,
     return ApplyDomainSingleSharding(domain, *single_sharding);
   }
   VLOG(1) << "Assigning non-trivial sharding " << sharding;
-  TF_RETURN_IF_ERROR(ApplyDomainShardingPass(domain, sharding).status());
+  ABSL_RETURN_IF_ERROR(ApplyDomainShardingPass(domain, sharding).status());
 
   int64_t unassigned = 0;
   for (HloInstruction* instruction : domain.instructions) {
@@ -377,11 +391,11 @@ Status ApplyDomainSharding(const DomainMetadata::Domain& domain,
     }
   }
   // Should we error out if unassigned > 0?
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-StatusOr<std::shared_ptr<const HloSharding>> ExtractOriginalCommonSharding(
-    absl::Span<HloInstruction* const> instructions) {
+absl::StatusOr<std::shared_ptr<const HloSharding>>
+ExtractOriginalCommonSharding(absl::Span<HloInstruction* const> instructions) {
   // If we are here, all the instructions being passed had the same sharding
   // (or no sharding), by the means of the ShardingMatches() API.
   // As such, no kDomain was inserted, and here we are asked to extract the
@@ -435,38 +449,38 @@ std::string ShardingMetadata::ToString() const {
   return sharding_ != nullptr ? sharding_->ToString() : "{}";
 }
 
-/*static*/ StatusOr<const ShardingMetadata*>
+/*static*/ absl::StatusOr<const ShardingMetadata*>
 ShardingMetadata::ToShardingMetadata(const DomainMetadata* metadata) {
   if (metadata->Kind() != ShardingMetadata::KindName()) {
-    return Status(
+    return absl::Status(
         absl::StatusCode::kInvalidArgument,
         "ShardingMetadata normalizer called with incorrect domain metadata");
   }
   return static_cast<const ShardingMetadata*>(metadata);
 }
 
-Status ShardingMetadata::NormalizeShardingDomain(
+absl::Status ShardingMetadata::NormalizeShardingDomain(
     const DomainMetadata::Domain& domain, const DomainMetadata* metadata) {
   if (metadata != nullptr) {
-    TF_ASSIGN_OR_RETURN(const auto& sharding_metadata,
-                        ToShardingMetadata(metadata));
+    ABSL_ASSIGN_OR_RETURN(const auto& sharding_metadata,
+                          ToShardingMetadata(metadata));
     const HloSharding* sharding = sharding_metadata->sharding();
     if (sharding != nullptr) {
       VLOG(4) << "Normalizing sharding to " << sharding->ToString() << ":";
-      TF_RETURN_IF_ERROR(ApplyDomainSharding(domain, *sharding));
-      TF_RETURN_IF_ERROR(FixupPassThroughDomainLinks(domain, *sharding));
+      ABSL_RETURN_IF_ERROR(ApplyDomainSharding(domain, *sharding));
+      ABSL_RETURN_IF_ERROR(FixupPassThroughDomainLinks(domain, *sharding));
     }
   } else {
-    TF_ASSIGN_OR_RETURN(std::shared_ptr<const HloSharding> sharding,
-                        ExtractOriginalCommonSharding(domain.instructions));
+    ABSL_ASSIGN_OR_RETURN(std::shared_ptr<const HloSharding> sharding,
+                          ExtractOriginalCommonSharding(domain.instructions));
     if (sharding != nullptr) {
       VLOG(4) << "Normalizing sharding-less domain to " << sharding->ToString();
-      TF_RETURN_IF_ERROR(ApplyDomainSharding(domain, *sharding));
+      ABSL_RETURN_IF_ERROR(ApplyDomainSharding(domain, *sharding));
     } else {
       VLOG(1) << "Unable to find common sharding";
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 // Creates a kDomain instruction to be placed between instruction and operand.

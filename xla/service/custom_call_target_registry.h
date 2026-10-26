@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,9 +19,12 @@ limitations under the License.
 // For this reason, we avoid relying on TensorFlow and instead only use the
 // standard C++ library.
 
-#include <map>
+#include <cstddef>
+#include <functional>
 #include <mutex>  // NOLINT
 #include <string>
+#include <unordered_map>
+#include <utility>
 
 namespace xla {
 
@@ -32,7 +35,14 @@ namespace xla {
 // The XLA:CPU ahead-of-time (AOT) compiler links using a standard offline
 // linker; so when compiling in CPU AOT mode, you *also* need to make sure the
 // name of the callee (presumably implemented in C++) matches up with the
-// symbolic name used in the CustomCall.
+// symbolic name used in the CustomCall. Be careful with the name of the symbol
+// you register with the macros: C++ namespaces are not included, including
+// anonymous namespaces,so if two libraries attempt to register functions with
+// the same name in separate namespaces the registrations will collide. Either
+// call the registration macro from the global namespace so that you have to
+// refer to the function in a fully-qualified manner (which also requires you to
+// emit HLO-based calls to it by the fully-qualified name *and* complicates
+// future refactoring!) or use C-style namespacing directly in the symbol name.
 //
 // We maintain the registry in both the JIT and the AOT cases for simplicity,
 // but we only use it when running in JIT mode.
@@ -44,16 +54,36 @@ class CustomCallTargetRegistry {
                 const std::string& platform);
   void* Lookup(const std::string& symbol, const std::string& platform) const;
 
+  std::unordered_map<std::string, void*> registered_symbols(
+      const std::string& platform) const;
+
  private:
+  // hash<pair<T,T>> is surprisingly not provided by default in stl.  It would
+  // be better to use absl's hash function, but we're avoiding an absl
+  // dependency here because this library is pulled in by all XLA:CPU AoT
+  // binaries.
+  struct HashPairOfStrings {
+    size_t operator()(const std::pair<std::string, std::string>& k) const {
+      std::hash<std::string> hasher;
+      size_t h1 = hasher(k.first);
+      size_t h2 = hasher(k.second);
+      // This is a bad hash function, but it's good enough for our purposes
+      // here.  Nobody is going to try to DoS this hashtable.  :)
+      return h1 ^ 31 * h2;
+    }
+  };
+
   // Maps the pair (symbol, platform) to a C function implementing a custom call
   // named `symbol` for StreamExecutor platform `platform`.
   //
   // Different platforms have different ABIs.  TODO(jlebar): Describe them!
   //
-  // (We std::map rather than std::unordered_map because the STL doesn't provide
-  // a default hasher for pair<std::string, std::string>, and we want to avoid
-  // pulling in dependencies that might define this.)
-  std::map<std::pair<std::string, std::string>, void*> registered_symbols_;
+  // (We use std::unordered_map and std::mutex rather than
+  // absl::flat_hash_map and absl::Mutex because we want to avoid an absl
+  // dependency, because this library is pulled in by all XLA:CPU AoT binaries.)
+  std::unordered_map<std::pair<std::string, std::string>, void*,
+                     HashPairOfStrings>
+      registered_symbols_;
   mutable std::mutex mu_;
 };
 

@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,46 +14,52 @@ limitations under the License.
 ==============================================================================*/
 
 #include <algorithm>
+#include <cstdint>
 #include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
+#include "absl/log/check.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Twine.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
-#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
-#include "mlir/IR/DialectRegistry.h"  // from @llvm-project
-#include "mlir/IR/MLIRContext.h"  // from @llvm-project
-#include "mlir/IR/OwningOpRef.h"  // from @llvm-project
-#include "mlir/IR/Verifier.h"  // from @llvm-project
-#include "mlir/InitAllDialects.h"  // from @llvm-project
-#include "mlir/InitAllPasses.h"  // from @llvm-project
-#include "mlir/Pass/PassManager.h"  // from @llvm-project
-#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
-#include "mlir/Support/FileUtilities.h"  // from @llvm-project
-#include "mlir/Tools/ParseUtilities.h"  // from @llvm-project
-#include "xla/mlir/runtime/ir/rt_dialect.h"
-#include "xla/mlir/tools/mlir_bisect/bisect_lib.h"
-#include "xla/mlir/tools/mlir_bisect/test_passes.h"
-#include "xla/mlir/tools/mlir_replay/public/execution_trace_utils.h"
-#include "xla/mlir_hlo/deallocation/IR/deallocation_ops.h"
-#include "xla/mlir_hlo/deallocation/transforms/passes.h"
-#include "xla/mlir_hlo/gml_st/IR/gml_st_ops.h"
-#include "xla/mlir_hlo/gml_st/transforms/passes.h"
-#include "xla/mlir_hlo/gml_st/transforms/test_passes.h"
-#include "xla/mlir_hlo/lhlo/IR/lhlo_ops.h"
-#include "xla/mlir_hlo/lhlo/transforms/passes.h"
-#include "xla/mlir_hlo/mhlo/IR/register.h"
-#include "xla/mlir_hlo/mhlo/transforms/passes.h"
-#include "xla/mlir_hlo/thlo/IR/thlo_ops.h"
-#include "xla/mlir_hlo/thlo/transforms/passes.h"
-#include "xla/mlir_hlo/tools/mlir_interpreter/framework/interpreter.h"
-#include "xla/service/hlo.pb.h"
+#include "mlir/Dialect/Affine/Utils.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributeInterfaces.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/OwningOpRef.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/Verifier.h"
+#include "mlir/InitAllDialects.h"
+#include "mlir/InitAllPasses.h"
+#include "mlir/Parser/Parser.h"
+#include "mlir/Pass/PassManager.h"
+#include "mlir/Pass/PassRegistry.h"
+#include "mlir/Support/FileUtilities.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Support/LogicalResult.h"
+#include "mlir/Transforms/Passes.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/init_main.h"
+#include "xla/literal.h"
+#include "xla/mlir/tools/mlir_bisect/bisect_lib.h"
+#include "xla/mlir/tools/mlir_bisect/test_passes.h"
+#include "xla/mlir/tools/mlir_interpreter/framework/interpreter.h"
+#include "xla/mlir/tools/mlir_replay/public/execution_trace.pb.h"
+#include "xla/mlir/tools/mlir_replay/public/execution_trace_utils.h"
+#include "xla/mlir_hlo/mhlo/IR/register.h"
+#include "xla/mlir_hlo/mhlo/transforms/passes.h"
+#include "xla/service/hlo.pb.h"
 
 struct Options {
   llvm::cl::opt<std::string> input_filename{llvm::cl::Positional,
@@ -91,10 +97,10 @@ namespace mlir {
 namespace bisect {
 namespace {
 
-OwningOpRef<ModuleOp> ParseMlirInput(llvm::StringRef inputFilename,
+OwningOpRef<ModuleOp> ParseMlirInput(llvm::StringRef input_filename,
                                      MLIRContext* context) {
   std::string error_message;
-  auto file = mlir::openInputFile(inputFilename, &error_message);
+  auto file = mlir::openInputFile(input_filename, &error_message);
   if (!file) {
     llvm::errs() << error_message << "\n";
     return {};
@@ -110,7 +116,7 @@ LogicalResult RunPipeline(ModuleOp module, const Options& options) {
     return mlir::success();
   }
 
-  auto error_handler = [&](const Twine& msg) {
+  auto error_handler = [&](const llvm::Twine& msg) {
     llvm::errs() << msg << "\n";
     return failure();
   };
@@ -129,12 +135,12 @@ LogicalResult Run(mlir::Operation* module, interpreter::ExecutionTrace* trace,
   interpreter::ExecutionTraceListener tracer(trace);
   interpreter::InterpreterOptions interpreter_options;
   interpreter_options.listener = &tracer;
-  interpreter_options.maxSteps = options.max_steps_per_run;
-  auto results_before_pass = interpreter::runInterpreter(
+  interpreter_options.max_steps = options.max_steps_per_run;
+  auto results_before_pass = interpreter::RunInterpreter(
       symbol_table, llvm::cast<func::FuncOp>(symbol_table.lookup("main")), {},
       interpreter_options);
 
-  if (!succeeded(results_before_pass)) {
+  if (!results_before_pass.ok()) {
     llvm::errs() << "Interpreter failed\n";
     return failure();
   }
@@ -152,20 +158,20 @@ LogicalResult Run(mlir::Operation* module, interpreter::ExecutionTrace* trace,
   interpreter_options.listener = nullptr;
   bool found_expected_error = false;
   if (!options.expected_error.empty()) {
-    auto original_handler = interpreter_options.errorHandler;
-    interpreter_options.errorHandler = [&](llvm::StringRef failure) {
+    auto original_handler = std::move(interpreter_options.error_handler);
+    interpreter_options.error_handler = [&](llvm::StringRef failure) {
       found_expected_error |=
           failure.find(options.expected_error) != std::string::npos;
       original_handler(failure);
     };
   }
 
-  auto results_after_pass = interpreter::runInterpreter(
+  auto results_after_pass = interpreter::RunInterpreter(
       symbol_table_after,
       llvm::cast<func::FuncOp>(symbol_table_after.lookup("main")), {},
-      interpreter_options);
+      std::move(interpreter_options));
 
-  if (!succeeded(results_after_pass)) {
+  if (!results_after_pass.ok()) {
     if (found_expected_error) {
       return success();
     }
@@ -183,11 +189,11 @@ LogicalResult Run(mlir::Operation* module, interpreter::ExecutionTrace* trace,
 
   llvm::errs() << "results before:\n";
   for (auto& result : *results_before_pass) {
-    llvm::errs() << "  " << result.toString() << "\n";
+    llvm::errs() << "  " << result.ToString() << "\n";
   }
   llvm::errs() << "\nresults after:\n";
   for (auto& result : *results_after_pass) {
-    llvm::errs() << "  " << result.toString() << "\n";
+    llvm::errs() << "  " << result.ToString() << "\n";
   }
 
   return success();
@@ -226,14 +232,14 @@ OwningOpRef<ModuleOp> ReduceModule(OwningOpRef<ModuleOp> module,
                      << *candidate << "\n\n";
 
         // Update the trace.
-        state.SetTrace(trace);
+        state.SetTrace(std::move(trace));
 
         // Move strategies to the end.
         decltype(strategies) new_strategies;
         std::copy(it + 1, strategies.end(), std::back_inserter(new_strategies));
         std::copy(strategies.begin(), it + 1,
                   std::back_inserter(new_strategies));
-        strategies = new_strategies;
+        strategies = std::move(new_strategies);
         return {candidate.release()};
       }
     }
@@ -257,8 +263,8 @@ void ReplaceArgsWithConstants(ModuleOp module,
         bbarg.getType());
     CHECK_EQ(attr.size(), 1) << "unsupported argument";
 
-    auto constant = b.create<arith::ConstantOp>(
-        main.getLoc(), bbarg.getType(), llvm::cast<TypedAttr>(attr.front()));
+    auto constant = arith::ConstantOp::create(
+        b, main.getLoc(), bbarg.getType(), llvm::cast<TypedAttr>(attr.front()));
     bbarg.replaceAllUsesWith(constant);
   }
 
@@ -266,8 +272,8 @@ void ReplaceArgsWithConstants(ModuleOp module,
   for (auto arg :
        main.getBody().getArguments().drop_front(snapshot.arguments().size())) {
     CHECK(llvm::isa<MemRefType>(arg.getType())) << "unsupported argument";
-    arg.replaceAllUsesWith(b.create<memref::AllocOp>(
-        module.getLoc(), llvm::cast<MemRefType>(arg.getType())));
+    arg.replaceAllUsesWith(memref::AllocOp::create(
+        b, module.getLoc(), llvm::cast<MemRefType>(arg.getType())));
   }
   while (main.getBody().getNumArguments() > 0) {
     main.getBody().eraseArgument(0);
@@ -295,17 +301,9 @@ int main(int argc, char* argv[]) {
   mlir::registerAllPasses();
   mlir::bisect::test::RegisterTestPasses();
   mlir::mhlo::registerAllMhloPasses();
-  mlir::lmhlo::registerAllLmhloPasses();
-  mlir::thlo::registerAllThloPasses();
-  mlir::gml_st::registerGmlStPasses();
-  mlir::gml_st::registerGmlStTestPasses();
   mlir::mhlo::registerAllMhloDialects(registry);
-  mlir::deallocation::registerDeallocationPasses();
 
-  registry.insert<mlir::lmhlo::LmhloDialect, mlir::gml_st::GmlStDialect,
-                  mlir::deallocation::DeallocationDialect,
-                  mlir::arith::ArithDialect, mlir::thlo::THLODialect,
-                  xla::runtime::RuntimeDialect>();
+  registry.insert<mlir::arith::ArithDialect>();
 
   mlir::MLIRContext context(registry);
   context.getOrLoadDialect<mlir::arith::ArithDialect>();
@@ -313,8 +311,8 @@ int main(int argc, char* argv[]) {
 
   if (!options.hlo_snapshot.empty()) {
     xla::HloSnapshot snapshot;
-    TF_CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(), options.hlo_snapshot,
-                                     &snapshot));
+    CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(), options.hlo_snapshot,
+                                  &snapshot));
     mlir::bisect::ReplaceArgsWithConstants(*module, snapshot);
   }
 
@@ -333,7 +331,7 @@ int main(int argc, char* argv[]) {
   }
 
   mlir::bisect::BisectState state;
-  state.SetTrace(trace);
+  state.SetTrace(std::move(trace));
   if (!options.debug_strategy.empty()) {
     bool some_failed = false;
     for (auto& candidate : mlir::bisect::detail::GetCandidates(

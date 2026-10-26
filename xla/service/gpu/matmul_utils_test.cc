@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,29 +15,34 @@ limitations under the License.
 
 #include "xla/service/gpu/matmul_utils.h"
 
+#include <gtest/gtest.h>
+
+#include <cstdint>
+#include <memory>
+#include <string>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/status/status_matchers.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "xla/service/hlo_parser.h"
-#include "xla/test.h"
-#include "xla/tests/hlo_test_base.h"
-#include "tsl/platform/status_matchers.h"
+#include "absl/strings/substitute.h"
+#include "xla/autotuning.pb.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/parser/hlo_parser.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/layout_util.h"
+#include "xla/shape.h"
+#include "xla/stream_executor/cuda/cuda_compute_capability.h"
+#include "xla/stream_executor/device_description.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace gpu {
 namespace {
 
-using ::testing::ElementsAre;
-using ::tsl::testing::IsOkAndHolds;
-
-TEST(GetNonContractingDimsTest, Valid) {
-  Shape shape = ParseShape("f32[1,2,3,4,5,6]").value();
-  EXPECT_THAT(GetNonContractingDims(shape, /*batch_dims=*/{4},
-                                    /*contracting_dims=*/{1, 5}),
-              IsOkAndHolds(ElementsAre(0, 2, 3)));
-}
-
-using CanFoldTransposeOperandIntoDotTest = HloTestBase;
+using CanFoldTransposeOperandIntoDotTest = HloHardwareIndependentTestBase;
 
 TEST_F(CanFoldTransposeOperandIntoDotTest, ArgTransposeFoldGemm) {
   const char* hlo_text = R"(
@@ -51,10 +56,30 @@ ENTRY AddDotsFunc {
 }
 
 )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(hlo_text));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_text));
   auto dot = module->entry_computation()->root_instruction();
-  EXPECT_THAT(CanFoldTransposeOperandIntoDot(*dot, 0), IsOkAndHolds(true));
+  EXPECT_THAT(CanFoldTransposeOperandIntoDot(*dot, 0),
+              absl_testing::IsOkAndHolds(true));
+}
+
+TEST_F(CanFoldTransposeOperandIntoDotTest, RhsTransposeFoldGemm) {
+  const char* hlo_text = R"(
+HloModule RhsTransposeFoldGemm
+
+ENTRY AddDotsFunc {
+  x = f32[2,3] parameter(0)
+  y = f32[4,3] parameter(1)
+  y_transposed = f32[3,4] transpose(y), dimensions={1, 0}
+  ROOT dot_a = f32[2,4] dot(x, y_transposed), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+}
+
+)";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_text));
+  auto dot = module->entry_computation()->root_instruction();
+  EXPECT_THAT(CanFoldTransposeOperandIntoDot(*dot, 1),
+              absl_testing::IsOkAndHolds(true));
 }
 
 TEST_F(CanFoldTransposeOperandIntoDotTest, BatchedArgRowColTransposeFoldGemm) {
@@ -69,10 +94,11 @@ ENTRY AddDotsFunc {
 }
 
 )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(hlo_text));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_text));
   auto dot = module->entry_computation()->root_instruction();
-  EXPECT_THAT(CanFoldTransposeOperandIntoDot(*dot, 0), IsOkAndHolds(true));
+  EXPECT_THAT(CanFoldTransposeOperandIntoDot(*dot, 0),
+              absl_testing::IsOkAndHolds(true));
 }
 
 TEST_F(CanFoldTransposeOperandIntoDotTest, BatchRowTransposeFoldGemm) {
@@ -87,10 +113,11 @@ ENTRY AddDotsFunc {
 }
 
 )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(hlo_text));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_text));
   auto dot = module->entry_computation()->root_instruction();
-  EXPECT_THAT(CanFoldTransposeOperandIntoDot(*dot, 0), IsOkAndHolds(true));
+  EXPECT_THAT(CanFoldTransposeOperandIntoDot(*dot, 0),
+              absl_testing::IsOkAndHolds(true));
 }
 
 TEST_F(CanFoldTransposeOperandIntoDotTest,
@@ -106,10 +133,11 @@ ENTRY AddDotsFunc {
 }
 
 )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(hlo_text));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_text));
   auto dot = module->entry_computation()->root_instruction();
-  EXPECT_THAT(CanFoldTransposeOperandIntoDot(*dot, 0), IsOkAndHolds(false));
+  EXPECT_THAT(CanFoldTransposeOperandIntoDot(*dot, 0),
+              absl_testing::IsOkAndHolds(false));
 }
 
 TEST_F(CanFoldTransposeOperandIntoDotTest,
@@ -125,10 +153,11 @@ ENTRY AddDotsFunc {
 }
 
 )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(hlo_text));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_text));
   auto dot = module->entry_computation()->root_instruction();
-  EXPECT_THAT(CanFoldTransposeOperandIntoDot(*dot, 1), IsOkAndHolds(false));
+  EXPECT_THAT(CanFoldTransposeOperandIntoDot(*dot, 1),
+              absl_testing::IsOkAndHolds(false));
 }
 
 struct GetBatchRowColumnShapeTestParams {
@@ -146,9 +175,10 @@ TEST_P(GetBatchRowColumnShapeTest, ValidShape) {
   const GetBatchRowColumnShapeTestParams& params = GetParam();
 
   Shape shape = ParseShape(params.shape).value();
-  EXPECT_THAT(GetBatchRowColumnShape(shape, params.batch_dims, params.row_dims,
-                                     params.col_dims),
-              IsOkAndHolds(ParseShape(params.expected_shape).value()));
+  EXPECT_THAT(
+      GetBatchRowColumnShape(shape, params.batch_dims, params.row_dims,
+                             params.col_dims),
+      absl_testing::IsOkAndHolds(ParseShape(params.expected_shape).value()));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -223,6 +253,197 @@ INSTANTIATE_TEST_SUITE_P(
 TEST(GetMatrixLayoutTest, BatchInMostMinorPhysicalDimension) {
   Shape shape = ParseShape("f32[3,4,5]{0,2,1}").value();
   EXPECT_FALSE(MatrixLayout::For(shape).ok());
+}
+
+using GetMatrixSizeRewriteThresholdTest = HloHardwareIndependentTestBase;
+
+TEST_F(GetMatrixSizeRewriteThresholdTest, MatMulTooSmallForRewrite) {
+  const char* hlo_text = R"(
+HloModule DotFuncModule
+
+ENTRY DotFunc {
+  x = f32[100,30,3] parameter(0)
+  y = f32[100,3,3] parameter(1)
+  ROOT dot = f32[100,30,3] dot(x, y), lhs_contracting_dims={2}, rhs_contracting_dims={1}, lhs_batch_dims={0}, rhs_batch_dims={0}
+}
+
+)";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_text));
+  auto dot = module->entry_computation()->root_instruction();
+  EXPECT_THAT(IsMatrixMultiplicationTooSmallForRewriting(*dot, 100),
+              absl_testing::IsOkAndHolds(true));
+}
+
+TEST_F(GetMatrixSizeRewriteThresholdTest, MatMulSupportedByClassicalEmitters) {
+  const char* hlo_text = R"(
+HloModule DotFuncModule
+
+ENTRY DotFunc {
+  x = f32[100,30,3] parameter(0)
+  y = f32[100,3,3] parameter(1)
+  ROOT dot = f32[100,30,3] dot(x, y), lhs_contracting_dims={2}, rhs_contracting_dims={1}, lhs_batch_dims={0}, rhs_batch_dims={0}
+}
+
+)";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_text));
+  auto dot = module->entry_computation()->root_instruction();
+  EXPECT_TRUE(IsDotSupportedByClassicalEmitters(*dot));
+}
+
+TEST_F(GetMatrixSizeRewriteThresholdTest,
+       MatMulUnsupportedByClassicalEmitters) {
+  const char* hlo_text = R"(
+HloModule DotFuncModule
+
+ENTRY DotFunc {
+  x = s8[100,30,3] parameter(0)
+  y = s8[100,3,3] parameter(1)
+  ROOT dot = s32[100,30,3] dot(x, y), lhs_contracting_dims={2}, rhs_contracting_dims={1}, lhs_batch_dims={0}, rhs_batch_dims={0}
+}
+
+)";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_text));
+  auto dot = module->entry_computation()->root_instruction();
+  EXPECT_FALSE(IsDotSupportedByClassicalEmitters(*dot));
+}
+
+TEST_F(GetMatrixSizeRewriteThresholdTest, MatMulLeftLargeEnoughForRewrite) {
+  const char* hlo_text = R"(
+HloModule DotFuncModule
+
+ENTRY DotFunc {
+  x = f32[50,2] parameter(0)
+  y = f32[2,2] parameter(1)
+  ROOT dot = f32[50,2] dot(x, y), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+}
+
+)";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_text));
+  auto dot = module->entry_computation()->root_instruction();
+  EXPECT_THAT(IsMatrixMultiplicationTooSmallForRewriting(*dot, 100),
+              absl_testing::IsOkAndHolds(false));
+}
+
+TEST_F(GetMatrixSizeRewriteThresholdTest, MatMulRightLargeEnoughForRewrite) {
+  const char* hlo_text = R"(
+HloModule DotFuncModule
+
+ENTRY DotFunc {
+  x = f32[2,2] parameter(0)
+  y = f32[2,50] parameter(1)
+  ROOT dot = f32[2,50] dot(x, y), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+}
+
+)";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_text));
+  auto dot = module->entry_computation()->root_instruction();
+  EXPECT_THAT(IsMatrixMultiplicationTooSmallForRewriting(*dot, 100),
+              absl_testing::IsOkAndHolds(false));
+}
+
+TEST_F(GetMatrixSizeRewriteThresholdTest, MatMulTogetherLargeEnoughForRewrite) {
+  const char* hlo_text = R"(
+HloModule DotFuncModule
+
+ENTRY DotFunc {
+  x = f32[4,16] parameter(0)
+  y = f32[16,4] parameter(1)
+  ROOT dot = f32[4,4] dot(x, y), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+}
+
+)";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_text));
+  auto dot = module->entry_computation()->root_instruction();
+  EXPECT_THAT(IsMatrixMultiplicationTooSmallForRewriting(*dot, 100),
+              absl_testing::IsOkAndHolds(false));
+}
+
+TEST(TritonGemmConfigTest, ProtoRoundTripPreservesWavesPerEu) {
+  TritonGemmConfig config(/*block_m=*/64, /*block_n=*/128, /*block_k=*/32,
+                          /*num_stages=*/2, /*num_warps=*/4,
+                          /*num_ctas=*/1, /*is_tma_allowed=*/false,
+                          /*is_warp_specialization_allowed=*/false,
+                          /*waves_per_eu=*/4);
+
+  AutotuneResult::TritonGemmKey key = config.ToProto();
+  EXPECT_EQ(key.waves_per_eu(), 4);
+
+  ASSERT_OK_AND_ASSIGN(TritonGemmConfig restored,
+                       TritonGemmConfig::FromProto(key));
+  EXPECT_EQ(restored.block_m, 64);
+  EXPECT_EQ(restored.block_n, 128);
+  EXPECT_EQ(restored.block_k, 32);
+
+  EXPECT_EQ(restored.num_stages, 2);
+  EXPECT_EQ(restored.num_warps, 4);
+  EXPECT_EQ(restored.num_ctas, 1);
+  EXPECT_EQ(restored.is_tma_allowed, false);
+  EXPECT_EQ(restored.is_warp_specialization_allowed, false);
+  EXPECT_EQ(restored.waves_per_eu, 4);
+}
+
+TEST(TritonGemmConfigTest, ToStringIncludesWavesPerEu) {
+  TritonGemmConfig config(/*block_m=*/64, /*block_n=*/128, /*block_k=*/32,
+                          /*num_stages=*/2, /*num_warps=*/4,
+                          /*num_ctas=*/1, /*is_tma_allowed=*/false,
+                          /*is_warp_specialization_allowed=*/false,
+                          /*waves_per_eu=*/4);
+  std::string str = config.ToString();
+  EXPECT_NE(str.find("waves_per_eu:4"), std::string::npos);
+}
+
+class DotRequiresMinorContractingDimsTest
+    : public HloHardwareIndependentTestBase {
+ protected:
+  bool Requires(absl::string_view lhs, absl::string_view rhs,
+                absl::string_view out, const se::CudaComputeCapability& cc) {
+    absl::StatusOr<std::unique_ptr<HloModule>> module =
+        ParseAndReturnVerifiedModule(absl::Substitute(R"(
+      ENTRY e {
+        x = $0[2,3] parameter(0)
+        y = $1[3,4] parameter(1)
+        ROOT dot = $2[2,4] dot(x, y), lhs_contracting_dims={1},
+          rhs_contracting_dims={0}
+      })",
+                                                      lhs, rhs, out));
+    CHECK_OK(module);
+    return DotRequiresMinorContractingDims(
+        *(*module)->entry_computation()->root_instruction(),
+        se::GpuComputeCapability(cc));
+  }
+};
+
+TEST_F(DotRequiresMinorContractingDimsTest, S8ToS32) {
+  EXPECT_TRUE(Requires("s8", "s8", "s32", se::CudaComputeCapability::Hopper()));
+  EXPECT_FALSE(
+      Requires("s8", "s8", "f32", se::CudaComputeCapability::Hopper()));
+}
+
+TEST_F(DotRequiresMinorContractingDimsTest, Fp8BeforeBlackwell) {
+  EXPECT_TRUE(Requires("f8e4m3fn", "f8e4m3fn", "f32",
+                       se::CudaComputeCapability::Hopper()));
+  EXPECT_FALSE(Requires("f8e4m3fn", "f8e4m3fn", "f32",
+                        se::CudaComputeCapability::Blackwell()));
+}
+
+TEST_F(DotRequiresMinorContractingDimsTest, Float) {
+  EXPECT_FALSE(
+      Requires("f32", "f32", "f32", se::CudaComputeCapability::Hopper()));
+}
+
+TEST(AreContractingDimsMinorTest, Works) {
+  EXPECT_TRUE(AreContractingDimsMinor(LayoutUtil::MakeLayout({2, 1, 0}), {2}));
+  EXPECT_FALSE(AreContractingDimsMinor(LayoutUtil::MakeLayout({2, 1, 0}), {1}));
+  EXPECT_TRUE(
+      AreContractingDimsMinor(LayoutUtil::MakeLayout({1, 2, 0}), {2, 1}));
+  EXPECT_FALSE(
+      AreContractingDimsMinor(LayoutUtil::MakeLayout({1, 0, 2}), {2, 1}));
 }
 
 }  // namespace

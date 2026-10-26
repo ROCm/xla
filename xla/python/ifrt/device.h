@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,69 +16,121 @@ limitations under the License.
 #ifndef XLA_PYTHON_IFRT_DEVICE_H_
 #define XLA_PYTHON_IFRT_DEVICE_H_
 
-#include <utility>
-#include <vector>
+#include <cstdint>
 
-#include "absl/container/inlined_vector.h"
-#include "absl/functional/function_ref.h"
-#include "xla/pjrt/pjrt_client.h"
-#include "xla/python/ifrt/types.pb.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/functional/any_invocable.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "xla/python/ifrt/attribute_map.h"
+#include "xla/python/ifrt/device.pb.h"
+#include "xla/python/ifrt/rtti.h"
+#include "xla/tsl/lib/gtl/int_type.h"
 
 namespace xla {
 namespace ifrt {
 
 class Client;
+class Memory;
 
-// Short-term alias to reuse `xla::PjRtDevice` without a separate abstract type.
-using Device = ::xla::PjRtDevice;
+// Globally unique device IDs.
+TSL_LIB_GTL_DEFINE_INT_TYPE(DeviceId, int32_t);
 
-// Ordered list of devices.
-class DeviceList {
+// `Device` represents a single device that can run computations. The types of
+// supported computations depend on the runtime.
+class Device : public RTTIExtends<Device, RTTIRoot> {
  public:
-  using value_type = Device*;
+  Device() = default;
 
-  // Number of devices to inline in `Devices`.
-  static constexpr int kInlineDeviceSize = 1;
+  // Not copyable or movable.
+  Device(const Device&) = delete;
+  Device(Device&&) = delete;
+  Device& operator=(const Device&) = delete;
+  Device& operator=(Device&&) = delete;
 
-  // TODO(hyeontaek): Consider using variant<Device*, std::vector<Device*>> for
-  // better performance.
-  using Devices = absl::InlinedVector<Device*, kInlineDeviceSize>;
+  virtual Client* client() const = 0;
 
-  // Function that matches the semantics of `Client::LookupDevice()`.
-  using LookupDeviceFunc = absl::FunctionRef<StatusOr<Device*>(int)>;
+  // The ID of this device. Globally unique across all processes.
+  virtual DeviceId Id() const = 0;
 
-  explicit DeviceList(Devices devices) : devices_(std::move(devices)) {}
+  // Returns vendor specific attributes about the device. For example the model
+  // number of a GPU, or the mesh coordinates of a TPU device. The returned
+  // reference will remain valid for the lifetime of the Device.
+  virtual const AttributeMap& Attributes() const = 0;
 
-  // Constructs `DeviceList` from `DeviceListProto`. Devices are looked up using
-  // `lookup_device`. Device ids in the proto must be consistent with the
-  // devices returned by `lookup_device`.
-  static StatusOr<DeviceList> FromProto(LookupDeviceFunc lookup_device,
-                                        const DeviceListProto& proto);
+  // A string that uniquely identifies the platform, e.g., "tpu", "cuda", "cpu".
+  virtual absl::string_view PlatformName() const = 0;
 
-  // Returns a `DeviceListProto` representation.
-  DeviceListProto ToProto() const;
+  // A vendor-dependent string that uniquely identifies the kind of device,
+  // e.g., "Tesla V100-SXM2-16GB". May be used to determine whether two GPUs are
+  // compatible compilation.
+  virtual absl::string_view Kind() const = 0;
 
-  absl::Span<Device* const> devices() const { return devices_; }
+  // Debug string suitable for reading by end users, should be reasonably terse,
+  // for example: "CpuDevice(id=0)".
+  virtual absl::string_view ToString() const = 0;
 
-  int size() const { return devices_.size(); }
-  bool empty() const { return devices_.empty(); }
+  // Debug string suitable for logging when errors occur. Should be verbose
+  // enough to describe the current device unambiguously.
+  virtual absl::string_view DebugString() const = 0;
 
-  Device* operator[](int i) const { return devices_[i]; }
-  Device* at(int i) const { return devices_.at(i); }
-  Device* front() const { return devices_.front(); }
-  Device* back() const { return devices_.back(); }
+  // Returns the default memory space attached to this device.
+  virtual absl::StatusOr<Memory*> DefaultMemory() const = 0;
 
-  auto begin() const { return devices_.begin(); }
-  auto cbegin() const { return devices_.cbegin(); }
-  auto end() const { return devices_.end(); }
-  auto cend() const { return devices_.cend(); }
+  // Returns all memory spaces attached to this device.
+  // The memory spaces are in no particular order.
+  virtual absl::Span<Memory* const> Memories() const = 0;
 
- private:
-  Devices devices_;
+  // Whether client can issue commands to this device.
+  virtual bool IsAddressable() const = 0;
+
+  // The index of the process that this device belongs to, i.e. is addressable
+  // from. This is not always identical to Client::process_index() in a
+  // multi-process setting, where each client can see devices from all
+  // processes, but only a subset of them are addressable and have the same
+  // process_index as the client.
+  virtual int ProcessIndex() const = 0;
+
+  template <class Sink>
+  friend void AbslStringify(Sink& sink, const Device& device) {
+    sink.Append(device.ToString());
+  }
+
+  template <class Sink>
+  friend void AbslStringify(Sink& sink, const Device* device) {
+    if (device == nullptr) {
+      sink.Append("<nullptr>");
+    } else {
+      sink.Append(device->ToString());
+    }
+  }
+
+  static char ID;  // NOLINT
 };
 
-// Returns the id of each device in `device_list`.
-std::vector<int> GetDeviceIds(DeviceList device_list);
+typedef absl::AnyInvocable<absl::Status(
+    const absl::flat_hash_map<Device*, xla::ifrt::AttributeMap>&)>
+    OnDeviceAttributeChangeCallback;
+
+// Object that controls the lifetime of subscription.
+class DeviceAttributeSubscription {
+ public:
+  DeviceAttributeSubscription() = default;
+  // Unsubscribe from device attribute changes on destruction.
+  virtual ~DeviceAttributeSubscription() = default;
+
+  typedef absl::flat_hash_map<Device*, xla::ifrt::AttributeMap> UpdateType;
+
+  // Not copyable or movable.
+  DeviceAttributeSubscription(const DeviceAttributeSubscription&) = delete;
+  DeviceAttributeSubscription(DeviceAttributeSubscription&&) = delete;
+  DeviceAttributeSubscription& operator=(const DeviceAttributeSubscription&) =
+      delete;
+  DeviceAttributeSubscription& operator=(DeviceAttributeSubscription&&) =
+      delete;
+};
 
 }  // namespace ifrt
 }  // namespace xla

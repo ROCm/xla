@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,30 +15,48 @@ limitations under the License.
 
 #include "xla/service/cpu/cpu_instruction_fusion.h"
 
-#include <algorithm>
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <cstdint>
 #include <memory>
 #include <set>
+#include <string>
+#include <vector>
 
+#include "absl/algorithm/container.h"
+#include "absl/status/status_matchers.h"  // IWYU pragma: keep
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "xla/hlo/analysis/alias_info.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/hlo/utils/hlo_matchers.h"
+#include "xla/literal_util.h"
 #include "xla/service/transpose_folding.h"
 #include "xla/shape.h"
-#include "xla/tests/hlo_test_base.h"
 #include "xla/tests/test_utils.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/xla_data.pb.h"
 
 namespace op = xla::testing::opcode_matchers;
 
-namespace xla {
-namespace cpu {
+namespace xla::cpu {
 namespace {
 
-using InstructionFusionTest = HloTestBase;
+class InstructionFusionTest : public HloHardwareIndependentTestBase {
+ protected:
+  AliasInfo alias_info_;
+};
 
 std::unique_ptr<HloInstruction> MakeDot(const Shape& shape, HloInstruction* lhs,
                                         HloInstruction* rhs) {
   DotDimensionNumbers dot_dnums;
-  dot_dnums.add_lhs_contracting_dimensions(lhs->shape().rank() - 1);
+  dot_dnums.add_lhs_contracting_dimensions(lhs->shape().dimensions().size() -
+                                           1);
   dot_dnums.add_rhs_contracting_dimensions(0);
   PrecisionConfig precision_config;
   precision_config.mutable_operand_precision()->Resize(
@@ -62,7 +80,7 @@ TEST_F(InstructionFusionTest, DotOperationFusion_Basic_0) {
   auto module = CreateNewVerifiedModule();
   auto computation = module->AddEntryComputation(builder.Build());
   EXPECT_EQ(dot, computation->root_instruction());
-  EXPECT_TRUE(CpuInstructionFusion().Run(module.get()).value());
+  EXPECT_TRUE(CpuInstructionFusion(&alias_info_).Run(module.get()).value());
   EXPECT_THAT(computation->root_instruction(), op::Fusion());
 }
 
@@ -81,7 +99,7 @@ TEST_F(InstructionFusionTest, DotOperationFusion_Basic_1) {
   auto module = CreateNewVerifiedModule();
   auto computation = module->AddEntryComputation(builder.Build());
   EXPECT_EQ(dot, computation->root_instruction());
-  EXPECT_TRUE(CpuInstructionFusion().Run(module.get()).value());
+  EXPECT_TRUE(CpuInstructionFusion(&alias_info_).Run(module.get()).value());
   EXPECT_THAT(computation->root_instruction(), op::Fusion());
 }
 
@@ -102,7 +120,7 @@ TEST_F(InstructionFusionTest, DotOperationFusion_Bitcast) {
   auto module = CreateNewVerifiedModule();
   auto computation = module->AddEntryComputation(builder.Build());
   EXPECT_EQ(dot, computation->root_instruction());
-  EXPECT_TRUE(CpuInstructionFusion().Run(module.get()).value());
+  EXPECT_TRUE(CpuInstructionFusion(&alias_info_).Run(module.get()).value());
   EXPECT_THAT(computation->root_instruction(), op::Fusion());
 }
 
@@ -124,7 +142,7 @@ TEST_F(InstructionFusionTest, DotOperationFusion_Reshape) {
   auto module = CreateNewVerifiedModule();
   auto computation = module->AddEntryComputation(builder.Build());
   EXPECT_EQ(dot, computation->root_instruction());
-  EXPECT_TRUE(CpuInstructionFusion().Run(module.get()).value());
+  EXPECT_TRUE(CpuInstructionFusion(&alias_info_).Run(module.get()).value());
   EXPECT_THAT(computation->root_instruction(), op::Fusion());
 }
 
@@ -143,7 +161,7 @@ TEST_F(InstructionFusionTest, DotOperationFusion_TooLarge) {
   auto module = CreateNewVerifiedModule();
   auto computation = module->AddEntryComputation(builder.Build());
   EXPECT_EQ(dot, computation->root_instruction());
-  EXPECT_FALSE(CpuInstructionFusion().Run(module.get()).value());
+  EXPECT_FALSE(CpuInstructionFusion(&alias_info_).Run(module.get()).value());
   EXPECT_EQ(dot, computation->root_instruction());
 }
 
@@ -162,7 +180,7 @@ TEST_F(InstructionFusionTest, DotOperationFusion_ElementReuse) {
   auto module = CreateNewVerifiedModule();
   auto computation = module->AddEntryComputation(builder.Build());
   EXPECT_EQ(dot, computation->root_instruction());
-  EXPECT_FALSE(CpuInstructionFusion().Run(module.get()).value());
+  EXPECT_FALSE(CpuInstructionFusion(&alias_info_).Run(module.get()).value());
   EXPECT_EQ(dot, computation->root_instruction());
 }
 
@@ -179,11 +197,10 @@ ENTRY DotOperationFusion_TransposeFusion {
 }
 )";
 
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
   HloComputation* computation = module->entry_computation();
 
-  TF_ASSERT_OK_AND_ASSIGN(bool changed, TransposeFolding().Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(bool changed, TransposeFolding().Run(module.get()));
   ASSERT_TRUE(changed);
   ASSERT_THAT(computation->root_instruction(),
               op::Dot(op::Parameter(0), op::Exp(op::Parameter(1)),
@@ -203,11 +220,10 @@ ENTRY DotOperationFusion_TransposeFusion {
 }
 )";
 
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
   HloComputation* computation = module->entry_computation();
 
-  TF_ASSERT_OK_AND_ASSIGN(bool changed, TransposeFolding().Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(bool changed, TransposeFolding().Run(module.get()));
   ASSERT_TRUE(changed);
   ASSERT_THAT(computation->root_instruction(),
               op::Dot(op::Parameter(0), op::Exp(op::Parameter(1)),
@@ -228,11 +244,10 @@ ENTRY DotOperationFusion_TransposeFusion {
 }
 )";
 
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
   HloComputation* computation = module->entry_computation();
 
-  TF_ASSERT_OK_AND_ASSIGN(bool changed, TransposeFolding().Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(bool changed, TransposeFolding().Run(module.get()));
   ASSERT_TRUE(changed);
   ASSERT_THAT(computation->root_instruction(),
               op::Dot(op::Parameter(0), op::Exp(op::Parameter(1)),
@@ -241,6 +256,16 @@ ENTRY DotOperationFusion_TransposeFusion {
 
 class OpcodeFusionTest : public InstructionFusionTest {
  protected:
+  bool RunFusion(HloModule* module) {
+    absl::StatusOr<bool> did_fusion =
+        CpuInstructionFusion(&alias_info_).Run(module);
+    EXPECT_TRUE(did_fusion.ok());
+    if (!did_fusion.ok()) {
+      return false;
+    }
+    return *did_fusion;
+  }
+
   // Runs CPU instruction fusion on the given module, and tests that the result
   // contains a fused op at the root with exactly the given multiset of opcodes.
   void RunFusionAndCheckOpcodesWereFused(
@@ -248,18 +273,16 @@ class OpcodeFusionTest : public InstructionFusionTest {
       HloInstruction::FusionKind fusion_kind =
           HloInstruction::FusionKind::kLoop) {
     auto computation = module->entry_computation();
-    auto did_fusion = CpuInstructionFusion().Run(module);
-    ASSERT_TRUE(did_fusion.ok());
-    EXPECT_TRUE(did_fusion.value());
+    auto did_fusion = RunFusion(module);
+    EXPECT_TRUE(did_fusion);
 
     HloInstruction* root = computation->root_instruction();
     ASSERT_THAT(root, op::Fusion());
     EXPECT_EQ(root->fusion_kind(), fusion_kind);
 
     std::vector<HloOpcode> fused_opcodes(root->fused_instruction_count());
-    std::transform(root->fused_instructions().begin(),
-                   root->fused_instructions().end(), fused_opcodes.begin(),
-                   [](const HloInstruction* hlo) { return hlo->opcode(); });
+    absl::c_transform(root->fused_instructions(), fused_opcodes.begin(),
+                      [](const HloInstruction* hlo) { return hlo->opcode(); });
 
     EXPECT_EQ(
         std::multiset<HloOpcode>(fused_opcodes.begin(), fused_opcodes.end()),
@@ -452,7 +475,6 @@ TEST_F(OpcodeFusionTest, Slice_Negate) {
       HloInstruction::CreateSlice(slice_shape, param0, {0}, {4}, {2}));
   builder.AddInstruction(HloInstruction::CreateUnary(
       ShapeUtil::MakeShape(F32, {2}), HloOpcode::kNegate, slice1));
-
   auto module = CreateNewVerifiedModule();
   module->AddEntryComputation(builder.Build());
 
@@ -569,6 +591,7 @@ TEST_F(OpcodeFusionTest, DynamicSliceWithDynamicUpdateSlice) {
 
 TEST_F(OpcodeFusionTest, MessOfFusibleNodes) {
   auto module = CreateNewVerifiedModule();
+
   HloComputation::Builder builder(TestName());
 
   Shape full_shape = ShapeUtil::MakeShape(F32, {4, 100, 10, 100, 50});
@@ -681,8 +704,8 @@ TEST_F(OpcodeFusionTest, DotAddOutputFusion_19x50x19) {
                                              /*k=*/50, /*n=*/19,
                                              /*add_extra_use_for_dot=*/false);
 
-  TF_ASSERT_OK_AND_ASSIGN(bool fused_something,
-                          CpuInstructionFusion().Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(bool fused_something,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
   EXPECT_FALSE(fused_something);
   EXPECT_THAT(module->entry_computation()->root_instruction(),
               Not(op::Fusion()));
@@ -694,8 +717,8 @@ TEST_F(OpcodeFusionTest, DotAddOutputFusion_19x50x1_multi_use) {
                                              /*k=*/50, /*n=*/1,
                                              /*add_extra_use_for_dot=*/true);
 
-  TF_ASSERT_OK_AND_ASSIGN(bool fused_something,
-                          CpuInstructionFusion().Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(bool fused_something,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
   EXPECT_FALSE(fused_something);
   EXPECT_THAT(module->entry_computation()->root_instruction(),
               Not(op::Fusion()));
@@ -714,10 +737,10 @@ ENTRY main {
 }
 )";
 
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(module_string));
-  TF_ASSERT_OK_AND_ASSIGN(bool fused_something,
-                          CpuInstructionFusion().Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool fused_something,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
   EXPECT_FALSE(fused_something);
   EXPECT_THAT(module->entry_computation()->root_instruction(),
               Not(op::Fusion()));
@@ -741,8 +764,7 @@ TEST_P(GatherLoopFusionTest, GatherLoopFusion) {
   const GatherLoopFusionTestSpec& spec = GetParam();
   std::string hlo_string = absl::StrCat("HloModule ", spec.test_name, "\n\n",
                                         spec.hlo_computation_text);
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
 
   RunFusionAndCheckOpcodesWereFused(
       module.get(),
@@ -873,7 +895,7 @@ INSTANTIATE_TEST_SUITE_P(GatherLoopFusionTestInstantiation,
                          ::testing::ValuesIn(GetGatherLoopFusionTestSpecs()),
                          GatherLoopFusionTestSpec::Name);
 
-TEST_F(InstructionFusionTest, NoFuseReduceMajor) {
+TEST_F(InstructionFusionTest, FuseReduceMajor) {
   absl::string_view module_string = R"(
 HloModule module
 
@@ -892,13 +914,12 @@ ENTRY main {
 }
 )";
 
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(module_string));
-  TF_ASSERT_OK_AND_ASSIGN(bool fused_something,
-                          CpuInstructionFusion().Run(module.get()));
-  EXPECT_FALSE(fused_something);
-  EXPECT_THAT(module->entry_computation()->root_instruction(),
-              Not(op::Fusion()));
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool fused_something,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
+  EXPECT_TRUE(fused_something);
+  EXPECT_THAT(module->entry_computation()->root_instruction(), op::Fusion());
 }
 
 TEST_F(InstructionFusionTest, FuseReduceMinor) {
@@ -920,13 +941,495 @@ ENTRY main {
 }
 )";
 
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(module_string));
-  TF_ASSERT_OK_AND_ASSIGN(bool fused_something,
-                          CpuInstructionFusion().Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool fused_something,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
   EXPECT_TRUE(fused_something);
   EXPECT_THAT(module->entry_computation()->root_instruction(), op::Fusion());
 }
+
+TEST_F(OpcodeFusionTest, BigConstantNotInFusion) {
+  absl::string_view module_string = R"(
+HloModule module
+
+ENTRY main {
+  a = f32[1000,1000]{1,0} parameter(0)
+  b = f32[1000,1000]{1,0} constant({...})
+  a_plus_b = f32[1000,1000]{1,0} add(a, b)
+  c = f32[1000,1000]{1,0} constant({...})
+  ROOT result = f32[1000,1000]{1,0} add(a_plus_b, c)
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  RunFusionAndCheckOpcodesWereFused(
+      module.get(), {HloOpcode::kParameter, HloOpcode::kParameter,
+                     HloOpcode::kParameter, HloOpcode::kAdd, HloOpcode::kAdd});
+}
+
+TEST_F(OpcodeFusionTest, ScalarConstantInFusion) {
+  absl::string_view module_string = R"(
+HloModule module
+
+ENTRY main {
+  a = f32[1] parameter(0)
+  b = f32[1] constant({...})
+  a_plus_b = f32[1] add(a, b)
+  c = f32[1] constant({...})
+  ROOT result = f32[1] add(a_plus_b, c)
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  RunFusionAndCheckOpcodesWereFused(
+      module.get(), {HloOpcode::kParameter, HloOpcode::kConstant,
+                     HloOpcode::kConstant, HloOpcode::kAdd, HloOpcode::kAdd});
+}
+
+TEST_F(InstructionFusionTest, SkipCustomFusionsBasic) {
+  absl::string_view module_string = R"(
+HloModule module
+
+%fused_computation (param_0: f32[10,10], param_1: f32[10,10]) -> f32[10,10] {
+  %param_0 = f32[10,10]{1,0} parameter(0)
+  %param_1 = f32[10,10]{1,0} parameter(1)
+  %add = f32[10,10]{1,0} add(f32[10,10]{1,0} %param_0, f32[10,10]{1,0} %param_1)
+  %subtract = f32[10,10]{1,0} subtract(f32[10,10]{1,0} %param_0, f32[10,10]{1,0} %param_1)
+  ROOT %multiply = f32[10,10]{1,0} multiply(f32[10,10]{1,0} %add, f32[10,10]{1,0} %subtract)
+}
+
+ENTRY %main (Arg_0: f32[10,10], Arg_1: f32[10,10]) -> f32[10,10] {
+  %Arg_0 = f32[10,10]{1,0} parameter(0), metadata={op_name="x"}
+  %Arg_1 = f32[10,10]{1,0} parameter(1), metadata={op_name="y"}
+  ROOT %subtract_multiply_fusion = f32[10,10]{1,0} fusion(f32[10,10]{1,0} %Arg_0, f32[10,10]{1,0} %Arg_1), kind=kCustom, calls=%fused_computation
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
+  EXPECT_FALSE(changed);
+}
+
+TEST_F(InstructionFusionTest, SkipCustomFusions) {
+  absl::string_view module_string = R"(
+HloModule module
+
+%fused_computation (param_0: f32[10,10], param_1: f32[10,10]) -> f32[10,10] {
+  %param_0 = f32[10,10] parameter(0)
+  %param_1 = f32[10,10] parameter(1)
+  %add = f32[10,10] add(f32[10,10] %param_0, f32[10,10] %param_1)
+  %subtract = f32[10,10] subtract(f32[10,10] %param_0, f32[10,10] %param_1)
+  ROOT %multiply = f32[10,10] multiply(f32[10,10] %add, f32[10,10] %subtract)
+}
+
+ENTRY %main (Arg_0: f32[10,10], Arg_1: f32[10,10]) -> f32[10,10] {
+  %Arg_0 = f32[10,10] parameter(0)
+  %Arg_1 = f32[10,10] parameter(1)
+  %Add = f32[10,10] add(f32[10,10] %Arg_0, f32[10,10] %Arg_1)
+  %Sub = f32[10,10] subtract(f32[10,10] %Arg_0, f32[10,10] %Arg_1)
+  ROOT %subtract_multiply_fusion = f32[10,10] fusion(f32[10,10] %Add, f32[10,10] %Sub), kind=kCustom, calls=%fused_computation
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
+  EXPECT_FALSE(changed);
+}
+
+TEST_F(InstructionFusionTest, SkipComputationsAttachedToCustomCalls) {
+  absl::string_view module_string = R"(
+HloModule module
+
+%custom_computation (param_0: f32[10,10], param_1: f32[10,10]) -> f32[10,10] {
+  %param_0 = f32[10,10]{1,0} parameter(0)
+  %param_1 = f32[10,10]{1,0} parameter(1)
+  %add = f32[10,10]{1,0} add(f32[10,10]{1,0} %param_0, f32[10,10]{1,0} %param_1)
+  %subtract = f32[10,10]{1,0} subtract(f32[10,10]{1,0} %param_0, f32[10,10]{1,0} %param_1)
+  ROOT %multiply = f32[10,10]{1,0} multiply(f32[10,10]{1,0} %add, f32[10,10]{1,0} %subtract)
+}
+
+ENTRY %main (Arg_0: f32[10,10], Arg_1: f32[10,10]) -> f32[10,10] {
+  %Arg_0 = f32[10,10]{1,0} parameter(0), metadata={op_name="x"}
+  %Arg_1 = f32[10,10]{1,0} parameter(1), metadata={op_name="y"}
+  ROOT %custom_call = f32[10,10]{1,0} custom-call(f32[10,10]{1,0} %Arg_0, f32[10,10]{1,0} %Arg_1), custom_call_target="target", called_computations={%custom_computation}
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
+  EXPECT_FALSE(changed);
+}
+
+static constexpr absl::string_view kScatterModuleString = R"(
+HloModule module
+
+%scatter_max (param0: f32[], param1: f32[]) -> f32[] {
+  %lhs = f32[] parameter(0)
+  %rhs = f32[] parameter(1)
+  %maximum.1 = f32[] maximum(f32[] lhs, f32[] rhs)
+  %convert.8 = bf16[] convert(f32[] maximum.1)
+  ROOT %convert.9 = f32[] convert(bf16[] convert.8)
+}
+
+ENTRY %main (arg0: f32[13,5,10,62], arg1: s32[3,1], arg2: f32[3,1,5,10,62])
+    -> f32[13,5,10,62] {
+  %arg0 = f32[13,5,10,62]{3,2,1,0} parameter(0)
+  %arg1 = s32[3,1]{1,0} parameter(1)
+  %arg2 = f32[3,1,5,10,62]{4,3,2,1,0} parameter(2)
+  ROOT %scatter.2 = f32[13,5,10,62]{3,2,1,0} scatter(
+      f32[13,5,10,62]{3,2,1,0} %arg0,
+      s32[3,1]{1,0} %arg1,
+      f32[3,1,5,10,62]{4,3,2,1,0} %arg2),
+    update_window_dims={1,2,3,4}, inserted_window_dims={},
+    scatter_dims_to_operand_dims={0}, index_vector_dim=1, to_apply=scatter_max
+}
+)";
+
+TEST_F(InstructionFusionTest, SkipScatterComputations) {
+  auto mod_config = GetModuleConfigForTest();
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(
+                                        kScatterModuleString, mod_config));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
+  EXPECT_FALSE(changed);
+}
+
+static constexpr absl::string_view kReduceModuleString = R"(
+  HloModule module
+
+  %reduce_max (param0: f32[], param1: f32[]) -> f32[] {
+    %lhs = f32[] parameter(0)
+    %rhs = f32[] parameter(1)
+    %maximum.1 = f32[] maximum(f32[] lhs, f32[] rhs)
+    %convert.8 = bf16[] convert(f32[] maximum.1)
+    ROOT %convert.9 = f32[] convert(bf16[] convert.8)
+  }
+
+  ENTRY %main (arg0: f32[13,5,10,62])
+      -> f32[13,5,10] {
+    %arg0 = f32[13,5,10,62]{3,2,1,0} parameter(0)
+    %init = f32[] constant(0)
+    ROOT %reduce = f32[13,5,10]{2,1,0} reduce(%arg0, %init),
+                     dimensions={3}, to_apply=reduce_max
+  }
+)";
+
+TEST_F(InstructionFusionTest, SkipReduceComputationsIfFusionEmitters) {
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(kReduceModuleString));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
+  EXPECT_FALSE(changed);
+}
+
+bool FusionComputesShiftValueForReduce(const HloInstruction* fusion) {
+  if (fusion->opcode() != HloOpcode::kFusion) {
+    return false;
+  }
+  for (const HloInstruction* instr : fusion->fused_instructions()) {
+    if (instr->opcode() != HloOpcode::kReduce) {
+      continue;
+    }
+    // A split fusion recomputes the elementwise shift value inside the
+    // reduce kernel, so the reduce's operand is the elementwise producer
+    // (multiply, add, ...) rather than a fused parameter.
+    if (instr->operand(0)->IsElementwise()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool FusionRecomputesShiftValueForExpShift(const HloInstruction* fusion,
+                                           const HloInstruction* dot) {
+  if (fusion->opcode() != HloOpcode::kFusion) {
+    return false;
+  }
+  const HloInstruction* subtract = nullptr;
+  for (const HloInstruction* instr : fusion->fused_instructions()) {
+    if (instr->opcode() == HloOpcode::kSubtract) {
+      subtract = instr;
+      break;
+    }
+  }
+  if (subtract == nullptr) {
+    return false;
+  }
+  // The shift value is the elementwise producer (multiply, add, ...) feeding
+  // the exp-shift subtract.
+  const HloInstruction* shift_value = subtract->operand(0);
+  if (!shift_value->IsElementwise()) {
+    return false;
+  }
+  const HloComputation* fused_computation =
+      fusion->fused_instructions_computation();
+  const HloInstruction* fusion_instr = fused_computation->FusionInstruction();
+  for (int64_t i = 0; i < fusion_instr->operand_count(); ++i) {
+    if (fusion_instr->operand(i) != dot) {
+      continue;
+    }
+    const HloInstruction* param = fusion->fused_parameter(i);
+    if (absl::c_linear_search(shift_value->operands(), param)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool HasSplitCoupledReductionShiftExpFusion(const HloModule& module) {
+  const HloComputation* entry = module.entry_computation();
+  const HloInstruction* dot = nullptr;
+  for (const HloInstruction* instr : entry->instructions()) {
+    if (instr->opcode() == HloOpcode::kDot) {
+      dot = instr;
+      break;
+    }
+  }
+  if (dot == nullptr) {
+    return false;
+  }
+
+  const HloInstruction* reduce_fusion = nullptr;
+  const HloInstruction* shift_fusion = nullptr;
+  for (const HloInstruction* instr : entry->instructions()) {
+    if (!instr->IsLoopFusion()) {
+      continue;
+    }
+    if (FusionComputesShiftValueForReduce(instr)) {
+      reduce_fusion = instr;
+    }
+    if (FusionRecomputesShiftValueForExpShift(instr, dot)) {
+      shift_fusion = instr;
+    }
+  }
+  return reduce_fusion != nullptr && shift_fusion != nullptr;
+}
+
+// Returns true if a bare instruction with the given opcode is still present in
+// the entry computation (i.e. it was not fused/duplicated into consumers).
+bool EntryHasStandaloneOp(const HloModule& module, HloOpcode opcode) {
+  return absl::c_any_of(module.entry_computation()->instructions(),
+                        [opcode](const HloInstruction* instr) {
+                          return instr->opcode() == opcode;
+                        });
+}
+
+TEST_F(InstructionFusionTest, AvoidSplitCoupledReductionShiftExpFusions) {
+  absl::string_view module_string = R"(
+HloModule module
+
+%max (p0: f32[], p1: f32[]) -> f32[] {
+  %p0 = f32[] parameter(0)
+  %p1 = f32[] parameter(1)
+  ROOT %m = f32[] maximum(%p0, %p1)
+}
+
+ENTRY main {
+  %lhs = f32[5,5] parameter(0)
+  %rhs = f32[5,5] parameter(1)
+  %dot = f32[5,5] dot(%lhs, %rhs), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+  %scale = f32[] constant(0.44721359)
+  %broadcast_scale = f32[5,5] broadcast(%scale), dimensions={}
+  %multiply = f32[5,5] multiply(%dot, %broadcast_scale)
+  %neg_inf = f32[] constant(-inf)
+  %reduce_max = f32[5] reduce(%multiply, %neg_inf), dimensions={1}, to_apply=%max
+  %broadcast_max = f32[5,5] broadcast(%reduce_max), dimensions={0}
+  %subtract = f32[5,5] subtract(%multiply, %broadcast_max)
+  ROOT %exp = f32[5,5] exponential(%subtract)
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_FALSE(HasSplitCoupledReductionShiftExpFusion(*module));
+}
+
+// Conservatively treat any elementwise shift value as coupled. Multiply is
+// the case with a known divergence mechanism (FMA contraction); other
+// elementwise ops are included defensively.
+TEST_F(InstructionFusionTest,
+       AvoidSplitCoupledReductionShiftExpFusionsAddBias) {
+  absl::string_view module_string = R"(
+HloModule module
+
+%max (p0: f32[], p1: f32[]) -> f32[] {
+  %p0 = f32[] parameter(0)
+  %p1 = f32[] parameter(1)
+  ROOT %m = f32[] maximum(%p0, %p1)
+}
+
+ENTRY main {
+  %lhs = f32[5,5] parameter(0)
+  %rhs = f32[5,5] parameter(1)
+  %bias = f32[5,5] parameter(2)
+  %dot = f32[5,5] dot(%lhs, %rhs), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+  %add = f32[5,5] add(%dot, %bias)
+  %neg_inf = f32[] constant(-inf)
+  %reduce_max = f32[5] reduce(%add, %neg_inf), dimensions={1}, to_apply=%max
+  %broadcast_max = f32[5,5] broadcast(%reduce_max), dimensions={0}
+  %subtract = f32[5,5] subtract(%add, %broadcast_max)
+  ROOT %exp = f32[5,5] exponential(%subtract)
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_FALSE(HasSplitCoupledReductionShiftExpFusion(*module));
+}
+
+// Discrimination check: the shift value multiply feeds a *sum* reduce (not a
+// max reduce), so it is not the numerically coupled stable-softmax pattern and
+// the multiply should still be fused/duplicated normally, leaving no
+// standalone multiply in the entry computation.
+TEST_F(InstructionFusionTest, StillFusesMultiplyWithSumReduce) {
+  absl::string_view module_string = R"(
+HloModule module
+
+%add (p0: f32[], p1: f32[]) -> f32[] {
+  %p0 = f32[] parameter(0)
+  %p1 = f32[] parameter(1)
+  ROOT %a = f32[] add(%p0, %p1)
+}
+
+ENTRY main {
+  %lhs = f32[5,5] parameter(0)
+  %rhs = f32[5,5] parameter(1)
+  %dot = f32[5,5] dot(%lhs, %rhs), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+  %scale = f32[] constant(0.44721359)
+  %broadcast_scale = f32[5,5] broadcast(%scale), dimensions={}
+  %multiply = f32[5,5] multiply(%dot, %broadcast_scale)
+  %zero = f32[] constant(0)
+  %reduce_sum = f32[5] reduce(%multiply, %zero), dimensions={1}, to_apply=%add
+  %broadcast_sum = f32[5,5] broadcast(%reduce_sum), dimensions={0}
+  %subtract = f32[5,5] subtract(%multiply, %broadcast_sum)
+  ROOT %exp = f32[5,5] exponential(%subtract)
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_FALSE(EntryHasStandaloneOp(*module, HloOpcode::kMultiply));
+}
+
+// Discrimination check: the multiply feeds a max reduce, but the subtract does
+// not feed an exponential, so it is not the coupled stable-softmax pattern and
+// the multiply should still be fused/duplicated normally, leaving no
+// standalone multiply in the entry computation.
+TEST_F(InstructionFusionTest, StillFusesMultiplyWhenSubtractDoesNotFeedExp) {
+  absl::string_view module_string = R"(
+HloModule module
+
+%max (p0: f32[], p1: f32[]) -> f32[] {
+  %p0 = f32[] parameter(0)
+  %p1 = f32[] parameter(1)
+  ROOT %m = f32[] maximum(%p0, %p1)
+}
+
+ENTRY main {
+  %lhs = f32[5,5] parameter(0)
+  %rhs = f32[5,5] parameter(1)
+  %dot = f32[5,5] dot(%lhs, %rhs), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+  %scale = f32[] constant(0.44721359)
+  %broadcast_scale = f32[5,5] broadcast(%scale), dimensions={}
+  %multiply = f32[5,5] multiply(%dot, %broadcast_scale)
+  %neg_inf = f32[] constant(-inf)
+  %reduce_max = f32[5] reduce(%multiply, %neg_inf), dimensions={1}, to_apply=%max
+  %broadcast_max = f32[5,5] broadcast(%reduce_max), dimensions={0}
+  %subtract = f32[5,5] subtract(%multiply, %broadcast_max)
+  ROOT %negate = f32[5,5] negate(%subtract)
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_FALSE(EntryHasStandaloneOp(*module, HloOpcode::kMultiply));
+}
+
+TEST_F(InstructionFusionTest,
+       DoNotFuseMinorDimensionConcatenateWithSufficientBytes) {
+  absl::string_view module_string = R"(
+HloModule module
+
+ENTRY main {
+  %p0 = f32[16,32]{1,0} parameter(0)
+  %p1 = f32[16,32]{1,0} parameter(1)
+  %concat = f32[16,64]{1,0} concatenate(%p0, %p1), dimensions={1}
+  ROOT %negate = f32[16,64]{1,0} negate(%concat)
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
+  EXPECT_FALSE(changed);
+  EXPECT_TRUE(EntryHasStandaloneOp(*module, HloOpcode::kConcatenate));
+  EXPECT_TRUE(EntryHasStandaloneOp(*module, HloOpcode::kNegate));
+}
+
+TEST_F(InstructionFusionTest, FuseMinorDimensionConcatenateWithTinyBytes) {
+  absl::string_view module_string = R"(
+HloModule module
+
+ENTRY main {
+  %p0 = f32[4,2]{1,0} parameter(0)
+  %p1 = f32[4,2]{1,0} parameter(1)
+  %concat = f32[4,4]{1,0} concatenate(%p0, %p1), dimensions={1}
+  ROOT %negate = f32[4,4]{1,0} negate(%concat)
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_FALSE(EntryHasStandaloneOp(*module, HloOpcode::kConcatenate));
+  EXPECT_FALSE(EntryHasStandaloneOp(*module, HloOpcode::kNegate));
+}
+
+TEST_F(InstructionFusionTest,
+       FuseMinorDimensionConcatenateWithSmallTotalBytes) {
+  absl::string_view module_string = R"(
+HloModule module
+
+ENTRY main {
+  %p0 = f32[8,8]{1,0} parameter(0)
+  %p1 = f32[8,8]{1,0} parameter(1)
+  %concat = f32[8,16]{1,0} concatenate(%p0, %p1), dimensions={1}
+  ROOT %negate = f32[8,16]{1,0} negate(%concat)
+}
+)";
+
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       CpuInstructionFusion(&alias_info_).Run(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_FALSE(EntryHasStandaloneOp(*module, HloOpcode::kConcatenate));
+  EXPECT_FALSE(EntryHasStandaloneOp(*module, HloOpcode::kNegate));
+}
+
 }  // namespace
-}  // namespace cpu
-}  // namespace xla
+}  // namespace xla::cpu

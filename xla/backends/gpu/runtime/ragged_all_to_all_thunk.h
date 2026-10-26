@@ -1,0 +1,306 @@
+/* Copyright 2024 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#ifndef XLA_BACKENDS_GPU_RUNTIME_RAGGED_ALL_TO_ALL_THUNK_H_
+#define XLA_BACKENDS_GPU_RUNTIME_RAGGED_ALL_TO_ALL_THUNK_H_
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include "absl/container/inlined_vector.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "xla/backends/gpu/collectives/gpu_clique_key.h"
+#include "xla/backends/gpu/runtime/collective_clique_requests.h"
+#include "xla/backends/gpu/runtime/collective_thunk.h"
+#include "xla/backends/gpu/runtime/per_device_state.h"
+#include "xla/backends/gpu/runtime/thunk.pb.h"
+#include "xla/core/collectives/communicator.h"
+#include "xla/core/collectives/rank_id.h"
+#include "xla/core/collectives/symmetric_memory.h"
+#include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/service/buffer_assignment.h"
+#include "xla/stream_executor/command_buffer.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/device_address_allocator.h"
+#include "xla/stream_executor/memory_allocation.h"
+#include "xla/stream_executor/stream.h"
+#include "xla/xla.pb.h"
+#include "xla/xla_data.pb.h"
+
+namespace xla {
+namespace gpu {
+
+struct RaggedAllToAllConfig {
+  CollectiveConfig config;
+  int64_t num_total_updates = 1;
+  int64_t num_input_rows = 1;
+  int64_t num_row_elements = 1;
+
+  // Whether the one-shot kernel is enabled. If true, the thunk will use the
+  // one-shot kernel when possible.
+  bool one_shot_kernel_enabled = false;
+
+  // If true, the thunk will use the MultiGpuBarrierWithNcclKernel in the
+  // one-shot kernel for multi-host synchronization. Works when devices are on
+  // multiple hosts connected via a fast interconnect (e.g., MNNVL).
+  bool use_multi_gpu_barrier_with_nccl_in_one_shot_kernel = false;
+
+  // If true, the thunk will use the fallback NCCL ragged all-to-all kernel.
+  bool allow_fallback_to_nccl = false;
+
+  CollectiveThunk::CollectivesMode collectives_mode =
+      DebugOptions::COLLECTIVES_PRIVATE_MEMORY;
+
+  // If true, the thunk will use the device-initiated (NCCL GIN + LSA) kernel
+  // for ragged-all-to-all when symmetric buffers are available.
+  bool use_device_kernel = false;
+
+  // If set, this will be used to determine if optimized kernels that assume a
+  // fast interconnect can be used.
+  std::optional<int64_t> fast_interconnect_slice_size_override = std::nullopt;
+
+  // Whether the GXL backend is enabled for this ragged all-to-all operation.
+  bool enable_gxl = false;
+};
+
+// Contains the values that are passed between host threads with rendezvous.
+struct RaggedAllToAllRendezvousValue {
+  RankId rank;
+  se::DeviceAddressBase output_buffer;
+
+  // Exchange the address of the SIGNAL BUFFER array.
+  // Peers will write to their_rank's-th cell in the signals array.
+  se::DeviceAddressBase barrier_signal_buffer;
+
+  bool operator<(const RaggedAllToAllRendezvousValue& other) const {
+    return rank < other.rank;
+  }
+};
+
+struct RaggedAllToAllStreamState {
+  int device_ordinal = 0;
+  RankId rank = RankId(0);
+  std::optional<int64_t> lsa_size;
+  GpuCliqueKey clique_key{{}, 0};
+
+  // Host memory allocations for ragged metadata.
+  absl::InlinedVector<std::unique_ptr<se::MemoryAllocation>, 8>
+      host_buffer_allocs;
+
+  // Device memory buffer for output offsets.
+  se::ScopedDeviceAddress<uint8_t> output_offsets_device_buffer;
+
+  // MultiGpuBarrier: Device memory buffer for signal values (one per peer).
+  // Peers write specific slots in this array to signal this device.
+  std::unique_ptr<se::MemoryAllocation> barrier_signal_buffer;
+
+  // MultiGpuBarrier: Device memory for the current local step counter.
+  // This value is incremented locally by the kernel after every barrier.
+  std::unique_ptr<se::MemoryAllocation> barrier_signal_value;
+
+  // Device memory buffer to store the output buffer pointers.
+  std::unique_ptr<se::MemoryAllocation> output_buffer_ptr_storage;
+
+  // Contains the output buffer pointers and barrier signal buffers for all
+  // peers.
+  std::shared_ptr<std::vector<RaggedAllToAllRendezvousValue>> participants;
+
+  RaggedAllToAllStreamState() = default;
+  RaggedAllToAllStreamState(int device_ordinal, RankId rank,
+                            GpuCliqueKey clique_key)
+      : device_ordinal(device_ordinal),
+        rank(rank),
+        clique_key(std::move(clique_key)) {}
+};
+
+// Thunk that performs a NCCL-based Ragged-All-to-All among CUDA GPU-based
+// replicas.
+class RaggedAllToAllThunk : public CollectiveThunk {
+ public:
+  RaggedAllToAllThunk(ThunkInfo thunk_info,
+                      const HloRaggedAllToAllInstruction* instr,
+                      std::vector<Buffer> buffers, bool p2p_memcpy_enabled,
+                      int devices_per_host);
+  RaggedAllToAllThunk(ThunkInfo thunk_info, const RaggedAllToAllConfig& config,
+                      std::vector<CollectiveThunk::Buffer> buffers,
+                      int devices_per_host);
+
+  // Returns whether the given instruction can be lowered to a nccl
+  // ragged-all-to-all call.
+  static absl::Status CheckImplementable(
+      const HloRaggedAllToAllInstruction* instr, int64_t replica_count,
+      int64_t partition_count);
+
+  CollectiveCliqueRequests::CliqueRequirements GetCliqueRequirements(
+      const GpuCliqueKey& clique_key, const PrepareParams& params) override;
+
+  absl::Status Initialize(const InitializeParams& params) override;
+
+  absl::StatusOr<const se::CommandBuffer::Command*> Record(
+      const ExecuteParams& execute_params, const RecordParams& record_params,
+      RecordAction record_action, se::CommandBuffer* command_buffer) override;
+
+  static absl::string_view GetHloOpName() { return "ragged-all-to-all-start"; }
+
+  static CollectiveOpGroupMode GetGroupMode(
+      const HloRaggedAllToAllInstruction* instr);
+
+  const CollectiveConfig& config() const override { return config_.config; }
+
+  bool CanUseSymmetricBuffer() const override { return true; }
+
+  const RaggedAllToAllConfig& ragged_all_to_all_config() const {
+    return config_;
+  }
+
+  bool is_one_shot_kernel_enabled() const {
+    return config_.one_shot_kernel_enabled;
+  }
+
+  bool use_multi_gpu_barrier_with_nccl_in_one_shot_kernel() const {
+    return config_.use_multi_gpu_barrier_with_nccl_in_one_shot_kernel;
+  }
+
+  bool UsesDeviceKernel() const {
+    return config_.use_device_kernel && config_.config.use_symmetric_buffer;
+  }
+
+  // Number of per-CTA barrier/signal slots reserved when creating the device
+  // communicator. The kernel indexes its cooperative barrier by blockIdx.x, so
+  // registration must cover the largest grid we might launch, which is
+  // bounded by the executor's SM count. Callers pass the SM count from
+  // se::DeviceDescription::core_count(); all participating ranks are expected
+  // to be homogeneous so every rank arrives at the same value.
+  static int32_t device_kernel_barrier_count(int core_count) {
+    return std::max<int32_t>(core_count, kMinDeviceKernelCtaCount);
+  }
+
+  // Launch grid for the device kernel. Sized to saturate the SMs (grid =
+  // ctas_per_update * num_active_updates, chosen so grid <= sm_cap and evenly
+  // divides `total_lsa_updates` in RaggedAllToAllCopy). All ranks launch the
+  // same grid, which the cross-rank cooperative barriers require.
+  static int32_t DeviceKernelLaunchCtaCount(int core_count,
+                                            int64_t num_active_updates) {
+    const int64_t sm_cap = std::max<int64_t>(1, core_count);
+    const int64_t updates = std::max<int64_t>(1, num_active_updates);
+    const int64_t ctas_per_update = std::max<int64_t>(1, sm_cap / updates);
+    const int64_t grid = ctas_per_update * updates;
+    return static_cast<int32_t>(
+        std::clamp<int64_t>(grid, kMinDeviceKernelCtaCount, sm_cap));
+  }
+
+  GpuDeviceCommunicator::Requirements DeviceKernelLsaDevCommRequirements(
+      int core_count) const {
+    GpuDeviceCommunicator::Requirements requirements;
+    requirements.lsa_barrier_count = device_kernel_barrier_count(core_count);
+    return requirements;
+  }
+
+  GpuDeviceCommunicator::Requirements DeviceKernelDevCommRequirements(
+      int core_count) const {
+    GpuDeviceCommunicator::Requirements requirements;
+    const int32_t c = device_kernel_barrier_count(core_count);
+    requirements.barrier_count = c;
+    requirements.lsa_barrier_count = c;
+    requirements.rail_gin_barrier_count = c;
+    requirements.gin_signal_count = c;
+    requirements.gin_connection_full = true;
+    return requirements;
+  }
+
+  // Returns true if one shot kernel is supported
+  bool IsOneShotKernelSupported() const;
+
+  static absl::StatusOr<std::unique_ptr<RaggedAllToAllThunk>> FromProto(
+      ThunkInfo thunk_info, const RaggedAllToAllThunkProto& thunk_proto,
+      absl::Span<const BufferAllocation> buffer_allocations,
+      int devices_per_host);
+
+  absl::StatusOr<ThunkProto> ToProto() const override;
+
+ protected:
+  // No rendezvous needed when using one-shot kernel in local mode instead of
+  // NCCL.
+  bool RequiresRendezvous() const override {
+    return !is_one_shot_kernel_enabled();
+  }
+
+  absl::Status PrepareCollective(const PrepareParams& params,
+                                 const GpuCliqueKey& clique_key) override;
+
+  absl::Status RunCollective(const ExecuteParams& params,
+                             const GpuCliqueKey& clique_key, se::Stream& stream,
+                             Communicator& comm) override;
+
+ private:
+  bool is_local(int device_count) const;
+
+  const RaggedAllToAllConfig config_;
+
+  // Floor on the launch grid so small shapes still get some parallelism.
+  // The upper bound is derived from the executor's SM count at Prepare /
+  // Initialize / Run time via device_kernel_barrier_count().
+  static constexpr int32_t kMinDeviceKernelCtaCount = 8;
+
+  PerDeviceState<RaggedAllToAllStreamState> per_device_states_;
+};
+
+// Executes the rendezvous to exchange buffer addresses and barrier signal
+// buffers.
+absl::StatusOr<std::shared_ptr<std::vector<RaggedAllToAllRendezvousValue>>>
+RendezvousResources(int device_ordinal, RankId rank,
+                    const GpuCliqueKey& clique_key,
+                    const se::DeviceAddressBase& output_buffer,
+                    const se::DeviceAddressBase& barrier_signal_buffer);
+
+// Executes an optimized "One-Shot" Ragged All-to-All collective.
+//
+// Unlike the standard implementation, this approach consolidates the
+// coordination and data movement into a single execution path (typically a
+// custom kernel or specialized P2P sequence) to reduce host-device
+// synchronization overhead.
+//
+// It utilizes `MultiGpuBarrierKernel` to enforce device-side synchronization.
+// This ensures input/output buffers are safe to access without requiring
+// Event-based coordination, enabling compatibility with CUDA Graphs.
+absl::Status RunOneShotRaggedAllToAll(
+    const GpuCliqueKey& clique_key, se::Stream& stream, RankId rank,
+    const se::DeviceAddressBase& barrier_signal_buffer,
+    const se::DeviceAddressBase& barrier_signal_value,
+    int64_t num_total_updates, int64_t num_input_rows, int64_t num_row_elements,
+    absl::Span<DeviceBufferPair const> buffers,
+    const std::vector<RaggedAllToAllRendezvousValue>& participants);
+
+// It utilizes `MultiGpuBarrierWithNcclKernel` to enforce device-side
+// synchronization. This ensures input/output buffers are safe to access without
+// requiring Event-based coordination, enabling compatibility with CUDA Graphs.
+absl::Status RunOneShotRaggedAllToAllWithNccl(
+    const GpuCliqueKey& clique_key, se::Stream& stream, RankId rank,
+    GpuCommunicator* comm, SymmetricMemory* output_sym_mem,
+    size_t output_sym_offset, int64_t num_total_updates, int64_t num_input_rows,
+    int64_t num_row_elements, absl::Span<DeviceBufferPair const> buffers);
+
+}  // namespace gpu
+}  // namespace xla
+
+#endif  // XLA_BACKENDS_GPU_RUNTIME_RAGGED_ALL_TO_ALL_THUNK_H_

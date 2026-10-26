@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,8 +20,10 @@ limitations under the License.
 #include <tuple>
 #include <utility>
 
-#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/OwningOpRef.h"
+#include "mlir/Support/LLVM.h"
 #include "xla/mlir/tools/mlir_replay/public/execution_trace.pb.h"
 #include "xla/mlir/tools/mlir_replay/public/execution_trace_utils.h"
 

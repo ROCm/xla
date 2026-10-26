@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,9 +17,14 @@ limitations under the License.
 #define XLA_SERVICE_STREAM_POOL_H_
 
 #include <memory>
-#include <unordered_map>
 #include <vector>
 
+#include "absl/base/thread_annotations.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/status/statusor.h"
+#include "absl/synchronization/mutex.h"
+#include "xla/stream_executor/platform.h"
+#include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 
 namespace xla {
@@ -38,15 +43,15 @@ class StreamPool {
   // stream to the pool on destruction.
   using Ptr = std::unique_ptr<se::Stream, PtrDeleter>;
 
-  StreamPool() = default;
+  explicit StreamPool(se::StreamExecutor* executor) : executor_(executor) {}
 
   // Returns a pointer to a stream in the pool, creating a new stream
   // if none are available in the pool. The returned smart pointer
   // returns the stream to the pool on destruction.
   //
   // This method is thread-safe.
-  Ptr BorrowStream(se::StreamExecutor* executor,
-                   se::StreamPriority priority = se::StreamPriority::Default);
+  absl::StatusOr<Ptr> BorrowStream(
+      se::StreamPriority priority = se::StreamPriority::Default);
 
  private:
   // Puts a pointer to a stream back into the pool, leaving it free
@@ -58,9 +63,10 @@ class StreamPool {
 
   absl::Mutex mu_;
   // This stores streams with user-specified priority.
-  std::unordered_map<se::StreamPriority,
-                     std::vector<std::unique_ptr<se::Stream>>>
+  absl::flat_hash_map<se::StreamPriority,
+                      std::vector<std::unique_ptr<se::Stream>>>
       streams_with_pri_ ABSL_GUARDED_BY(mu_);
+  se::StreamExecutor* executor_;
 };
 
 }  // namespace xla

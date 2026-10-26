@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,40 +20,49 @@ limitations under the License.
 
 #include <string>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/service/buffer_assignment.h"
 #include "xla/service/hlo.pb.h"
-#include "xla/status.h"
 
 namespace xla {
 
 // Returns a serialized representation of the HLO state.
 HloProto MakeHloProto(const HloModule& module,
-                      const BufferAssignment& assignment);
+                      const BufferAssignment& assignment,
+                      HloProtoOptions options = HloProtoOptions());
+void MakeHloProto(const HloModule& module, const BufferAssignment& assignment,
+                  HloProto* proto, HloProtoOptions options = HloProtoOptions());
 
 // Returns a serialized representation of the HLO state, but buffer assignment
 // will not be included in the output.
-HloProto MakeHloProto(const HloModule& module);
-
-// Create an HLO state from serialized representation. In addition to
-// creating the proto with HloModule::CreateFromProto(...) it also
-// uses HloVerifier to ensure basic invariants are held.
-// The HLO module could be a pre-optimizations (default) or post-optimizations
-// module, which affects how the HLO module is verified, e.g., mixed-precision
-// is allowed in post-optimizations HLOs.
-StatusOr<std::unique_ptr<HloModule>> CreateModuleFromProto(
-    const HloModuleProto& proto, const HloModuleConfig& module_config,
-    bool is_module_post_optimizations = false);
+HloProto MakeHloProto(const HloModule& module,
+                      HloProtoOptions options = HloProtoOptions());
+void MakeHloProto(const HloModule& module, HloProto* proto,
+                  HloProtoOptions options = HloProtoOptions());
 
 // Returns the shapes of the parameters of the entry computation. Shape pointers
 // refer to shapes inside of the given HloProto.
-StatusOr<std::vector<const ShapeProto*>> EntryComputationParameterShapes(
+absl::StatusOr<std::vector<const ShapeProto*>> EntryComputationParameterShapes(
     const HloProto& hlo_proto);
 
 // Returns the shape of the output of the entry computation. The shape pointer
 // refers to the output shape inside of the given HloProto.
-StatusOr<const ShapeProto*> EntryComputationOutputShape(
+absl::StatusOr<const ShapeProto*> EntryComputationOutputShape(
     const HloProto& hlo_proto);
+
+// Extracts the backend_config string from an HloInstructionProto.
+// If the payload is stored externally, module must be provided to look up the
+// string using the stored ID.
+absl::StatusOr<std::string> GetBackendConfigString(
+    const HloInstructionProto& instruction,
+    const HloModuleProto* module = nullptr);
+
+// Returns a self-contained HloInstructionProto by inlining payloads that were
+// previously deduplicated and stored in the module's payloads list.
+HloInstructionProto ToProtoWithInlinedPayloads(HloInstructionProto proto,
+                                               const HloModuleProto* module);
 
 }  // namespace xla
 

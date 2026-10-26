@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,19 +15,28 @@ limitations under the License.
 
 #include "xla/tools/hlo_extractor.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <memory>
 #include <string>
 
-#include <gtest/gtest.h>
+#include "absl/strings/string_view.h"
+#include "tsl/platform/statusor.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/ir/hlo_schedule.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/hlo/utils/hlo_matchers.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/shape_util.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace {
 
 namespace op = testing::opcode_matchers;
 
-using HloExtractorTest = HloTestBase;
+using HloExtractorTest = HloHardwareIndependentTestBase;
 
 TEST_F(HloExtractorTest, ExtractTopLevel) {
   const std::string& hlo_string = R"(
@@ -148,9 +157,9 @@ TEST_F(HloExtractorTest, ExtractFromMultipleComputation) {
     calculate_alpha {
       c.1 = f32[] constant(1)
       c.2 = f32[] constant(2)
-      c.3 = f32[] add(c.1, c.2)
-      c.4 = f32[] constant(4)
-      ROOT ret = f32[] subtract(c.4, c.3)
+      add.0 = f32[] add(c.1, c.2)
+      c.3 = f32[] constant(4)
+      ROOT ret = f32[] subtract(add.0, c.3)
     }
     
     ENTRY axpy_computation {
@@ -159,39 +168,58 @@ TEST_F(HloExtractorTest, ExtractFromMultipleComputation) {
       x = f32[10] parameter(0)
       ax = f32[10] multiply(broadcast, x)
       y = f32[10] parameter(1)
-      ROOT add = f32[10] add(ax, y)
+      ROOT add.1 = f32[10] add(ax, y)
     }
   )";
 
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> hlo_module,
                           ParseAndReturnVerifiedModule(hlo_string));
-  {
-    // Find the kSubtract instruction in computation: calculate_alpha
-    HloInstruction* inst =
-        FindInstruction(hlo_module.get(), HloOpcode::kSubtract);
-    EXPECT_NE(inst, nullptr);
-    EXPECT_THAT(inst, op::Subtract());
 
-    // Extract from the non-entry computation, with kSubstract instruction as
-    // the new root instruction
-    auto extracted_module = ExtractModule(inst, /*height=*/1);
-    EXPECT_THAT(extracted_module->entry_computation()->root_instruction(),
-                op::Subtract(op::Constant(), op::Add()));
-    EXPECT_EQ(extracted_module->computation_count(), 1);
+  HloInstruction* inst = FindInstruction(hlo_module.get(), "add.0");
+  EXPECT_THAT(inst, op::Add());
+
+  auto extract_selector = [&inst](const HloInstruction* hlo_inst) {
+    return hlo_inst != inst;
+  };
+
+  // Exclude `add.0 = f32[] add(c.1, c.2)` from computation `calculate_alpha`,
+  // and replace it with a constant.
+  {
+    auto replace_type_selector = [](const HloInstruction* hlo_inst) {
+      return ReplaceType::kReplaceConst;
+    };
+
+    auto extracted_module =
+        ExtractModule(hlo_module->entry_computation()->root_instruction(),
+                      /*height=*/-1, /*extract_selector=*/extract_selector,
+                      /*replace_type_selector=*/replace_type_selector,
+                      /*cross_computation=*/true);
+    EXPECT_EQ(extracted_module->computation_count(), 2);
+    auto calculate_alpha_root_instruction =
+        FindComputation(extracted_module.get(), "calculate_alpha")
+            ->root_instruction();
+    EXPECT_THAT(calculate_alpha_root_instruction,
+                op::Subtract(op::Constant(), op::Constant()));
   }
 
+  // Exclude `add.0 = f32[] add(c.1, c.2)` from computation `calculate_alpha`,
+  // and replace it with a broadcasted zero.
   {
-    // FindInstruction iterates from the ENTRY computation, therefore, it
-    // matches to the kAdd instruction at the entry computation, instead of the
-    // kAdd instruction in the Computation:calculate_alpha
-    HloInstruction* inst = FindInstruction(hlo_module.get(), "add");
-    EXPECT_NE(inst, nullptr);
-    EXPECT_THAT(inst, op::Add(op::Multiply(), op::Parameter()));
+    auto replace_type_selector = [](const HloInstruction* hlo_inst) {
+      return ReplaceType::kReplaceZeroBroadcast;
+    };
 
-    auto extracted_module = ExtractModule(inst);
-    EXPECT_THAT(extracted_module->entry_computation()->root_instruction(),
-                op::Add(op::Multiply(), op::Parameter()));
+    auto extracted_module =
+        ExtractModule(hlo_module->entry_computation()->root_instruction(),
+                      /*height=*/-1, /*extract_selector=*/extract_selector,
+                      /*replace_type_selector=*/replace_type_selector,
+                      /*cross_computation=*/true);
     EXPECT_EQ(extracted_module->computation_count(), 2);
+    auto calculate_alpha_root_instruction =
+        FindComputation(extracted_module.get(), "calculate_alpha")
+            ->root_instruction();
+    EXPECT_THAT(calculate_alpha_root_instruction,
+                op::Subtract(op::Broadcast(op::Constant()), op::Constant()));
   }
 }
 
@@ -352,8 +380,8 @@ ENTRY %entry {
                 op::Add(op::GetTupleElement(op::Constant()), op::Parameter()));
   }
 
-  // Testing kReplaceZeroBroadcast -- replace a scalar (`element`) with a
-  // constant.
+  // Testing kReplaceZeroBroadcast -- replace a scalar (`element`) with
+  // a broadcasted zero.
   {
     auto hlo_selector = [](const HloInstruction* hlo_inst) -> bool {
       return hlo_inst->opcode() != HloOpcode::kGetTupleElement;
@@ -369,8 +397,24 @@ ENTRY %entry {
                 op::Add(op::Broadcast(), op::Parameter()));
   }
 
-  // Testing kReplaceZeroBroadcast -- replace a tuple op (`tuple.1`) with a
-  // constant.
+  // Testing kReplaceRandomBroadcast -- replace a scalar (`element`) with a
+  // broadcasted random constant.
+  {
+    auto hlo_selector = [](const HloInstruction* hlo_inst) -> bool {
+      return hlo_inst->opcode() != HloOpcode::kGetTupleElement;
+    };
+    auto replace_type_selector =
+        [](const HloInstruction* hlo_inst) -> ReplaceType {
+      return ReplaceType::kReplaceRandomBroadcast;
+    };
+    auto extracted_module =
+        ExtractModule(FindInstruction(hlo_module.get(), "add"),
+                      /*height=*/-1, hlo_selector, replace_type_selector);
+    EXPECT_THAT(extracted_module->entry_computation()->root_instruction(),
+                op::Add(op::Broadcast(), op::Parameter()));
+  }
+
+  // Testing kReplaceZeroBroadcast -- replace a tuple op (`tuple.1`) with zeros.
   {
     auto hlo_selector = [](const HloInstruction* hlo_inst) -> bool {
       return hlo_inst->opcode() != HloOpcode::kTuple;
@@ -387,6 +431,280 @@ ENTRY %entry {
         op::Add(op::GetTupleElement(op::Tuple(op::Tuple(), op::Broadcast())),
                 op::Parameter()));
   }
+
+  // Testing kReplaceRandomBroadcast -- replace a tuple op (`tuple.1`) with a
+  // broadcasted random constant.
+  {
+    auto hlo_selector = [](const HloInstruction* hlo_inst) -> bool {
+      return hlo_inst->opcode() != HloOpcode::kTuple;
+    };
+    auto replace_type_selector =
+        [](const HloInstruction* hlo_inst) -> ReplaceType {
+      return ReplaceType::kReplaceRandomBroadcast;
+    };
+    auto extracted_module =
+        ExtractModule(FindInstruction(hlo_module.get(), "add"),
+                      /*height=*/-1, hlo_selector, replace_type_selector);
+    EXPECT_THAT(
+        extracted_module->entry_computation()->root_instruction(),
+        op::Add(op::GetTupleElement(op::Tuple(op::Tuple(), op::Broadcast())),
+                op::Parameter()));
+  }
+}
+
+TEST_F(HloExtractorTest, TestWithCalledComputationsAndFusion) {
+  const char* hlo = R"(
+  HloModule test
+  computation.1 {
+    p.0 = s32[] parameter(0)
+    p.1 = s32[] parameter(1)
+    ROOT tuple = (s32[], s32[]) tuple(p.0, p.1)
+  }
+  computation.2 {
+    p.0 = s32[] parameter(0)
+    p.1 = s32[] parameter(1)
+    ROOT tuple = (s32[], s32[]) tuple(p.0, p.1)
+  }
+  ENTRY main {
+    p.0 = s32[] parameter(0)
+    p.1 = s32[] parameter(1)
+    p.2 = s32[] parameter(2)
+    call.1 = (s32[], s32[]) call(p.0, p.1), to_apply=computation.1
+    fused.1 = (s32[], s32[]) fusion(p.0, p.2), kind=kInput, calls=computation.2
+    gte.1 = get-tuple-element(call.1), index=0
+    gte.2 = get-tuple-element(fused.1), index=0
+    ROOT tuple = tuple(gte.1, gte.2)
+  })";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
+  auto extracted =
+      ExtractModule(module->entry_computation()->root_instruction(), -1,
+                    nullptr, nullptr, false, true);
+  EXPECT_THAT(extracted->entry_computation()->root_instruction(),
+              op::Tuple(op::Parameter(0), op::Parameter(0)));
+}
+
+TEST_F(HloExtractorTest, TestInheritedConfig) {
+  const char* hlo = R"(
+  HloModule test
+  computation.1 {
+    p.0 = s32[] parameter(0)
+    p.1 = s32[] parameter(1)
+    ROOT tuple = (s32[], s32[]) tuple(p.0, p.1)
+  }
+  computation.2 {
+    p.0 = s32[] parameter(0)
+    p.1 = s32[] parameter(1)
+    ROOT tuple = (s32[], s32[]) tuple(p.0, p.1)
+  }
+  ENTRY main {
+    p.0 = s32[] parameter(0)
+    p.1 = s32[] parameter(1)
+    p.2 = s32[] parameter(2)
+    call.1 = (s32[], s32[]) call(p.0, p.1), to_apply=computation.1
+    fused.1 = (s32[], s32[]) fusion(p.0, p.2), kind=kInput, calls=computation.2
+    gte.1 = get-tuple-element(call.1), index=0
+    gte.2 = get-tuple-element(fused.1), index=0
+    ROOT tuple = tuple(gte.1, gte.2)
+  })";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
+  module->mutable_config().set_replica_count(module->config().replica_count() +
+                                             1);
+  auto extracted = ExtractModule(
+      module->entry_computation()->root_instruction(), /*height=*/-1,
+      /*extract_selector=*/nullptr, /*replace_type_selector=*/nullptr,
+      /*cross_computation=*/false, /*inline_calls_and_fusions=*/true,
+      /*run_verifier=*/false, /*inherit_module_config=*/true);
+  EXPECT_THAT(extracted->entry_computation()->root_instruction(),
+              op::Tuple(op::Parameter(0), op::Parameter(0)));
+  EXPECT_EQ(extracted->config().replica_count(),
+            module->config().replica_count());
+}
+
+TEST_F(HloExtractorTest, TestInheritedSchedule) {
+  const char* hlo = R"(
+  HloModule InheritedSchedule, is_scheduled=true
+  computation.1 {
+    p.0 = s32[] parameter(0)
+    p.1 = s32[] parameter(1)
+    ROOT tuple = (s32[], s32[]) tuple(p.0, p.1)
+  }
+  computation.2 {
+    p.0 = s32[] parameter(0)
+    p.1 = s32[] parameter(1)
+    ROOT tuple = (s32[], s32[]) tuple(p.0, p.1)
+  }
+  ENTRY main {
+    p.0 = s32[] parameter(0)
+    p.1 = s32[] parameter(1)
+    p.2 = s32[] parameter(2)
+    call.1 = (s32[], s32[]) call(p.0, p.1), to_apply=computation.1
+    fused.1 = (s32[], s32[]) fusion(p.0, p.2), kind=kInput, calls=computation.2
+    gte.1 = get-tuple-element(call.1), index=0
+    gte.2 = get-tuple-element(fused.1), index=0
+    ROOT tuple = tuple(gte.1, gte.2)
+  })";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
+  auto extracted = ExtractModule(
+      module->entry_computation()->root_instruction(), /*height=*/-1,
+      /*extract_selector=*/nullptr, /*replace_type_selector=*/nullptr,
+      /*cross_computation=*/false, /*inline_calls_and_fusions=*/false,
+      /*run_verifier=*/false, /*inherit_module_config=*/false,
+      /*inherit_schedule=*/true);
+  ASSERT_TRUE(extracted->has_schedule());
+  for (HloComputation* computation : extracted->computations()) {
+    EXPECT_EQ(extracted->schedule().is_computation_scheduled(computation),
+              !computation->IsFusionComputation());
+  }
+}
+
+TEST_F(HloExtractorTest, TestInvalidModule) {
+  constexpr absl::string_view hlo = R"(
+HloModule main
+
+computation {
+  ROOT arg.0 = s32[16] parameter(0)
+}
+
+ENTRY main {
+  arg.0 = s32[16] parameter(0)
+  ROOT call.0 = call(arg.0), to_apply=computation
+})";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
+
+  HloInstruction* arg0 =
+      FindComputation(module.get(), "computation")->root_instruction();
+  // Create invalid operand shape.
+  *arg0->mutable_shape() = ShapeUtil::MakeShape(S32, {4});
+
+  auto extracted =
+      ExtractModule(module->entry_computation()->root_instruction(), -1,
+                    nullptr, nullptr, false, false, false);
+
+  // Restore the operand shape to be valid.
+  *arg0->mutable_shape() = ShapeUtil::MakeShape(S32, {16});
+}
+
+TEST_F(HloExtractorTest, ExtractModuleInheritScheduleEntryPostOrder) {
+  constexpr absl::string_view hlo = R"(
+HloModule scheduled_module, is_scheduled=true
+
+called_comp {
+  c0 = f32[10] parameter(0)
+  c1 = f32[10] parameter(1)
+  neg1 = f32[10] negate(c1)
+  neg0 = f32[10] negate(c0)
+  ROOT sum = f32[10] add(neg0, neg1)
+}
+
+ENTRY main {
+  p0 = f32[10] parameter(0)
+  p1 = f32[10] parameter(1)
+  op_b = f32[10] negate(p1)
+  op_a = f32[10] negate(p0)
+  ROOT call = f32[10] call(op_a, op_b), to_apply=called_comp
+})";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo));
+  HloInstruction* call_inst = FindInstruction(module.get(), HloOpcode::kCall);
+  ASSERT_NE(call_inst, nullptr);
+
+  auto extracted = ExtractModule(
+      call_inst, /*height=*/0, /*extract_selector=*/nullptr,
+      /*replace_type_selector=*/nullptr, /*cross_computation=*/false,
+      /*inline_calls_and_fusions=*/false, /*run_verifier=*/true,
+      /*inherit_module_config=*/true, /*inherit_schedule=*/true);
+  ASSERT_NE(extracted, nullptr);
+  ASSERT_TRUE(extracted->has_schedule());
+
+  // The entry computation schedule should be in canonical post-order
+  // (parameter(0) before parameter(1)), not the caller's schedule order where
+  // op_b preceded op_a.
+  HloComputation* entry = extracted->entry_computation();
+  const auto& entry_seq = extracted->schedule().sequence(entry).instructions();
+  ASSERT_EQ(entry_seq.size(), 3);
+  EXPECT_EQ(entry_seq[0], entry->parameter_instruction(0));
+  EXPECT_EQ(entry_seq[1], entry->parameter_instruction(1));
+  EXPECT_EQ(entry_seq[2], entry->root_instruction());
+
+  // The called computation schedule should preserve neg1 before neg0.
+  HloComputation* extracted_called = entry->root_instruction()->to_apply();
+  const auto& called_seq =
+      extracted->schedule().sequence(extracted_called).instructions();
+  ASSERT_EQ(called_seq.size(), 5);
+  EXPECT_EQ(called_seq[2]->name(), "neg1");
+  EXPECT_EQ(called_seq[3]->name(), "neg0");
+}
+
+TEST_F(HloExtractorTest, ExtractAsyncChain) {
+  constexpr absl::string_view hlo = R"(
+HloModule async_chain_module
+
+async_computation {
+  p0 = f32[10] parameter(0)
+  ROOT res = f32[10] negate(p0)
+}
+
+ENTRY main {
+  p0 = f32[10] parameter(0)
+  p1 = f32[10] parameter(1)
+  add0 = f32[10] add(p0, p1)
+  start = ((f32[10]), f32[10]) async-start(add0), calls=async_computation
+  update = ((f32[10]), f32[10]) async-update(start)
+  done = f32[10] async-done(update)
+  ROOT out = f32[10] add(done, p1)
+})";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo));
+
+  HloInstruction* start_inst =
+      FindInstruction(module.get(), HloOpcode::kAsyncStart);
+  HloInstruction* update_inst =
+      FindInstruction(module.get(), HloOpcode::kAsyncUpdate);
+  HloInstruction* done_inst =
+      FindInstruction(module.get(), HloOpcode::kAsyncDone);
+  ASSERT_NE(start_inst, nullptr);
+  ASSERT_NE(update_inst, nullptr);
+  ASSERT_NE(done_inst, nullptr);
+
+  for (HloInstruction* inst : {start_inst, update_inst, done_inst}) {
+    auto extracted = ExtractModule(inst, /*height=*/0);
+    ASSERT_NE(extracted, nullptr);
+    HloComputation* entry = extracted->entry_computation();
+    EXPECT_EQ(entry->root_instruction()->opcode(), HloOpcode::kAsyncDone);
+    EXPECT_THAT(
+        entry->root_instruction(),
+        op::AsyncDone(op::AsyncUpdate(op::AsyncStart(op::Parameter()))));
+  }
+}
+
+TEST_F(HloExtractorTest, DoesNotVisitInstructionsBeyondBoundary) {
+  constexpr absl::string_view hlo = R"(
+HloModule test
+
+ENTRY main {
+  p0 = f32[4] parameter(0)
+  neg = f32[4] negate(p0)
+  tanh = f32[4] tanh(neg)
+  ROOT exp = f32[4] exponential(tanh)
+})";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo));
+
+  HloInstruction* neg = FindInstruction(module.get(), "neg");
+  HloInstruction* exp = FindInstruction(module.get(), "exp");
+  bool visited_beyond_boundary = false;
+  auto extract_selector = [&](const HloInstruction* inst) {
+    if (inst == neg) {
+      visited_beyond_boundary = true;
+    }
+    return true;
+  };
+
+  auto extracted = ExtractModule(exp, /*height=*/0, extract_selector);
+  ASSERT_NE(extracted, nullptr);
+  EXPECT_FALSE(visited_beyond_boundary);
+  EXPECT_THAT(extracted->entry_computation()->root_instruction(),
+              op::Exp(op::Parameter(0)));
 }
 
 }  // namespace

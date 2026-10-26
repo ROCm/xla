@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,14 +16,14 @@ limitations under the License.
 #ifndef XLA_SERVICE_COMPILATION_CACHE_H_
 #define XLA_SERVICE_COMPILATION_CACHE_H_
 
-#include <map>
+#include <cstdint>
 #include <memory>
-#include <string>
 
+#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/status/statusor.h"
+#include "absl/synchronization/mutex.h"
 #include "xla/service/executable.h"
-#include "xla/service/hlo_module_config.h"
-#include "xla/types.h"
 
 namespace xla {
 
@@ -33,13 +33,13 @@ namespace xla {
 // compilation cache.
 class CompilationCache {
  public:
-  CompilationCache() {}
+  CompilationCache() = default;
 
   ExecutionHandle Insert(std::unique_ptr<Executable> executable);
 
   // Lookup the Executable for the specified handle in the cache. Return a
   // shared_ptr to the Executable if it exists in the cache.
-  StatusOr<std::shared_ptr<Executable>> LookUp(
+  absl::StatusOr<std::shared_ptr<Executable>> LookUp(
       const ExecutionHandle& handle) const;
 
  protected:

@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,30 +13,35 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
 #include <limits>
-#include <memory>
-#include <numeric>
+#include <tuple>
 #include <vector>
 
 #include "xla/array2d.h"
-#include "xla/client/lib/arithmetic.h"
-#include "xla/client/lib/matrix.h"
-#include "xla/client/xla_builder.h"
-#include "xla/literal.h"
-#include "xla/statusor.h"
-#include "xla/test.h"
-#include "xla/tests/client_library_test_base.h"
-#include "xla/tests/literal_test_util.h"
-#include "xla/tests/test_macros.h"
-#include "xla/types.h"
-#include "tsl/lib/core/status_test_util.h"
+#include "xla/array3d.h"
+#include "xla/error_spec.h"
+#include "xla/hlo/builder/lib/arithmetic.h"
+#include "xla/hlo/builder/lib/matrix.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/literal_util.h"
+#include "xla/service/hlo_runner_interface.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/tests/client_library_test_runner_mixin.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
 
 namespace xla {
 namespace {
 
-using CholeskyTest = ClientLibraryTestBase;
+using CholeskyTest =
+    ClientLibraryTestRunnerMixin<HloInterpreterReferenceMixin<HloTestBase>>;
 
-XLA_TEST_F(CholeskyTest, NonPSDInput) {
+TEST_F(CholeskyTest, NonPSDInput) {
   XlaBuilder builder(TestName());
 
   Array2D<float> a_vals({
@@ -56,11 +61,11 @@ XLA_TEST_F(CholeskyTest, NonPSDInput) {
       {nan, nan, nan},
   });
 
-  ComputeAndCompareR2<float>(&builder, expected, {a_data.get()},
+  ComputeAndCompareR2<float>(&builder, expected, {&a_data},
                              ErrorSpec(1e-4, 1e-4));
 }
 
-XLA_TEST_F(CholeskyTest, NonPSDBatched) {
+TEST_F(CholeskyTest, NonPSDBatched) {
   XlaBuilder builder(TestName());
 
   Array3D<float> a_vals({
@@ -94,11 +99,11 @@ XLA_TEST_F(CholeskyTest, NonPSDBatched) {
       },
   });
 
-  ComputeAndCompareR3<float>(&builder, expected, {a_data.get()},
+  ComputeAndCompareR3<float>(&builder, expected, {&a_data},
                              ErrorSpec(1e-4, 1e-4));
 }
 
-XLA_TEST_F(CholeskyTest, Lower) {
+TEST_F(CholeskyTest, Lower) {
   XlaBuilder builder(TestName());
 
   float nan = std::numeric_limits<float>::quiet_NaN();
@@ -120,11 +125,11 @@ XLA_TEST_F(CholeskyTest, Lower) {
       {5, 8, 10, 11},
   });
 
-  ComputeAndCompareR2<float>(&builder, expected, {a_data.get()},
+  ComputeAndCompareR2<float>(&builder, expected, {&a_data},
                              ErrorSpec(1e-4, 1e-4));
 }
 
-XLA_TEST_F(CholeskyTest, Upper) {
+TEST_F(CholeskyTest, Upper) {
   XlaBuilder builder(TestName());
 
   float nan = std::numeric_limits<float>::quiet_NaN();
@@ -146,11 +151,11 @@ XLA_TEST_F(CholeskyTest, Upper) {
       {0, 0, 0, 11},
   });
 
-  ComputeAndCompareR2<float>(&builder, expected, {a_data.get()},
+  ComputeAndCompareR2<float>(&builder, expected, {&a_data},
                              ErrorSpec(1e-4, 1e-4));
 }
 
-XLA_TEST_F(CholeskyTest, Simple2) {
+TEST_F(CholeskyTest, Simple2) {
   XlaBuilder builder(TestName());
 
   Array2D<float> a_vals({
@@ -169,11 +174,11 @@ XLA_TEST_F(CholeskyTest, Simple2) {
                            {2, 14, 16, 0},  //
                            {3, 6, 1, 4}});
 
-  ComputeAndCompareR2<float>(&builder, expected, {a_data.get()},
+  ComputeAndCompareR2<float>(&builder, expected, {&a_data},
                              ErrorSpec(1e-4, 1e-4));
 }
 
-XLA_TEST_F(CholeskyTest, SimpleBatched) {
+TEST_F(CholeskyTest, SimpleBatched) {
   XlaBuilder builder(TestName());
 
   Array3D<float> a_vals({
@@ -208,17 +213,18 @@ XLA_TEST_F(CholeskyTest, SimpleBatched) {
        {3, 6, 1, 4}},
   });
 
-  ComputeAndCompareR3<float>(&builder, expected, {a_data.get()},
+  ComputeAndCompareR3<float>(&builder, expected, {&a_data},
                              ErrorSpec(1e-4, 1e-4));
 }
 
 using CholeskyTestCase = std::tuple<int64_t, int64_t, bool>;
 
 class RandomCholeskyTest
-    : public ClientLibraryTestBase,
+    : public ClientLibraryTestRunnerMixin<
+          HloInterpreterReferenceMixin<HloTestBase>>,
       public ::testing::WithParamInterface<CholeskyTestCase> {};
 
-XLA_TEST_P(RandomCholeskyTest, Real) {
+TEST_P(RandomCholeskyTest, Real) {
   XlaBuilder builder(TestName());
 
   auto test_params = GetParam();
@@ -250,12 +256,13 @@ XLA_TEST_P(RandomCholeskyTest, Real) {
   Reduce(delta * delta, ConstantR0<float>(&builder, 0.0),
          CreateScalarAddComputation(F32, &builder), {0, 1, 2});
 
-  TF_ASSERT_OK_AND_ASSIGN(auto input_data, client_->TransferToServer(literal));
-  ComputeAndCompareR0<float>(&builder, 0.0, {input_data.get()},
-                             ErrorSpec(1e-4, 1e-4));
+  ComputeAndCompareR0<float>(&builder, 0.0, {&literal}, ErrorSpec(1e-4, 1e-4));
 }
 
-XLA_TEST_P(RandomCholeskyTest, Complex) {
+TEST_P(RandomCholeskyTest, Complex) {
+  if (test_runner().HasProperty(HloRunnerPropertyTag::kUsingGpuRocm)) {
+    GTEST_SKIP() << " hipblaslt doesn't suppport c64 c128 types";
+  }
   XlaBuilder builder(TestName());
 
   auto test_params = GetParam();
@@ -293,12 +300,7 @@ XLA_TEST_P(RandomCholeskyTest, Complex) {
   Reduce(Abs(delta * Conj(delta)), ConstantR0<float>(&builder, 0.0),
          CreateScalarAddComputation(F32, &builder), {0, 1, 2});
 
-  TF_ASSERT_OK_AND_ASSIGN(auto input_data_real,
-                          client_->TransferToServer(literal_real));
-  TF_ASSERT_OK_AND_ASSIGN(auto input_data_imag,
-                          client_->TransferToServer(literal_imag));
-  ComputeAndCompareR0<float>(&builder, 0.0,
-                             {input_data_real.get(), input_data_imag.get()},
+  ComputeAndCompareR0<float>(&builder, 0.0, {&literal_real, &literal_imag},
                              ErrorSpec(1e-4, 1e-4));
 }
 

@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "xla/pjrt/c/pjrt_c_api.h"
 
-namespace xla {
 namespace pjrt {
 
 // Registers a function that generates a PJRT_Api to the test factory. Including
@@ -33,6 +32,5 @@ void RegisterPjRtCApiTestFactory(std::function<const PJRT_Api*()> factory,
                                  absl::string_view platform_name);
 
 }  // namespace pjrt
-}  // namespace xla
 
 #endif  // XLA_PJRT_C_PJRT_C_API_TEST_H_

@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,9 +18,9 @@ limitations under the License.
 
 #include <string>
 
-#include "llvm/Support/ExtensibleRTTI.h"
-#include "xla/statusor.h"
-#include "tfrt/concurrency/ref_count.h"  // from @tf_runtime
+#include "absl/status/statusor.h"
+#include "xla/python/ifrt/rtti.h"
+#include "xla/tsl/concurrency/ref_count.h"
 
 namespace xla {
 namespace ifrt {
@@ -32,7 +32,7 @@ class Client;
 //
 // TODO(hyeontaek): Unify `HostCallback` with `Executable` once `Executable` is
 // added.
-class HostCallback : public llvm::RTTIExtends<HostCallback, llvm::RTTIRoot> {
+class HostCallback : public RTTIExtends<HostCallback, RTTIRoot> {
  public:
   // Returns a serialized host callback.
   virtual std::string Serialize() const = 0;
@@ -50,9 +50,8 @@ class HostCallback : public llvm::RTTIExtends<HostCallback, llvm::RTTIRoot> {
 // `LoadedExecutable` runs as a top-level standalone runnable, while
 // `LoadedHostCallback` runs as a sub-computation of another `LoadedExecutable`
 // execution.
-class LoadedHostCallback
-    : public tsl::ReferenceCounted<LoadedHostCallback>,
-      public llvm::RTTIExtends<LoadedHostCallback, llvm::RTTIRoot> {
+class LoadedHostCallback : public tsl::ReferenceCounted<LoadedHostCallback>,
+                           public RTTIExtends<LoadedHostCallback, RTTIRoot> {
  public:
   virtual Client* client() const = 0;
 
@@ -64,7 +63,7 @@ class LoadedHostCallback
   //
   // TODO(hyeontaek): Change `Serialize()` to return `HostCallback` instead of a
   // serialized host callback directly.
-  virtual StatusOr<std::string> Serialize() const = 0;
+  virtual absl::StatusOr<std::string> Serialize() const = 0;
 
   static char ID;  // NOLINT
 };

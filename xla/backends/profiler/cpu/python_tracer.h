@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,12 +15,24 @@ limitations under the License.
 #ifndef XLA_BACKENDS_PROFILER_CPU_PYTHON_TRACER_H_
 #define XLA_BACKENDS_PROFILER_CPU_PYTHON_TRACER_H_
 
+#include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "tsl/profiler/lib/profiler_interface.h"
+#include "xla/python/profiler/internal/python_hooks.h"
 
 namespace xla {
 namespace profiler {
+
+// A chunk of Python trace data collected during a streaming profiling interval.
+struct PythonTracerChunk {
+  // Timestamp (in nanoseconds) when this chunk's profiling interval began
+  // (either at Start() or at the preceding Consume() call). Used as the
+  // initial baseline timestamp for thread XLines during Serialize().
+  uint64_t start_timestamp_ns = 0;
+  std::vector<PerThreadConsumeData> consumed_data;
+};
 
 struct PythonTracerOptions {
   // Whether to enable python function calls tracing.

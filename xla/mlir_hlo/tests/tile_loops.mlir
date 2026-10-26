@@ -1,3 +1,17 @@
+// Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// ==============================================================================
 // RUN: mlir-hlo-opt --tile-loops="tile-sizes=2 unroll-factors=4" %s | \
 // RUN: FileCheck %s
 
@@ -6,7 +20,7 @@ func.func @parallel_loop(%arg0: memref<16xf32>, %arg1: memref<16xf32>) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c16 = arith.constant 16 : index
-  %0 = memref.alloc() {alignment = 128 : i64} : memref<16xf32>
+  %0 = memref.alloc() alignment = 128 : memref<16xf32>
   scf.parallel (%arg2) = (%c0) to (%c16) step (%c1) {
   // CHECK-DAG: %[[C8:.*]] = arith.constant 8
   // CHECK-DAG: %[[C4:.*]] = arith.constant 4
@@ -16,11 +30,12 @@ func.func @parallel_loop(%arg0: memref<16xf32>, %arg1: memref<16xf32>) {
     %2 = memref.load %arg0[%arg2] : memref<16xf32>
     %3 = math.log %2 : f32
     memref.store %3, %0[%arg2] : memref<16xf32>
-    scf.yield
+    scf.reduce
   }
-  %1 = bufferization.to_tensor %0 : memref<16xf32>
-  memref.tensor_store %1, %arg1 : memref<16xf32>
-  "lmhlo.terminator"() : () -> ()
+  %1 = bufferization.to_tensor %0 : memref<16xf32> to tensor<16xf32>
+  bufferization.materialize_in_destination %1 in writable %arg1
+      : (tensor<16xf32>, memref<16xf32>) -> ()
+  return
 }
 
 // CHECK-LABEL: func @statically_unrolled
@@ -37,17 +52,17 @@ func.func @statically_unrolled(%arg0: memref<?xindex>) {
   // CHECK:   scf.parallel
   // CHECK:     scf.parallel {{.*}} to (%[[C4]])
     memref.store %arg1, %arg0[%arg1] : memref<?xindex>
-    scf.yield
+    scf.reduce
   }
   scf.parallel (%arg1) = (%c0) to (%c36) step (%c3) {
   // CHECK: scf.parallel
   // CHECK:   scf.parallel
   // CHECK:     scf.parallel {{.*}} to (%[[C4]])
     memref.store %arg1, %arg0[%arg1] : memref<?xindex>
-    scf.yield
+    scf.reduce
   }
 
-  "lmhlo.terminator"() : () -> ()
+  return
 }
 
 // CHECK-LABEL: func @dynamically_unrolled
@@ -61,25 +76,25 @@ func.func @dynamically_unrolled(%arg0: memref<?xindex>, %arg1 : index) {
   scf.parallel (%arg2) = (%c0) to (%arg1) step (%c1) {
   // CHECK-NOT: scf.parallel {{.*}} to (%[[C4]])
     memref.store %arg2, %arg0[%arg2] : memref<?xindex>
-    scf.yield
+    scf.reduce
   }
   scf.parallel (%arg2) = (%c0) to (%c10) step (%c1) {
   // CHECK-NOT: scf.parallel {{.*}} to (%[[C4]])
     memref.store %arg2, %arg0[%arg2] : memref<?xindex>
-    scf.yield
+    scf.reduce
   }
   scf.parallel (%arg2) = (%c10) to (%c32) step (%c1) {
   // CHECK-NOT: scf.parallel {{.*}} to (%[[C4]])
     memref.store %arg2, %arg0[%arg2] : memref<?xindex>
-    scf.yield
+    scf.reduce
   }
   scf.parallel (%arg2) = (%c0) to (%c32) step (%c10) {
   // CHECK-NOT: scf.parallel {{.*}} to (%[[C4]])
     memref.store %arg2, %arg0[%arg2] : memref<?xindex>
-    scf.yield
+    scf.reduce
   }
 
-  "lmhlo.terminator"() : () -> ()
+  return
 }
 
 // CHECK-LABEL: func @complex_access
@@ -87,7 +102,7 @@ func.func @complex_access(%arg0: memref<16xf32>, %arg1: memref<4xf32>) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c4 = arith.constant 4 : index
-  %0 = memref.alloc() {alignment = 128 : i64} : memref<4xf32>
+  %0 = memref.alloc() alignment = 128 : memref<4xf32>
   scf.parallel (%arg2) = (%c0) to (%c4) step (%c1) {
   // CHECK-DAG: %[[C2:.*]] = arith.constant 2
   // CHECK:     scf.parallel {{.*}} step (%[[C2]])
@@ -98,9 +113,10 @@ func.func @complex_access(%arg0: memref<16xf32>, %arg1: memref<4xf32>) {
     %2 = memref.load %arg0[%idx] : memref<16xf32>
     %3 = math.log %2 : f32
     memref.store %3, %0[%arg2] : memref<4xf32>
-    scf.yield
+    scf.reduce
   }
-  %1 = bufferization.to_tensor %0 : memref<4xf32>
-  memref.tensor_store %1, %arg1 : memref<4xf32>
-  "lmhlo.terminator"() : () -> ()
+  %1 = bufferization.to_tensor %0 : memref<4xf32> to tensor<4xf32>
+  bufferization.materialize_in_destination %1 in writable %arg1
+      : (tensor<4xf32>, memref<4xf32>) -> ()
+  return
 }

@@ -1,0 +1,1264 @@
+/* Copyright 2018 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include "xla/hlo/analysis/while_loop_analysis.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <utility>
+#include <vector>
+
+#include "absl/algorithm/container.h"
+#include "absl/base/casts.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/functional/function_ref.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/types/span.h"
+#include "xla/comparison_util.h"
+#include "xla/hlo/analysis/hlo_reachability.h"
+#include "xla/hlo/evaluator/hlo_evaluator.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/utils/hlo_query.h"
+#include "xla/literal.h"
+#include "xla/literal_util.h"
+#include "xla/primitive_util.h"
+#include "xla/service/collective_ops_utils.h"
+#include "xla/service/constant_value.h"
+#include "xla/service/hlo_module_config.h"
+#include "xla/service/pattern_matcher.h"
+#include "xla/service/value_range.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/xla_data.pb.h"
+
+namespace xla {
+
+using std::nullopt;
+using std::optional;
+namespace m = match;
+
+namespace {
+
+// Traces through a chain of copy instructions and a GTE-tuple pair until a
+// non-copy or a non-GTE-tuple pair is found.
+const HloInstruction* TraceThroughCopyAndGteTupleChain(
+    const HloInstruction* instr) {
+  if (instr->opcode() == HloOpcode::kGetTupleElement &&
+      instr->operand(0)->opcode() == HloOpcode::kTuple) {
+    return TraceThroughCopyAndGteTupleChain(
+        instr->operand(0)->operand(instr->tuple_index()));
+  }
+  if (instr->opcode() == HloOpcode::kCopy ||
+      instr->opcode() == HloOpcode::kCopyStart ||
+      instr->opcode() == HloOpcode::kCopyDone) {
+    return TraceThroughCopyAndGteTupleChain(instr->operand(0));
+  }
+
+  return instr;
+}
+}  // namespace
+
+// Finds and returns the non-constant operand in instr, if there is only one
+// such operand.
+//
+// Returns nullptr if instr doesn't have exactly one unique non-constant
+// operand.
+static const HloInstruction* NonConstantOperand(const HloInstruction* instr) {
+  const HloInstruction* result = nullptr;
+  for (const HloInstruction* operand : instr->operands()) {
+    if (!operand->IsConstant()) {
+      if (result != nullptr && result != operand) {
+        return nullptr;
+      }
+      result = operand;
+    }
+  }
+  return result;
+}
+
+namespace {
+
+struct ReachingParameter {
+  int64_t parameter_number;
+  std::optional<int64_t> tuple_index;
+
+  template <typename H>
+  friend H AbslHashValue(H h, const ReachingParameter& p) {
+    return H::combine(std::move(h), p.parameter_number, p.tuple_index);
+  }
+  friend bool operator==(const ReachingParameter& a,
+                         const ReachingParameter& b) {
+    return a.parameter_number == b.parameter_number &&
+           a.tuple_index == b.tuple_index;
+  }
+};
+
+struct HelperState {
+  const HloInstruction* instr;
+  std::optional<int64_t> tuple_index;
+
+  template <typename H>
+  friend H AbslHashValue(H h, const HelperState& s) {
+    return H::combine(std::move(h), s.instr, s.tuple_index);
+  }
+  friend bool operator==(const HelperState& a, const HelperState& b) {
+    return a.instr == b.instr && a.tuple_index == b.tuple_index;
+  }
+};
+
+}  // namespace
+
+// This function returns true if the operation is a simple scalar operation.
+// While loop analysis can execute such an operation at compile time without
+// incurring huge overheads.
+static bool IsScalarOp(const HloInstruction* op) {
+  if (IsCollective(op)) {
+    return false;
+  }
+  switch (op->opcode()) {
+    case HloOpcode::kSend:
+    case HloOpcode::kSendDone:
+    case HloOpcode::kRecv:
+    case HloOpcode::kRecvDone:
+    case HloOpcode::kCustomCall:
+      return false;
+    default:
+      break;
+  }
+  for (const HloComputation* computation : op->called_computations()) {
+    for (const HloInstruction* instruction : computation->instructions()) {
+      if (!IsScalarOp(instruction)) {
+        return false;
+      }
+    }
+  }
+  return ShapeUtil::IsScalar(op->shape());
+}
+
+// Traces backward inside `computation` from an output (either a specific tuple
+// element if `output_tuple_idx` is set, or the scalar root otherwise) to find
+// which computation parameters contribute to that output.
+static std::optional<std::vector<ReachingParameter>> GetReachingParameters(
+    const HloComputation* computation, std::optional<int64_t> output_tuple_idx,
+    bool is_scalar_verified) {
+  absl::flat_hash_set<ReachingParameter> reaching_params_set;
+  absl::flat_hash_set<HelperState> visited;
+  std::vector<HelperState> worklist;
+  worklist.push_back({computation->root_instruction(), output_tuple_idx});
+
+  while (!worklist.empty()) {
+    HelperState state = worklist.back();
+    worklist.pop_back();
+    if (!visited.insert(state).second) {
+      continue;
+    }
+
+    const HloInstruction* instr = state.instr;
+    std::optional<int64_t> tuple_idx = state.tuple_index;
+
+    // Ensure the instruction shape aligns with whether we are tracing a tuple
+    // element or a scalar value.
+    if (tuple_idx.has_value() ? !instr->shape().IsTuple()
+                              : !ShapeUtil::IsScalar(instr->shape())) {
+      return std::nullopt;
+    }
+
+    // Base case: Reached an input parameter of this computation.
+    if (instr->opcode() == HloOpcode::kParameter) {
+      reaching_params_set.insert({instr->parameter_number(), tuple_idx});
+      continue;
+    }
+
+    // When tracing a tuple element, route backward to the corresponding operand
+    // in the tuple construction.
+    if (instr->opcode() == HloOpcode::kTuple) {
+      if (*tuple_idx < 0 || *tuple_idx >= instr->operand_count()) {
+        return std::nullopt;
+      }
+      worklist.push_back({instr->operand(*tuple_idx), std::nullopt});
+      continue;
+    }
+
+    // Transition from a scalar element backward to its parent tuple source.
+    if (instr->opcode() == HloOpcode::kGetTupleElement) {
+      worklist.push_back({instr->operand(0), instr->tuple_index()});
+      continue;
+    }
+
+    // Transparently forward through copy operations.
+    if (instr->opcode() == HloOpcode::kCopy) {
+      worklist.push_back({instr->operand(0), tuple_idx});
+      continue;
+    }
+
+    // Recursively resolve parameter dependencies inside called
+    // sub-computations.
+    if (instr->opcode() == HloOpcode::kFusion ||
+        instr->opcode() == HloOpcode::kCall) {
+      const HloComputation* callee =
+          (instr->opcode() == HloOpcode::kFusion)
+              ? instr->fused_instructions_computation()
+              : instr->to_apply();
+      std::optional<std::vector<ReachingParameter>> inner_params =
+          GetReachingParameters(callee, tuple_idx, is_scalar_verified);
+      if (!inner_params.has_value()) {
+        return std::nullopt;
+      }
+      for (const ReachingParameter& param : *inner_params) {
+        worklist.push_back(
+            {instr->operand(param.parameter_number), param.tuple_index});
+      }
+      continue;
+    }
+
+    // General scalar compute operations cannot produce tuples.
+    if (tuple_idx.has_value()) {
+      return std::nullopt;
+    }
+    // If `is_scalar_verified` is true, the calling fusion or call in the main
+    // traversal loop has already been verified via IsScalarOp (which
+    // recursively checks all instructions in called computations). We only need
+    // to invoke IsScalarOp when traversing inside a tuple-returning fusion or
+    // call, where the caller could not be verified via IsScalarOp due to its
+    // tuple shape.
+    if (!is_scalar_verified && !IsScalarOp(instr)) {
+      return std::nullopt;
+    }
+    for (const HloInstruction* operand : instr->operands()) {
+      worklist.push_back({operand, std::nullopt});
+    }
+  }
+
+  return std::vector<ReachingParameter>(reaching_params_set.begin(),
+                                        reaching_params_set.end());
+}
+
+// Resolves parameters of a top-level calling instruction (fusion or call) that
+// reach the specified output, adding scalar operands to `worklist` and
+// recording get-tuple-element indices on `in` into `candidate_indices`.
+static bool ProcessCalledComputation(
+    const HloInstruction* caller, const HloInstruction* in,
+    std::optional<int64_t> output_tuple_idx, bool is_scalar_verified,
+    std::vector<const HloInstruction*>& worklist,
+    absl::flat_hash_set<int64_t>& candidate_indices) {
+  const HloComputation* callee = (caller->opcode() == HloOpcode::kFusion)
+                                     ? caller->fused_instructions_computation()
+                                     : caller->to_apply();
+  std::optional<std::vector<ReachingParameter>> reaching_params =
+      GetReachingParameters(callee, output_tuple_idx, is_scalar_verified);
+  if (!reaching_params.has_value()) {
+    return false;
+  }
+  for (const ReachingParameter& param : *reaching_params) {
+    const HloInstruction* arg = caller->operand(param.parameter_number);
+    if (param.tuple_index.has_value()) {
+      while (arg->opcode() == HloOpcode::kCopy) {
+        arg = arg->operand(0);
+      }
+      if (arg == in) {
+        candidate_indices.insert(*param.tuple_index);
+      } else {
+        return false;
+      }
+    } else {
+      worklist.push_back(arg);
+    }
+  }
+  return true;
+}
+
+// If `out` is a function of a some values in the tuple `in` and has no other
+// dependence, i.e. if `out=f(gte1(in), gte2(in),...)`, then this function will
+// return all the get-tuple-element indices for the dependence.
+//
+// For example, in the following HLO, this function will return `1`:
+//   in = (s32[], s32[], s32[]) tuple(a,b,c)
+//   gte.1 = get-tuple-element(in), index=1
+//   out = fusion(gte.1), ...
+// Also checks whether all ops on the path from `in` to `out` are ops with a
+// scalar shape.
+static std::optional<absl::flat_hash_set<int64_t>> GetGTEDependenceIndices(
+    const HloInstruction* out, const HloInstruction* in) {
+  if (out->parent() != in->parent() || !in->shape().IsTuple()) {
+    return std::nullopt;
+  }
+
+  absl::flat_hash_set<int64_t> candidate_indices;
+  absl::flat_hash_set<const HloInstruction*> visited;
+  std::vector<const HloInstruction*> worklist;
+  worklist.push_back(out);
+
+  while (!worklist.empty()) {
+    const HloInstruction* instr = worklist.back();
+    worklist.pop_back();
+    if (!visited.insert(instr).second) {
+      continue;
+    }
+
+    // Reaching `in` directly means the tuple was consumed without extracting a
+    // scalar via get-tuple-element; reaching any other parameter means an
+    // illegal dependence on an external loop input.
+    if (instr == in || instr->opcode() == HloOpcode::kParameter) {
+      return std::nullopt;
+    }
+
+    // Resolve get-tuple-element operands to their source tuple in the top-level
+    // computation by stripping intermediate copy operations.
+    if (instr->opcode() == HloOpcode::kGetTupleElement) {
+      if (!ShapeUtil::IsScalar(instr->shape())) {
+        return std::nullopt;
+      }
+      const HloInstruction* operand = instr->operand(0);
+      while (operand->opcode() == HloOpcode::kCopy) {
+        operand = operand->operand(0);
+      }
+      // Case 1: Directly indexes into the target input tuple.
+      if (operand == in) {
+        candidate_indices.insert(instr->tuple_index());
+        continue;
+      }
+      // Case 2: Indexes into a newly created tuple; check all inputs.
+      if (operand->opcode() == HloOpcode::kTuple) {
+        for (const HloInstruction* op : operand->operands()) {
+          worklist.push_back(op);
+        }
+        continue;
+      }
+      // Case 3: Indexes into a tuple-returning sub-computation (e.g.
+      // multi-output fusion or fused copy). Use helper to find which parameters
+      // reach this tuple output element and map them back to outer operands.
+      if (operand->opcode() == HloOpcode::kFusion ||
+          operand->opcode() == HloOpcode::kCall) {
+        if (!ProcessCalledComputation(operand, in, instr->tuple_index(),
+                                      /*is_scalar_verified=*/false, worklist,
+                                      candidate_indices)) {
+          return std::nullopt;
+        }
+        continue;
+      }
+      return std::nullopt;
+    }
+
+    // Forward through scalar copy operations.
+    if (instr->opcode() == HloOpcode::kCopy) {
+      worklist.push_back(instr->operand(0));
+      continue;
+    }
+
+    // For scalar-returning fusions and calls, check validity via IsScalarOp,
+    // then find reaching internal parameters and add their corresponding
+    // top-level scalar operands to the worklist.
+    if (instr->opcode() == HloOpcode::kFusion ||
+        instr->opcode() == HloOpcode::kCall) {
+      if (!IsScalarOp(instr) ||
+          !ProcessCalledComputation(instr, in, std::nullopt,
+                                    /*is_scalar_verified=*/true, worklist,
+                                    candidate_indices)) {
+        return std::nullopt;
+      }
+      continue;
+    }
+
+    // For basic scalar compute operations (e.g. add, compare), continue tracing
+    // backward through all operands.
+    if (!IsScalarOp(instr)) {
+      return std::nullopt;
+    }
+    for (const HloInstruction* operand : instr->operands()) {
+      worklist.push_back(operand);
+    }
+  }
+
+  if (candidate_indices.empty()) {
+    return std::nullopt;
+  }
+  return candidate_indices;
+}
+
+// If `out` is a function of a single value in the tuple `in` and has no other
+// dependence, i.e. if `out=f(gte(in))`, then this function will return the
+// unique get-tuple-element index for the dependence.
+//
+// For example, in the following HLO, this function will return `1`:
+//   in = (s32[], s32[], s32[]) tuple(a,b,c)
+//   gte.1 = get-tuple-element(in), index=1
+//   out = fusion(gte.1), ...
+// Also checks whether all ops on the path from `in` to `out` are ops with a
+// scalar shape.
+static std::optional<int64_t> GetUniqueGTEDependenceIndex(
+    const HloInstruction* out, const HloInstruction* in) {
+  std::optional<absl::flat_hash_set<int64_t>> tuple_idxs =
+      GetGTEDependenceIndices(out, in);
+  if (!tuple_idxs.has_value()) {
+    return std::nullopt;
+  }
+  if (tuple_idxs->size() != 1) {
+    return std::nullopt;
+  }
+  return *tuple_idxs->begin();
+}
+
+// The below function identifies a subset of all possible auxiliary
+// induction variables (AIV). Specifically, candidates are gtes, e.g.,
+// gte(param0, N)
+// The function checks if the loop body plumbs the AIV
+// through the same tuple index at root, and that ops involving AIV
+// involve constants.
+//   op2 = op(constants, gte(param0, N), constants)
+//   op3 = op(constants, f(op2, gte(param0, N), constants)
+//   op4 = op(constants, f(op3, constants)
+//   root = tuple(..., op4, ...)
+// Further, the ops are restricted to basic math ops (+,-,*,/).
+// Finally, loop invariant GTEs are excluded from AIVs.
+// We can expand the ops category/nature of AIVs as needed.
+std::vector<const HloInstruction*> GetAuxiliaryLoopInductionVars(
+    const HloInstruction* while_op) {
+  std::vector<const HloInstruction*> aux_ind_gte;
+  CHECK_EQ(while_op->opcode(), HloOpcode::kWhile);
+  auto* while_body = while_op->while_body();
+  auto* while_body_param = while_body->parameter_instruction(0);
+  VLOG(2) << "Aux Induction Variables for loop:" << while_op->ToShortString();
+  VLOG(2) << "the parameter instr:" << while_body_param->ToShortString();
+  VLOG(2) << "the parameter user count:" << while_body_param->users().size();
+  if (while_body_param == nullptr) return aux_ind_gte;
+
+  // candidates_pairs = pair<inst, inst>(
+  //   operands of the root while body,
+  //   GTE only operands that index into the same position in the parameter)
+  // for each candidate_pair (x, y)
+  //  find all paths between x and y,
+  //  each paths should satisfy the above listed criterion
+  //  index that x and y used is added as a aux variable index
+  std::map<int64_t, const HloInstruction*> extractions;
+  for (const HloInstruction* indx_instr : while_body_param->users()) {
+    if (indx_instr->opcode() != HloOpcode::kGetTupleElement) {
+      continue;
+    }
+    auto it = extractions.find(indx_instr->tuple_index());
+    // if we find two extractions at the same index, we ignore such
+    // a candidate
+    if (it != extractions.end()) {
+      it->second = nullptr;
+      VLOG(2) << "two extractions at same index:" << indx_instr->ToString();
+    } else {
+      extractions.insert(std::make_pair(indx_instr->tuple_index(), indx_instr));
+      VLOG(2) << "inserting extraction :" << indx_instr->ToString();
+    }
+  }
+  VLOG(2) << "total extractions size:" << extractions.size() << std::endl;
+  if (extractions.empty()) {
+    return aux_ind_gte;
+  }
+
+  auto* while_body_root = while_body->root_instruction();
+  if (while_body_root->opcode() != HloOpcode::kTuple) {
+    VLOG(2) << "While body root is not a tuple:" << while_body_root->ToString();
+    return aux_ind_gte;
+  }
+  int64_t index = -1;
+  std::map<int64_t, const HloInstruction*> insertions;
+  for (const HloInstruction* operand : while_body_root->operands()) {
+    index++;
+    if (!operand->IsConstant()) {
+      auto it = insertions.find(index);
+      if (it != insertions.end()) {
+        it->second = nullptr;
+        VLOG(2) << "two insertions at same index:" << operand->ToString();
+      } else {
+        insertions.insert(std::make_pair(index, operand));
+        VLOG(2) << "inserting insertions:" << operand->ToString();
+      }
+    }
+  }
+  if (insertions.empty()) {
+    return aux_ind_gte;
+  }
+
+  std::map<int64_t, std::pair<const HloInstruction*, const HloInstruction*>>
+      candidate_pairs;
+  for (; index >= 0; --index) {
+    const HloInstruction *ext, *inst;
+    ext = (extractions.find(index) != extractions.end())
+              ? extractions.find(index)->second
+              : nullptr;
+    inst = (insertions.find(index) != insertions.end())
+               ? insertions.find(index)->second
+               : nullptr;
+    if (ext != nullptr && inst != nullptr) {
+      // Filter out trivial aux, i.e., extract directly to an insert.
+      if (ext != inst) {
+        candidate_pairs.insert(
+            std::make_pair(index, std::make_pair(ext, inst)));
+      }
+    }
+  }
+  VLOG(2) << "total candidate pairs:" << candidate_pairs.size() << std::endl;
+
+  // Passed to ReachabilityMap to decide the type of produce-consumer edges
+  // along the reachability path.
+  const auto add_dependencies = [](const HloInstruction* hlo,
+                                   std::vector<HloInstruction*>* inputs) {
+    HloInstruction* non_const_operand = nullptr;
+    int num_non_constants = 0;
+    for (HloInstruction* operand : hlo->operands()) {
+      if (!operand->IsConstant()) {
+        num_non_constants++;
+        non_const_operand = operand;
+      }
+    }
+    if (num_non_constants == 1 &&
+        (hlo->opcode() == HloOpcode::kGetTupleElement ||
+         hlo->opcode() == HloOpcode::kAdd ||
+         hlo->opcode() == HloOpcode::kMultiply ||
+         hlo->opcode() == HloOpcode::kDivide ||
+         hlo->opcode() == HloOpcode::kSubtract)) {
+      inputs->push_back(non_const_operand);
+    }
+  };
+
+  std::unique_ptr<HloReachabilityMap> hrm =
+      HloReachabilityMap::BuildWithRestrictions(
+          while_body,
+          absl::FunctionRef<void(const HloInstruction* hlo,
+                                 std::vector<HloInstruction*>* inputs)>(
+              add_dependencies));
+
+  for (auto candidates : candidate_pairs) {
+    VLOG(2) << "are reachable?:" << (candidates.second.first)->ToString()
+            << "*************" << (candidates.second.second)->ToString()
+            << std::endl;
+    if (hrm->IsReachable(candidates.second.first, candidates.second.second)) {
+      aux_ind_gte.push_back(candidates.second.first);
+      VLOG(2) << "YES";
+    } else {
+      VLOG(2) << "NO";
+    }
+  }
+  VLOG(2) << "num auxiliary candidates :" << aux_ind_gte.size();
+  return aux_ind_gte;
+}
+
+// Tries to get the tuple index of the induction variable of a while loop.
+//
+// Checks that the loop condition and body both plumb the induction variable
+// through the same tuple index, and that they both apply exactly one op to the
+// induction variable before  deciding whether to do another loop iteration (in
+// the loop condition's case) or packing the induction variable into the result
+// tuple (in the loop body's case).
+//
+// Specifically, checks that the loop condition has structure
+//
+//   root = op(constants, get-tuple-elem(param0, N), constants)
+//
+// and the loop body has the structure
+//
+//   inc = op(constants, get-tuple-elem(param0, N), constants)
+//   root = tuple(..., inc, ...)  // inc is N'th operand of tuple().
+//
+// If so, returns N.  Otherwise, returns nullopt.
+optional<int64_t> GetLoopInductionVarTupleIdx(const HloInstruction* while_op) {
+  return GetLoopInductionVarTupleIdxWithKnownValues(while_op, {});
+}
+
+// Same as above, but also handles cases where the range of the induction
+// variable depends on previously known values rather than constants.
+optional<int64_t> GetLoopInductionVarTupleIdxWithKnownValues(
+    const HloInstruction* while_op,
+    const absl::flat_hash_map<const HloInstruction*, Range>& known_values) {
+  CHECK_EQ(while_op->opcode(), HloOpcode::kWhile);
+  VLOG(2) << "Finding induction variable for loop "
+          << while_op->ToShortString();
+
+  // The while_cond computation should either have the form
+  //
+  //   while_cond_root =
+  //       op(constants, get-tuple-elem(while_cond_param, N), constants).
+  //
+  // or it has the form
+  //
+  //   while_cond_root = op(constants, get-tuple-elem(while_cond_param, N),
+  //       get-tuple-elem(while_cond_param, M), constants)
+  //
+  //   and M is such that while_op->operand(0)->operand(M) is in known_values.
+  //
+  // If it does, set indvar_tuple_idx to N.
+  auto* while_cond = while_op->while_condition();
+  auto* while_cond_root = while_cond->root_instruction();
+  auto* while_cond_param = while_cond->parameter_instruction(0);
+  optional<absl::flat_hash_set<int64_t>> cond_tuple_indices =
+      GetGTEDependenceIndices(while_cond_root, while_cond_param);
+  if (!cond_tuple_indices.has_value()) {
+    VLOG(2) << "Induction variable not found in loop condition: "
+            << while_cond->root_instruction()->ToString();
+    return nullopt;
+  }
+
+  if (while_op->operand(0)->opcode() != HloOpcode::kTuple) {
+    VLOG(2) << "While instruction's operand is not a tuple instruction: "
+            << while_op->operand(0)->ToString();
+    return nullopt;
+  }
+
+  // Exactly one of `cond_tuple_indices` should be not in known_values.
+  int64_t indvar_tuple_idx = -1;
+  if (cond_tuple_indices->size() == 1) {
+    indvar_tuple_idx = *cond_tuple_indices->begin();
+  } else {
+    for (int64_t possible_indvar_tuple_idx : *cond_tuple_indices) {
+      if (!known_values.contains(
+              while_op->operand(0)->operand(possible_indvar_tuple_idx))) {
+        if (indvar_tuple_idx != -1) {
+          VLOG(2) << "Induction variable found in loop condition: "
+                  << while_cond->root_instruction()->ToString();
+          return nullopt;
+        }
+        indvar_tuple_idx = possible_indvar_tuple_idx;
+      }
+    }
+  }
+  if (indvar_tuple_idx == -1) {
+    VLOG(2) << "Induction variable not found in loop condition: "
+            << while_cond->root_instruction()->ToString();
+    return nullopt;
+  }
+
+  // We have found the induction variable.
+  // The rest of the method verifies that the while body is of the form:
+  //
+  //   inc = op(constants, get-tuple-elem(while_body_param, N), constants)
+  //   root = tuple(..., inc, ...)  // inc is N'th operand of tuple().
+  //
+  // where N is the same as the induction variable found in the while condition.
+
+  auto* while_body = while_op->while_body();
+  auto* while_body_root = while_body->root_instruction();
+  if (while_body_root->opcode() != HloOpcode::kTuple) {
+    VLOG(2) << "While body's root is not a tuple instruction: "
+            << while_body_root->ToString();
+    return nullopt;
+  }
+  const HloInstruction* while_body_inc;
+  while_body_inc = TraceThroughCopyAndGteTupleChain(
+      while_body_root->operand(indvar_tuple_idx));
+  auto* while_body_param = while_body->parameter_instruction(0);
+  optional<int64_t> while_body_indvar_tuple_idx =
+      GetUniqueGTEDependenceIndex(while_body_inc, while_body_param);
+  if (!while_body_indvar_tuple_idx) {
+    VLOG(2)
+        << "Induction variable not found in while body increment instruction: "
+        << while_body_inc->ToString();
+    return nullopt;
+  }
+  if (while_body_indvar_tuple_idx != indvar_tuple_idx) {
+    VLOG(2) << "Tuple index of induction variable does not match between loop "
+               "condition ("
+            << indvar_tuple_idx << ") and while body ("
+            << *while_body_indvar_tuple_idx << ")";
+    return nullopt;
+  }
+
+  // Finally, check that the while loop's initial value is a tuple with enough
+  // elements.
+  auto* while_init = while_op->operand(0);
+  if (while_init->opcode() != HloOpcode::kTuple) {
+    VLOG(2) << "While init expected to be a tuple: " << while_init->ToString();
+    return nullopt;
+  }
+
+  VLOG(2) << "Induction variable's tuple index: " << indvar_tuple_idx;
+  return indvar_tuple_idx;
+}
+
+// Computes a + b, returning nullopt if it overflows.
+optional<int64_t> CheckedAdd(int64_t a, int64_t b) {
+  // Overflow occurred iff `a` and `b` have the same sign and `a + b` has a
+  // different sign, see Hacker's Delignt 2nd Ed. pp 28.
+  uint64_t aa = absl::bit_cast<uint64_t>(a);
+  uint64_t bb = absl::bit_cast<uint64_t>(b);
+  int64_t result = absl::bit_cast<int64_t>(aa + bb);
+  if (a >= 0 == b >= 0 && result >= 0 != a >= 0) {
+    return nullopt;
+  }
+  return result;
+}
+
+// Computes a - b, returning nullopt if it overflows.
+optional<int64_t> CheckedSubtract(int64_t a, int64_t b) {
+  uint64_t aa = absl::bit_cast<uint64_t>(a);
+  uint64_t bb = absl::bit_cast<uint64_t>(b);
+  int64_t result = absl::bit_cast<int64_t>(aa - bb);
+  // Overflow occurred iff `a` and `b` have different signs and the sign of
+  // `a - b` is the same as that of `b`, see Hacker's Delight 2nd Ed. pp 29.
+  if (a >= 0 != b >= 0 && result >= 0 == b >= 0) {
+    return nullopt;
+  }
+  return result;
+}
+
+absl::StatusOr<Literal> EvaluateIndvarInit(const HloInstruction* while_op,
+                                           int64_t indvar_tuple_idx) {
+  HloEvaluator evaluator(/*max_loop_iterations=*/0);
+  auto* while_init = while_op->operand(0);
+  auto* indvar_init = while_init->operand(indvar_tuple_idx);
+  return evaluator.Evaluate(TraceThroughCopyAndGteTupleChain(indvar_init));
+}
+
+optional<Range> MatchTrivialLoopRange(const HloInstruction* while_op) {
+  std::optional<int64_t> indvar_tuple_idx =
+      GetLoopInductionVarTupleIdx(while_op);
+  if (!indvar_tuple_idx.has_value()) {
+    return nullopt;
+  }
+  return MatchLoopRangeWithKnownValues(while_op, *indvar_tuple_idx, {});
+}
+
+optional<Range> MatchLoopRangeWithKnownValues(
+    const HloInstruction* while_op, const int64_t induction_var_idx,
+    const absl::flat_hash_map<const HloInstruction*, Range>& known_values) {
+  absl::StatusOr<Literal> indvar_init_result =
+      EvaluateIndvarInit(while_op, induction_var_idx);
+  if (!indvar_init_result.ok()) {
+    VLOG(2) << "Unable to evaluate induction variable init: "
+            << indvar_init_result.status()
+            << " for while op: " << while_op->ToString();
+    return nullopt;
+  }
+
+  const Literal indvar_init = std::move(indvar_init_result).value();
+  optional<int64_t> indvar_init_val =
+      LiteralUtil::LiteralAsScalarInt64(indvar_init);
+  if (!indvar_init_val) {
+    VLOG(2) << "Pattern-match failed: induction variable init is not a "
+               "constant scalar representable as an int64_t: "
+            << indvar_init.ToString();
+    return nullopt;
+  }
+
+  // Check that `i` goes as `i += C` in the while body where C is a natural
+  // number.
+  auto* while_body = while_op->while_body();
+  auto* while_body_indvar_update =
+      while_body->root_instruction()->mutable_operand(induction_var_idx);
+  auto* while_body_indvar = NonConstantOperand(while_body_indvar_update);
+  if (while_body_indvar == nullptr ||
+      while_body_indvar !=
+          hlo_query::GetUniqueGteInstruction(
+              while_body->parameter_instruction(0), induction_var_idx)) {
+    VLOG(2) << "Pattern-match failed: update of induction variable is not in "
+               "the form of op(gte, constant): "
+            << while_body_indvar_update->ToString();
+    return std::nullopt;
+  }
+  HloInstruction* trip_count_increase_step_instr = nullptr;
+  int64_t trip_count_step = 0;
+  if (!Match(while_body_indvar_update,
+             m::AddAnyOrder(m::Op().Is(while_body_indvar),
+                            m::Constant(&trip_count_increase_step_instr)))) {
+    if (trip_count_increase_step_instr == nullptr) {
+      VLOG(2) << "Pattern-match failed: induction variable is not getting "
+                 "updated by an add operation: "
+              << while_body_indvar_update->ToString();
+      return nullopt;
+    }
+    if (!trip_count_increase_step_instr->IsConstant() ||
+        !ShapeUtil::IsEffectiveScalar(
+            trip_count_increase_step_instr->shape())) {
+      VLOG(2) << "Pattern-match failed: induction variable is not getting "
+                 "incremented by constant: "
+              << while_body_indvar_update->ToString();
+      return nullopt;
+    }
+    if (!LiteralUtil::LiteralAsScalarInt64(
+             trip_count_increase_step_instr->literal())
+             .has_value()) {
+      VLOG(2)
+          << "Pattern-match failed: trip count step is not an integral type: "
+          << trip_count_increase_step_instr->shape().ToString();
+      return nullopt;
+    }
+    VLOG(2) << "Pattern-match for trip count step failed: "
+            << trip_count_increase_step_instr->ToString();
+  }
+
+  trip_count_step = LiteralUtil::LiteralAsScalarInt64(
+                        trip_count_increase_step_instr->literal())
+                        .value();
+  if (trip_count_step <= 0) {
+    VLOG(2) << "Pattern-match failed: trip count step is not a natural number: "
+            << trip_count_step;
+    return nullopt;
+  }
+  // Check that we do op(i, N) or op(N, i) as the while condition.  Capture the
+  // value N. N can either be a constant or a GTE that points to a known value.
+  auto* while_cond = while_op->while_condition();
+  auto* while_cond_root = while_cond->root_instruction();
+
+  auto* while_cond_indvar = hlo_query::GetUniqueGteInstruction(
+      while_cond->parameter_instruction(0), induction_var_idx);
+
+  if (while_cond_indvar == nullptr) {
+    VLOG(2) << "Pattern-match failed: while condition is not supported.";
+    return std::nullopt;
+  }
+  HloInstruction* while_cond_bound = nullptr;
+  if (!Match(while_cond_root,
+             m::Op().WithBinaryOperandsAnyOrder(m::Op().Is(while_cond_indvar),
+                                                m::Op(&while_cond_bound)))) {
+    VLOG(2) << "Pattern-match failed: while condition is not of the form "
+               "op(i, N) or op(N, i).";
+    return nullopt;
+  }
+
+  // Check if while_cond_bound is a GTE of a known value or a constant.
+  optional<int64_t> while_cond_bound_val = std::nullopt;
+  if (while_cond_bound->IsConstant()) {
+    while_cond_bound_val =
+        LiteralUtil::LiteralAsScalarInt64(while_cond_bound->literal());
+  } else {
+    if (while_cond_bound->opcode() != HloOpcode::kGetTupleElement) {
+      VLOG(2) << "Pattern-match failed: while condition bound is not a "
+                 "constant or a get-tuple-element.";
+      return std::nullopt;
+    }
+    int64_t cond_bound_tuple_idx = while_cond_bound->tuple_index();
+    auto it =
+        known_values.find(while_op->operand(0)->operand(cond_bound_tuple_idx));
+    if (it == known_values.end()) {
+      VLOG(2) << "Pattern-match failed: while condition bound is not a "
+                 "constant or a get-tuple-element.";
+      return std::nullopt;
+    }
+    if (it->second.IsSingleValue()) {
+      while_cond_bound_val = it->second.GetSingleSignedValue();
+    }
+  }
+
+  if (!while_cond_bound_val) {
+    VLOG(2) << "Pattern-match failed: while condition induction variable is "
+               "not a constant scalar representable as an int64_t.";
+    return nullopt;
+  }
+
+  // If the while loop condition does not support equality, then we need to
+  // deduct one from the bound.
+  bool while_cond_bound_supports_equality;
+  if (Match(while_cond_root,
+            m::Op().WithComparisonDirection(ComparisonDirection::kLt)) ||
+      Match(while_cond_root,
+            m::Op().WithComparisonDirection(ComparisonDirection::kGt))) {
+    while_cond_bound_supports_equality = false;
+  } else if (Match(while_cond_root,
+                   m::Op().WithComparisonDirection(ComparisonDirection::kLe)) ||
+             Match(while_cond_root,
+                   m::Op().WithComparisonDirection(ComparisonDirection::kGe))) {
+    while_cond_bound_supports_equality = true;
+  } else {
+    VLOG(2) << "Pattern-match failed: while condition comparison is not "
+               "LT, GT, LE, or GE.";
+    return nullopt;
+  }
+  if (!while_cond_bound_supports_equality) {
+    while_cond_bound_val.value()--;
+  }
+
+  // We also need to round the bound down so that the difference between bound
+  // and init_value is a multiple of the step size.
+  // We want to round down the expression
+  // (while_cond_bound_val.value() - indvar_init_val.value()) to a multiple of
+  // trip_count_step by adjusting the bound value. We need to be careful not to
+  // run into overflows.
+  int64_t bound_value_remainder =
+      while_cond_bound_val.value() % trip_count_step;
+  int64_t init_value_remainder = indvar_init_val.value() % trip_count_step;
+  int64_t remainder =
+      (bound_value_remainder - init_value_remainder) % trip_count_step;
+  if (remainder < 0) {
+    remainder += trip_count_step;
+  }
+  while_cond_bound_val.value() -= remainder;
+
+  const int64_t init_bitwidth =
+      primitive_util::BitWidth(indvar_init.shape().element_type());
+  const bool init_is_signed =
+      primitive_util::IsSignedIntegralType(indvar_init.shape().element_type());
+
+  const int64_t bound_bitwidth =
+      primitive_util::BitWidth(while_cond_bound->shape().element_type());
+  const bool bound_is_signed = primitive_util::IsSignedIntegralType(
+      while_cond_bound->shape().element_type());
+
+  return Range{ConstantValue::Get(indvar_init_val.value(), init_bitwidth,
+                                  /*is_signed=*/init_is_signed),
+               ConstantValue::Get(while_cond_bound_val.value(), bound_bitwidth,
+                                  /*is_signed=*/bound_is_signed),
+               ConstantValue::Get(trip_count_step, /*bitwidth=*/64,
+                                  /*is_signed=*/true),
+               /*is_linear=*/true};
+}
+
+// NOLINTBEGIN(clang-diagnostic-pre-c++20-compat)
+optional<int64_t> MatchTrivialLoopInductionStep(const HloInstruction* while_op,
+                                                int64_t indvar_tuple_idx) {
+  // Check that `i` goes as `i += k` in the while body where k is a natural
+  // number.
+  auto* while_body = while_op->while_body();
+  auto* while_body_indvar_update =
+      const_cast<HloInstruction*>(TraceThroughCopyAndGteTupleChain(
+          while_body->root_instruction()->mutable_operand(indvar_tuple_idx)));
+  auto* while_body_indvar = NonConstantOperand(while_body_indvar_update);
+  if (while_body_indvar == nullptr ||
+      TraceThroughCopyAndGteTupleChain(while_body_indvar) !=
+          hlo_query::GetUniqueGteInstruction(
+              while_body->parameter_instruction(0), indvar_tuple_idx)) {
+    return std::nullopt;
+  }
+  HloInstruction* trip_count_increase_step_instr = nullptr;
+  if (!Match(while_body_indvar_update,
+             m::AddAnyOrder(m::Op().Is(while_body_indvar),
+                            m::Constant(&trip_count_increase_step_instr)))) {
+    if (trip_count_increase_step_instr == nullptr) {
+      VLOG(2) << "Pattern-match failed: induction variable is not getting "
+                 "updated by an add operation: "
+              << while_body_indvar_update->ToString();
+      return nullopt;
+    }
+    if (!trip_count_increase_step_instr->IsConstant() ||
+        !ShapeUtil::IsEffectiveScalar(
+            trip_count_increase_step_instr->shape())) {
+      VLOG(2) << "Pattern-match failed: induction variable is not getting "
+                 "incremented by constant: "
+              << while_body_indvar_update->ToString();
+      return nullopt;
+    }
+    VLOG(2) << "Pattern-match for trip count step failed: "
+            << trip_count_increase_step_instr->ToString();
+  }
+
+  optional<int64_t> trip_count_step = LiteralUtil::LiteralAsScalarInt64(
+      trip_count_increase_step_instr->literal());
+  if (!trip_count_step.has_value()) {
+    VLOG(2) << "Pattern-match failed: trip count step is not an integral type: "
+            << trip_count_increase_step_instr->shape().ToString();
+    return nullopt;
+  }
+  if (*trip_count_step <= 0) {
+    VLOG(2) << "Pattern-match failed: trip count step is not a natural number: "
+            << *trip_count_step;
+    return nullopt;
+  }
+  return trip_count_step;
+}
+
+optional<int64_t> MatchTrivialLoopTripCount(const HloInstruction* while_op,
+                                            int64_t indvar_tuple_idx,
+                                            const Literal& indvar_init) {
+  // First, find the scalar constant init that `i` is initialized to.
+  optional<int64_t> indvar_init_val =
+      LiteralUtil::LiteralAsScalarInt64(indvar_init);
+  if (!indvar_init_val) {
+    VLOG(2) << "Pattern-match failed: induction variable init is not a "
+               "constant scalar representable as an int64_t: "
+            << indvar_init.ToString();
+    return nullopt;
+  }
+  // NOLINTEND(clang-diagnostic-pre-c++20-compat)
+
+  optional<int64_t> step =
+      MatchTrivialLoopInductionStep(while_op, indvar_tuple_idx);
+  if (!step) {
+    return nullopt;
+  }
+  const int64_t trip_count_step = *step;
+  // Check that we do op(i, N) or op(N, i) as the while condition.  Capture the
+  // value N.
+  auto* while_cond = while_op->while_condition();
+  auto* while_cond_root = while_cond->root_instruction();
+  auto* while_cond_indvar = NonConstantOperand(while_cond_root);
+  if (while_cond_indvar == nullptr ||
+      while_cond_indvar !=
+          hlo_query::GetUniqueGteInstruction(
+              while_cond->parameter_instruction(0), indvar_tuple_idx)) {
+    return std::nullopt;
+  }
+  HloInstruction* while_cond_bound = nullptr;
+  if (!Match(while_cond_root,
+             m::Op().WithBinaryOperandsAnyOrder(
+                 m::Op().Is(while_cond_indvar),
+                 m::ConstantEffectiveScalar(&while_cond_bound)))) {
+    VLOG(2) << "Pattern-match failed: while condition is not of the form "
+               "op(i, N) or op(N, i).";
+    return nullopt;
+  }
+  // Note: If this succeeds, the constant `N` is representable as an int64_t --
+  // that is, if it's an XLA U64, it fits within an int64_t.
+  optional<int64_t> while_cond_bound_val =
+      LiteralUtil::LiteralAsScalarInt64(while_cond_bound->literal());
+  if (!while_cond_bound_val) {
+    VLOG(2) << "Pattern-match failed: while condition induction variable is "
+               "not a constant scalar representable as an int64_t.";
+    return nullopt;
+  }
+
+  // Handle `i = init; i < N; i+=k`.
+  if (Match(while_cond_root,
+            m::Op()
+                .WithComparisonDirection(ComparisonDirection::kLt)
+                .WithOperand(0, m::Op().Is(while_cond_indvar)))) {
+    VLOG(2) << "Pattern-match succeeded: loop condition is i < N: "
+            << while_cond_root->ToString();
+    if (*while_cond_bound_val <= *indvar_init_val) {
+      return 0;
+    }
+    optional<int64_t> trips =
+        CheckedSubtract(*while_cond_bound_val, *indvar_init_val);
+    if (!trips) {
+      VLOG(2) << "Pattern-match failed: Trip count exceeds INT64_MAX.";
+      return nullopt;
+    }
+    return (*trips - 1) / trip_count_step + 1;
+  }
+
+  // Handle `i = init; i <= N; i+=k`.
+  if (Match(while_cond_root,
+            m::Op()
+                .WithComparisonDirection(ComparisonDirection::kLe)
+                .WithOperand(0, m::Op().Is(while_cond_indvar)))) {
+    VLOG(2) << "Pattern-match succeeded: loop condition is i <= N: "
+            << while_cond_root->ToString();
+    if (*while_cond_bound_val < *indvar_init_val) {
+      return 0;
+    }
+    optional<int64_t> trips =
+        CheckedSubtract(*while_cond_bound_val, *indvar_init_val);
+    if (!trips) {
+      VLOG(2) << "Pattern-match failed: Trip count exceeds INT64_MAX";
+      return nullopt;
+    }
+    trips = CheckedAdd(*trips / trip_count_step, 1);
+    if (!trips) {
+      VLOG(2) << "Pattern-match failed: Trip count exceeds INT64_MAX";
+      return nullopt;
+    }
+    return *trips;
+  }
+
+  VLOG(2) << "Pattern-match failed: while condition follows unknown pattern: "
+          << while_cond_root->ToString();
+  return nullopt;
+}
+
+optional<int64_t> ComputeWhileLoopTripCount(const HloInstruction* while_op,
+                                            int64_t max_brute_force_iters) {
+  VLOG(2) << "Getting trip count for loop " << while_op->ToString();
+
+  // The loop's induction variable is found at
+  //
+  //   get-tuple-elem(comp->parameter_instruction(0), *indvar_tuple_idx),
+  //
+  // where comp is while_op->while_body() or while_op->while_condition().
+  optional<int64_t> indvar_tuple_idx = GetLoopInductionVarTupleIdx(while_op);
+  if (!indvar_tuple_idx) {
+    return nullopt;
+  }
+
+  // Now that we know the index of the induction variable, we can we can try to
+  // compute how many times the loop executes.  Start by computing the induction
+  // variable's initial value.
+  absl::StatusOr<Literal> indvar_init_result =
+      EvaluateIndvarInit(while_op, *indvar_tuple_idx);
+  VLOG(2) << "indvar_init_result: " << indvar_init_result.status();
+  if (!indvar_init_result.ok()) {
+    VLOG(2) << "Couldn't evaluate induction variable init, "
+            << indvar_init_result.status() << ", "
+            << while_op->operand(0)->operand(*indvar_tuple_idx)->ToString();
+    return nullopt;
+  }
+  Literal indvar_iter_val = std::move(indvar_init_result).value();
+
+  // First, try to pattern-match.
+  if (auto trip_count = MatchTrivialLoopTripCount(while_op, *indvar_tuple_idx,
+                                                  indvar_iter_val)) {
+    return trip_count;
+  }
+
+  // If our pattern-match failed, try brute-forcing the loop trip count.
+  auto* while_body = while_op->while_body();
+  auto* while_body_indvar_update =
+      while_body->root_instruction()->operand(*indvar_tuple_idx);
+  auto* while_body_indvar = NonConstantOperand(while_body_indvar_update);
+  if (while_body_indvar == nullptr ||
+      while_body_indvar !=
+          hlo_query::GetUniqueGteInstruction(
+              while_body->parameter_instruction(0), *indvar_tuple_idx)) {
+    return std::nullopt;
+  }
+
+  auto* while_cond = while_op->while_condition();
+  auto* while_cond_root = while_cond->root_instruction();
+  auto* while_cond_indvar = NonConstantOperand(while_cond_root);
+  if (while_cond_indvar == nullptr ||
+      while_cond_indvar !=
+          hlo_query::GetUniqueGteInstruction(
+              while_cond->parameter_instruction(0), *indvar_tuple_idx)) {
+    return std::nullopt;
+  }
+
+  HloEvaluator evaluator(/*max_loop_iterations=*/0);
+  for (int64_t trip_count = 0; trip_count != max_brute_force_iters + 1;
+       ++trip_count) {
+    absl::StatusOr<Literal> result = evaluator.Evaluate(
+        while_cond_root, {}, false, {{while_cond_indvar, &indvar_iter_val}});
+    if (!result.ok()) {
+      VLOG(2) << "Couldn't evaluate while cond: " << result.status();
+      return nullopt;
+    }
+    if (result.value().data<bool>() == absl::Span<const bool>{false}) {
+      VLOG(2) << "Loop has static trip count of " << trip_count;
+      return trip_count;
+    }
+
+    // Calculate the value of the induction variable after one iteration of the
+    // loop, and check whether the while condition is true with this new value.
+    absl::StatusOr<Literal> indvar_next_result =
+        evaluator.Evaluate(while_body_indvar_update, {}, false,
+                           {{while_body_indvar, &indvar_iter_val}});
+    if (!indvar_next_result.ok()) {
+      VLOG(2) << "Couldn't evaluate induction variable update: "
+              << indvar_next_result.status();
+      return nullopt;
+    }
+    indvar_iter_val = std::move(indvar_next_result).value();
+  }
+
+  VLOG(2) << "Loop has unknown trip count.";
+  return nullopt;
+}
+
+// If the only user of this instruction is a get-tuple-element, return that
+// get-tuple-element, otherwise return null. If this runs before CSE/DCE, we may
+// get a false negative if there are several copies of the same GTE, or there
+// are unused GTEs, but we can live with this.
+static HloInstruction* GetOnlyGTE(HloInstruction* inst) {
+  if (inst->user_count() != 1) {
+    return nullptr;
+  }
+
+  HloInstruction* user = inst->users().back();
+  if (user->opcode() != HloOpcode::kGetTupleElement) {
+    return nullptr;
+  }
+  return user;
+}
+
+optional<int64_t> ComputeWhileLoopTripCountUpperBound(
+    const HloInstruction* while_op) {
+  // If we know the exact trip count, it's also the upper bound.
+  auto exact_trip_count = ComputeWhileLoopTripCount(while_op);
+  if (exact_trip_count) {
+    VLOG(2) << "Loop has exact trip count.";
+    return exact_trip_count;
+  }
+
+  // There is one more case we know how to handle. If the loop condition only
+  // looks at one element of the tuple, and the loop body sets this element to a
+  // constant, there are two options:
+  // 1) Evaluating the condition on this constant returns true. In this case,
+  // the loop either executes 0 times, or is an infinite loop, depending on the
+  // init value.
+  // 2) Evaluating the condition on this constant returns false. In this case,
+  // the loop executes 0 or 1 times, depending on the init value. This means
+  // that, regardless of the init value, the upper bound on the trip count is 1.
+
+  // Check whether the condition depends on a single parameter, and find out
+  // which.
+  auto* while_cond = while_op->while_condition();
+  auto* while_cond_param = while_cond->parameter_instruction(0);
+  auto* cond_gte = GetOnlyGTE(while_cond_param);
+  if (!cond_gte) {
+    VLOG(2) << "Induction variable not found in loop condition: "
+            << while_cond->root_instruction()->ToString();
+    return nullopt;
+  }
+
+  // Now check whether this gets set to a constant by the while body.
+  auto* while_body = while_op->while_body();
+  auto* while_body_root = while_body->root_instruction();
+  if (while_body_root->opcode() != HloOpcode::kTuple) {
+    VLOG(3) << "While body's root is not a tuple instruction: "
+            << while_body_root->ToString();
+    return nullopt;
+  }
+
+  int64_t indvar_index = cond_gte->tuple_index();
+  auto* while_body_indvar = while_body_root->operand(indvar_index);
+  if (while_body_indvar->opcode() != HloOpcode::kConstant) {
+    VLOG(3) << "While body does not set the IV to a constant: "
+            << while_body_indvar->ToString();
+    return nullopt;
+  }
+  // Create a new while cond computation accessing only the single parameter
+  // extracted by the GTE above to avoid excessive memory allocation for the
+  // evaluator.
+  absl::flat_hash_map<const HloInstruction*, std::unique_ptr<HloInstruction>>
+      replacements;
+  auto new_param = HloInstruction::CreateParameter(
+      0, ShapeUtil::MakeTupleShape({cond_gte->shape()}), "temp");
+  replacements[cond_gte] =
+      HloInstruction::CreateGetTupleElement(new_param.get(), 0);
+  replacements[while_cond_param] = std::move(new_param);
+  auto new_module = std::make_unique<HloModule>("temp_mod", HloModuleConfig{});
+  auto* new_computation = new_module->AddEmbeddedComputation(
+      while_cond->CloneWithReplacements(&replacements));
+
+  // We have a constant. Evaluate the condition on this constant.
+  HloEvaluator evaluator(/*max_loop_iterations=*/0);
+  Literal fake_input = Literal::CreateFromShape(
+      new_computation->parameter_instruction(0)->shape());
+  CHECK_OK(fake_input.CopyFrom(while_body_indvar->literal(),
+                               /*dest_shape_index=*/{0},
+                               /*src_shape_index=*/{}));
+  absl::StatusOr<Literal> eval_result =
+      evaluator.Evaluate(*new_computation, {std::move(fake_input)});
+
+  if (!eval_result.ok()) {
+    VLOG(2) << "Couldn't evaluate while loop condition.";
+    return nullopt;
+  }
+
+  Literal cond_result_pred = std::move(eval_result.value());
+  CHECK(Shape::Equal().IgnoreLayout()(cond_result_pred.shape(),
+                                      ShapeUtil::MakeShape(PRED, {})));
+
+  // Per the explanation above, if the evaluated condition returns false, the
+  // loop executes at most once.
+  bool cond_returns_true = cond_result_pred.GetFirstElement<bool>();
+  if (!cond_returns_true) {
+    VLOG(2) << "Upper bound on the trip count is 1";
+    return 1;
+  }
+
+  VLOG(2) << "Loop has no known upper bound on the trip count.";
+  return nullopt;
+}
+
+}  // namespace xla

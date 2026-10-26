@@ -1,4 +1,4 @@
-/* Copyright 2020 The TensorFlow Authors All Rights Reserved.
+/* Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,41 +16,53 @@ limitations under the License.
 
 #include <string>
 
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "tsl/platform/platform.h"
-#include "tsl/platform/test.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/tsl/platform/test_benchmark.h"
 
 namespace tsl {
 namespace profiler {
 namespace {
 
 TEST(TraceMeEncodeTest, NoArgTest) {
-  EXPECT_EQ(TraceMeEncode("Hello!", {}), "Hello!");
+  std::string encoded = TraceMeEncode("Hello!", {});
+  EXPECT_TRUE(absl::StrContains(encoded, "Hello!#_src="));
+  EXPECT_TRUE(absl::StrContains(encoded, "traceme_encode_test.cc"));
 }
 
 TEST(TraceMeEncodeTest, OneArgTest) {
-  EXPECT_EQ(TraceMeEncode("Hello", {{"context", "World"}}),
-            "Hello#context=World#");
+  std::string encoded = TraceMeEncode("Hello", {{"context", "World"}});
+  EXPECT_TRUE(absl::StrContains(encoded, "Hello#context=World,_src="));
+  EXPECT_TRUE(absl::StrContains(encoded, "traceme_encode_test.cc"));
 }
 
 TEST(TraceMeEncodeTest, TwoArgsTest) {
-  EXPECT_EQ(TraceMeEncode("Hello", {{"context", "World"}, {"request_id", 42}}),
-            "Hello#context=World,request_id=42#");
+  std::string encoded =
+      TraceMeEncode("Hello", {{"context", "World"}, {"request_id", 42}});
+  EXPECT_TRUE(
+      absl::StrContains(encoded, "Hello#context=World,request_id=42,_src="));
+  EXPECT_TRUE(absl::StrContains(encoded, "traceme_encode_test.cc"));
 }
 
 TEST(TraceMeEncodeTest, ThreeArgsTest) {
-  EXPECT_EQ(TraceMeEncode("Hello", {{"context", "World"},
-                                    {"request_id", 42},
-                                    {"addr", absl::Hex(0xdeadbeef)}}),
-            "Hello#context=World,request_id=42,addr=deadbeef#");
+  std::string encoded =
+      TraceMeEncode("Hello", {{"context", "World"},
+                              {"request_id", 42},
+                              {"addr", absl::Hex(0xdeadbeef)}});
+  EXPECT_TRUE(absl::StrContains(
+      encoded, "Hello#context=World,request_id=42,addr=deadbeef,_src="));
+  EXPECT_TRUE(absl::StrContains(encoded, "traceme_encode_test.cc"));
 }
 
 #if !defined(PLATFORM_WINDOWS)
 TEST(TraceMeEncodeTest, TemporaryStringTest) {
-  EXPECT_EQ(TraceMeEncode("Hello", {{std::string("context"),
-                                     absl::StrCat("World:", 2020)}}),
-            "Hello#context=World:2020#");
+  std::string encoded =
+      TraceMeEncode("Hello", {{"context", absl::StrCat("World:", 2020)}});
+  EXPECT_TRUE(absl::StrContains(encoded, "Hello#context=World:2020,_src="));
+  EXPECT_TRUE(absl::StrContains(encoded, "traceme_encode_test.cc"));
 }
 #endif
 
@@ -69,17 +81,44 @@ struct Point {
 };
 
 TEST(TraceMeEncodeTest, AbslStringifyTest) {
-  EXPECT_EQ(TraceMeEncode("Plot", {{"point", Point{10, 20}}}),
-            "Plot#point=(10, 20)#");
+  std::string encoded = TraceMeEncode("Plot", {{"point", Point{10, 20}}});
+  EXPECT_TRUE(absl::StrContains(encoded, "Plot#point=(10, 20),_src="));
+  EXPECT_TRUE(absl::StrContains(encoded, "traceme_encode_test.cc"));
 }
 
 #endif
 
-TEST(TraceMeEncodeTest, NoNameTest) {
-  EXPECT_EQ(TraceMeEncode({{"context", "World"}, {"request_id", 42}}),
-            "#context=World,request_id=42#");
+TEST(TraceMeEncodeTest, AppendLineNumberTest) {
+  std::string encoded =
+      TraceMeEncode("Hello", {{"context", "World"}}, TRACEME_FILE_AND_LINE);
+  EXPECT_TRUE(absl::StrContains(encoded, "traceme_encode_test.cc:"));
+}
+
+TEST(TraceMeEncodeTest, EmptySourceLocTest) {
+  std::string encoded = TraceMeEncode("Hello", {{"context", "World"}}, "");
+  EXPECT_EQ(encoded, "Hello#context=World#");
 }
 
 }  // namespace
+
+void BM_TraceMeEncode(::testing::benchmark::State& state) {
+  for (auto s : state) {
+    TraceMeEncode(
+        "MyTestEvent",
+        {{"Lorem ipsum dolor sit amet", 1},
+         {"consectetur adipiscing elit", 2},
+         {"sed do eiusmod tempor incididunt", 3.52},
+         {"ut labore et dolore magna aliqua", "Ut enim ad minim veniam"},
+         {"quis nostrud exercitation ullamco", "laboris nisi ut aliquip ex"},
+         {"ea commodo consequat.", 11111.1111},
+         {"Duis aute", 1234567890},
+         {"irure dolor in", " reprehenderit in voluptate"},
+         {"velit esse cillum dolore", "eu fugiat nulla pariatur."},
+         {"Excepteur sint", "occaecat cupidatat non proident, sunt in"},
+         {"culpa qui officia", "deserunt mollit anim id est laborum."}});
+  }
+}
+BENCHMARK(BM_TraceMeEncode);
+
 }  // namespace profiler
 }  // namespace tsl

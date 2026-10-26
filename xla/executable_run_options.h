@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ limitations under the License.
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/statusor.h"
@@ -32,8 +33,8 @@ namespace stream_executor {
 class Stream;
 class Event;
 class Platform;
-class DeviceMemoryAllocator;
-class DeviceMemoryBase;
+class DeviceAddressAllocator;
+class DeviceAddressBase;
 }  // namespace stream_executor
 
 namespace Eigen {
@@ -47,13 +48,24 @@ class AsyncValueRef;
 
 namespace xla {
 
+class CustomOptions;
+
+class CliqueKey;
 class DeviceAssignment;
 class ExecutionProfile;
 class Shape;
 
+namespace cpu {
+class CpuExecutableRunOptions;
+}  // namespace cpu
+
 namespace gpu {
 class GpuExecutableRunOptions;
 }  // namespace gpu
+
+namespace ffi {
+class ExecutionContext;
+}  // namespace ffi
 
 // A unique identifier for a particular "logical execution" of an XLA model.
 //
@@ -64,7 +76,8 @@ class GpuExecutableRunOptions;
 class RunId {
  public:
   // Creates a new, unique RunId.
-  RunId();
+  static RunId CreateUniqueId();
+
   explicit RunId(int64_t value) : data_(value) {}
 
   RunId(const RunId&) = default;
@@ -76,6 +89,11 @@ class RunId {
   template <typename H>
   friend H AbslHashValue(H h, const RunId& id) {
     return H::combine(std::move(h), id.data_);
+  }
+
+  template <typename Sink>
+  friend void AbslStringify(Sink sink, const RunId& id) {
+    return sink.Append(std::to_string(id.data_));
   }
 
  private:
@@ -95,20 +113,20 @@ using ThenExecuteFunction =
 // recorded on a `stream` once the send operation is completed and data was
 // copied from the `src` memory. `frontend_attrs` contains frontend specific
 // attributes for the send.
-using SendDeviceMemoryFunction =
-    std::function<absl::StatusOr<tsl::AsyncValueRef<stream_executor::Event>>(
+using SendDeviceMemoryFunction = std::function<
+    absl::StatusOr<tsl::AsyncValueRef<std::unique_ptr<stream_executor::Event>>>(
         int64_t channel_id, stream_executor::Stream* stream, const Shape& shape,
-        const stream_executor::DeviceMemoryBase& src,
+        const stream_executor::DeviceAddressBase& src,
         const absl::flat_hash_map<std::string, std::string>& frontend_attrs)>;
 
 // Callback for receiving device buffer from a channel. Returned event will be
 // recorded on a `stream` once the recv operation is completed and data was
 // copied into the `dst` memory. `frontend_attrs` contains frontend specific
 // attributes for the receive.
-using RecvDeviceMemoryFunction =
-    std::function<absl::StatusOr<tsl::AsyncValueRef<stream_executor::Event>>(
+using RecvDeviceMemoryFunction = std::function<
+    absl::StatusOr<tsl::AsyncValueRef<std::unique_ptr<stream_executor::Event>>>(
         int64_t channel_id, stream_executor::Stream* stream, const Shape& shape,
-        stream_executor::DeviceMemoryBase* dst,
+        stream_executor::DeviceAddressBase* dst,
         const absl::flat_hash_map<std::string, std::string>& frontend_attrs)>;
 
 // Class containing options for running a LocalExecutable.
@@ -116,16 +134,27 @@ class ExecutableRunOptions {
  public:
   // Specifies the allocator to use during execution.
   ExecutableRunOptions& set_allocator(
-      stream_executor::DeviceMemoryAllocator* allocator);
-  stream_executor::DeviceMemoryAllocator* allocator() const;
+      stream_executor::DeviceAddressAllocator* allocator);
+  stream_executor::DeviceAddressAllocator* allocator() const;
 
   // If set, this is the device to run the computation on. Valid device_ordinal
-  // values are: 0 to # of devices - 1. These values are identical to the device
-  // ordinal values used by StreamExecutor. The device must be of the same type
-  // as the executable was compiled for. A value of -1 indicates this option has
-  // not been set.
+  // values are: 0 to # of devices - 1. These are the logical device ordinals,
+  // since multiple logical devices could reside on the same physical device,
+  // e.g., virtual GPUs. If there is only one logical device on a physical
+  // device, then these values are identical to the device ordinal values used
+  // by StreamExecutor. The device must be of the same type as the executable
+  // was compiled for. A value of -1 indicates this option has not been set.
   ExecutableRunOptions& set_device_ordinal(int device_ordinal);
   int device_ordinal() const;
+
+  // If set, this is the physical device to run the computation on. These values
+  // are identical to the device ordinal values used by StreamExecutor. The
+  // device must be of the same type as the executable was compiled for. A value
+  // of -1 indicates this option has not been set, in which case the physical
+  // device ordinal is the same as the logical device ordinal.
+  ExecutableRunOptions& set_physical_device_ordinal(
+      int physical_device_ordinal);
+  int physical_device_ordinal() const;
 
   // If set, this is the stream to run the computation on. The platform of the
   // stream must match the platform the executable was built for.  A value of
@@ -210,15 +239,45 @@ class ExecutableRunOptions {
     return recv_device_memory_function_;
   }
 
+  // CPU-backend specific options. These are kept out-of-line to avoid bloating
+  // the size of this dependency for CPU-only AOT builds.
+  ExecutableRunOptions& set_cpu_executable_run_options(
+      const cpu::CpuExecutableRunOptions* cpu_executable_run_options);
+  const cpu::CpuExecutableRunOptions* cpu_executable_run_options() const;
+
   // GPU-backend specific options. These are kept out-of-line to avoid bloating
   // the size of this dependency for CPU-only AOT builds.
   ExecutableRunOptions& set_gpu_executable_run_options(
       const gpu::GpuExecutableRunOptions* gpu_executable_run_options);
   const gpu::GpuExecutableRunOptions* gpu_executable_run_options() const;
 
+  // Per-execution custom options.
+  ExecutableRunOptions& set_custom_options(
+      std::shared_ptr<const CustomOptions> custom_options);
+  const CustomOptions* custom_options() const;
+
+  // XLA FFI specific execution context that allows to pass auxiliary data to
+  // FFI handlers. It's a caller responsibility to ensure that the XLA FFI
+  // execution context stays alive while the executable is running.
+  ExecutableRunOptions& set_ffi_execution_context(
+      const ffi::ExecutionContext* ffi_execution_context);
+  const ffi::ExecutionContext* ffi_execution_context() const;
+
+  // This indicates how many local devices are used by the execution.
+  // Valid values are any value greater than 0.
+  // 0 means unset.
+  ExecutableRunOptions& set_local_device_count(int local_device_count);
+  int local_device_count() const;
+
+  ExecutableRunOptions& set_clique_keys(
+      std::vector<std::unique_ptr<CliqueKey>>* clique_keys);
+  std::vector<std::unique_ptr<CliqueKey>>* clique_keys() const;
+
  private:
-  stream_executor::DeviceMemoryAllocator* allocator_ = nullptr;
+  stream_executor::DeviceAddressAllocator* allocator_ = nullptr;
   int device_ordinal_ = -1;
+  int local_device_count_ = 0;
+  int physical_device_ordinal_ = -1;
   const DeviceAssignment* device_assignment_ = nullptr;
   stream_executor::Stream* stream_ = nullptr;
   const Eigen::ThreadPoolDevice* intra_op_thread_pool_ = nullptr;
@@ -230,8 +289,12 @@ class ExecutableRunOptions {
   ThenExecuteFunction* then_execute_function_ = nullptr;
   SendDeviceMemoryFunction* send_device_memory_function_ = nullptr;
   RecvDeviceMemoryFunction* recv_device_memory_function_ = nullptr;
-  RunId run_id_;
+  RunId run_id_{0};
+  const cpu::CpuExecutableRunOptions* cpu_executable_run_options_ = nullptr;
   const gpu::GpuExecutableRunOptions* gpu_executable_run_options_ = nullptr;
+  std::shared_ptr<const CustomOptions> custom_options_;
+  const ffi::ExecutionContext* ffi_execution_context_ = nullptr;
+  std::vector<std::unique_ptr<CliqueKey>>* clique_keys_ = nullptr;
 };
 
 }  // namespace xla

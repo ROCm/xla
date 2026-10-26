@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,21 +16,21 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_CUDA_CUDA_BLAS_UTILS_H_
 #define XLA_STREAM_EXECUTOR_CUDA_CUDA_BLAS_UTILS_H_
 
-#include <string>
-
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "third_party/gpus/cuda/include/cublas_v2.h"
-#include "xla/stream_executor/blas.h"
+#include "third_party/gpus/cuda/include/library_types.h"
 #include "tsl/platform/errors.h"
-#include "tsl/platform/status.h"
+#include "xla/stream_executor/blas.h"
 
 #define SE_CUBLAS_RETURN_IF_ERROR(expr) \
-  TF_RETURN_IF_ERROR(::stream_executor::cuda::ToStatus(expr, #expr))
+  ABSL_RETURN_IF_ERROR(::stream_executor::cuda::ToStatus(expr, #expr))
 
 namespace stream_executor {
 namespace cuda {
 
 const char* ToString(cublasStatus_t status);
-tsl::Status ToStatus(cublasStatus_t status, const char* prefix = "cublasLt");
+absl::Status ToStatus(cublasStatus_t status, const char* prefix = "cublasLt");
 cudaDataType_t AsCudaDataType(blas::DataType type);
 cublasComputeType_t AsCublasComputeType(blas::ComputationType type);
 cublasOperation_t AsCublasOperation(blas::Transpose trans);

@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,8 +18,8 @@ limitations under the License.
 
 #include <string>
 
-#include "mlir/Pass/Pass.h"  // from @llvm-project
-#include "mlir/Pass/PassInstrumentation.h"  // from @llvm-project
+#include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassInstrumentation.h"
 #include "xla/mlir/tools/mlir_replay/public/compiler_trace.pb.h"
 
 namespace mlir {
@@ -28,18 +28,12 @@ namespace interpreter {
 // Instrumentation that logs the state of the IR after each pass.
 class MlirCompilerTraceInstrumentation : public PassInstrumentation {
  public:
-  explicit MlirCompilerTraceInstrumentation(const std::string& dirname,
-                                            int unique_id,
-                                            const std::string& module_name)
-      : dirname_(dirname), unique_id_(unique_id), module_name_(module_name) {}
-  ~MlirCompilerTraceInstrumentation() override;
+  explicit MlirCompilerTraceInstrumentation(MlirCompilationTrace& trace)
+      : trace_(trace) {}
   void runAfterPass(Pass* pass, Operation* op) override;
 
  private:
-  MlirCompilationTrace trace_;
-  std::string dirname_;
-  int unique_id_;
-  std::string module_name_;
+  MlirCompilationTrace& trace_;
 };
 
 }  // namespace interpreter

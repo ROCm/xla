@@ -1,4 +1,4 @@
-/* Copyright 2019 The TensorFlow Authors All Rights Reserved.
+/* Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,7 +18,10 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "tsl/platform/mutex.h"
+#include "absl/base/const_init.h"
+#include "absl/log/log.h"
+#include "absl/synchronization/mutex.h"
+#include "tsl/profiler/lib/multi_pass_profiler_controller.h"
 #include "tsl/profiler/lib/profiler_controller.h"
 #include "tsl/profiler/lib/profiler_interface.h"
 #include "tsl/profiler/protobuf/profiler_options.pb.h"
@@ -27,24 +30,35 @@ namespace tsl {
 namespace profiler {
 namespace {
 
-mutex mu(LINKER_INITIALIZED);
+absl::Mutex mu(absl::kConstInit);
+absl::Mutex mu_multipass(absl::kConstInit);
 
 std::vector<ProfilerFactory>* GetFactories() {
   static auto factories = new std::vector<ProfilerFactory>();
   return factories;
 }
 
+std::vector<MultiPassProfilerFactory>* GetMultiPassFactories() {
+  static auto factories = new std::vector<MultiPassProfilerFactory>();
+  return factories;
+}
+
 }  // namespace
 
 void RegisterProfilerFactory(ProfilerFactory factory) {
-  mutex_lock lock(mu);
+  absl::MutexLock lock(mu);
   GetFactories()->push_back(std::move(factory));
+}
+
+void RegisterMultiPassProfilerFactory(MultiPassProfilerFactory factory) {
+  absl::MutexLock lock(mu_multipass);
+  GetMultiPassFactories()->push_back(std::move(factory));
 }
 
 std::vector<std::unique_ptr<profiler::ProfilerInterface>> CreateProfilers(
     const tensorflow::ProfileOptions& options) {
   std::vector<std::unique_ptr<profiler::ProfilerInterface>> result;
-  mutex_lock lock(mu);
+  absl::MutexLock lock(mu);
   for (const auto& factory : *GetFactories()) {
     auto profiler = factory(options);
     // A factory might return nullptr based on options.
@@ -55,9 +69,35 @@ std::vector<std::unique_ptr<profiler::ProfilerInterface>> CreateProfilers(
   return result;
 }
 
+std::vector<std::unique_ptr<MultiPassProfilerInterface>>
+CreateMultiPassProfilers(const tensorflow::ProfileOptions& options) {
+  std::vector<std::unique_ptr<MultiPassProfilerInterface>> multipass_profilers;
+  {
+    absl::MutexLock lock(mu_multipass);
+    VLOG(3) << "Creating MultiPassProfilers() with "
+            << GetMultiPassFactories()->size() << " factories.";
+    for (const auto& factory : *GetMultiPassFactories()) {
+      auto profiler = factory(options);
+      if (profiler == nullptr) {
+        continue;
+      }
+      multipass_profilers.emplace_back(
+          std::make_unique<MultiPassProfilerController>(std::move(profiler)));
+    }
+    VLOG(3) << "Created " << multipass_profilers.size()
+            << " multipass profilers.";
+  }
+  return multipass_profilers;
+}
+
 void ClearRegisteredProfilersForTest() {
-  mutex_lock lock(mu);
+  absl::MutexLock lock(mu);
   GetFactories()->clear();
+}
+
+void ClearRegisteredMultiPassProfilersForTest() {
+  absl::MutexLock lock(mu_multipass);
+  GetMultiPassFactories()->clear();
 }
 
 }  // namespace profiler

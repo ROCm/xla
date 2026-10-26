@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ limitations under the License.
 #include <memory>
 #include <utility>
 
-#include "xla/service/hlo_pass_interface.h"
+#include "xla/hlo/pass/hlo_pass_interface.h"
 
 namespace xla {
 
@@ -51,7 +51,7 @@ class ChangeOpDataType : public HloModulePass {
       absl::Span<std::pair<PrimitiveType, PrimitiveType> const> from_to_types,
       HloPredicate op_matcher, HloCloner cloner = nullptr)
       : op_matcher_(op_matcher), cloner_(cloner) {
-    for (const std::pair<PrimitiveType, PrimitiveType>& pair : from_to_types) {
+    for (const auto& pair : from_to_types) {
       to_type_map_[pair.first] = pair.second;
     }
   }
@@ -63,7 +63,9 @@ class ChangeOpDataType : public HloModulePass {
   }
 
   absl::string_view name() const override { return "change-op-data-type"; }
-  StatusOr<bool> Run(
+
+ protected:
+  absl::StatusOr<bool> RunImpl(
       HloModule* module,
       const absl::flat_hash_set<absl::string_view>& execution_threads) override;
 

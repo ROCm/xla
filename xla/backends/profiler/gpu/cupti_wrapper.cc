@@ -1,4 +1,4 @@
-/* Copyright 2019 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2019 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,10 +15,117 @@ limitations under the License.
 
 #include "xla/backends/profiler/gpu/cupti_wrapper.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <type_traits>
+#include <utility>
+
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_activity.h"
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_callbacks.h"
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_profiler_target.h"
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_result.h"
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_target.h"
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_version.h"
+#include "third_party/gpus/cuda/include/cuda.h"
+#include "xla/backends/profiler/gpu/cupti_interface.h"
+
+#if CUPTI_API_VERSION >= 24
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_pmsampling.h"
+#include "third_party/gpus/cuda/extras/CUPTI/include/cupti_profiler_host.h"
+#endif
 
 namespace xla {
 namespace profiler {
+
+// CUPTI V2 symbols are optional across CUDA installations. Weak declarations
+// let the wrapper detect missing symbols at runtime and fall back to V1.
+namespace {
+
+#ifdef CUpti_ActivityConfig_STRUCT_SIZE
+using CuptiActivityConfigAbi = CUpti_ActivityConfig;
+using CuptiBuffersCallbackRequestFuncV2Abi =
+    CUpti_BuffersCallbackRequestFunc_v2;
+using CuptiBuffersCallbackCompleteFuncV2Abi =
+    CUpti_BuffersCallbackCompleteFunc_v2;
+#else
+using CuptiActivityConfigAbi = void;
+using CuptiBuffersCallbackRequestFuncV2Abi = CuptiBuffersCallbackRequestFuncV2;
+using CuptiBuffersCallbackCompleteFuncV2Abi =
+    CuptiBuffersCallbackCompleteFuncV2;
+#endif
+
+#ifdef CUpti_SubscriberParams_STRUCT_SIZE
+using CuptiSubscriberParamsAbi = CUpti_SubscriberParams;
+constexpr size_t kCuptiSubscriberParamsStructSize =
+    CUpti_SubscriberParams_STRUCT_SIZE;
+#else
+struct CuptiSubscriberParamsAbi {
+  size_t structSize;
+  const char* subscriberName;
+  char* oldSubscriberName;
+  size_t oldSubscriberSize;
+  uint8_t allowMultipleSubscribers;
+  uint8_t padding[7];
+};
+constexpr size_t kCuptiSubscriberParamsStructSize =
+    sizeof(CuptiSubscriberParamsAbi);
+#endif
+
+// The multi-subscriber path requires
+// CUpti_SubscriberParams::allowMultipleSubscribers. Detect the field so older
+// CUPTI headers fall back to the V1 path.
+template <typename Params, typename = void>
+struct HasAllowMultipleSubscribers : std::false_type {};
+
+template <typename Params>
+struct HasAllowMultipleSubscribers<
+    Params,
+    std::void_t<decltype(std::declval<Params&>().allowMultipleSubscribers)>>
+    : std::true_type {};
+
+template <typename Params>
+bool SetAllowMultipleSubscribersIfSupported(Params* params) {
+  if constexpr (HasAllowMultipleSubscribers<Params>::value) {
+    params->allowMultipleSubscribers = 1;
+    return true;
+  }
+  return false;
+}
+
+// Keep optional V2 paths buildable with older CUPTI headers; weak symbol checks
+// still decide runtime availability.
+constexpr CUpti_ActivityAttribute kCuptiActivityAttrPerThreadActivityBuffer =
+    static_cast<CUpti_ActivityAttribute>(9);
+constexpr CUpti_ActivityAttribute kCuptiActivityAttrThreadIdType =
+    static_cast<CUpti_ActivityAttribute>(21);
+constexpr int kCuptiErrorMultipleSubscribersNotSupported = 39;
+
+}  // namespace
+
+extern "C" {
+[[gnu::weak]] CUptiResult cuptiActivityRegisterCallbacks_v2(
+    CUpti_SubscriberHandle subscriber,
+    CuptiBuffersCallbackRequestFuncV2Abi func_buffer_requested,
+    CuptiBuffersCallbackCompleteFuncV2Abi func_buffer_completed);
+[[gnu::weak]] CUptiResult cuptiActivityEnable_v2(
+    CUpti_SubscriberHandle subscriber, CUpti_ActivityKind kind,
+    CuptiActivityConfigAbi* cfg);
+[[gnu::weak]] CUptiResult cuptiActivityDisable_v2(
+    CUpti_SubscriberHandle subscriber, CUpti_ActivityKind kind,
+    CuptiActivityConfigAbi* cfg);
+[[gnu::weak]] CUptiResult cuptiActivityGetNextRecord_v2(
+    CUpti_SubscriberHandle subscriber, uint8_t* buffer,
+    size_t valid_buffer_size_bytes, CUpti_Activity** record);
+[[gnu::weak]] CUptiResult cuptiActivitySetAttribute_v2(
+    CUpti_SubscriberHandle subscriber, CUpti_ActivityAttribute attr,
+    size_t* valueSize, void* value);
+[[gnu::weak]] CUptiResult cuptiGetTimestamp_v2(
+    CUpti_SubscriberHandle subscriber, uint64_t* timestamp);
+[[gnu::weak]] CUptiResult cuptiSubscribe_v2(CUpti_SubscriberHandle* subscriber,
+                                            CUpti_CallbackFunc callback,
+                                            void* userdata,
+                                            CuptiSubscriberParamsAbi* params);
+}  // extern "C"
 
 CUptiResult CuptiWrapper::ActivityDisable(CUpti_ActivityKind kind) {
   return cuptiActivityDisable(kind);
@@ -36,6 +143,16 @@ CUptiResult CuptiWrapper::ActivityGetNextRecord(uint8_t* buffer,
                                                 size_t valid_buffer_size_bytes,
                                                 CUpti_Activity** record) {
   return cuptiActivityGetNextRecord(buffer, valid_buffer_size_bytes, record);
+}
+
+CUptiResult CuptiWrapper::ActivityGetNextRecordV2(
+    CUpti_SubscriberHandle subscriber, uint8_t* buffer,
+    size_t valid_buffer_size_bytes, CUpti_Activity** record) {
+  if (cuptiActivityGetNextRecord_v2 == nullptr) {
+    return CUPTI_ERROR_NOT_SUPPORTED;
+  }
+  return cuptiActivityGetNextRecord_v2(subscriber, buffer,
+                                       valid_buffer_size_bytes, record);
 }
 
 CUptiResult CuptiWrapper::ActivityGetNumDroppedRecords(CUcontext context,
@@ -56,13 +173,102 @@ CUptiResult CuptiWrapper::ActivityRegisterCallbacks(
                                         func_buffer_completed);
 }
 
-CUptiResult CuptiWrapper::GetDeviceId(CUcontext context,
-                                      tsl::uint32* deviceId) {
+CUptiResult CuptiWrapper::ActivityRegisterCallbacksV2(
+    CUpti_SubscriberHandle subscriber,
+    CuptiBuffersCallbackRequestFuncV2 func_buffer_requested,
+    CuptiBuffersCallbackCompleteFuncV2 func_buffer_completed) {
+  if (cuptiActivityRegisterCallbacks_v2 == nullptr) {
+    return CUPTI_ERROR_NOT_SUPPORTED;
+  }
+  return cuptiActivityRegisterCallbacks_v2(
+      subscriber,
+      reinterpret_cast<CuptiBuffersCallbackRequestFuncV2Abi>(
+          func_buffer_requested),
+      reinterpret_cast<CuptiBuffersCallbackCompleteFuncV2Abi>(
+          func_buffer_completed));
+}
+
+CUptiResult CuptiWrapper::ActivityEnableV2(CUpti_SubscriberHandle subscriber,
+                                           CUpti_ActivityKind kind, void* cfg) {
+  if (cuptiActivityEnable_v2 == nullptr) {
+    return CUPTI_ERROR_NOT_SUPPORTED;
+  }
+  return cuptiActivityEnable_v2(subscriber, kind,
+                                reinterpret_cast<CuptiActivityConfigAbi*>(cfg));
+}
+
+CUptiResult CuptiWrapper::ActivityDisableV2(CUpti_SubscriberHandle subscriber,
+                                            CUpti_ActivityKind kind,
+                                            void* cfg) {
+  if (cuptiActivityDisable_v2 == nullptr) {
+    return CUPTI_ERROR_NOT_SUPPORTED;
+  }
+  return cuptiActivityDisable_v2(
+      subscriber, kind, reinterpret_cast<CuptiActivityConfigAbi*>(cfg));
+}
+
+CUptiResult CuptiWrapper::ActivitySetAttributeV2(
+    CUpti_SubscriberHandle subscriber, CUpti_ActivityAttribute attr,
+    size_t* valueSize, void* value) {
+  if (cuptiActivitySetAttribute_v2 == nullptr) {
+    return CUPTI_ERROR_NOT_SUPPORTED;
+  }
+  return cuptiActivitySetAttribute_v2(subscriber, attr, valueSize, value);
+}
+
+CUptiResult CuptiWrapper::ActivityUseSystemThreadIdV2(
+    CUpti_SubscriberHandle subscriber) {
+  CUpti_ActivityThreadIdType thread_id_type =
+      CUPTI_ACTIVITY_THREAD_ID_TYPE_SYSTEM;
+  size_t size = sizeof(thread_id_type);
+  return ActivitySetAttributeV2(subscriber, kCuptiActivityAttrThreadIdType,
+                                &size, &thread_id_type);
+}
+
+CUptiResult CuptiWrapper::ActivityUsePerThreadBufferV2() {
+  uint8_t use_per_thread = 1;
+  size_t size = sizeof(use_per_thread);
+  return ActivitySetAttributeV2(
+      /*subscriber=*/nullptr, kCuptiActivityAttrPerThreadActivityBuffer, &size,
+      &use_per_thread);
+}
+
+CUptiResult CuptiWrapper::ActivityUsePerThreadBuffer() {
+#if CUDA_VERSION >= 12030
+  uint8_t use_per_thread_activity_buffer = 1;
+  size_t value_size = sizeof(use_per_thread_activity_buffer);
+  return cuptiActivitySetAttribute(
+      CUPTI_ACTIVITY_ATTR_PER_THREAD_ACTIVITY_BUFFER, &value_size,
+      &use_per_thread_activity_buffer);
+#else
+  // cuptiActivitySetAttribute returns CUPTI_ERROR_INVALID_PARAMETER if invoked
+  // with an invalid first parameter.
+  return CUPTI_ERROR_INVALID_PARAMETER;
+#endif
+}
+
+CUptiResult CuptiWrapper::SetActivityFlushPeriod(uint32_t period_ms) {
+#if CUDA_VERSION >= 11010
+  return cuptiActivityFlushPeriod(period_ms);
+#else
+  return CUPTI_ERROR_NOT_SUPPORTED;
+#endif
+}
+
+CUptiResult CuptiWrapper::GetDeviceId(CUcontext context, uint32_t* deviceId) {
   return cuptiGetDeviceId(context, deviceId);
 }
 
 CUptiResult CuptiWrapper::GetTimestamp(uint64_t* timestamp) {
   return cuptiGetTimestamp(timestamp);
+}
+
+CUptiResult CuptiWrapper::GetTimestampV2(CUpti_SubscriberHandle subscriber,
+                                         uint64_t* timestamp) {
+  if (cuptiGetTimestamp_v2 == nullptr) {
+    return CUPTI_ERROR_NOT_SUPPORTED;
+  }
+  return cuptiGetTimestamp_v2(subscriber, timestamp);
 }
 
 CUptiResult CuptiWrapper::Finalize() { return cuptiFinalize(); }
@@ -86,147 +292,30 @@ CUptiResult CuptiWrapper::Subscribe(CUpti_SubscriberHandle* subscriber,
   return cuptiSubscribe(subscriber, callback, userdata);
 }
 
+CUptiResult CuptiWrapper::SubscribeV2(CUpti_SubscriberHandle* subscriber,
+                                      CUpti_CallbackFunc callback,
+                                      void* userdata) {
+  // Check both required V2 setup entry points before creating a subscriber.
+  // The tracer handles errors reported after subscription.
+  if (cuptiSubscribe_v2 == nullptr || cuptiGetTimestamp_v2 == nullptr) {
+    return CUPTI_ERROR_NOT_SUPPORTED;
+  }
+  CuptiSubscriberParamsAbi params = {};
+  params.structSize = kCuptiSubscriberParamsStructSize;
+  params.subscriberName = "XlaGpuTracer";
+  if (!SetAllowMultipleSubscribersIfSupported(&params)) {
+    return CUPTI_ERROR_NOT_SUPPORTED;
+  }
+  CUptiResult result =
+      cuptiSubscribe_v2(subscriber, callback, userdata, &params);
+  if (static_cast<int>(result) == kCuptiErrorMultipleSubscribersNotSupported) {
+    return CUPTI_ERROR_NOT_SUPPORTED;
+  }
+  return result;
+}
+
 CUptiResult CuptiWrapper::Unsubscribe(CUpti_SubscriberHandle subscriber) {
   return cuptiUnsubscribe(subscriber);
-}
-
-CUptiResult CuptiWrapper::DeviceEnumEventDomains(
-    CUdevice device, size_t* array_size_bytes,
-    CUpti_EventDomainID* domain_array) {
-  return cuptiDeviceEnumEventDomains(device, array_size_bytes, domain_array);
-}
-
-CUptiResult CuptiWrapper::DeviceGetEventDomainAttribute(
-    CUdevice device, CUpti_EventDomainID event_domain,
-    CUpti_EventDomainAttribute attrib, size_t* value_size, void* value) {
-  return cuptiDeviceGetEventDomainAttribute(device, event_domain, attrib,
-                                            value_size, value);
-}
-
-CUptiResult CuptiWrapper::DisableKernelReplayMode(CUcontext context) {
-  return cuptiDisableKernelReplayMode(context);
-}
-
-CUptiResult CuptiWrapper::EnableKernelReplayMode(CUcontext context) {
-  return cuptiEnableKernelReplayMode(context);
-}
-
-CUptiResult CuptiWrapper::DeviceGetNumEventDomains(CUdevice device,
-                                                   uint32_t* num_domains) {
-  return cuptiDeviceGetNumEventDomains(device, num_domains);
-}
-
-CUptiResult CuptiWrapper::EventDomainEnumEvents(
-    CUpti_EventDomainID event_domain, size_t* array_size_bytes,
-    CUpti_EventID* event_array) {
-  return cuptiEventDomainEnumEvents(event_domain, array_size_bytes,
-                                    event_array);
-}
-
-CUptiResult CuptiWrapper::EventDomainGetNumEvents(
-    CUpti_EventDomainID event_domain, uint32_t* num_events) {
-  return cuptiEventDomainGetNumEvents(event_domain, num_events);
-}
-
-CUptiResult CuptiWrapper::EventGetAttribute(CUpti_EventID event,
-                                            CUpti_EventAttribute attrib,
-                                            size_t* value_size, void* value) {
-  return cuptiEventGetAttribute(event, attrib, value_size, value);
-}
-
-CUptiResult CuptiWrapper::EventGetIdFromName(CUdevice device,
-                                             const char* event_name,
-                                             CUpti_EventID* event) {
-  return cuptiEventGetIdFromName(device, event_name, event);
-}
-
-CUptiResult CuptiWrapper::EventGroupDisable(CUpti_EventGroup event_group) {
-  return cuptiEventGroupDisable(event_group);
-}
-
-CUptiResult CuptiWrapper::EventGroupEnable(CUpti_EventGroup event_group) {
-  return cuptiEventGroupEnable(event_group);
-}
-
-CUptiResult CuptiWrapper::EventGroupGetAttribute(
-    CUpti_EventGroup event_group, CUpti_EventGroupAttribute attrib,
-    size_t* value_size, void* value) {
-  return cuptiEventGroupGetAttribute(event_group, attrib, value_size, value);
-}
-
-CUptiResult CuptiWrapper::EventGroupReadEvent(
-    CUpti_EventGroup event_group, CUpti_ReadEventFlags flags,
-    CUpti_EventID event, size_t* event_value_buffer_size_bytes,
-    uint64_t* event_value_buffer) {
-  return cuptiEventGroupReadEvent(event_group, flags, event,
-                                  event_value_buffer_size_bytes,
-                                  event_value_buffer);
-}
-
-CUptiResult CuptiWrapper::EventGroupSetAttribute(
-    CUpti_EventGroup event_group, CUpti_EventGroupAttribute attrib,
-    size_t value_size, void* value) {
-  return cuptiEventGroupSetAttribute(event_group, attrib, value_size, value);
-}
-
-CUptiResult CuptiWrapper::EventGroupSetsCreate(
-    CUcontext context, size_t event_id_array_size_bytes,
-    CUpti_EventID* event_id_array, CUpti_EventGroupSets** event_group_passes) {
-  return cuptiEventGroupSetsCreate(context, event_id_array_size_bytes,
-                                   event_id_array, event_group_passes);
-}
-
-CUptiResult CuptiWrapper::EventGroupSetsDestroy(
-    CUpti_EventGroupSets* event_group_sets) {
-  return cuptiEventGroupSetsDestroy(event_group_sets);
-}
-
-// CUPTI metric API
-CUptiResult CuptiWrapper::DeviceEnumMetrics(CUdevice device,
-                                            size_t* arraySizeBytes,
-                                            CUpti_MetricID* metricArray) {
-  return cuptiDeviceEnumMetrics(device, arraySizeBytes, metricArray);
-}
-
-CUptiResult CuptiWrapper::DeviceGetNumMetrics(CUdevice device,
-                                              uint32_t* num_metrics) {
-  return cuptiDeviceGetNumMetrics(device, num_metrics);
-}
-
-CUptiResult CuptiWrapper::MetricGetIdFromName(CUdevice device,
-                                              const char* metric_name,
-                                              CUpti_MetricID* metric) {
-  return cuptiMetricGetIdFromName(device, metric_name, metric);
-}
-
-CUptiResult CuptiWrapper::MetricGetNumEvents(CUpti_MetricID metric,
-                                             uint32_t* num_events) {
-  return cuptiMetricGetNumEvents(metric, num_events);
-}
-
-CUptiResult CuptiWrapper::MetricEnumEvents(CUpti_MetricID metric,
-                                           size_t* event_id_array_size_bytes,
-                                           CUpti_EventID* event_id_array) {
-  return cuptiMetricEnumEvents(metric, event_id_array_size_bytes,
-                               event_id_array);
-}
-
-CUptiResult CuptiWrapper::MetricGetAttribute(CUpti_MetricID metric,
-                                             CUpti_MetricAttribute attrib,
-                                             size_t* value_size, void* value) {
-  return cuptiMetricGetAttribute(metric, attrib, value_size, value);
-}
-
-CUptiResult CuptiWrapper::MetricGetValue(CUdevice device, CUpti_MetricID metric,
-                                         size_t event_id_array_size_bytes,
-                                         CUpti_EventID* event_id_array,
-                                         size_t event_value_array_size_bytes,
-                                         uint64_t* event_value_array,
-                                         uint64_t time_duration,
-                                         CUpti_MetricValue* metric_value) {
-  return cuptiMetricGetValue(device, metric, event_id_array_size_bytes,
-                             event_id_array, event_value_array_size_bytes,
-                             event_value_array, time_duration, metric_value);
 }
 
 CUptiResult CuptiWrapper::GetResultString(CUptiResult result,
@@ -239,10 +328,508 @@ CUptiResult CuptiWrapper::GetContextId(CUcontext context,
   return cuptiGetContextId(context, context_id);
 }
 
+CUptiResult CuptiWrapper::GetGraphId(CUgraph graph, uint32_t* graph_id) {
+#if CUDA_VERSION >= 11010
+  return cuptiGetGraphId(graph, graph_id);
+#else
+  // Do not treat it as error if the interface is not available.
+  if (graph_id) *graph_id = 0;
+  return CUPTI_SUCCESS;
+#endif
+}
+
+CUptiResult CuptiWrapper::GetGraphNodeId(CUgraphNode node, uint64_t* nodeId) {
+#if CUDA_VERSION >= 11010
+  return cuptiGetGraphNodeId(node, nodeId);
+#else
+  // Do not treat it as error if the interface is not available.
+  return CUPTI_SUCCESS;
+#endif
+}
+
+CUptiResult CuptiWrapper::GetGraphExecId(CUgraphExec graph_exec,
+                                         uint32_t* graph_id) {
+  // TODO: (b/350105610), Using cuptiGetGraphExecId() for CUDA 12.3 and later
+  return GetGraphId(reinterpret_cast<CUgraph>(graph_exec), graph_id);
+}
+
+CUptiResult CuptiWrapper::SetThreadIdType(CUpti_ActivityThreadIdType type) {
+  return cuptiSetThreadIdType(type);
+}
+
 CUptiResult CuptiWrapper::GetStreamIdEx(CUcontext context, CUstream stream,
                                         uint8_t per_thread_stream,
                                         uint32_t* stream_id) {
   return cuptiGetStreamIdEx(context, stream, per_thread_stream, stream_id);
+}
+
+extern "C" {
+// Prototype for cuptiActivityEnableHWTrace if headers are not present.
+[[gnu::weak]] CUptiResult cuptiActivityEnableHWTrace(uint8_t enable);
+}  // extern "C"
+
+CUptiResult CuptiWrapper::ActivityEnableHWTrace(bool enable) {
+  return (cuptiActivityEnableHWTrace == nullptr)
+             ? CUPTI_ERROR_NOT_SUPPORTED
+             : cuptiActivityEnableHWTrace(enable ? 1 : 0);
+}
+
+// Prototypes for PM sampling and profiler host APIs if headers are not present
+extern "C" {
+[[gnu::weak]] CUptiResult cuptiProfilerHostInitialize(
+    CUpti_Profiler_Host_Initialize_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerHostDeinitialize(
+    CUpti_Profiler_Host_Deinitialize_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerHostGetSupportedChips(
+    CUpti_Profiler_Host_GetSupportedChips_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerHostGetBaseMetrics(
+    CUpti_Profiler_Host_GetBaseMetrics_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerHostGetSubMetrics(
+    CUpti_Profiler_Host_GetSubMetrics_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerHostGetMetricProperties(
+    CUpti_Profiler_Host_GetMetricProperties_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerHostGetRangeName(
+    CUpti_Profiler_Host_GetRangeName_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerHostEvaluateToGpuValues(
+    CUpti_Profiler_Host_EvaluateToGpuValues_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerHostConfigAddMetrics(
+    CUpti_Profiler_Host_ConfigAddMetrics_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerHostGetConfigImageSize(
+    CUpti_Profiler_Host_GetConfigImageSize_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerHostGetConfigImage(
+    CUpti_Profiler_Host_GetConfigImage_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerHostGetNumOfPasses(
+    CUpti_Profiler_Host_GetNumOfPasses_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerHostGetMaxNumHardwareMetricsPerPass(
+    CUpti_Profiler_Host_GetMaxNumHardwareMetricsPerPass_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerInitialize(
+    CUpti_Profiler_Initialize_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerDeInitialize(
+    CUpti_Profiler_DeInitialize_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerCounterDataImageCalculateSize(
+    CUpti_Profiler_CounterDataImage_CalculateSize_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerCounterDataImageInitialize(
+    CUpti_Profiler_CounterDataImage_Initialize_Params* params);
+[[gnu::weak]] CUptiResult
+cuptiProfilerCounterDataImageCalculateScratchBufferSize(
+    CUpti_Profiler_CounterDataImage_CalculateScratchBufferSize_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerCounterDataImageInitializeScratchBuffer(
+    CUpti_Profiler_CounterDataImage_InitializeScratchBuffer_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerBeginSession(
+    CUpti_Profiler_BeginSession_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerEndSession(
+    CUpti_Profiler_EndSession_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerSetConfig(
+    CUpti_Profiler_SetConfig_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerBeginPass(
+    CUpti_Profiler_BeginPass_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerEndPass(
+    CUpti_Profiler_EndPass_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerEnableProfiling(
+    CUpti_Profiler_EnableProfiling_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerDisableProfiling(
+    CUpti_Profiler_DisableProfiling_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerIsPassCollected(
+    CUpti_Profiler_IsPassCollected_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerFlushCounterData(
+    CUpti_Profiler_FlushCounterData_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerPushRange(
+    CUpti_Profiler_PushRange_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerPopRange(
+    CUpti_Profiler_PopRange_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerGetCounterAvailability(
+    CUpti_Profiler_GetCounterAvailability_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerDeviceSupported(
+    CUpti_Profiler_DeviceSupported_Params* params);
+[[gnu::weak]] CUptiResult cuptiProfilerUnsetConfig(
+    CUpti_Profiler_UnsetConfig_Params* params);
+
+[[gnu::weak]] CUptiResult cuptiPmSamplingSetConfig(
+    CUpti_PmSampling_SetConfig_Params* params);
+[[gnu::weak]] CUptiResult cuptiPmSamplingEnable(
+    CUpti_PmSampling_Enable_Params* params);
+[[gnu::weak]] CUptiResult cuptiPmSamplingDisable(
+    CUpti_PmSampling_Disable_Params* params);
+[[gnu::weak]] CUptiResult cuptiPmSamplingStart(
+    CUpti_PmSampling_Start_Params* params);
+[[gnu::weak]] CUptiResult cuptiPmSamplingStop(
+    CUpti_PmSampling_Stop_Params* params);
+[[gnu::weak]] CUptiResult cuptiPmSamplingDecodeData(
+    CUpti_PmSampling_DecodeData_Params* params);
+[[gnu::weak]] CUptiResult cuptiPmSamplingGetCounterAvailability(
+    CUpti_PmSampling_GetCounterAvailability_Params* params);
+[[gnu::weak]] CUptiResult cuptiPmSamplingGetCounterDataSize(
+    CUpti_PmSampling_GetCounterDataSize_Params* params);
+[[gnu::weak]] CUptiResult cuptiPmSamplingCounterDataImageInitialize(
+    CUpti_PmSampling_CounterDataImage_Initialize_Params* params);
+[[gnu::weak]] CUptiResult cuptiPmSamplingGetCounterDataInfo(
+    CUpti_PmSampling_GetCounterDataInfo_Params* params);
+[[gnu::weak]] CUptiResult cuptiPmSamplingCounterDataGetSampleInfo(
+    CUpti_PmSampling_CounterData_GetSampleInfo_Params* params);
+}
+
+// Profiler Host APIs
+CUptiResult CuptiWrapper::ProfilerHostInitialize(
+    CUpti_Profiler_Host_Initialize_Params* params) {
+  if (cuptiProfilerHostInitialize != nullptr) {
+    return cuptiProfilerHostInitialize(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerHostDeinitialize(
+    CUpti_Profiler_Host_Deinitialize_Params* params) {
+  if (cuptiProfilerHostDeinitialize != nullptr) {
+    return cuptiProfilerHostDeinitialize(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerHostGetSupportedChips(
+    CUpti_Profiler_Host_GetSupportedChips_Params* params) {
+  if (cuptiProfilerHostGetSupportedChips != nullptr) {
+    return cuptiProfilerHostGetSupportedChips(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerHostGetBaseMetrics(
+    CUpti_Profiler_Host_GetBaseMetrics_Params* params) {
+  if (cuptiProfilerHostGetBaseMetrics != nullptr) {
+    return cuptiProfilerHostGetBaseMetrics(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerHostGetSubMetrics(
+    CUpti_Profiler_Host_GetSubMetrics_Params* params) {
+  if (cuptiProfilerHostGetSubMetrics != nullptr) {
+    return cuptiProfilerHostGetSubMetrics(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerHostGetMetricProperties(
+    CUpti_Profiler_Host_GetMetricProperties_Params* params) {
+  if (cuptiProfilerHostGetMetricProperties != nullptr) {
+    return cuptiProfilerHostGetMetricProperties(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerHostGetRangeName(
+    CUpti_Profiler_Host_GetRangeName_Params* params) {
+  if (cuptiProfilerHostGetRangeName != nullptr) {
+    return cuptiProfilerHostGetRangeName(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerHostEvaluateToGpuValues(
+    CUpti_Profiler_Host_EvaluateToGpuValues_Params* params) {
+  if (cuptiProfilerHostEvaluateToGpuValues != nullptr) {
+    return cuptiProfilerHostEvaluateToGpuValues(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerHostConfigAddMetrics(
+    CUpti_Profiler_Host_ConfigAddMetrics_Params* params) {
+  if (cuptiProfilerHostConfigAddMetrics != nullptr) {
+    return cuptiProfilerHostConfigAddMetrics(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerHostGetConfigImageSize(
+    CUpti_Profiler_Host_GetConfigImageSize_Params* params) {
+  if (cuptiProfilerHostGetConfigImageSize != nullptr) {
+    return cuptiProfilerHostGetConfigImageSize(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerHostGetConfigImage(
+    CUpti_Profiler_Host_GetConfigImage_Params* params) {
+  if (cuptiProfilerHostGetConfigImage != nullptr) {
+    return cuptiProfilerHostGetConfigImage(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerHostGetNumOfPasses(
+    CUpti_Profiler_Host_GetNumOfPasses_Params* params) {
+  if (cuptiProfilerHostGetNumOfPasses != nullptr) {
+    return cuptiProfilerHostGetNumOfPasses(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerHostGetMaxNumHardwareMetricsPerPass(
+    CUpti_Profiler_Host_GetMaxNumHardwareMetricsPerPass_Params* params) {
+  if (cuptiProfilerHostGetMaxNumHardwareMetricsPerPass != nullptr) {
+    return cuptiProfilerHostGetMaxNumHardwareMetricsPerPass(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+// Profiler Target APIs
+CUptiResult CuptiWrapper::ProfilerInitialize(
+    CUpti_Profiler_Initialize_Params* params) {
+  if (cuptiProfilerInitialize != nullptr) {
+    return cuptiProfilerInitialize(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerDeInitialize(
+    CUpti_Profiler_DeInitialize_Params* params) {
+  if (cuptiProfilerDeInitialize != nullptr) {
+    return cuptiProfilerDeInitialize(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerCounterDataImageCalculateSize(
+    CUpti_Profiler_CounterDataImage_CalculateSize_Params* params) {
+  if (cuptiProfilerCounterDataImageCalculateSize != nullptr) {
+    return cuptiProfilerCounterDataImageCalculateSize(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerCounterDataImageInitialize(
+    CUpti_Profiler_CounterDataImage_Initialize_Params* params) {
+  if (cuptiProfilerCounterDataImageInitialize != nullptr) {
+    return cuptiProfilerCounterDataImageInitialize(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerCounterDataImageCalculateScratchBufferSize(
+    CUpti_Profiler_CounterDataImage_CalculateScratchBufferSize_Params* params) {
+  if (cuptiProfilerCounterDataImageCalculateScratchBufferSize != nullptr) {
+    return cuptiProfilerCounterDataImageCalculateScratchBufferSize(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerCounterDataImageInitializeScratchBuffer(
+    CUpti_Profiler_CounterDataImage_InitializeScratchBuffer_Params* params) {
+  if (cuptiProfilerCounterDataImageInitializeScratchBuffer != nullptr) {
+    return cuptiProfilerCounterDataImageInitializeScratchBuffer(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerBeginSession(
+    CUpti_Profiler_BeginSession_Params* params) {
+  if (cuptiProfilerBeginSession != nullptr) {
+    return cuptiProfilerBeginSession(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerEndSession(
+    CUpti_Profiler_EndSession_Params* params) {
+  if (cuptiProfilerEndSession != nullptr) {
+    return cuptiProfilerEndSession(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerSetConfig(
+    CUpti_Profiler_SetConfig_Params* params) {
+  if (cuptiProfilerSetConfig != nullptr) {
+    return cuptiProfilerSetConfig(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerUnsetConfig(
+    CUpti_Profiler_UnsetConfig_Params* params) {
+  if (cuptiProfilerUnsetConfig != nullptr) {
+    return cuptiProfilerUnsetConfig(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerBeginPass(
+    CUpti_Profiler_BeginPass_Params* params) {
+  if (cuptiProfilerBeginPass != nullptr) {
+    return cuptiProfilerBeginPass(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerEndPass(
+    CUpti_Profiler_EndPass_Params* params) {
+  if (cuptiProfilerEndPass != nullptr) {
+    return cuptiProfilerEndPass(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerEnableProfiling(
+    CUpti_Profiler_EnableProfiling_Params* params) {
+  if (cuptiProfilerEnableProfiling != nullptr) {
+    return cuptiProfilerEnableProfiling(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerDisableProfiling(
+    CUpti_Profiler_DisableProfiling_Params* params) {
+  if (cuptiProfilerDisableProfiling != nullptr) {
+    return cuptiProfilerDisableProfiling(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerIsPassCollected(
+    CUpti_Profiler_IsPassCollected_Params* params) {
+  if (cuptiProfilerIsPassCollected != nullptr) {
+    return cuptiProfilerIsPassCollected(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerFlushCounterData(
+    CUpti_Profiler_FlushCounterData_Params* params) {
+  if (cuptiProfilerFlushCounterData != nullptr) {
+    return cuptiProfilerFlushCounterData(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerPushRange(
+    CUpti_Profiler_PushRange_Params* params) {
+  if (cuptiProfilerPushRange != nullptr) {
+    return cuptiProfilerPushRange(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerPopRange(
+    CUpti_Profiler_PopRange_Params* params) {
+  if (cuptiProfilerPopRange != nullptr) {
+    return cuptiProfilerPopRange(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerGetCounterAvailability(
+    CUpti_Profiler_GetCounterAvailability_Params* params) {
+  if (cuptiProfilerGetCounterAvailability != nullptr) {
+    return cuptiProfilerGetCounterAvailability(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::ProfilerDeviceSupported(
+    CUpti_Profiler_DeviceSupported_Params* params) {
+  if (cuptiProfilerDeviceSupported != nullptr) {
+    return cuptiProfilerDeviceSupported(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::PmSamplingSetConfig(
+    CUpti_PmSampling_SetConfig_Params* params) {
+  if (cuptiPmSamplingSetConfig != nullptr) {
+    return cuptiPmSamplingSetConfig(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::PmSamplingEnable(
+    CUpti_PmSampling_Enable_Params* params) {
+  if (cuptiPmSamplingEnable != nullptr) {
+    return cuptiPmSamplingEnable(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::PmSamplingDisable(
+    CUpti_PmSampling_Disable_Params* params) {
+  if (cuptiPmSamplingDisable != nullptr) {
+    return cuptiPmSamplingDisable(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::PmSamplingStart(
+    CUpti_PmSampling_Start_Params* params) {
+  if (cuptiPmSamplingStart != nullptr) {
+    return cuptiPmSamplingStart(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::PmSamplingStop(CUpti_PmSampling_Stop_Params* params) {
+  if (cuptiPmSamplingStop != nullptr) {
+    return cuptiPmSamplingStop(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::PmSamplingDecodeData(
+    CUpti_PmSampling_DecodeData_Params* params) {
+  if (cuptiPmSamplingDecodeData != nullptr) {
+    return cuptiPmSamplingDecodeData(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::PmSamplingGetCounterAvailability(
+    CUpti_PmSampling_GetCounterAvailability_Params* params) {
+  if (cuptiPmSamplingGetCounterAvailability != nullptr) {
+    return cuptiPmSamplingGetCounterAvailability(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::PmSamplingGetCounterDataSize(
+    CUpti_PmSampling_GetCounterDataSize_Params* params) {
+  if (cuptiPmSamplingGetCounterDataSize != nullptr) {
+    return cuptiPmSamplingGetCounterDataSize(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::PmSamplingCounterDataImageInitialize(
+    CUpti_PmSampling_CounterDataImage_Initialize_Params* params) {
+  if (cuptiPmSamplingCounterDataImageInitialize != nullptr) {
+    return cuptiPmSamplingCounterDataImageInitialize(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::PmSamplingGetCounterDataInfo(
+    CUpti_PmSampling_GetCounterDataInfo_Params* params) {
+  if (cuptiPmSamplingGetCounterDataInfo != nullptr) {
+    return cuptiPmSamplingGetCounterDataInfo(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+CUptiResult CuptiWrapper::PmSamplingCounterDataGetSampleInfo(
+    CUpti_PmSampling_CounterData_GetSampleInfo_Params* params) {
+  if (cuptiPmSamplingCounterDataGetSampleInfo != nullptr) {
+    return cuptiPmSamplingCounterDataGetSampleInfo(params);
+  }
+  return CUPTI_ERROR_NOT_SUPPORTED;
+}
+
+// Restore disabled warnings (required because CUPTI declares non-weak functions
+// which then cause -Wtautological-pointer-compare to fail in the above code)
+#if CUPTI_PM_SAMPLING_SUPPORTED
+#pragma clang diagnostic pop
+#endif
+
+CUptiResult CuptiWrapper::DeviceGetChipName(
+    CUpti_Device_GetChipName_Params* params) {
+  return cuptiDeviceGetChipName(params);
 }
 
 }  // namespace profiler

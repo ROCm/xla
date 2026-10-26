@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ limitations under the License.
 #include <optional>
 
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 
 namespace xla {
 
@@ -82,14 +83,14 @@ class IrBuilderMixin {
   }
 
   llvm::CallInst* Call(llvm::FunctionCallee func_callee,
-                       llvm::ArrayRef<llvm::Value*> args = std::nullopt,
+                       llvm::ArrayRef<llvm::Value*> args = {},
                        const llvm::Twine& name = "",
                        llvm::MDNode* fp_math_tag = nullptr) {
     return mixin_builder()->CreateCall(func_callee, args, name, fp_math_tag);
   }
 
   llvm::CallInst* Call(llvm::FunctionType* func_type, llvm::Value* callee,
-                       llvm::ArrayRef<llvm::Value*> args = std::nullopt,
+                       llvm::ArrayRef<llvm::Value*> args = {},
                        const llvm::Twine& name = "",
                        llvm::MDNode* fp_math_tag = nullptr) {
     return mixin_builder()->CreateCall(func_type, callee, args, name,
@@ -97,13 +98,19 @@ class IrBuilderMixin {
   }
 
   template <class... Args>
-  llvm::BranchInst* CondBr(Args&&... args) {
+  llvm::CondBrInst* CondBr(Args&&... args) {
     return mixin_builder()->CreateCondBr(std::forward<Args>(args)...);
   }
 
   template <class... Args>
   llvm::Value* ConstInBoundsGEP1_32(Args&&... args) {
     return mixin_builder()->CreateConstInBoundsGEP1_32(
+        std::forward<Args>(args)...);
+  }
+
+  template <class... Args>
+  llvm::Value* ConstInBoundsGEP1_64(Args&&... args) {
+    return mixin_builder()->CreateConstInBoundsGEP1_64(
         std::forward<Args>(args)...);
   }
 
@@ -436,7 +443,7 @@ class IrBuilderMixin {
   }
 
  private:
-  llvm::IRBuilder<>* mixin_builder() {
+  llvm::IRBuilderBase* mixin_builder() {
     return static_cast<Derived*>(this)->builder();
   }
 };

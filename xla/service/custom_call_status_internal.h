@@ -1,4 +1,4 @@
-/* Copyright 2021 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2021 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ limitations under the License.
 #define XLA_SERVICE_CUSTOM_CALL_STATUS_INTERNAL_H_
 
 #include <optional>
+#include <string>
 
 #include "absl/strings/string_view.h"
 #include "xla/service/custom_call_status.h"
@@ -36,4 +37,4 @@ std::optional<absl::string_view> CustomCallStatusGetMessage(
 
 }  // namespace xla
 
-#endif  // XLA_SERVICE_CUSTOM_CALL_INTERNAL_STATUS_H_
+#endif  // XLA_SERVICE_CUSTOM_CALL_STATUS_INTERNAL_H_

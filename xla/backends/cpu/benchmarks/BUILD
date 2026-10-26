@@ -1,0 +1,886 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load("//xla:xla.default.bzl", "xla_cc_test")
+load(
+    "//xla/backends/cpu/benchmarks:hlo_test_suite.bzl",
+    "hlo_test_suite",
+)
+load(
+    "//xla/backends/cpu/benchmarks/hlo:hlo_files.bzl",
+    "MEMORY_INTENSIVE_HLO_FILES",
+    "REGULAR_HLO_FILES",
+    "SLOW_HLO_FILES",
+)
+load(
+    "//xla/backends/cpu/benchmarks/huge_hlo:hlo_files.bzl",
+    "HUGE_HLO_FILES",
+)
+load("//xla/tsl:tsl.bzl", "if_google", "tsl_copts")
+load("//xla/tsl/mkl:graph.bzl", "onednn_cc_test")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
+
+package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
+    default_visibility = [":friends"],
+    licenses = ["notice"],
+)
+
+package_group(
+    name = "friends",
+    includes = [
+        "//xla:friends",
+    ],
+)
+
+cc_library(
+    name = "aot_benchmark_helper",
+    testonly = 1,
+    srcs = ["aot_benchmark_helper.cc"],
+    hdrs = ["aot_benchmark_helper.h"],
+    deps = [
+        "//xla/service:compiler",
+        "//xla/service/cpu:cpu_aot_compilation_result",
+        "//xla/service/cpu:test_header_helper",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "aot_benchmark_helper_test",
+    srcs = ["aot_benchmark_helper_test.cc"],
+    deps = [
+        ":aot_benchmark_helper",
+        "//xla/service:compiler",
+        "//xla/service/cpu:cpu_aot_compilation_result",
+        "//xla/service/cpu:test_header_helper",
+        "//xla/tsl/platform:test",
+        "//xla/tsl/platform:test_main",
+    ],
+)
+
+cc_library(
+    name = "hlo_benchmark_runner",
+    testonly = 1,
+    srcs = ["hlo_benchmark_runner.cc"],
+    hdrs = ["hlo_benchmark_runner.h"],
+    deps = [
+        "//xla:debug_options_flags",
+        "//xla:literal",
+        "//xla:shape_util",
+        "//xla:util",
+        "//xla/hlo/builder:xla_computation",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/parser:hlo_parser",
+        "//xla/hlo/testlib:verified_hlo_module",
+        "//xla/pjrt:pjrt_client",
+        "//xla/pjrt:pjrt_executable",
+        "//xla/pjrt/cpu:cpu_client",
+        "//xla/pjrt/plugin/xla_cpu:cpu_client_options",
+        "//xla/pjrt/plugin/xla_cpu:xla_cpu_pjrt_client",
+        "//xla/service:compiler",
+        "//xla/service:hlo_module_config",
+        "//xla/service:hlo_proto_cc",
+        "//xla/tests:test_utils",
+        "//xla/tools:hlo_module_loader",
+        "//xla/tools:run_hlo_module_proto_cc",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test_benchmark",
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:span",
+        "@tsl//tsl/platform:casts",
+        "@tsl//tsl/platform:path",
+    ],
+)
+
+xla_cc_test(
+    name = "aliasing_benchmark_test",
+    srcs = ["aliasing_benchmark_test.cc"],
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:test",
+        "//xla/tsl/platform:test_benchmark",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings:string_view",
+        "@tsl//tsl/platform:stacktrace_handler",
+    ],
+)
+
+xla_cc_test(
+    name = "dag_execution_benchmark_test",
+    srcs = ["dag_execution_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "dot_benchmark_test",
+    srcs = ["dot_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":aot_benchmark_helper",
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/backends/cpu:ynn_support",
+        "//xla/hlo/builder:xla_builder",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/parser:hlo_parser",
+        "//xla/service:hlo_proto_cc",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test",
+        "//xla/tsl/platform:test_benchmark",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@com_google_benchmark//:benchmark",
+        "@tsl//tsl/platform:stacktrace_handler",
+    ],
+)
+
+xla_cc_test(
+    name = "reduce_benchmark_test",
+    srcs = ["reduce_benchmark_test.cc"],
+    deps = [
+        ":aot_benchmark_helper",
+        ":hlo_benchmark_runner",
+        "//xla:literal",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/parser:hlo_parser",
+        "//xla/service:hlo_proto_cc",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@com_google_benchmark//:benchmark",
+        "@tsl//tsl/platform:path",
+        "@tsl//tsl/platform:stacktrace_handler",
+    ],
+)
+
+xla_cc_test(
+    name = "norm_benchmark_test",
+    srcs = ["norm_benchmark_test.cc"],
+    deps = [
+        ":aot_benchmark_helper",
+        ":hlo_benchmark_runner",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/parser:hlo_parser",
+        "//xla/service:hlo_proto_cc",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@com_google_benchmark//:benchmark",
+        "@tsl//tsl/platform:stacktrace_handler",
+    ],
+)
+
+xla_cc_test(
+    name = "dynamic_update_slice_benchmark_test",
+    srcs = ["dynamic_update_slice_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "elementwise_benchmark_test",
+    srcs = ["elementwise_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "exp_benchmark_test",
+    srcs = ["exp_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/service/cpu:cpu_aot_compilation_result",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+filegroup(
+    name = "hlo_files",
+    srcs = [
+        "//xla/backends/cpu/benchmarks/hlo:memory_intensive_hlo_files",
+        "//xla/backends/cpu/benchmarks/hlo:regular_hlo_files",
+        "//xla/backends/cpu/benchmarks/hlo:slow_hlo_files",
+        "//xla/backends/cpu/benchmarks/huge_hlo:hlo_files",
+    ],
+)
+
+cc_library(
+    name = "hlo_benchmark_test_lib",
+    testonly = True,
+    srcs = ["hlo_benchmark_test.cc"],
+    deps = [
+        "//xla:literal",
+        "//xla/backends/cpu/benchmarks:aot_benchmark_helper",
+        "//xla/backends/cpu/benchmarks:hlo_benchmark_runner",
+        "//xla/hlo/ir:hlo",
+        "//xla/service:hlo_proto_cc",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_benchmark//:benchmark",
+        "@tsl//tsl/platform:path",
+        "@tsl//tsl/platform:stacktrace_handler",
+    ],
+    alwayslink = True,
+)
+
+xla_cc_test(
+    name = "hlo_benchmark_test",
+    data = [
+        ":hlo_files",
+    ],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_test_lib",
+    ],
+)
+
+xla_cc_test(
+    name = "log_benchmark_test",
+    srcs = ["log_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "fusion_benchmark_test",
+    srcs = ["fusion_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "multi_benchmark_config",
+    testonly = 1,
+    srcs = ["multi_benchmark_config.cc"],
+    hdrs = ["multi_benchmark_config.h"],
+    deps = [
+        ":aot_benchmark_helper",
+        ":hlo_benchmark_runner",
+        "//xla/tsl/platform:test_benchmark",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "optimizer_benchmark_test",
+    srcs = ["optimizer_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "reduction_benchmark_test",
+    srcs = ["reduction_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+[
+    xla_cc_test(
+        name = "convolution_%s_benchmark_test" % name,
+        srcs = ["convolution_benchmark_test.cc"],
+        fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+        fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+        local_defines = [
+            "XLA_CPU_CONVOLUTION_BENCHMARK_INPUT=%s" % input,
+            "XLA_CPU_CONVOLUTION_BENCHMARK_KERNEL=%s" % kernel,
+            "XLA_CPU_CONVOLUTION_BENCHMARK_OUTPUT=%s" % output,
+        ] + (["XLA_CPU_CONVOLUTION_BENCHMARK_IS_F32"] if name == "f32" else []),
+        deps = [
+            ":hlo_benchmark_runner",
+            ":multi_benchmark_config",
+            "//xla:literal",
+            "//xla:literal_util",
+            "//xla:shape_util",
+            "//xla:xla_data_proto_cc",
+            "//xla/tsl/platform:logging",
+            "//xla/tsl/platform:test_benchmark",
+            "//xla/tsl/platform:test_main",
+            "@com_google_absl//absl/strings",
+            "@com_google_absl//absl/strings:str_format",
+        ],
+    )
+    for name, input, kernel, output in [
+        ("f64", "F64", "F64", "F64"),
+        ("f32", "F32", "F32", "F32"),
+        ("bf16", "BF16", "BF16", "F32"),
+        ("s8", "S8", "S8", "S32"),
+    ]
+]
+
+xla_cc_test(
+    name = "custom_call_benchmark_test",
+    srcs = ["custom_call_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/ffi",
+        "//xla/ffi:ffi_api",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "gather_benchmark_test",
+    srcs = ["gather_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:array2d",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "gemv_benchmark_test",
+    srcs = ["gemv_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "select_and_scatter_benchmark_test",
+    srcs = ["select_and_scatter_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "concatenate_benchmark_test",
+    srcs = ["concatenate_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "topk_benchmark_test",
+    srcs = ["topk_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "sort_benchmark_test",
+    srcs = ["sort_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "pad_benchmark_test",
+    srcs = ["pad_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+onednn_cc_test(
+    name = "onednn_matmul_benchmark_test",
+    srcs = ["onednn_matmul_benchmark_test.cc"],
+    copts = tsl_copts(),
+    deps = [
+        ":hlo_benchmark_runner",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/service/cpu:onednn_util",
+        "//xla/tsl/platform:test",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/platform:test",
+    ],
+)
+
+xla_cc_test(
+    name = "tanh_benchmark_test",
+    srcs = ["tanh_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "scatter_benchmark_test",
+    srcs = ["scatter_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:array2d",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/parser:hlo_parser",
+        "//xla/service:scatter_simplifier",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "transposed_copy_benchmark_test",
+    srcs = ["transposed_copy_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "transposed_dot_benchmark_test",
+    srcs = ["transposed_dot_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "ynn_fusion_benchmark_test",
+    srcs = ["ynn_fusion_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "snapshot_loading_test",
+    srcs = ["snapshot_loading_test.cc"],
+    deps = [
+        ":hlo_benchmark_runner",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/parser:hlo_parser",
+        "//xla/service:hlo_module_config",
+        "//xla/service:hlo_proto_cc",
+        "//xla/tsl/lib/core:status_test_util",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "many_small_ops_benchmark_test",
+    srcs = ["many_small_ops_benchmark_test.cc"],
+    fail_if_no_test_linked = False,  # NOLINT=This contains benchmarks only, no tests.
+    fail_if_no_test_selected = False,  # NOLINT=This contains benchmarks only, no tests.
+    deps = [
+        ":hlo_benchmark_runner",
+        ":multi_benchmark_config",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/ffi",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+bzl_library(
+    name = "hlo_test_suite_bzl",
+    srcs = ["hlo_test_suite.bzl"],
+    # copybara:uncomment parse_tests = False,
+    visibility = ["//xla:friends"],
+    deps = [
+        "//xla:xla_bzl",
+    ],
+)
+
+hlo_test_suite(
+    name = "regular_hlo_tests",
+    hlo_files = REGULAR_HLO_FILES,
+    tags = [
+        "no_oss",
+    ],
+)
+
+hlo_test_suite(
+    name = "slow_hlo_tests",
+    timeout = "long",
+    hlo_files = SLOW_HLO_FILES,
+    tags = [
+        "no_oss",
+    ],
+)
+
+hlo_test_suite(
+    name = "memory_intensive_hlo_tests",
+    hlo_files = MEMORY_INTENSIVE_HLO_FILES,
+    tags = [
+        "no_oss",
+    ] + if_google([
+        "requires-mem:24g",
+    ]),
+)
+
+hlo_test_suite(
+    name = "huge_hlo_tests",
+    timeout = "long",
+    hlo_files = HUGE_HLO_FILES,
+    pkg = "//xla/backends/cpu/benchmarks/huge_hlo",
+    tags = [
+        "no_oss",
+    ] + if_google([
+        "notap",
+        "local",
+        "requires-mem:28g",
+    ]),
+)

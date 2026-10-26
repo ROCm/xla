@@ -1,176 +1,316 @@
-# GPU executor library for data-parallel kernel launches and cross-platform
-# HPC-library APIs.
-#
-# Throughout this file, all targets are built with the standard crosstool and
-# do not link against restricted binary blobs.
-
-load("@tsl//tsl/platform:build_config_root.bzl", "if_static")
-load("@tsl//tsl:tsl.bzl", "set_external_visibility", "transitive_hdrs", "tsl_gpu_library")
-load("@tsl//tsl/platform:rules_cc.bzl", "cc_library")
-load("@tsl//tsl/platform:build_config.bzl", "tf_proto_library")
-load("//xla:xla.bzl", "xla_cc_test")
-load("//xla/stream_executor:build_defs.bzl", "stream_executor_friends")
-load("@tsl//tsl:tsl.default.bzl", "filegroup")
+load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm_is_configured")
+load("//xla:xla.default.bzl", "xla_cc_test")
+load("//xla/stream_executor:build_defs.bzl", "if_cuda_or_rocm_is_configured", "stream_executor_build_defs_bzl_deps", "stream_executor_friends", "stream_executor_internal")
+load("//xla/tsl:tsl.bzl", "if_google", "if_oss", "internal_visibility")
+load("//xla/tsl/platform:build_config.bzl", "tf_proto_library")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
+load("//xla/tsl/platform/default:cuda_build_defs.bzl", "if_cuda_is_configured")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
-    default_visibility = set_external_visibility([
-        ":friends",
-    ]),
+    default_visibility = internal_visibility([":friends"]),
     licenses = ["notice"],
 )
 
+# StreamExecutor clients that can depend on targets defined in stream_executor package.
 package_group(
     name = "friends",
     packages = stream_executor_friends(),
 )
 
-# The stream_executor_headers target does not prescribe an implementation.
-cc_library(
-    name = "stream_executor_headers",
-    textual_hdrs = [
-        "blas.h",
-        "device_description.h",
-        "device_memory.h",
-        "device_memory_allocator.h",
-        "device_options.h",
-        "dnn.h",
-        "event.h",
-        "executor_cache.h",
-        "fft.h",
-        "gpu_launch_dim.h",
-        "kernel.h",
-        "kernel_cache_config.h",
-        "kernel_spec.h",
-        "launch_dim.h",
-        "numeric_options.h",
-        "module_spec.h",
-        "multi_platform_manager.h",
-        "platform.h",
-        "plugin.h",
-        "plugin_registry.h",
-        "stream.h",
-        "stream_executor.h",
-        "stream_executor_internal.h",
-        "stream_executor_pimpl.h",
-        "temporary_device_memory.h",
-        "temporary_memory_manager.h",
-        "trace_listener.h",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":allocator_stats",
-        ":device_description_proto_cc",
-        ":dnn_proto_cc",
-        ":host_or_device_scalar",
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/functional:any_invocable",
-        "@com_google_absl//absl/memory",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/types:optional",
-        "@com_google_absl//absl/types:span",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/platform:types",
-    ],
+# StreamExecutor platform-dependent implementations. We restrict visibility of all internal
+# implementation interfaces to internal users (everything in `stream_executor::internal` namespace).
+package_group(
+    name = "internal",
+    packages = stream_executor_internal(),
 )
 
-transitive_hdrs(
-    name = "stream_executor_install_hdrs",
-    deps = [":stream_executor_headers"],
+bzl_library(
+    name = "build_defs_bzl",
+    srcs = ["build_defs.bzl"],
+    deps = [
+        "//xla/tsl/platform:rules_cc_bzl",
+        "//xla/tsl/platform/default:cuda_build_defs_bzl",
+        "@local_config_cuda//cuda:build_defs_bzl",
+        "@rules_ml_toolchain//py/rules_pywrap:pywrap_bzl",
+    ] + stream_executor_build_defs_bzl_deps(),
 )
 
-cc_library(
-    name = "launch_dim",
-    hdrs = [
-        "gpu_launch_dim.h",
-        "launch_dim.h",
-    ],
-    deps = [
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/strings",
-    ],
-)
-
-cc_library(
-    name = "trace_listener",
-    hdrs = [
-        "trace_listener.h",
-    ],
-    deps = [
-        ":device_memory",
-        ":kernel",
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/strings",
-        "@tsl//tsl/platform:status",
-    ],
-)
+#===--------------------------------------------------------------------------------------------===#
+# StreamExecutor public libraries
+#===--------------------------------------------------------------------------------------------===#
 
 tf_proto_library(
     name = "device_description_proto",
     srcs = ["device_description.proto"],
-    cc_api_version = 2,
     make_default_target_header_only = True,
-    protodeps = [
+    deps = [
         "//xla:autotune_results_proto",
+        "//xla/stream_executor/cuda:cuda_compute_capability_proto",
+        "//xla/stream_executor/sycl:oneapi_compute_capability_proto",
     ],
+)
+
+cc_library(
+    name = "activate_context",
+    hdrs = ["activate_context.h"],
 )
 
 cc_library(
     name = "device_description",
     srcs = ["device_description.cc"],
     hdrs = ["device_description.h"],
+    visibility = internal_visibility([
+        "//third_party/py/jax:__subpackages__",
+        ":friends",
+    ]),
     deps = [
         ":device_description_proto_cc",
         ":launch_dim",
-        "//xla/stream_executor/platform",
+        ":semantic_version",
+        "//xla:xla_data_proto_cc",
+        "//xla/stream_executor/cuda:cuda_compute_capability",
+        "//xla/stream_executor/rocm:rocm_compute_capability",
+        "//xla/stream_executor/sycl:oneapi_compute_capability",
+        "//xla/tsl/lib/math:math_util",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/util:sorted_range",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@tsl//tsl/lib/math:math_util",
-        "@tsl//tsl/platform:numbers",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
 cc_library(
-    name = "kernel_spec",
-    srcs = ["kernel_spec.cc"],
-    hdrs = ["kernel_spec.h"],
+    name = "device_address",
+    hdrs = ["device_address.h"],
     deps = [
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/log:check",
+    ],
+)
+
+xla_cc_test(
+    name = "device_address_test",
+    srcs = ["device_address_test.cc"],
+    deps = [
+        ":device_address",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
 cc_library(
-    name = "kernel_cache_config",
-    hdrs = ["kernel_cache_config.h"],
+    name = "device_address_handle",
+    srcs = ["device_address_handle.cc"],
+    hdrs = ["device_address_handle.h"],
+    visibility = internal_visibility([
+        "//third_party/py/jax:__subpackages__",
+        ":friends",
+    ]),
+    deps = [
+        ":device_address",
+        ":stream_executor_h",
+    ],
+)
+
+xla_cc_test(
+    name = "device_address_handle_test",
+    srcs = ["device_address_handle_test.cc"],
+    deps = [
+        ":device_address",
+        ":device_address_handle",
+        ":mock_stream_executor",
+        "//xla/tsl/platform:test",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "device_address_allocator",
+    hdrs = ["device_address_allocator.h"],
+    visibility = internal_visibility([
+        "//third_party/py/jax:__subpackages__",
+        ":friends",
+    ]),
+    deps = [
+        ":device_address",
+        ":platform",
+        "//xla/tsl/platform:errors",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
+    name = "device_memory",
+    hdrs = ["device_memory.h"],
+    deps = [
+        ":device_address",
+        ":tensor_map",
+        "@com_google_absl//absl/base:core_headers",
+    ],
+)
+
+cc_library(
+    name = "device_memory_handle",
+    hdrs = ["device_memory_handle.h"],
+    deps = [
+        ":device_address_handle",
+        "@com_google_absl//absl/base:core_headers",
+    ],
+)
+
+cc_library(
+    name = "device_memory_allocator",
+    hdrs = ["device_memory_allocator.h"],
+    deps = [
+        ":device_address_allocator",
+        "@com_google_absl//absl/base:core_headers",
+    ],
 )
 
 cc_library(
     name = "module_spec",
     hdrs = ["module_spec.h"],
     deps = [
-        "//xla/stream_executor/platform",
+        "//xla/tsl/platform:logging",
+        "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/types:span",
     ],
 )
 
 cc_library(
-    name = "allocator_stats",
-    srcs = [
-        "allocator_stats.cc",
-    ],
-    hdrs = ["allocator_stats.h"],
+    name = "scoped_module_handle",
+    hdrs = ["scoped_module_handle.h"],
     deps = [
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/types:optional",
+        ":module_spec",
+        ":stream_executor_h",
+        "@com_google_absl//absl/log:check",
+    ],
+)
+
+cc_library(
+    name = "gpu_solver_context",
+    hdrs = ["gpu_solver_context.h"],
+    deps = [
+        ":blas",
+        ":device_address",
+        ":stream",
+        "//xla:xla_data_proto_cc",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
+    name = "stream_finder",
+    srcs = ["stream_finder.cc"],
+    hdrs = ["stream_finder.h"],
+    deps = [
+        ":platform",
+        ":stream",
+        ":stream_executor_h",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
+    name = "mock_command_buffer",
+    testonly = True,
+    hdrs = ["mock_command_buffer.h"],
+    deps = [
+        ":bit_pattern",
+        ":command_buffer",
+        ":device_address",
+        ":dnn",
+        ":kernel",
+        ":kernel_args",
+        ":launch_dim",
+        ":platform",
+        ":stream",
+        "//xla/hlo/testlib:test",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "mock_platform",
+    testonly = True,
+    hdrs = ["mock_platform.h"],
+    deps = [
+        ":device_description",
+        ":platform",
+        ":stream_executor_h",
+        "//xla/hlo/testlib:test",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
+    name = "mock_stream",
+    testonly = True,
+    hdrs = ["mock_stream.h"],
+    deps = [
+        ":device_address",
+        ":device_description",
+        ":event",
+        ":event_based_timer",
+        ":launch_dim",
+        ":platform",
+        ":stream",
+        "//xla/hlo/testlib:test",
+        "//xla/stream_executor/sycl:oneapi_compute_capability",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "mock_stream_executor",
+    testonly = True,
+    hdrs = ["mock_stream_executor.h"],
+    deps = [
+        ":activate_context",
+        ":allocator_stats",
+        ":blas",
+        ":command_buffer",
+        ":device_address",
+        ":device_description",
+        ":dnn",
+        ":event",
+        ":event_based_timer",
+        ":fft",
+        ":kernel",
+        ":kernel_spec",
+        ":memory_allocation",
+        ":memory_allocator",
+        ":memory_space",
+        ":module_spec",
+        ":platform",
+        ":stream",
+        ":stream_executor_h",
+        "//xla/hlo/testlib:test",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -178,53 +318,270 @@ cc_library(
     name = "data_type",
     hdrs = ["data_type.h"],
     deps = [
-        ":dnn_proto_cc",
-        "@tsl//tsl/platform:float8",
-        "@tsl//tsl/protobuf:dnn_proto_cc",
+        "//xla/tsl/protobuf:dnn_proto_cc",
+        "@tsl//tsl/platform:ml_dtypes",
     ],
 )
 
 cc_library(
-    name = "device_id_utils",
-    hdrs = ["device_id_utils.h"],
+    name = "stream_executor_address_allocator",
+    srcs = ["stream_executor_address_allocator.cc"],
+    hdrs = ["stream_executor_address_allocator.h"],
     deps = [
+        ":device_address",
+        ":device_address_allocator",
         ":platform",
-        ":stream_executor",
-        "@com_google_absl//absl/strings",
-        "@tsl//tsl/framework:device_id_impl",
-        "@tsl//tsl/lib/gtl:int_type",
-        "@tsl//tsl/platform:str_util",
+        ":stream",
+        ":stream_executor_h",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:span",
+        "@tsl//tsl/platform:numbers",
     ],
 )
 
 cc_library(
-    name = "device_memory",
-    hdrs = ["device_memory.h"],
-    deps = ["//xla/stream_executor/platform"],
+    name = "stream_executor_memory_allocator",
+    hdrs = ["stream_executor_memory_allocator.h"],
+    deps = [
+        ":stream_executor_address_allocator",
+        "@com_google_absl//absl/base:core_headers",
+    ],
 )
 
 cc_library(
-    name = "device_options",
-    hdrs = ["device_options.h"],
+    name = "device_address_vmm_allocator",
+    srcs = ["device_address_vmm_allocator.cc"],
+    hdrs = ["device_address_vmm_allocator.h"],
     deps = [
-        "//xla/stream_executor/platform",
+        ":device_address",
+        ":device_address_allocator",
+        ":memory_allocation",
+        ":memory_reservation",
+        ":platform",
+        ":stream",
+        ":stream_executor_h",
+        "//xla/service:device_assignment",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:btree",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "device_address_vmm_allocator_test",
+    srcs = ["device_address_vmm_allocator_test.cc"],
+    deps = [
+        ":device_address",
+        ":device_address_allocator",
+        ":device_address_vmm_allocator",
+        ":memory_allocation",
+        ":memory_reservation",
+        ":mock_platform",
+        ":mock_stream",
+        ":mock_stream_executor",
+        ":platform",
+        ":stream_executor_h",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+# Factory backends. Each implementation is free of platform `#if` macros; the
+# right one is selected by the top-level `device_address_vmm_allocator_factory`
+# dispatcher below (Stub / CUDA / ROCm), mirroring the //xla/pjrt:triton idiom.
+cc_library(
+    name = "device_address_vmm_allocator_factory_stub",
+    srcs = ["device_address_vmm_allocator_factory_stub.cc"],
+    tags = ["manual"],
+    deps = [
+        ":device_address_vmm_allocator",
+        ":platform",
+        ":stream",
+        ":stream_executor_h",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "device_address_vmm_allocator_factory_cuda",
+    srcs = ["device_address_vmm_allocator_factory_cuda.cc"],
+    tags = [
+        "cuda-only",
+        "gpu",
+        "manual",
+    ],
+    deps = [
+        ":device_address_vmm_allocator",
+        ":platform",
+        ":stream",
+        ":stream_executor_h",
+        "//xla/stream_executor/cuda:cuda_device_address_vmm_allocator",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "device_address_vmm_allocator_factory_rocm",
+    srcs = ["device_address_vmm_allocator_factory_rocm.cc"],
+    tags = [
+        "gpu",
+        "manual",
+        "rocm-only",
+    ],
+    deps = [
+        ":device_address_vmm_allocator",
+        ":platform",
+        ":stream",
+        ":stream_executor_h",
+        "//xla/stream_executor/rocm:rocm_device_address_vmm_allocator",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "device_address_vmm_allocator_factory",
+    deps = [
+        ":device_address_vmm_allocator",
+    ] + if_cuda_or_rocm_is_configured(
+        [],
+        [":device_address_vmm_allocator_factory_stub"],
+    ) + if_rocm_is_configured(
+        [":device_address_vmm_allocator_factory_rocm"],
+    ) + if_cuda_is_configured(
+        [":device_address_vmm_allocator_factory_cuda"],
+    ),
+)
+
+cc_library(
+    name = "launch_dim",
+    srcs = ["launch_dim.cc"],
+    hdrs = ["launch_dim.h"],
+    visibility = internal_visibility([
+        ":friends",
+        "//xla:native_custom_call_handler_allowlist",
+    ]),
+    deps = [
+        ":launch_dim_proto_cc",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
 tf_proto_library(
-    name = "dnn_proto",
-    srcs = ["dnn.proto"],
-    make_default_target_header_only = True,
-    protodeps = ["@tsl//tsl/protobuf:dnn_proto"],
-    exports = ["@tsl//tsl/protobuf:dnn_proto"],
+    name = "launch_dim_proto",
+    srcs = ["launch_dim.proto"],
+)
+
+xla_cc_test(
+    name = "launch_dim_test",
+    srcs = ["launch_dim_test.cc"],
+    deps = [
+        ":launch_dim",
+        ":launch_dim_proto_cc",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/util/proto:proto_matchers",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_protobuf//:protobuf",
+    ],
 )
 
 cc_library(
-    name = "fft",
-    hdrs = ["fft.h"],
+    name = "memory_allocation",
+    srcs = ["memory_allocation.cc"],
+    hdrs = ["memory_allocation.h"],
+    visibility = internal_visibility([
+        ":friends",
+        "//third_party/py/jax:__subpackages__",
+    ]),
     deps = [
-        "//xla/stream_executor/platform",
+        ":device_address",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/strings:str_format",
+    ],
+)
+
+cc_library(
+    name = "memory_reservation",
+    srcs = ["memory_reservation.cc"],
+    hdrs = ["memory_reservation.h"],
+    deps = [
+        ":device_address",
+        ":memory_allocation",
+        "//xla/tsl/platform:errors",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/time",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "platform_manager",
+    srcs = ["platform_manager.cc"],
+    hdrs = ["platform_manager.h"],
+    deps = [
+        ":platform",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+    ],
+)
+
+cc_library(
+    name = "engine_options",
+    hdrs = ["engine_options.h"],
+)
+
+cc_library(
+    name = "platform_id",
+    hdrs = ["platform_id.h"],
+    deps = [
+        "@com_google_absl//absl/strings:string_view",
     ],
 )
 
@@ -233,419 +590,38 @@ cc_library(
     srcs = ["platform.cc"],
     hdrs = ["platform.h"],
     deps = [
-        ":plugin",
-        ":stream_executor_headers",
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/strings",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-    ],
-)
-
-cc_library(
-    name = "plugin",
-    srcs = ["plugin.cc"],
-    hdrs = ["plugin.h"],
-)
-
-cc_library(
-    name = "numeric_options",
-    hdrs = ["numeric_options.h"],
-)
-
-cc_library(
-    name = "device_mem_allocator",
-    hdrs = [
-        "device_host_allocator.h",
-        "device_mem_allocator.h",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":stream_executor",
-        "@tsl//tsl/framework:allocator",
-        "@tsl//tsl/framework:device_id",
-        "@tsl//tsl/platform:macros",
-        "@tsl//tsl/profiler/lib:traceme",
-    ],
-)
-
-filegroup(
-    name = "device_mem_allocator_headers",
-    srcs = [
-        "device_host_allocator.h",
-        "device_mem_allocator.h",
-    ],
-)
-
-cc_library(
-    name = "executor_cache",
-    srcs = [
-        "device_description.h",
-        "device_memory.h",
-        "device_options.h",
-        "event.h",
-        "executor_cache.cc",
-        "launch_dim.h",
-        "plugin.h",
-        "plugin_registry.h",
-        "stream_executor_pimpl.h",
-        "temporary_device_memory.h",
-        "temporary_memory_manager.h",
-    ],
-    hdrs = [
-        "blas.h",
-        "executor_cache.h",
-        "fft.h",
-        "kernel.h",
-        "kernel_cache_config.h",
-        "kernel_spec.h",
-        "platform.h",
-        "stream.h",
-        "stream_executor_internal.h",
-        "trace_listener.h",
-    ],
-    deps = [
-        ":allocator_stats",
-        ":data_type",
         ":device_description",
-        ":device_description_proto_cc",
-        ":device_memory",
-        ":device_options",
-        ":fft",
-        ":kernel_cache_config",
-        ":kernel_spec",
-        ":launch_dim",
-        ":plugin",
-        ":stream_executor_headers",
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/functional:any_invocable",
-        "@com_google_absl//absl/memory",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/types:optional",
-        "@com_google_absl//absl/types:span",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/protobuf:dnn_proto_cc",
+        ":platform_id",
+        "//xla/stream_executor/abi:runtime_abi_version",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
     ],
 )
 
-cc_library(
-    name = "multi_platform_manager",
-    srcs = ["multi_platform_manager.cc"],
-    hdrs = ["multi_platform_manager.h"],
-    deps = [
-        ":platform",
-        ":stream_executor_headers",
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/synchronization",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-    ],
-)
-
-cc_library(
-    name = "stream_executor_internal",
-    hdrs = [
-        "stream_executor_internal.h",
-    ],
-    deps = [
-        ":allocator_stats",
-        ":device_description",
-        ":device_memory",
-        ":device_options",
-        ":kernel",
-        ":kernel_cache_config",
-        ":kernel_spec",
-        ":launch_dim",
-        ":plugin_registry",
-        ":stream_executor_headers",
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/functional:any_invocable",
-        "@com_google_absl//absl/types:optional",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-    ],
-)
-
-cc_library(
-    name = "stream_executor_pimpl_header",
-    hdrs = [
-        "device_description.h",
-        "kernel.h",
-        "kernel_cache_config.h",
-        "stream_executor_pimpl.h",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":device_description",
-        ":device_description_proto_cc",
-        ":kernel_cache_config",
-        ":platform",
-        ":stream_executor_headers",
-        ":stream_executor_internal",
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/functional:any_invocable",
-        "@com_google_absl//absl/memory",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/types:optional",
-        "@com_google_absl//absl/types:span",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/protobuf:dnn_proto_cc",
-    ],
-)
-
-# It implements :stream_executor_pimpl_header
-tsl_gpu_library(
-    name = "stream_executor_pimpl",
-    srcs = [
-        "stream.cc",
-        "stream_executor_pimpl.cc",
-    ],
-    hdrs = ["stream_executor_pimpl.h"],
-    deps = [
-        ":blas",
-        ":device_memory",
-        ":dnn",
-        ":event",
-        ":executor_cache",
-        ":fft",
-        ":host_or_device_scalar",
-        ":kernel",
-        ":launch_dim",
-        ":platform",
-        ":plugin_registry",
-        ":stream_executor_headers",
-        ":stream_executor_internal",
-        ":temporary_device_memory",
-        ":temporary_memory_manager",
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/functional:any_invocable",
-        "@com_google_absl//absl/memory",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/types:optional",
-        "@com_google_absl//absl/types:span",
-        "@eigen_archive//:eigen3",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:stacktrace",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/protobuf:dnn_proto_cc",
-        "@tsl//tsl/util:env_var",
-    ],
-)
-
-cc_library(
-    name = "kernel",
-    srcs = [
-        "fft.h",
-        "kernel.cc",
-        "plugin.h",
-        "stream.h",
-        "stream_executor_pimpl.h",
-        "temporary_device_memory.h",
-        "temporary_memory_manager.h",
-    ],
-    hdrs = [
-        "blas.h",
-        "device_description.h",
-        "device_options.h",
-        "event.h",
-        "kernel.h",
-        "kernel_spec.h",
-        "launch_dim.h",
-        "multi_platform_manager.h",
-        "platform.h",
-        "plugin_registry.h",
-        "stream_executor.h",
-        "stream_executor_internal.h",
-        "trace_listener.h",
-    ],
-    deps = [
-        ":allocator_stats",
-        ":data_type",
-        ":device_description",
-        ":device_description_proto_cc",
-        ":device_memory",
-        ":device_options",
-        ":fft",
-        ":kernel_cache_config",
-        ":kernel_spec",
-        ":launch_dim",
-        ":platform",
-        ":plugin",
-        ":plugin_registry",
-        ":stream_executor_headers",
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/functional:any_invocable",
-        "@com_google_absl//absl/memory",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/types:optional",
-        "@com_google_absl//absl/types:span",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:platform_port",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/protobuf:dnn_proto_cc",
-    ],
-)
-
-cc_library(
-    name = "timer",
-    srcs = [
-        "device_description.h",
-        "kernel_cache_config.h",
-    ],
-    hdrs = [
-        "blas.h",
-        "kernel.h",
-        "stream.h",
-        "stream_executor.h",
-    ],
-    deps = [
-        ":data_type",
-        ":device_description",
-        ":device_description_proto_cc",
-        ":kernel_cache_config",
-        ":platform",
-        ":stream_executor_headers",
-        ":stream_executor_pimpl_header",
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/functional:any_invocable",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/types:span",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/protobuf:dnn_proto_cc",
-    ],
-)
+#===--------------------------------------------------------------------------------------------===#
+# StreamExecutor plugins
+#===--------------------------------------------------------------------------------------------===#
 
 cc_library(
     name = "blas",
     srcs = ["blas.cc"],
     hdrs = ["blas.h"],
     deps = [
+        ":blas_proto_cc",
         ":data_type",
-        ":stream_executor_headers",
-        "//xla/stream_executor/platform",
+        ":device_address",
+        ":engine_options",
+        ":scratch_allocator",
+        ":stream",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/protobuf:dnn_proto_cc",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/protobuf:dnn_proto_cc",
-    ],
-)
-
-cc_library(
-    name = "host_or_device_scalar",
-    hdrs = ["host_or_device_scalar.h"],
-    deps = [
-        ":data_type",
-        ":device_memory",
-        "//xla/stream_executor/platform",
-    ],
-)
-
-cc_library(
-    name = "event",
-    srcs = [
-        "blas.h",
-        "device_description.h",
-        "device_options.h",
-        "event.cc",
-        "fft.h",
-        "kernel_cache_config.h",
-        "launch_dim.h",
-        "plugin.h",
-        "plugin_registry.h",
-        "stream_executor_pimpl.h",
-        "temporary_device_memory.h",
-        "temporary_memory_manager.h",
-        "trace_listener.h",
-    ],
-    hdrs = [
-        "device_memory.h",
-        "event.h",
-        "kernel.h",
-        "kernel_spec.h",
-        "platform.h",
-        "stream.h",
-        "stream_executor_internal.h",
-    ],
-    deps = [
-        ":allocator_stats",
-        ":blas",
-        ":data_type",
-        ":device_description",
-        ":device_description_proto_cc",
-        ":device_memory",
-        ":device_options",
-        ":fft",
-        ":kernel_cache_config",
-        ":kernel_spec",
-        ":launch_dim",
-        ":platform",
-        ":plugin",
-        ":stream_executor_headers",
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/functional:any_invocable",
-        "@com_google_absl//absl/memory",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/types:optional",
-        "@com_google_absl//absl/types:span",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/protobuf:dnn_proto_cc",
-    ],
-)
-
-cc_library(
-    name = "plugin_registry",
-    srcs = ["plugin_registry.cc"],
-    hdrs = ["plugin_registry.h"],
-    deps = [
-        ":blas",
-        ":dnn",
-        ":fft",
-        ":multi_platform_manager",
-        ":platform",
-        ":plugin",
-        ":stream_executor_headers",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/synchronization",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
     ],
 )
 
@@ -655,149 +631,725 @@ cc_library(
     hdrs = ["dnn.h"],
     deps = [
         ":data_type",
+        ":device_address",
         ":device_description_proto_cc",
-        ":device_memory",
-        ":dnn_proto_cc",
-        ":numeric_options",
-        ":stream_executor_headers",
-        "//xla/stream_executor/platform",
+        ":engine_options",
+        ":scratch_allocator",
+        ":semantic_version",
+        ":stream",
+        "//xla:util",
+        "//xla/tsl/lib/strings:proto_serialization",
+        "//xla/tsl/protobuf:dnn_proto_cc",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:btree",
-        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/types:optional",
         "@com_google_absl//absl/types:span",
-        "@tsl//tsl/lib/strings:proto_serialization",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/protobuf:dnn_proto_cc",
-    ] + if_static(["@com_google_protobuf//:protobuf"]),
+        "@com_google_protobuf//:wrappers_cc_proto",
+        "@eigen_archive//:eigen3",  # buildcleaner: keep
+        "@tsl//tsl/platform:ml_dtypes",
+    ],
+)
+
+tf_proto_library(
+    name = "blas_proto",
+    srcs = ["blas.proto"],
 )
 
 cc_library(
-    name = "temporary_memory_manager",
-    srcs = ["temporary_memory_manager.cc"],
-    hdrs = ["temporary_memory_manager.h"],
+    name = "fft",
+    hdrs = ["fft.h"],
+)
+
+cc_library(
+    name = "lazy_op_runner",
+    hdrs = ["lazy_op_runner.h"],
     deps = [
-        ":device_memory",
-        ":stream_executor_headers",
-        ":stream_executor_pimpl_header",
-        ":temporary_device_memory",
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/synchronization",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
+        ":dnn",
+        ":stream",
+        ":stream_executor_h",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/protobuf:dnn_proto_cc",
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
     ],
 )
 
 cc_library(
-    name = "temporary_device_memory",
-    srcs = [
-        "event.h",
-        "temporary_device_memory.cc",
-        "temporary_memory_manager.h",
-    ],
-    hdrs = ["temporary_device_memory.h"],
+    name = "stream_executor_h",
+    srcs = ["stream_executor.cc"],
+    hdrs = ["stream_executor.h"],
     deps = [
-        ":device_memory",
-        ":stream_executor_headers",
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/synchronization",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-    ],
-)
-
-cc_library(
-    name = "stream_executor",
-    textual_hdrs = [
-        "blas.h",
-        "device_description.h",
-        "device_memory.h",
-        "device_memory_allocator.h",
-        "device_options.h",
-        "dnn.h",
-        "event.h",
-        "executor_cache.h",
-        "fft.h",
-        "gpu_launch_dim.h",
-        "kernel.h",
-        "kernel_cache_config.h",
-        "kernel_spec.h",
-        "launch_dim.h",
-        "module_spec.h",
-        "multi_platform_manager.h",
-        "platform.h",
-        "plugin.h",
-        "plugin_registry.h",
-        "stream.h",
-        "stream_executor.h",
-        "stream_executor_internal.h",
-        "stream_executor_pimpl.h",
-        "temporary_device_memory.h",
-        "temporary_memory_manager.h",
-        "trace_listener.h",
-    ],
-    deps = [
-        ":stream_executor_headers",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:types",
-    ] + if_static([":stream_executor_impl"]),
-)
-
-cc_library(
-    name = "stream_executor_impl",
-    deps = [
+        ":activate_context",
+        ":allocator_stats",
+        ":blas",
+        ":command_buffer",
+        ":device_address",
         ":device_description",
         ":device_memory",
-        ":dnn_proto_cc",
+        ":dnn",
         ":event",
+        ":event_based_timer",
+        ":fft",
         ":kernel",
-        ":launch_dim",
-        ":multi_platform_manager",
+        ":kernel_spec",
+        ":memory_allocation",
+        ":memory_allocator",
+        ":memory_reservation",
+        ":memory_space",
+        ":module_spec",
         ":platform",
-        ":stream_executor_headers",
-        ":stream_executor_pimpl",
-        "//xla/stream_executor:dnn_proto_cc_impl",
-        "@tsl//tsl/protobuf:dnn_proto_cc_impl",
+        ":stream",
+        ":tensor_map",
+        "//xla/stream_executor/gpu:tma_metadata",
+        "//xla/tsl/lib/gtl:int_type",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:span",
+        "@tsl//tsl/platform:platform_port",
     ],
 )
 
 cc_library(
-    name = "device_memory_allocator",
-    hdrs = ["device_memory_allocator.h"],
+    name = "event",
+    hdrs = ["event.h"],
     deps = [
-        ":device_memory",
-        ":platform",
-        ":stream_executor",
+        "@com_google_absl//absl/status",
+    ],
+)
+
+cc_library(
+    name = "memory_allocator",
+    srcs = ["memory_allocator.cc"],
+    hdrs = ["memory_allocator.h"],
+    visibility = internal_visibility([
+        ":friends",
+        "//third_party/py/jax:__subpackages__",
+    ]),
+    deps = [
+        ":device_address",
+        ":memory_allocation",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+    ],
+)
+
+cc_library(
+    name = "memory_space",
+    hdrs = ["memory_space.h"],
+    visibility = internal_visibility([
+        ":friends",
+        "//third_party/py/jax:__subpackages__",
+    ]),
+    deps = ["@com_google_absl//absl/base:core_headers"],
+)
+
+cc_library(
+    name = "generic_memory_allocator",
+    hdrs = ["generic_memory_allocator.h"],
+    deps = [
+        ":memory_allocation",
+        ":memory_allocator",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
+    name = "generic_memory_allocation",
+    hdrs = ["generic_memory_allocation.h"],
+    deps = [
+        ":device_address",
+        ":memory_allocation",
+        "@com_google_absl//absl/functional:any_invocable",
+    ],
+)
+
+cc_library(
+    name = "stream",
+    srcs = ["stream.cc"],
+    hdrs = ["stream.h"],
+    deps = [
+        ":device_address",
+        ":device_description",
+        ":device_memory",
+        ":event",
+        ":event_based_timer",
+        ":launch_dim",
+        ":platform",
+        "//xla/tsl/lib/gtl:int_type",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:status",
-        "@tsl//tsl/platform:statusor",
-        "@tsl//tsl/platform:types",
+    ],
+)
+
+cc_library(
+    name = "event_based_timer",
+    hdrs = ["event_based_timer.h"],
+    deps = [
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+cc_library(
+    name = "executor_cache",
+    srcs = ["executor_cache.cc"],
+    hdrs = ["executor_cache.h"],
+    deps = [
+        ":stream_executor_h",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+    ],
+)
+
+cc_library(
+    name = "kernel_symbol_registry",
+    srcs = ["kernel_symbol_registry.cc"],
+    hdrs = ["kernel_symbol_registry.h"],
+    deps = [
+        ":platform",
+        ":platform_manager",
+        "//xla/stream_executor/platform:initialize",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+    ],
+)
+
+xla_cc_test(
+    name = "kernel_symbol_registry_test",
+    srcs = ["kernel_symbol_registry_test.cc"],
+    deps = [
+        ":kernel_symbol_registry",
+        "//xla/stream_executor/cuda:cuda_platform_id",
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "kernel_spec",
+    srcs = ["kernel_spec.cc"],
+    hdrs = ["kernel_spec.h"],
+    visibility = internal_visibility([
+        ":friends",
+        "//xla:native_custom_call_handler_allowlist",
+    ]),
+    deps = [
+        ":kernel",
+        ":kernel_args",
+        ":kernel_args_packing_spec",
+        ":kernel_spec_proto_cc",
+        "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+tf_proto_library(
+    name = "kernel_spec_proto",
+    srcs = ["kernel_spec.proto"],
+    deps = [":kernel_args_packing_spec_proto"],
+)
+
+xla_cc_test(
+    name = "kernel_spec_test",
+    srcs = ["kernel_spec_test.cc"],
+    deps = [
+        ":kernel_args_packing_spec",
+        ":kernel_spec",
+        ":kernel_spec_proto_cc",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/util:safe_reinterpret_cast",
+        "//xla/tsl/util/proto:parse_text_proto",
+        "//xla/tsl/util/proto:proto_matchers",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "kernel_metadata",
+    hdrs = ["kernel_metadata.h"],
+)
+
+xla_cc_test(
+    name = "kernel_metadata_test",
+    srcs = ["kernel_metadata_test.cc"],
+    deps = [
+        ":kernel_metadata",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "kernel_args_packing_spec",
+    srcs = ["kernel_args_packing_spec.cc"],
+    hdrs = ["kernel_args_packing_spec.h"],
+    deps = [
+        ":kernel_args",
+        ":kernel_args_packed_vector",
+        ":kernel_args_packing_spec_proto_cc",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+tf_proto_library(
+    name = "kernel_args_packing_spec_proto",
+    srcs = ["kernel_args_packing_spec.proto"],
+)
+
+xla_cc_test(
+    name = "kernel_args_packing_spec_test",
+    srcs = ["kernel_args_packing_spec_test.cc"],
+    deps = [
+        ":device_address",
+        ":kernel_args",
+        ":kernel_args_packing_spec",
+        ":kernel_args_packing_spec_proto_cc",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/util:safe_reinterpret_cast",
+        "//xla/tsl/util/proto:parse_text_proto",
+        "//xla/tsl/util/proto:proto_matchers",
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/types:span",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "kernel",
+    hdrs = ["kernel.h"],
+    deps = [
+        ":kernel_args",
+        ":kernel_metadata",
+        ":launch_dim",
+        ":stream",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
+    name = "typed_kernel_factory",
+    hdrs = ["typed_kernel_factory.h"],
+    deps = [
+        ":kernel",
+        ":kernel_spec",
+        ":stream_executor_h",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "kernel_args_packed_vector",
+    hdrs = ["kernel_args_packed_vector.h"],
+    deps = [
+        ":kernel_args",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "kernel_args_packed_vector_test",
+    srcs = ["kernel_args_packed_vector_test.cc"],
+    deps = [
+        ":kernel_args_packed_vector",
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/types:span",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "semantic_version",
+    srcs = ["semantic_version.cc"],
+    hdrs = ["semantic_version.h"],
+    deps = [
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
     ],
 )
 
 cc_library(
     name = "scratch_allocator",
-    srcs = ["scratch_allocator.cc"],
     hdrs = ["scratch_allocator.h"],
     deps = [
-        ":device_memory",
-        ":stream_executor_headers",
-        "//xla/stream_executor/platform",
+        ":device_address",
+        ":device_address_allocator",
+        ":stream",
         "@com_google_absl//absl/container:inlined_vector",
-        "@tsl//tsl/platform:statusor",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+#===--------------------------------------------------------------------------------------------===#
+# StreamExecutor internal implementation (visible to StreamExecutor platform implementations)
+#===--------------------------------------------------------------------------------------------===#
+
+cc_library(
+    name = "plugin_registry",
+    srcs = ["plugin_registry.cc"],
+    hdrs = ["plugin_registry.h"],
+    visibility = [":internal"],
+    deps = [
+        ":blas",
+        ":dnn",
+        ":fft",
+        ":platform",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+    ],
+)
+
+cc_library(
+    name = "allocator_stats",
+    srcs = ["allocator_stats.cc"],
+    hdrs = ["allocator_stats.h"],
+    deps = [
+        "@com_google_absl//absl/strings:str_format",
+        "@tsl//tsl/platform:numbers",
+    ],
+)
+
+cc_library(
+    name = "command_buffer",
+    srcs = ["command_buffer.cc"],
+    hdrs = ["command_buffer.h"],
+    visibility = internal_visibility([":internal"]),
+    deps = [
+        ":bit_pattern",
+        ":device_address",
+        ":dnn",
+        ":kernel",
+        ":kernel_args",
+        ":launch_dim",
+        ":platform",
+        "//xla/tsl/lib/gtl:int_type",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "trace_command_buffer_factory",
+    srcs = ["trace_command_buffer_factory.cc"],
+    hdrs = ["trace_command_buffer_factory.h"],
+    visibility = [":internal"],
+    deps = [
+        ":command_buffer",
+        ":stream",
+        ":stream_executor_h",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
+    name = "stream_executor_common",
+    srcs = ["stream_executor_common.cc"],
+    hdrs = ["stream_executor_common.h"],
+    deps = [
+        ":activate_context",
+        ":device_description",
+        ":platform",
+        ":stream_executor_h",
+        "//xla/tsl/util:env_var",
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
+    name = "stream_common",
+    srcs = ["stream_common.cc"],
+    hdrs = ["stream_common.h"],
+    deps = [
+        ":device_description",
+        ":fft",
+        ":platform",
+        ":stream",
+        ":stream_executor_h",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+        "@tsl//tsl/platform:thread_annotations",
+    ],
+)
+
+cc_library(
+    name = "bit_pattern",
+    srcs = ["bit_pattern.cc"],
+    hdrs = ["bit_pattern.h"],
+    visibility = [":internal"],
+    deps = ["@com_google_absl//absl/strings"],
+)
+
+# We have a separate `stream_executor_impl` target because in open source we are building multiple
+# shared libraries and then link them together (this is an implementation detail of Tensorflow
+# framework), and we take extra care not to define symbols in multiple objects. Otherwise we can
+# end up with static singletons declared in multiple objects, ODR violations, and many other bad
+# things that lead to nearly impossible to debug run time crashes.
+cc_library(
+    name = "stream_executor_impl",
+    deps = [
+        ":allocator_stats",  # build_cleaner: keep
+        ":blas",  # build_cleaner: keep
+        ":command_buffer",  # build_cleaner: keep
+        ":device_address",  # build_cleaner: keep
+        ":device_description",  # build_cleaner: keep
+        ":dnn",  # build_cleaner: keep
+        ":executor_cache",  # build_cleaner: keep
+        ":fft",  # build_cleaner: keep
+        ":kernel",  # build_cleaner: keep
+        ":kernel_spec",  # build_cleaner: keep
+        ":launch_dim",  # build_cleaner: keep
+        ":platform",  # build_cleaner: keep
+        ":platform_manager",  # build_cleaner: keep
+        ":scratch_allocator",  # build_cleaner: keep
+        ":stream_common",  # build_cleaner: keep
+        ":stream_executor_common",  # build_cleaner: keep
+        ":stream_executor_h",  # build_cleaner: keep
+    ] + if_oss(["//xla/tsl/protobuf:dnn_proto_cc_impl"]),
+)
+
+cc_library(
+    name = "tensor_map",
+    hdrs = ["tensor_map.h"],
+)
+
+cc_library(
+    name = "device_interconnect_resource",
+    hdrs = ["device_interconnect_resource.h"],
+    deps = [
+        ":device_description",
+        ":stream_executor_h",
+        "@com_google_absl//absl/container:flat_hash_map",
+    ],
+)
+
+#===--------------------------------------------------------------------------------------------===#
+# StreamExecutor tests
+#===--------------------------------------------------------------------------------------------===#
+
+xla_cc_test(
+    name = "command_buffer_test",
+    srcs = ["command_buffer_test.cc"],
+    deps = [
+        ":command_buffer",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+xla_cc_test(
+    name = "generic_memory_allocation_test",
+    srcs = ["generic_memory_allocation_test.cc"],
+    deps = [
+        ":generic_memory_allocation",
+        "@com_google_googletest//:gtest",
+        "@tsl//tsl/platform:test_main",
+    ],
+)
+
+xla_cc_test(
+    name = "generic_memory_allocator_test",
+    srcs = ["generic_memory_allocator_test.cc"],
+    deps = [
+        ":generic_memory_allocation",
+        ":generic_memory_allocator",
+        ":memory_allocation",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_googletest//:gtest",
+        "@tsl//tsl/platform:test_main",
+    ],
+)
+
+xla_cc_test(
+    name = "memory_allocator_test",
+    srcs = ["memory_allocator_test.cc"],
+    deps = [
+        ":device_address",
+        ":memory_allocation",
+        ":memory_allocator",
+        "//xla/tsl/platform:env",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_googletest//:gtest",
+        "@tsl//tsl/platform:test_main",
+    ],
+)
+
+xla_cc_test(
+    name = "semantic_version_test",
+    srcs = ["semantic_version_test.cc"],
+    deps = [
+        ":semantic_version",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/hash:hash_testing",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "kernel_args",
+    hdrs = ["kernel_args.h"],
+    deps = [
+        ":device_address",
+        ":kernel_metadata",
+        ":tensor_map",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:fixed_array",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/functional:overload",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/meta:type_traits",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "kernel_stats",
+    hdrs = ["kernel_stats.h"],
+    deps = ["@com_google_absl//absl/container:flat_hash_map"],
+)
+
+xla_cc_test(
+    name = "kernel_args_test",
+    srcs = ["kernel_args_test.cc"],
+    deps = [
+        ":device_address",
+        ":kernel_args",
+        ":kernel_metadata",
+        "//xla/stream_executor/host:host_platform",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/types:span",
+        "@com_google_benchmark//:benchmark",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
+xla_cc_test(
+    name = "stream_executor_test",
+    srcs = ["stream_executor_test.cc"],
+    deps = [
+        ":device_description",
+        ":platform",
+        ":platform_manager",
+        ":stream_executor_h",
+        "//xla/stream_executor/host:host_platform",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -806,10 +1358,15 @@ xla_cc_test(
     size = "small",
     srcs = ["stream_test.cc"],
     deps = [
-        ":stream_executor",
+        ":platform",
+        ":platform_manager",
+        ":stream",
+        ":stream_executor_h",
         "//xla/stream_executor/host:host_platform",
-        "@tsl//tsl/platform:test",
-        "@tsl//tsl/platform:test_main",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/log:check",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -819,61 +1376,108 @@ xla_cc_test(
     srcs = ["dnn_test.cc"],
     deps = [
         ":dnn",
-        "@tsl//tsl/platform:test",
-        "@tsl//tsl/platform:test_main",
+        "//xla/tsl/platform:test",
+        "//xla/tsl/protobuf:dnn_proto_cc",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
-cc_library(
-    name = "tf_allocator_adapter",
-    srcs = ["tf_allocator_adapter.cc"],
-    hdrs = ["tf_allocator_adapter.h"],
+xla_cc_test(
+    name = "scoped_module_handle_test",
+    srcs = ["scoped_module_handle_test.cc"],
     deps = [
-        ":device_memory",
-        ":device_memory_allocator",
-        ":platform",
-        ":stream_executor_headers",
-        "@com_google_absl//absl/synchronization",
-        "@tsl//tsl/framework:allocator",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:statusor",
+        ":mock_stream_executor",
+        ":module_spec",
+        ":scoped_module_handle",
+        "//xla/tsl/platform:test",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
-cc_library(
-    name = "lazy_op_runner",
-    hdrs = ["lazy_op_runner.h"],
+xla_cc_test(
+    name = "device_description_test",
+    srcs = ["device_description_test.cc"],
     deps = [
-        ":dnn",
-        ":stream_executor_headers",
-        "@com_google_absl//absl/base",
+        ":device_description",
+        ":device_description_proto_cc",
+        ":semantic_version",
+        "//xla:xla_data_proto_cc",
+        "//xla/backends/gpu/target_config",
+        "//xla/stream_executor/cuda:cuda_compute_capability",
+        "//xla/stream_executor/rocm:rocm_compute_capability",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
-exports_files(["lazy_op_runner.h"])
+xla_cc_test(
+    name = "executor_cache_test",
+    srcs = ["executor_cache_test.cc"],
+    deps = [
+        ":executor_cache",
+        ":mock_stream_executor",
+        ":stream",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/log",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+xla_cc_test(
+    name = "stream_finder_test",
+    srcs = ["stream_finder_test.cc"],
+    deps = [
+        ":mock_platform",
+        ":mock_stream",
+        ":mock_stream_executor",
+        ":stream_finder",
+        "//xla/hlo/testlib:test",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test",
+        "@com_google_absl//absl/status",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+xla_cc_test(
+    name = "bit_pattern_test",
+    srcs = ["bit_pattern_test.cc"],
+    deps = [
+        ":bit_pattern",
+        "//xla/tsl/platform:test",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+#===--------------------------------------------------------------------------------------------===#
+# Aliases for StreamExecutor platforms
+#===--------------------------------------------------------------------------------------------===#
 
 alias(
     name = "cuda_platform",
     actual = "//xla/stream_executor/cuda:all_runtime",
+    tags = [
+        "cuda-only",
+        "gpu",
+    ],
 )
 
 alias(
     name = "rocm_platform",
     actual = "//xla/stream_executor/rocm:all_runtime",
+    tags = [
+        "gpu",
+        "rocm-only",
+    ] + if_google([
+        "manual",
+    ]),
 )
 
-# TODO(se-owner): document or remove this.
-cc_library(
-    name = "stream_executor_bundle",
-    deps = [
-        ":dnn",
-        ":event",
-        ":multi_platform_manager",
-        ":scratch_allocator",
-        ":stream_executor",
-        "//xla/stream_executor/cuda:cuda_platform_id",
-        "//xla/stream_executor/host:host_platform_id",
-        "//xla/stream_executor/platform:dso_loader",
-        "//xla/stream_executor/rocm:rocm_platform_id",
+alias(
+    name = "sycl_platform",
+    actual = "//xla/stream_executor/sycl:all_runtime",
+    tags = [
+        "gpu",
     ],
 )

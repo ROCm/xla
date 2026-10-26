@@ -15,19 +15,20 @@ limitations under the License.
 
 #include "tsl/platform/random.h"
 
+#include <cstdint>
 #include <set>
 
-#include "tsl/platform/test.h"
-#include "tsl/platform/types.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/tsl/platform/types.h"
 
 namespace tsl {
 namespace random {
 namespace {
 
 TEST(New64Test, SanityCheck) {
-  std::set<uint64> values;
+  std::set<uint64_t> values;
   for (int i = 0; i < 1000000; i++) {
-    uint64 x = New64();
+    uint64_t x = New64();
     EXPECT_TRUE(values.insert(x).second) << "duplicate " << x;
   }
 }

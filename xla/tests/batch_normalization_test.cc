@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,42 +14,45 @@ limitations under the License.
 ==============================================================================*/
 
 #include <cmath>
+#include <cstdint>
 #include <memory>
+#include <ostream>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_join.h"
 #include "xla/array2d.h"
+#include "xla/array3d.h"
 #include "xla/array4d.h"
-#include "xla/client/lib/arithmetic.h"
-#include "xla/client/lib/math.h"
-#include "xla/client/local_client.h"
-#include "xla/client/xla_builder.h"
-#include "xla/client/xla_computation.h"
-#include "xla/hlo/ir/hlo_computation.h"
-#include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/hlo/ir/hlo_module.h"
+#include "xla/error_spec.h"
+#include "xla/hlo/builder/lib/arithmetic.h"
+#include "xla/hlo/builder/lib/math.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/testlib/test_helpers.h"
 #include "xla/literal.h"
+#include "xla/literal_util.h"
 #include "xla/reference_util.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/statusor.h"
-#include "xla/test.h"
-#include "xla/test_helpers.h"
-#include "xla/tests/client_library_test_base.h"
-#include "xla/tests/hlo_test_base.h"
-#include "xla/tests/literal_test_util.h"
-#include "xla/tests/test_macros.h"
-#include "xla/tests/test_utils.h"
+#include "xla/tests/client_library_test_runner_mixin.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/tsl/lib/math/math_util.h"
+#include "xla/tsl/platform/test.h"
 #include "xla/types.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/lib/math/math_util.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/test.h"
 
 namespace xla {
 namespace {
 
-class BatchNormalizationTest : public ClientLibraryTestBase {
+constexpr ErrorSpec kErrorSpec{0.001, 0.001};
+
+class BatchNormalizationTest : public ClientLibraryTestRunnerMixin<
+                                   HloInterpreterReferenceMixin<HloTestBase>> {
  protected:
   BatchNormalizationTest() : input_array_(kSamples, kZ, kY, kX) {
     Array2D<float> pz({
@@ -82,10 +85,9 @@ class BatchNormalizationTest : public ClientLibraryTestBase {
 
   Array4D<float> input_array_;
   Literal input_literal_;
-  const ErrorSpec error_spec_{0.001, 0.001};
 };
 
-XLA_TEST_F(BatchNormalizationTest, SubtractInZ) {
+TEST_F(BatchNormalizationTest, SubtractInZ) {
   XlaBuilder builder("subtract_in_z_one_sample");
   auto x = ConstantLiteral(&builder, input_literal_);
   auto y = ConstantR1<float>(&builder, {3.14, 4.25});
@@ -98,10 +100,10 @@ XLA_TEST_F(BatchNormalizationTest, SubtractInZ) {
       {5.0f - 3.14f, 4.4f - 4.25f},   // p2
   });
   expected.FillWithPZ(pz);
-  ComputeAndCompareR4<float>(&builder, expected, {}, error_spec_);
+  ComputeAndCompareR4<float>(&builder, expected, {}, kErrorSpec);
 }
 
-XLA_TEST_F(BatchNormalizationTest, SquareTesseractElementwise) {
+TEST_F(BatchNormalizationTest, SquareTesseractElementwise) {
   XlaBuilder builder("square_tesseract_elementwise");
   auto x = ConstantLiteral(&builder, input_literal_);
   Square(x);
@@ -115,10 +117,10 @@ XLA_TEST_F(BatchNormalizationTest, SquareTesseractElementwise) {
       {MathUtil::IPow(5.0f, 2), MathUtil::IPow(4.4f, 2)},
   });
   expected.FillWithPZ(expected_pz);
-  ComputeAndCompareR4<float>(&builder, expected, {}, error_spec_);
+  ComputeAndCompareR4<float>(&builder, expected, {}, kErrorSpec);
 }
 
-XLA_TEST_F(BatchNormalizationTest, SumToZ) {
+TEST_F(BatchNormalizationTest, SumToZ) {
   XlaBuilder builder("sum_to_z");
   auto input_activations = ConstantLiteral(&builder, input_literal_);
   XlaComputation add = CreateScalarAddComputation(F32, &builder);
@@ -126,10 +128,10 @@ XLA_TEST_F(BatchNormalizationTest, SumToZ) {
   Reduce(input_activations, ConstantR0<float>(&builder, 0.0f), add, {0, 2, 3});
 
   std::vector<float> expected = {6, 12.6};
-  ComputeAndCompareR1<float>(&builder, expected, {}, error_spec_);
+  ComputeAndCompareR1<float>(&builder, expected, {}, kErrorSpec);
 }
 
-XLA_TEST_F(BatchNormalizationTest, SquareAndReduce) {
+TEST_F(BatchNormalizationTest, SquareAndReduce) {
   XlaBuilder builder("square_and_reduce");
   auto input_activations = ConstantLiteral(&builder, input_literal_);
   auto set_means = ConstantR1<float>(&builder, {2.f, 4.2f});
@@ -140,21 +142,21 @@ XLA_TEST_F(BatchNormalizationTest, SquareAndReduce) {
   Reduce(dev_squares, ConstantR0<float>(&builder, 0.0f), add, {0, 2, 3});
 
   std::vector<float> expected = {18, 0.06};
-  ComputeAndCompareR1<float>(&builder, expected, {}, error_spec_);
+  ComputeAndCompareR1<float>(&builder, expected, {}, kErrorSpec);
 }
 
-XLA_TEST_F(BatchNormalizationTest, VarianceToStddev) {
+TEST_F(BatchNormalizationTest, VarianceToStddev) {
   XlaBuilder builder("variance_to_stddev");
   auto variance = ConstantR1<float>(&builder, {6.f, .02f});
   Sqrt(variance);
 
   std::vector<float> expected = {2.44948974f, 0.14142136f};
-  ComputeAndCompareR1<float>(&builder, expected, {}, error_spec_);
+  ComputeAndCompareR1<float>(&builder, expected, {}, kErrorSpec);
 }
 
 // Compare against a forward batch normalization example in the NN spec
 // reference.
-XLA_TEST_F(BatchNormalizationTest, SpecComparisonForward) {
+TEST_F(BatchNormalizationTest, SpecComparisonForward) {
   XlaBuilder builder("batch_normalize_per_spec");
   auto input_activations =
       CheckShape(&builder, ConstantLiteral(&builder, input_literal_),
@@ -210,10 +212,10 @@ XLA_TEST_F(BatchNormalizationTest, SpecComparisonForward) {
   });
   expected.FillWithPZ(pz);
 
-  ComputeAndCompareR4<float>(&builder, expected, {}, error_spec_);
+  ComputeAndCompareR4<float>(&builder, expected, {}, kErrorSpec);
 }
 
-XLA_TEST_F(BatchNormalizationTest, BasicTraining) {
+TEST_F(BatchNormalizationTest, BasicTraining) {
   const int kFeatureIndex = 3;
   XlaBuilder builder(TestName());
 
@@ -236,7 +238,7 @@ XLA_TEST_F(BatchNormalizationTest, BasicTraining) {
   ComputeAndCompareTuple(&builder, expected, {}, ErrorSpec(0.1));
 }
 
-XLA_TEST_F(BatchNormalizationTest, BasicTraining_fp16) {
+TEST_F(BatchNormalizationTest, BasicTraining_fp16) {
   const int kFeatureIndex = 3;
   XlaBuilder builder(TestName());
   Array4D<Eigen::half> input = {{{{1.f, 2.f}}, {{3.f, 4.f}}},
@@ -266,7 +268,7 @@ XLA_TEST_F(BatchNormalizationTest, BasicTraining_fp16) {
   ComputeAndCompareTuple(&builder, expected, {}, ErrorSpec(0.1));
 }
 
-XLA_TEST_F(BatchNormalizationTest, BasicTrainingOnDimension2) {
+TEST_F(BatchNormalizationTest, BasicTrainingOnDimension2) {
   const int kFeatureIndex = 2;
   XlaBuilder builder(TestName());
 
@@ -290,7 +292,7 @@ XLA_TEST_F(BatchNormalizationTest, BasicTrainingOnDimension2) {
   ComputeAndCompareTuple(&builder, expected, {}, ErrorSpec(0.1));
 }
 
-XLA_TEST_F(BatchNormalizationTest, BasicTrainingOnDimension2_fp16) {
+TEST_F(BatchNormalizationTest, BasicTrainingOnDimension2_fp16) {
   const int kFeatureIndex = 2;
   XlaBuilder builder(TestName());
   Array4D<Eigen::half> input = {{{{1.f}, {2.f}}, {{3.f}, {4.f}}},
@@ -320,7 +322,7 @@ XLA_TEST_F(BatchNormalizationTest, BasicTrainingOnDimension2_fp16) {
   ComputeAndCompareTuple(&builder, expected, {}, ErrorSpec(0.1));
 }
 
-XLA_TEST_F(BatchNormalizationTest, TrainingWithFeatureOnLowDimension) {
+TEST_F(BatchNormalizationTest, TrainingWithFeatureOnLowDimension) {
   // Use 0 dimension as feature, tests layout analyzer.
   const int kFeatureIndex = 0;
   XlaBuilder builder(TestName());
@@ -346,12 +348,11 @@ XLA_TEST_F(BatchNormalizationTest, TrainingWithFeatureOnLowDimension) {
        LiteralUtil::CreateR1<float>(std::vector<float>(260, 1.0f)),
        LiteralUtil::CreateR1<float>(std::vector<float>(260, 0.0f))});
 
-  ComputeAndCompareTuple(&builder, expected,
-                         {operand.get(), scale.get(), offset.get()},
+  ComputeAndCompareTuple(&builder, expected, {&operand, &scale, &offset},
                          ErrorSpec(0.1));
 }
 
-XLA_TEST_F(BatchNormalizationTest, LargeEpsilonTest) {
+TEST_F(BatchNormalizationTest, LargeEpsilonTest) {
   // Test the correctness of choosing a large epsilon value.
   const int kFeatureIndex = 2;
   XlaBuilder builder(TestName());
@@ -379,12 +380,11 @@ XLA_TEST_F(BatchNormalizationTest, LargeEpsilonTest) {
        LiteralUtil::CreateR1<float>(std::vector<float>(1, 15.0f)),
        LiteralUtil::CreateR1<float>(std::vector<float>(1, 125.0f))});
 
-  ComputeAndCompareTuple(&builder, expected,
-                         {operand.get(), scale.get(), offset.get()},
+  ComputeAndCompareTuple(&builder, expected, {&operand, &scale, &offset},
                          ErrorSpec(0.1));
 }
 
-XLA_TEST_F(BatchNormalizationTest, BatchNormGradBasic) {
+TEST_F(BatchNormalizationTest, BatchNormGradBasic) {
   const int kFeatureIndex = 2;
   XlaBuilder builder(TestName());
 
@@ -413,7 +413,7 @@ XLA_TEST_F(BatchNormalizationTest, BatchNormGradBasic) {
   ComputeAndCompareTuple(&builder, expected, {}, ErrorSpec(0.1));
 }
 
-XLA_TEST_F(BatchNormalizationTest, BatchNormGradBasic_fp16) {
+TEST_F(BatchNormalizationTest, BatchNormGradBasic_fp16) {
   const int kFeatureIndex = 2;
   XlaBuilder builder(TestName());
   auto operand = ConstantR4FromArray4D<Eigen::half>(
@@ -468,7 +468,8 @@ struct BatchNormTestParam {
 
 // Tests to test the fused operation of BatchNorm.
 class BatchNormTestManySizes
-    : public ClientLibraryTestBase,
+    : public ClientLibraryTestRunnerMixin<
+          HloInterpreterReferenceMixin<HloTestBase>>,
       public ::testing::WithParamInterface<BatchNormTestParam> {};
 
 std::vector<BatchNormTestParam> BuildBatchNormTestParams() {
@@ -509,7 +510,7 @@ std::vector<BatchNormTestParam> BuildBatchNormTestParams() {
 INSTANTIATE_TEST_CASE_P(BatchNormTest_Instantiation, BatchNormTestManySizes,
                         ::testing::ValuesIn(BuildBatchNormTestParams()));
 
-XLA_TEST_P(BatchNormTestManySizes, RandomizedTrainingTests) {
+TEST_P(BatchNormTestManySizes, RandomizedTrainingTests) {
   float epsilon = 0.001;
   XlaBuilder builder(TestName());
   const std::vector<int64_t>& bounds = GetParam().bounds;
@@ -590,27 +591,19 @@ XLA_TEST_P(BatchNormTestManySizes, RandomizedTrainingTests) {
       {expected_normalized, LiteralUtil::CreateR1<float>(mean),
        LiteralUtil::CreateR1<float>(var)});
 
-  std::unique_ptr<GlobalData> input_data =
-      client_->TransferToServer(input_literal).value();
-  std::unique_ptr<GlobalData> scale_data =
-      client_->TransferToServer(scale_literal).value();
-  std::unique_ptr<GlobalData> offset_data =
-      client_->TransferToServer(offset_literal).value();
-
   BatchNormTraining(input_activations, scale_activations, offset_activations,
                     epsilon, feature_index);
 
   // Run all HLO passes during this test.  In particular, ClientLibraryTestBase
   // disables constant folding, but we want it enabled for our zero-sized tensor
   // testcase.
-  execution_options_.mutable_debug_options()->clear_xla_disable_hlo_passes();
-  ComputeAndCompareTuple(
-      &builder, expected,
-      {input_data.get(), scale_data.get(), offset_data.get()},
-      ErrorSpec(0.01, 1));
+  mutable_debug_options()->clear_xla_disable_hlo_passes();
+  ComputeAndCompareTuple(&builder, expected,
+                         {&input_literal, &scale_literal, &offset_literal},
+                         ErrorSpec(0.01, 1));
 }
 
-XLA_TEST_P(BatchNormTestManySizes, RandomizedInferencingTests) {
+TEST_P(BatchNormTestManySizes, RandomizedInferencingTests) {
   float epsilon = 0.001;
   XlaBuilder builder(TestName());
   const std::vector<int64_t>& bounds = GetParam().bounds;
@@ -691,17 +684,6 @@ XLA_TEST_P(BatchNormTestManySizes, RandomizedInferencingTests) {
 
   Array4D<float> expected = normalized;
 
-  std::unique_ptr<GlobalData> input_data =
-      client_->TransferToServer(input_literal).value();
-  std::unique_ptr<GlobalData> scale_data =
-      client_->TransferToServer(scale_literal).value();
-  std::unique_ptr<GlobalData> offset_data =
-      client_->TransferToServer(offset_literal).value();
-  std::unique_ptr<GlobalData> mean_data =
-      client_->TransferToServer(mean_literal).value();
-  std::unique_ptr<GlobalData> variance_data =
-      client_->TransferToServer(var_literal).value();
-
   BatchNormInference(input_activations, scale_activations, offset_activations,
                      mean_activations, variance_activations, epsilon,
                      feature_index);
@@ -709,16 +691,15 @@ XLA_TEST_P(BatchNormTestManySizes, RandomizedInferencingTests) {
   // Run all HLO passes during this test.  In particular, ClientLibraryTestBase
   // disables constant folding, but we want it enabled for our zero-sized tensor
   // testcase.
-  execution_options_.mutable_debug_options()->clear_xla_disable_hlo_passes();
+  mutable_debug_options()->clear_xla_disable_hlo_passes();
 
-  ComputeAndCompareR4<float>(
-      &builder, expected,
-      {input_data.get(), scale_data.get(), offset_data.get(), mean_data.get(),
-       variance_data.get()},
-      ErrorSpec(0.01, 1));
+  ComputeAndCompareR4<float>(&builder, expected,
+                             {&input_literal, &scale_literal, &offset_literal,
+                              &mean_literal, &var_literal},
+                             ErrorSpec(0.01, 1));
 }
 
-XLA_TEST_P(BatchNormTestManySizes, RandomizedGradTests) {
+TEST_P(BatchNormTestManySizes, RandomizedGradTests) {
   float epsilon = 0.001;
   XlaBuilder builder(TestName());
   const std::vector<int64_t>& bounds = GetParam().bounds;
@@ -876,17 +857,6 @@ XLA_TEST_P(BatchNormTestManySizes, RandomizedGradTests) {
   auto grad_output_parameter =
       Parameter(&builder, 4, grad_output_literal.shape(), "grad_output");
 
-  std::unique_ptr<GlobalData> input_data =
-      client_->TransferToServer(input_literal).value();
-  std::unique_ptr<GlobalData> scale_data =
-      client_->TransferToServer(scale_literal).value();
-  std::unique_ptr<GlobalData> mean_data =
-      client_->TransferToServer(mean_literal).value();
-  std::unique_ptr<GlobalData> var_data =
-      client_->TransferToServer(var_literal).value();
-  std::unique_ptr<GlobalData> grad_output_data =
-      client_->TransferToServer(grad_output_literal).value();
-
   BatchNormGrad(input_parameter, scale_parameter, mean_parameter, var_parameter,
                 grad_output_parameter, epsilon, feature_index);
 
@@ -897,11 +867,11 @@ XLA_TEST_P(BatchNormTestManySizes, RandomizedGradTests) {
   // Run all HLO passes during this test.  In particular, ClientLibraryTestBase
   // disables constant folding, but we want it enabled for our zero-sized tensor
   // testcase.
-  execution_options_.mutable_debug_options()->clear_xla_disable_hlo_passes();
+  mutable_debug_options()->clear_xla_disable_hlo_passes();
 
   ComputeAndCompareTuple(&builder, expected,
-                         {input_data.get(), scale_data.get(), mean_data.get(),
-                          var_data.get(), grad_output_data.get()},
+                         {&input_literal, &scale_literal, &mean_literal,
+                          &var_literal, &grad_output_literal},
                          ErrorSpec(0.01, 1));
 }
 

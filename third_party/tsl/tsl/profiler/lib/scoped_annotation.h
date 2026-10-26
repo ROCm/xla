@@ -18,22 +18,87 @@ limitations under the License.
 #include <stddef.h>
 
 #include <atomic>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #include "absl/strings/string_view.h"
-#include "tsl/platform/macros.h"
-#include "tsl/platform/types.h"
+#include "tsl/platform/platform.h"  // IWYU pragma: keep
+#include "tsl/profiler/lib/nvtx_utils.h"
+#include "xla/tsl/platform/macros.h"
 
 #if !defined(IS_MOBILE_PLATFORM)
-#include "tsl/profiler/backends/cpu/annotation_stack.h"
-#include "tsl/profiler/lib/nvtx_utils.h"
+#include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
 #endif
 
-namespace tsl {
-namespace profiler {
+namespace tsl::profiler {
+
+// Adds an annotation to all activities through the currently registered
+// TraceCollector until PopAnnotation() is called.
+template <typename Generator>
+void PushAnnotation(const Generator& generator) {
+  auto domain = DefaultProfilerDomain();
+  const bool push_nvtx = TF_PREDICT_FALSE(domain != nullptr);
+#if !defined(IS_MOBILE_PLATFORM)
+  const bool push_stack = TF_PREDICT_FALSE(AnnotationStack::IsEnabled());
+#else
+  constexpr bool push_stack = false;
+#endif
+  if (TF_PREDICT_FALSE(push_nvtx || push_stack)) {
+    // Now CUPTI supports multiple subscribers we may need both sets of
+    // annotations at the same time.
+    decltype(auto) annotation = generator();
+    if (push_nvtx) {
+      RangePush(domain, annotation);
+    }
+#if !defined(IS_MOBILE_PLATFORM)
+    if (push_stack) {
+      AnnotationStack::PushAnnotation(
+          static_cast<absl::string_view>(annotation));
+    }
+#endif
+  }
+}
+
+template <typename AnnotationGenerator, typename RangeGenerator>
+void PushAnnotation(const AnnotationGenerator& annotation_generator,
+                    const RangeGenerator& range_generator) {
+  if (auto domain = DefaultProfilerDomain();
+      TF_PREDICT_FALSE(domain != nullptr)) {
+    RangePush(domain, range_generator());
+  }
+
+#if !defined(IS_MOBILE_PLATFORM)
+  if (TF_PREDICT_FALSE(AnnotationStack::IsEnabled())) {
+    AnnotationStack::PushAnnotation(
+        static_cast<absl::string_view>(annotation_generator()));
+  }
+#endif
+}
+
+inline void PushAnnotation(const char* name) {
+  PushAnnotation([&] { return name; });
+}
+inline void PushAnnotation(const std::string& name) {
+  PushAnnotation([&] { return name; });
+}
+
+inline void PopAnnotation() {
+  // TODO(b/137971921): without this memory fence, two presubmit tests will
+  // fail probably due to compiler in that presubmit config.
+  std::atomic_thread_fence(std::memory_order_acquire);
+
+#if !defined(IS_MOBILE_PLATFORM)
+  if (TF_PREDICT_FALSE(AnnotationStack::IsEnabled())) {
+    AnnotationStack::PopAnnotation();
+  }
+#endif
+
+  if (auto domain = DefaultProfilerDomain();
+      TF_PREDICT_FALSE(domain != nullptr)) {
+    RangePop(domain);
+  }
+}
 
 // Adds an annotation to all activities for the duration of the instance
 // lifetime through the currently registered TraceCollector.
@@ -44,102 +109,26 @@ namespace profiler {
 //          LaunchKernel2(); // Launches a CUDA kernel.
 //        }
 // This will add 'my kernels' to both kernels in the profiler UI
-template <bool always_annotate = false>
-class ScopedAnnotationT {
+class ScopedAnnotation {
  public:
-  explicit ScopedAnnotationT(absl::string_view name) {
-#if !defined(IS_MOBILE_PLATFORM)
-#if GOOGLE_CUDA
-    std::optional<nvtxDomainHandle_t> domain =
-        tsl::profiler::nvtx::GetNVTXDomain();
-    if (TF_PREDICT_FALSE(domain.has_value())) {
-      nvtxEventAttributes_t attrs;
-      std::string name_str(name);
-      tsl::profiler::nvtx::MakeAttributes(name_str.c_str(), &attrs);
-      ::nvtxDomainRangePushEx(domain.value(), &attrs);
-    } else  // NOLINT
-#endif
-        if (always_annotate || TF_PREDICT_FALSE(AnnotationStack::IsEnabled())) {
-      old_length_ = AnnotationStack::PushAnnotation(name);
-    }
-#endif
+  template <typename Generator>
+  explicit ScopedAnnotation(Generator&& generator) {
+    PushAnnotation(std::forward<Generator>(generator));
   }
 
-  explicit ScopedAnnotationT(const char* name)
-      : ScopedAnnotationT(absl::string_view(name)) {}
-
-  explicit ScopedAnnotationT(const string& name) {
-#if !defined(IS_MOBILE_PLATFORM)
-#if GOOGLE_CUDA
-    std::optional<nvtxDomainHandle_t> domain =
-        tsl::profiler::nvtx::GetNVTXDomain();
-    if (TF_PREDICT_FALSE(domain.has_value())) {
-      nvtxEventAttributes_t attrs;
-      tsl::profiler::nvtx::MakeAttributes(name.c_str(), &attrs);
-      ::nvtxDomainRangePushEx(domain.value(), &attrs);
-    } else  // NOLINT
-#endif
-        if (always_annotate || TF_PREDICT_FALSE(AnnotationStack::IsEnabled())) {
-      old_length_ = AnnotationStack::PushAnnotation(name);
-    }
-#endif
+  // The annotation generator provides the string pushed to the annotation
+  // stack. The range generator provides the object pushed to the profiler
+  // domain's range stack, which can carry a compact registered name and a
+  // structured payload.
+  template <typename AnnotationGenerator, typename RangeGenerator>
+  explicit ScopedAnnotation(AnnotationGenerator&& annotation_generator,
+                            RangeGenerator&& range_generator) {
+    PushAnnotation(std::forward<AnnotationGenerator>(annotation_generator),
+                   std::forward<RangeGenerator>(range_generator));
   }
 
-  explicit ScopedAnnotationT(string&& name) {
-#if !defined(IS_MOBILE_PLATFORM)
-#if GOOGLE_CUDA
-    std::optional<nvtxDomainHandle_t> domain =
-        tsl::profiler::nvtx::GetNVTXDomain();
-    if (TF_PREDICT_FALSE(domain.has_value())) {
-      nvtxEventAttributes_t attrs;
-      tsl::profiler::nvtx::MakeAttributes(name.c_str(), &attrs);
-      ::nvtxDomainRangePushEx(domain.value(), &attrs);
-    } else  // NOLINT
-#endif
-        if (always_annotate || TF_PREDICT_FALSE(AnnotationStack::IsEnabled())) {
-      old_length_ = AnnotationStack::PushAnnotation(std::move(name));
-    }
-#endif
-  }
-
-  template <typename NameGeneratorT>
-  explicit ScopedAnnotationT(NameGeneratorT name_generator) {
-#if !defined(IS_MOBILE_PLATFORM)
-#if GOOGLE_CUDA
-    std::optional<nvtxDomainHandle_t> domain =
-        tsl::profiler::nvtx::GetNVTXDomain();
-    if (TF_PREDICT_FALSE(domain.has_value())) {
-      auto name = name_generator();
-      nvtxEventAttributes_t attrs;
-      tsl::profiler::nvtx::MakeAttributes(name.c_str(), &attrs);
-      ::nvtxDomainRangePushEx(domain.value(), &attrs);
-    } else  // NOLINT
-#endif
-        if (always_annotate || TF_PREDICT_FALSE(AnnotationStack::IsEnabled())) {
-      auto name = name_generator();
-      old_length_ = AnnotationStack::PushAnnotation(name);
-    }
-#endif
-  }
-
-  // Pops the name passed in the constructor from the current annotation.
-  ~ScopedAnnotationT() {
-    // TODO(b/137971921): without this memory fence, two presubmit tests will
-    // fail probably due to compiler in that presubmit config.
-    std::atomic_thread_fence(std::memory_order_acquire);
-#if !defined(IS_MOBILE_PLATFORM)
-#if GOOGLE_CUDA
-    std::optional<nvtxDomainHandle_t> domain =
-        tsl::profiler::nvtx::GetNVTXDomain();
-    if (TF_PREDICT_FALSE(domain.has_value())) {
-      ::nvtxDomainRangePop(domain.value());
-    } else  // NOLINT
-#endif
-        if (TF_PREDICT_FALSE(old_length_ != kInvalidLength)) {
-      AnnotationStack::PopAnnotation(old_length_);
-    }
-#endif
-  }
+  // Pops the annotation and/or range pushed by the constructor.
+  ~ScopedAnnotation() { PopAnnotation(); }
 
   static bool IsEnabled() {
 #if !defined(IS_MOBILE_PLATFORM)
@@ -150,18 +139,10 @@ class ScopedAnnotationT {
   }
 
  private:
-  // signals that annotation is disabled at the constructor.
-  static constexpr size_t kInvalidLength = static_cast<size_t>(-1);
-
-  TF_DISALLOW_COPY_AND_ASSIGN(ScopedAnnotationT);
-
-  size_t old_length_ = kInvalidLength;
+  ScopedAnnotation(const ScopedAnnotation&) = delete;
+  ScopedAnnotation& operator=(const ScopedAnnotation&) = delete;
 };
 
-using ScopedAnnotation = ScopedAnnotationT<false>;
-using ScopedAnnotationAlways = ScopedAnnotationT<true>;
-
-}  // namespace profiler
-}  // namespace tsl
+}  // namespace tsl::profiler
 
 #endif  // TENSORFLOW_TSL_PROFILER_LIB_SCOPED_ANNOTATION_H_

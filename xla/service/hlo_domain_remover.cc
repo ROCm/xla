@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,13 +15,23 @@ limitations under the License.
 
 #include "xla/service/hlo_domain_remover.h"
 
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_computation.h"
+#include "xla/hlo/ir/hlo_domain_metadata.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/hlo_domain_map.h"
 #include "xla/service/hlo_domain_verifier.h"
-#include "xla/service/hlo_graph_dumper.h"
-#include "xla/types.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -30,46 +40,46 @@ class HloDomainRemover::RunContext {
   RunContext(HloModule* module, HloDomainRemover* remover)
       : module_(module), remover_(remover) {}
 
-  StatusOr<bool> Run(
+  absl::StatusOr<bool> Run(
       const absl::flat_hash_set<absl::string_view>& execution_threads);
 
  private:
   // Verifies the consistency of the domain, and normalizes the instructions
   // within it.
-  Status VerifyAndNormalizeDomain(const DomainMetadata::Domain& domain);
+  absl::Status VerifyAndNormalizeDomain(const DomainMetadata::Domain& domain);
 
   HloModule* module_;
   HloDomainRemover* remover_;
 };
 
-Status HloDomainRemover::RunContext::VerifyAndNormalizeDomain(
+absl::Status HloDomainRemover::RunContext::VerifyAndNormalizeDomain(
     const DomainMetadata::Domain& domain) {
-  TF_ASSIGN_OR_RETURN(const DomainMetadata* ref_metadata,
-                      HloDomainVerifier::VerifyDomain(domain));
+  ABSL_ASSIGN_OR_RETURN(const DomainMetadata* ref_metadata,
+                        HloDomainVerifier::VerifyDomain(domain));
   if (ref_metadata != nullptr) {
     VLOG(4) << "Applying domain normalization: " << ref_metadata->ToString();
-    TF_RETURN_IF_ERROR(remover_->normalizer_(domain, ref_metadata));
+    ABSL_RETURN_IF_ERROR(remover_->normalizer_(domain, ref_metadata));
   } else {
     // No kDomain instruction was present within this domain, so call the
     // generic normalization functions and have them apply their heuristic.
     VLOG(2) << "Applying domain-less normalization";
-    TF_RETURN_IF_ERROR(remover_->normalizer_(domain, nullptr));
+    ABSL_RETURN_IF_ERROR(remover_->normalizer_(domain, nullptr));
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-StatusOr<bool> HloDomainRemover::RunContext::Run(
+absl::StatusOr<bool> HloDomainRemover::RunContext::Run(
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   VLOG(4) << "Processing metadata domain: '" << remover_->kind_ << "'";
   int64_t removed_domains = 0;
   for (HloComputation* computation : module_->computations(execution_threads)) {
     // First create the domain instruction sets. A domain instruction set is
     // the set of instructions whose edges never cross a kDomain instruction.
-    TF_ASSIGN_OR_RETURN(std::unique_ptr<HloDomainMap> domain_map,
-                        HloDomainMap::Create(computation, remover_->kind_));
+    ABSL_ASSIGN_OR_RETURN(std::unique_ptr<HloDomainMap> domain_map,
+                          HloDomainMap::Create(computation, remover_->kind_));
     // Verify and normalize every domain populated within the map.
     for (auto& domain : domain_map->GetDomains()) {
-      TF_RETURN_IF_ERROR(VerifyAndNormalizeDomain(*domain));
+      ABSL_RETURN_IF_ERROR(VerifyAndNormalizeDomain(*domain));
     }
 
     // Now remove all the kDomain instructions of the kind specified by the
@@ -80,9 +90,9 @@ StatusOr<bool> HloDomainRemover::RunContext::Run(
       for (HloInstruction* operand : instruction->unique_operands()) {
         if (domain_map->IsDomainInstruction(operand)) {
           VLOG(5) << "Removing " << operand->name();
-          TF_RETURN_IF_ERROR(
+          ABSL_RETURN_IF_ERROR(
               operand->ReplaceAllUsesWith(operand->mutable_operand(0)));
-          TF_RETURN_IF_ERROR(computation->RemoveInstruction(operand));
+          ABSL_RETURN_IF_ERROR(computation->RemoveInstruction(operand));
           ++removed_domains;
         }
       }
@@ -91,7 +101,7 @@ StatusOr<bool> HloDomainRemover::RunContext::Run(
     if (root != nullptr && domain_map->IsDomainInstruction(root)) {
       VLOG(5) << "Removing " << root->name();
       computation->set_root_instruction(root->mutable_operand(0));
-      TF_RETURN_IF_ERROR(computation->RemoveInstruction(root));
+      ABSL_RETURN_IF_ERROR(computation->RemoveInstruction(root));
       ++removed_domains;
     }
   }
@@ -100,7 +110,7 @@ StatusOr<bool> HloDomainRemover::RunContext::Run(
   return removed_domains > 0;
 }
 
-StatusOr<int64_t> HloDomainRemover::RemoveExitDomains(
+absl::StatusOr<int64_t> HloDomainRemover::RemoveExitDomains(
     HloInstruction* instruction, absl::string_view domain_kind) {
   int64_t removed_domains = 0;
   HloComputation* computation = instruction->parent();
@@ -112,15 +122,15 @@ StatusOr<int64_t> HloDomainRemover::RemoveExitDomains(
         user->user_side_metadata().Kind() == domain_kind &&
         user->operand_side_metadata().Kind() == domain_kind) {
       VLOG(5) << "Removing exit domain " << user->name();
-      TF_RETURN_IF_ERROR(user->ReplaceAllUsesWith(instruction));
-      TF_RETURN_IF_ERROR(computation->RemoveInstruction(user));
+      ABSL_RETURN_IF_ERROR(user->ReplaceAllUsesWith(instruction));
+      ABSL_RETURN_IF_ERROR(computation->RemoveInstruction(user));
       ++removed_domains;
     }
   }
   return removed_domains;
 }
 
-StatusOr<bool> HloDomainRemover::Run(
+absl::StatusOr<bool> HloDomainRemover::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   RunContext run_context(module, this);

@@ -1,4 +1,4 @@
-/* Copyright 2021 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2021 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,14 +15,22 @@ limitations under the License.
 
 #include "xla/service/while_loop_expensive_invariant_code_motion.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include "xla/hlo/ir/hlo_computation.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/parser/hlo_parser.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/hlo/utils/hlo_matchers.h"
-#include "xla/service/hlo_parser.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/util.h"
 
 namespace xla {
 namespace {
 
-using WhileLoopExpensiveInvariantCodeMotionTest = HloTestBase;
+using WhileLoopExpensiveInvariantCodeMotionTest =
+    HloHardwareIndependentTestBase;
 namespace op = xla::testing::opcode_matchers;
 
 constexpr char kModuleWithNonInflatingInvariantDot[] = R"(
@@ -64,7 +72,7 @@ TEST_F(WhileLoopExpensiveInvariantCodeMotionTest,
   auto m =
       ParseAndReturnVerifiedModule(kModuleWithNonInflatingInvariantDot).value();
 
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       bool simplified_loop,
       WhileLoopExpensiveInvariantCodeMotion(
           /*worth_hoisting_individually=*/HloPredicateIsOp<HloOpcode::kDot>)
@@ -83,7 +91,7 @@ TEST_F(WhileLoopExpensiveInvariantCodeMotionTest,
   auto m =
       ParseAndReturnVerifiedModule(kModuleWithNonInflatingInvariantDot).value();
 
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       bool simplified_loop,
       WhileLoopExpensiveInvariantCodeMotion(
           /*worth_hoisting_individually=*/HloPredicateIsOp<HloOpcode::kDot,
@@ -102,10 +110,10 @@ TEST_F(WhileLoopExpensiveInvariantCodeMotionTest,
   auto m =
       ParseAndReturnVerifiedModule(kModuleWithNonInflatingInvariantDot).value();
 
-  TF_ASSERT_OK_AND_ASSIGN(bool simplified_loop,
-                          WhileLoopExpensiveInvariantCodeMotion(
-                              /*worth_hoisting_individually=*/HloPredicateFalse)
-                              .Run(m.get()));
+  ASSERT_OK_AND_ASSIGN(bool simplified_loop,
+                       WhileLoopExpensiveInvariantCodeMotion(
+                           /*worth_hoisting_individually=*/HloPredicateFalse)
+                           .Run(m.get()));
   EXPECT_FALSE(simplified_loop);
 }
 
@@ -147,7 +155,7 @@ TEST_F(WhileLoopExpensiveInvariantCodeMotionTest, DoesNotHoistsInflating) {
   auto m =
       ParseAndReturnVerifiedModule(kModuleWithInflatingInvariantDot).value();
 
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       bool simplified_loop,
       WhileLoopExpensiveInvariantCodeMotion(
           /*worth_hoisting_individually=*/HloPredicateIsOp<HloOpcode::kDot>)
@@ -160,7 +168,7 @@ TEST_F(WhileLoopExpensiveInvariantCodeMotionTest,
   auto m =
       ParseAndReturnVerifiedModule(kModuleWithInflatingInvariantDot).value();
 
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       bool simplified_loop,
       WhileLoopExpensiveInvariantCodeMotion(
           /*worth_hoisting_individually=*/HloPredicateIsOp<HloOpcode::kDot,
@@ -208,7 +216,7 @@ ENTRY entry {
 )";
   auto m = ParseAndReturnVerifiedModule(kModuleWithDuplicateOperands).value();
 
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       bool simplified_loop,
       WhileLoopExpensiveInvariantCodeMotion(
           /*worth_hoisting_individually=*/HloPredicateIsOp<HloOpcode::kDot>)
@@ -252,12 +260,82 @@ ENTRY entry {
 )";
   auto m = ParseAndReturnVerifiedModule(kModuleWithShardingCustomCalls).value();
 
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       bool simplified_loop,
       WhileLoopExpensiveInvariantCodeMotion(
           /*worth_hoisting_individually=*/HloPredicateIsOp<HloOpcode::kDot>)
           .Run(m.get()));
   EXPECT_FALSE(simplified_loop);
+}
+
+TEST_F(WhileLoopExpensiveInvariantCodeMotionTest, HoistWithOriginalValue) {
+  const char* const hlo_string = R"(
+HloModule licm_ov_test
+
+body {
+  p_body = (f32[8,8], f32[16, 8]) parameter(0)
+  b = f32[16, 8] get-tuple-element(p_body), index=1
+  const = f32[] constant(1.0)
+  lhs = f32[8, 16] broadcast(const), dimensions={}, origin={{"lhs.1"}}
+  dot = f32[8,8] dot(lhs, b), lhs_contracting_dims={1}, rhs_contracting_dims={0}, origin={{"dot.1"}}
+  a = f32[8,8] get-tuple-element(p_body), index=0
+  add = f32[8,8] add(a, dot)
+  ROOT root = (f32[8,8], f32[16,8]) tuple(add, b)
+}
+
+condition {
+  p_cond = (f32[8,8], f32[16, 8]) parameter(0)
+  ROOT result = pred[] constant(true)
+}
+
+ENTRY entry {
+  param0 = f32[8,8] parameter(0)
+  param1 = f32[16, 8] parameter(1)
+  while_init = (f32[8,8], f32[16,8]) tuple(param0, param1)
+  ROOT while0 = (f32[8,8], f32[16, 8]) while(while_init), condition=condition, body=body, origin={({"while.5" {0}},{"while.5" {1}})}
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto m, ParseAndReturnVerifiedModule(hlo_string));
+  HloComputation* body = m->GetComputationWithName("body");
+  HloInstruction* dot = body->GetInstructionWithName("dot");
+  HloInstruction* lhs = body->GetInstructionWithName("lhs");
+
+  ASSERT_OK_AND_ASSIGN(
+      bool simplified_loop,
+      WhileLoopExpensiveInvariantCodeMotion(
+          /*worth_hoisting_individually=*/HloPredicateIsOp<HloOpcode::kDot>)
+          .Run(m.get()));
+  EXPECT_TRUE(simplified_loop);
+
+  HloInstruction* transformed_while = nullptr;
+  for (auto* instr : m->entry_computation()->instructions()) {
+    if (instr->opcode() == HloOpcode::kWhile) {
+      transformed_while = instr;
+      break;
+    }
+  }
+  ASSERT_NE(transformed_while, nullptr);
+
+  HloInstruction* hoisted_dot = nullptr;
+  HloInstruction* hoisted_lhs = nullptr;
+  for (auto* instr : m->entry_computation()->instructions()) {
+    if (instr->opcode() == HloOpcode::kDot && instr->shape() == dot->shape()) {
+      hoisted_dot = instr;
+    }
+    if (instr->opcode() == HloOpcode::kBroadcast &&
+        instr->shape() == lhs->shape()) {
+      hoisted_lhs = instr;
+    }
+  }
+  ASSERT_NE(hoisted_dot, nullptr);
+  ASSERT_NE(hoisted_lhs, nullptr);
+  ASSERT_NE(hoisted_dot->original_value(), nullptr);
+  EXPECT_EQ(hoisted_dot->original_value()->ToString(), "{\"while.5#*/dot.1\"}");
+  ASSERT_NE(hoisted_lhs->original_value(), nullptr);
+  EXPECT_EQ(hoisted_lhs->original_value()->ToString(), "{\"while.5#*/lhs.1\"}");
+  ASSERT_NE(transformed_while->original_value(), nullptr);
+  EXPECT_EQ(transformed_while->original_value()->ToString(),
+            "({\"while.5\" {0}}, {\"while.5\" {1}}, {\"while.5#*/dot.1\"})");
 }
 
 }  // namespace

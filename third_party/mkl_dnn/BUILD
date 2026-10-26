@@ -1,51 +1,20 @@
-load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load("@xla//third_party/rules_python/python:py_binary.bzl", "py_binary")
 
 package(
-    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
-    default_visibility = [
-        "//tensorflow:__subpackages__",
-    ],
+    # copybara:uncomment default_applicable_licenses = ["//third_party/tensorflow:license"],
+    default_visibility = ["//visibility:public"],
     licenses = ["notice"],
 )
 
-exports_files(["LICENSE"])
-
-config_setting(
-    name = "build_with_mkl_opensource",
-    define_values = {
-        "build_with_mkl": "true",
-        "build_with_mkl_opensource": "true",
-    },
+exports_files(
+    ["LICENSE"],
     visibility = ["//visibility:public"],
 )
 
-config_setting(
-    name = "build_with_mkldnn_openmp",
-    define_values = {
-        "build_with_mkl": "true",
-        "build_with_openmp": "true",
-    },
-    visibility = ["//visibility:public"],
-)
-
-config_setting(
-    name = "build_with_mkl_aarch64_openmp",
-    define_values = {
-        "build_with_mkl_aarch64": "true",
-        "build_with_openmp": "true",
-    },
-    visibility = ["//visibility:public"],
-)
-
-config_setting(
-    name = "build_with_mkl_aarch64",
-    define_values = {
-        "build_with_mkl_aarch64": "true",
-    },
-    visibility = ["//visibility:public"],
-)
-
-bzl_library(
-    name = "build_defs_bzl",
-    srcs = ["build_defs.bzl"],
+py_binary(
+    name = "gen_gpu_kernel_list",
+    srcs = ["gen_gpu_kernel_list.py"],
+    visibility = [
+        "@onednn_async//:__subpackages__",
+    ],
 )

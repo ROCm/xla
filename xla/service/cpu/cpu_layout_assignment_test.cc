@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,42 +15,44 @@ limitations under the License.
 
 #include "xla/service/cpu/cpu_layout_assignment.h"
 
+#include <cstdint>
 #include <initializer_list>
 #include <memory>
-#include <utility>
-#include <vector>
+#include <string>
 
+#include "absl/log/check.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/types/span.h"
+#include "tsl/platform/status.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/testlib/test_helpers.h"
 #include "xla/hlo/utils/hlo_matchers.h"
 #include "xla/layout_util.h"
 #include "xla/literal.h"
-#include "xla/service/algebraic_simplifier.h"
 #include "xla/service/computation_layout.h"
-#include "xla/service/cpu/target_machine_features_fake.h"
+#include "xla/service/cpu/target_machine_features_stub.h"
 #include "xla/shape_layout.h"
 #include "xla/shape_util.h"
-#include "xla/test.h"
-#include "xla/test_helpers.h"
-#include "xla/tests/hlo_test_base.h"
 #include "xla/tests/test_utils.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/status.h"
 
 namespace op = xla::testing::opcode_matchers;
 
 namespace xla {
 namespace {
 
-class CpuLayoutAssignmentTest : public HloTestBase {
+class CpuLayoutAssignmentTest : public HloHardwareIndependentTestBase {
  protected:
   void AssignLayouts(HloModule* module,
                      ComputationLayout* entry_computation_layout) {
-    cpu::TargetMachineFeaturesWithFakeAlignmentLogic target_machine_features(
+    cpu::TargetMachineFeaturesStub target_machine_features(
         [](int64_t shape_size) {
           return cpu::TargetMachineFeatures::kEigenExpectedTensorAlignment;
         });
@@ -261,7 +263,7 @@ struct DotOutputFusionLayoutAssignmentResult {
   const HloInstruction* addend_fusion_param;
 };
 
-static StatusOr<DotOutputFusionLayoutAssignmentResult> RunDotOutputFusion(
+static absl::StatusOr<DotOutputFusionLayoutAssignmentResult> RunDotOutputFusion(
     HloModule* module, const std::string& test_name, int m, int k, int n,
     const int64_t dot_operand_idx_in_add) {
   DotOutputFusionLayoutAssignmentResult result;
@@ -303,14 +305,14 @@ static StatusOr<DotOutputFusionLayoutAssignmentResult> RunDotOutputFusion(
   HloInstruction* fusion_instruction =
       module->entry_computation()->AddInstruction(HloInstruction::CreateFusion(
           dot_shape, HloInstruction::FusionKind::kOutput, add_result));
-  TF_RETURN_IF_ERROR(
+  ABSL_RETURN_IF_ERROR(
       computation->ReplaceInstruction(add_result, fusion_instruction));
 
   HloInstruction* fused_add =
       fusion_instruction->fused_instructions_computation()->root_instruction();
   HloInstruction* fused_dot = fusion_instruction->FuseInstruction(dot_result);
 
-  TF_RETURN_IF_ERROR(
+  ABSL_RETURN_IF_ERROR(
       computation->RemoveInstructionAndUnusedOperands(dot_result));
 
   ComputationLayout computation_layout(computation->ComputeProgramShape());
@@ -328,14 +330,14 @@ static StatusOr<DotOutputFusionLayoutAssignmentResult> RunDotOutputFusion(
   result.addend_fusion_param = fusion_instruction->operand(
       fused_add->operand(1 - dot_operand_idx_in_add)->parameter_number());
 
-  cpu::TargetMachineFeaturesWithFakeAlignmentLogic target_machine_features(
+  cpu::TargetMachineFeaturesStub target_machine_features(
       [](int64_t shape_size) {
         return cpu::TargetMachineFeatures::kEigenExpectedTensorAlignment;
       });
   cpu::CpuLayoutAssignment layout_assignment(&computation_layout,
                                              &target_machine_features);
-  TF_ASSIGN_OR_RETURN(result.layout_assignment_changed_something,
-                      layout_assignment.Run(module));
+  ABSL_ASSIGN_OR_RETURN(result.layout_assignment_changed_something,
+                        layout_assignment.Run(module));
 
   return result;
 }
@@ -347,7 +349,9 @@ static void AssertCorrectLayoutForDotOutputFusion(
   Layout expected_dot_rhs_layout = expect_col_major_dot_rhs
                                        ? LayoutUtil::MakeLayout({0, 1})
                                        : LayoutUtil::MakeLayout({1, 0});
-  if (layout_assignment_result.dot_rhs_fusion_param->shape().rank() == 1) {
+  if (layout_assignment_result.dot_rhs_fusion_param->shape()
+          .dimensions()
+          .size() == 1) {
     expected_dot_rhs_layout = LayoutUtil::MakeLayout({0});
   }
   EXPECT_TRUE(LayoutUtil::Equal(
@@ -356,19 +360,23 @@ static void AssertCorrectLayoutForDotOutputFusion(
 
   EXPECT_TRUE(LayoutUtil::Equal(
       LayoutUtil::MakeDescendingLayout(
-          layout_assignment_result.dot_lhs_fusion_param->shape().rank()),
+          layout_assignment_result.dot_lhs_fusion_param->shape()
+              .dimensions()
+              .size()),
       layout_assignment_result.dot_lhs_fusion_param->shape().layout()));
 
   EXPECT_TRUE(LayoutUtil::Equal(
       LayoutUtil::MakeDescendingLayout(
-          layout_assignment_result.addend_fusion_param->shape().rank()),
+          layout_assignment_result.addend_fusion_param->shape()
+              .dimensions()
+              .size()),
       layout_assignment_result.addend_fusion_param->shape().layout()));
   EXPECT_THAT(computation->instructions(), Each(Not(op::Copy())));
 }
 
 TEST_F(CpuLayoutAssignmentTest, DotOutputFusion_1x50x19_dot_idx_0) {
   std::unique_ptr<HloModule> module = CreateNewVerifiedModule();
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       DotOutputFusionLayoutAssignmentResult layout_assignment_result,
       RunDotOutputFusion(module.get(), TestName(), /*m=*/1, /*k=*/50, /*n=*/19,
                          /*dot_operand_idx_in_add=*/0));
@@ -380,7 +388,7 @@ TEST_F(CpuLayoutAssignmentTest, DotOutputFusion_1x50x19_dot_idx_0) {
 
 TEST_F(CpuLayoutAssignmentTest, DotOutputFusion_1x50x19_dot_idx_1) {
   std::unique_ptr<HloModule> module = CreateNewVerifiedModule();
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       DotOutputFusionLayoutAssignmentResult layout_assignment_result,
       RunDotOutputFusion(module.get(), TestName(), /*m=*/1, /*k=*/50, /*n=*/19,
                          /*dot_operand_idx_in_add=*/1));
@@ -392,7 +400,7 @@ TEST_F(CpuLayoutAssignmentTest, DotOutputFusion_1x50x19_dot_idx_1) {
 
 TEST_F(CpuLayoutAssignmentTest, DotOutputFusion_19x50x1_dot_idx_0) {
   std::unique_ptr<HloModule> module = CreateNewVerifiedModule();
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       DotOutputFusionLayoutAssignmentResult layout_assignment_result,
       RunDotOutputFusion(module.get(), TestName(), /*m=*/19, /*k=*/50, /*n=*/1,
                          /*dot_operand_idx_in_add=*/0));
@@ -404,7 +412,7 @@ TEST_F(CpuLayoutAssignmentTest, DotOutputFusion_19x50x1_dot_idx_0) {
 
 TEST_F(CpuLayoutAssignmentTest, DotOutputFusion_19x50x1_dot_idx_1) {
   std::unique_ptr<HloModule> module = CreateNewVerifiedModule();
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       DotOutputFusionLayoutAssignmentResult layout_assignment_result,
       RunDotOutputFusion(module.get(), TestName(), /*m=*/19, /*k=*/50, /*n=*/1,
                          /*dot_operand_idx_in_add=*/1));
@@ -416,7 +424,7 @@ TEST_F(CpuLayoutAssignmentTest, DotOutputFusion_19x50x1_dot_idx_1) {
 
 TEST_F(CpuLayoutAssignmentTest, DotOutputFusion_19x50x19_dot_idx_0) {
   std::unique_ptr<HloModule> module = CreateNewVerifiedModule();
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       DotOutputFusionLayoutAssignmentResult layout_assignment_result,
       RunDotOutputFusion(module.get(), TestName(), /*m=*/19, /*k=*/50, /*n=*/19,
                          /*dot_operand_idx_in_add=*/0));
@@ -428,7 +436,7 @@ TEST_F(CpuLayoutAssignmentTest, DotOutputFusion_19x50x19_dot_idx_0) {
 
 TEST_F(CpuLayoutAssignmentTest, DotOutputFusion_19x50x19_dot_idx_1) {
   std::unique_ptr<HloModule> module = CreateNewVerifiedModule();
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       DotOutputFusionLayoutAssignmentResult layout_assignment_result,
       RunDotOutputFusion(module.get(), TestName(), /*m=*/19, /*k=*/50, /*n=*/19,
                          /*dot_operand_idx_in_add=*/1));
@@ -452,8 +460,7 @@ ENTRY BatchDotLayoutMustBeRowMajor {
 }
 )";
 
-  TF_ASSERT_OK_AND_ASSIGN(auto module,
-                          ParseAndReturnVerifiedModule(hlo_string));
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
 
   HloComputation* computation = module->entry_computation();
 

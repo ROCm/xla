@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,26 +19,29 @@ limitations under the License.
 #ifndef XLA_LITERAL_COMPARISON_H_
 #define XLA_LITERAL_COMPARISON_H_
 
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "absl/status/status.h"
 #include "xla/error_spec.h"
 #include "xla/literal.h"
-#include "tsl/platform/status.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
 
 namespace xla {
 namespace literal_comparison {
 
 // Returns ok if the given shapes have the same rank, dimension sizes, and
 // primitive types.
-Status EqualShapes(const Shape& expected, const Shape& actual);
+absl::Status EqualShapes(const Shape& expected, const Shape& actual);
 
 // Returns ok if the given literals share identical dynamic shapes and
 // dimension sizes.
-Status EqualDynamicShapesAndDimensions(const LiteralSlice& expected,
-                                       const LiteralSlice& actual);
-
-// Returns ok if the expected and actual literals are (bitwise) equal for all
-// elements in the literal. Also, asserts that the rank, dimensions sizes, and
-// primitive type are equal.
-Status Equal(const LiteralSlice& expected, const LiteralSlice& actual);
+absl::Status EqualDynamicShapesAndDimensions(const LiteralSlice& expected,
+                                             const LiteralSlice& actual);
 
 // Structure that contains the distribution of absolute and relative errors,
 // bucketized into five buckets: [0.0001, 0.001, 0.01, 0.1, 1].
@@ -58,6 +61,12 @@ using MiscompareCallback = std::function<void(
     const LiteralSlice& expected, const LiteralSlice& actual,
     const LiteralSlice& mismatches, const ShapeIndex& shape_index,
     const ErrorBuckets& error_buckets)>;
+
+// Returns ok if the expected and actual literals are (bitwise) equal for all
+// elements in the literal. Also, asserts that the rank, dimensions sizes, and
+// primitive type are equal.
+absl::Status Equal(const LiteralSlice& expected, const LiteralSlice& actual,
+                   const MiscompareCallback& miscompare_callback = nullptr);
 
 // Inspects whether the expected and actual literals are within the given error
 // bound for all elements. Also, inspects whether the rank, dimensions sizes,
@@ -80,9 +89,9 @@ using MiscompareCallback = std::function<void(
 //
 // If miscompare_callback is nullptr, Near will return an error on the first
 // detected mismatch.
-Status Near(const LiteralSlice& expected, const LiteralSlice& actual,
-            const ErrorSpec& error, std::optional<bool> detailed_message,
-            const MiscompareCallback& miscompare_callback);
+absl::Status Near(const LiteralSlice& expected, const LiteralSlice& actual,
+                  const ErrorSpec& error, std::optional<bool> detailed_message,
+                  const MiscompareCallback& miscompare_callback);
 
 // Calling ToString on a literal with over 100 million elements takes around
 // 3 minutes.  The utility of printing a literal with >1000 elements is

@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@ limitations under the License.
 #ifndef XLA_SERVICE_PATTERN_MATCHER_H_
 #define XLA_SERVICE_PATTERN_MATCHER_H_
 
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <ios>
 #include <memory>
@@ -23,20 +25,37 @@ limitations under the License.
 #include <ostream>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
+#include "absl/algorithm/container.h"
+#include "absl/container/inlined_vector.h"
+#include "absl/functional/function_ref.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "absl/utility/utility.h"
+#include "xla/comparison_util.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/ir/hlo_sharding.h"
+#include "xla/hlo/ir/ptrvec.h"
+#include "xla/hlo/parser/hlo_parser.h"
+#include "xla/layout.h"
 #include "xla/layout_util.h"
-#include "xla/literal_util.h"
-#include "xla/service/hlo_parser.h"
+#include "xla/literal.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
+#include "xla/util.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 
@@ -85,6 +104,13 @@ namespace xla {
 //     - WithConvDnums(string or proto): checks convolution_dimension_numbers().
 //     - WithPredicate: Instruction matches an arbitrary function you pass.
 //       Function must have signature `bool(const HloInstruction*)`.
+//     - WithContractingDims: Dot instruction with specific LHS and RHS
+//       contracting dimensions.
+//     - WithReplicaGroups: Collective instruction's replica groups matches the
+//       given pattern.
+//     - WithSharding: Instruction's sharding is equal to the given sharding.
+//     - WithControlDeps: Instruction's control predecessors/successors match
+//       the given list of instructions.
 //
 //   Shape():
 //     - EqualTo
@@ -103,6 +129,8 @@ namespace xla {
 //
 //  Layout():
 //     - EqualTo
+//     - WithMinorToMajor: minor to major dimension ordering matches the given
+//       pattern
 //
 // Op(), Shape(), and Layout() may be passed an argument of type
 // HloInstruction**, Shape**, or Layout**, respectively, or const versions of
@@ -240,16 +268,68 @@ bool MatchAndLogIfFailed(HloInstruction* instr, absl::string_view desc,
   return false;
 }
 
+// Captures multiple HloInstruction pointers and verifies that their target
+// is identical.
+//
+// Example:
+// Pattern cos(x) / sin(x) with cos and sin intended to operate on the same
+// HloInstruction:
+//  UniqueHloInstruction x;
+//  bool m = Match(
+//    instr, m::Divide(m::Cos(m::Op().WithPredicate(x.capture_or_verify_fn())),
+//                    m::Sin(m::Op().WithPredicate(x.capture_or_verify_fn()))));
+// m is true and x.instr() returns an HloInstruction pointer to the operand of
+// cosine and sine iff HloInstruction *instr points to a division of a cosine by
+// a sine that operate on the same instruction.
+class UniqueHloInstruction {
+ public:
+  UniqueHloInstruction()
+      : is_set_(false),
+        instr_(nullptr),
+        capture_or_verify_([this](const HloInstruction* instr) -> bool {
+          return CaptureOrVerify(const_cast<HloInstruction*>(instr));
+        }) {}  // NOLINT(google-readability-const-cast): const_cast is needed
+               // to make it compatible with the WithPredicate API.
+  HloInstruction* instr() const { return instr_; }
+  void set_instr(HloInstruction* instr) {
+    is_set_ = true;
+    instr_ = instr;
+  }
+
+  // Stores instr when invoked the first time. Otherwise, compares instr to the
+  // stored value and sets the stored value to nullptr if the comparison fails.
+  bool CaptureOrVerify(HloInstruction* instr) {
+    if (is_set_ && instr != instr_) {
+      instr_ = nullptr;
+    }
+    if (!is_set_) {
+      is_set_ = true;
+      instr_ = instr;
+    }
+    return instr_ != nullptr;
+  }
+
+  // Returns a std::function for capturing or verifying an instruction using
+  // WithPredicate.
+  std::function<bool(const HloInstruction*)> capture_or_verify_fn() const {
+    return capture_or_verify_;
+  }
+
+ private:
+  bool is_set_;
+  HloInstruction* instr_;
+  std::function<bool(const HloInstruction*)> capture_or_verify_;
+};
+
 namespace match {
 
 namespace detail {
 
 // Macro for streaming to option.explain_os if it's not null.
 //
-//   EXPLAIN << "value of foo(): " << foo()
+//   XLA_PATTERN_MATCHER_EXPLAIN << "value of foo(): " << foo()
 //
-#pragma push_macro("EXPLAIN")
-#define EXPLAIN \
+#define XLA_PATTERN_MATCHER_EXPLAIN \
   if (option.explain_os) *option.explain_os
 
 // kIndentInc is the additional number of spaces that we indent by when we
@@ -450,8 +530,8 @@ auto AllOf(const detail::AllOfPattern<Item, InnerPs...>& inner_p,
                                 InnerPs..., OuterPs...>(inner_ps...,
                                                         outer_ps...);
   };
-  return absl::apply(make_all_of, std::tuple_cat(inner_p.patterns(),
-                                                 std::make_tuple(outer_ps...)));
+  return std::apply(make_all_of, std::tuple_cat(inner_p.patterns(),
+                                                std::make_tuple(outer_ps...)));
 }
 
 namespace detail {
@@ -465,7 +545,7 @@ class LayoutPatternBaseImpl {
  public:
   bool Match(const ::xla::Layout* layout, MatchOption option) const {
     if (layout == nullptr) {
-      EXPLAIN << "Layout is null";
+      XLA_PATTERN_MATCHER_EXPLAIN << "Layout is null";
       return false;
     }
     return true;
@@ -487,9 +567,9 @@ class LayoutPatternEqualImpl {
 
   bool Match(const ::xla::Layout* layout, MatchOption option) const {
     if (!LayoutUtil::Equal(*layout_, *layout)) {
-      EXPLAIN << "Layout " << LayoutUtil::HumanString(*layout)
-              << " is not equal to expected "
-              << LayoutUtil::HumanString(*layout_);
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "Layout " << LayoutUtil::HumanString(*layout)
+          << " is not equal to expected " << LayoutUtil::HumanString(*layout_);
       return false;
     }
     return true;
@@ -501,6 +581,30 @@ class LayoutPatternEqualImpl {
 
  private:
   const ::xla::Layout* layout_;
+};
+
+class LayoutPatternMinorToMajorImpl {
+ public:
+  explicit LayoutPatternMinorToMajorImpl(
+      absl::Span<const int64_t> minor_to_major)
+      : minor_to_major_(minor_to_major.begin(), minor_to_major.end()) {}
+
+  bool Match(const ::xla::Layout* layout, MatchOption option) const {
+    if (layout->minor_to_major() != minor_to_major_) {
+      XLA_PATTERN_MATCHER_EXPLAIN << "Layout does not have minor to major ["
+                                  << absl::StrJoin(minor_to_major_, ",") << "]";
+      return false;
+    }
+    return true;
+  }
+
+  void DescribeTo(std::ostream* os, int64_t indent = 0) const {
+    *os << "with minor to major [" << absl::StrJoin(minor_to_major_, ",")
+        << "]";
+  }
+
+ private:
+  absl::InlinedVector<int64_t, 8> minor_to_major_;
 };
 
 // A pattern that matches Layouts.
@@ -551,6 +655,11 @@ class LayoutPattern {
     return AppendImpl(LayoutPatternEqualImpl(layout));
   }
 
+  constexpr auto WithMinorToMajor(
+      absl::Span<const int64_t> minor_to_major) const {
+    return AppendImpl(LayoutPatternMinorToMajorImpl(minor_to_major));
+  }
+
  private:
   Impl impl_;
   LayoutType** matched_layout_;
@@ -576,19 +685,40 @@ class AnyOfPattern {
   }
 
  private:
+  template <typename ItemType, typename SubPattern>
+  static bool MatchSinglePattern(ItemType* item, MatchOption option,
+                                 const SubPattern& subpattern) {
+    MatchOption new_option = option;
+    new_option.capture = false;
+    if (!subpattern.Match(item, new_option)) {
+      return false;
+    }
+    if (option.capture) {
+      bool matched = subpattern.Match(item, option);
+      DCHECK(matched);
+    }
+    return true;
+  }
+
   template <typename ItemType>
   bool MatchImpl(ItemType* item, MatchOption option) const {
-    // If we're generating an explanation, buffer it until we know we failed.
-    std::optional<std::stringstream> explanation;
-    MatchOption new_option = option;
-    if (option.explain_os) {
-      new_option.explain_os = &explanation.emplace();
+    if (!option.explain_os) {
+      return std::apply(
+          [&](const auto&... patterns) {
+            return (MatchSinglePattern(item, option, patterns) || ...);
+          },
+          patterns_);
     }
+    // If we're generating an explanation, buffer it until we know we failed.
+    std::stringstream explanation;
+    MatchOption new_option = option;
+    new_option.explain_os = &explanation;
     bool rv = MatchRecursiveImpl(item, new_option,
                                  std::integral_constant<size_t, 0>());
-    if (!rv && option.explain_os) {
-      EXPLAIN << "None of the following matchers succeeded:";
-      EXPLAIN << explanation->str();
+    if (!rv) {
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "None of the following matchers succeeded:";
+      XLA_PATTERN_MATCHER_EXPLAIN << explanation.str();
     }
     return rv;
   }
@@ -599,10 +729,8 @@ class AnyOfPattern {
     auto new_option = option;
     new_option.capture = false;
 
-    std::optional<std::stringstream> explanation;
-    if (option.explain_os) {
-      new_option.explain_os = &explanation.emplace();
-    }
+    std::stringstream explanation;
+    new_option.explain_os = &explanation;
 
     // Try to match the sub-pattern without capturing behavior.
     if (std::get<index>(patterns_).Match(item, new_option)) {
@@ -627,14 +755,13 @@ class AnyOfPattern {
       }
       return true;
     }
-    if (option.explain_os) {
-      EXPLAIN << "\nMatcher #" << index + 1;
-      EXPLAIN << "\n - ";
-      std::get<index>(patterns_).DescribeTo(option.explain_os, /*indent=*/3);
-      EXPLAIN << "\nfailed with";
-      EXPLAIN << "\n - ";
-      EXPLAIN << absl::StrReplaceAll(explanation->str(), {{"\n", "\n   "}});
-    }
+    XLA_PATTERN_MATCHER_EXPLAIN << "\nMatcher #" << index + 1;
+    XLA_PATTERN_MATCHER_EXPLAIN << "\n - ";
+    std::get<index>(patterns_).DescribeTo(option.explain_os, /*indent=*/3);
+    XLA_PATTERN_MATCHER_EXPLAIN << "\nfailed with";
+    XLA_PATTERN_MATCHER_EXPLAIN << "\n - ";
+    XLA_PATTERN_MATCHER_EXPLAIN
+        << absl::StrReplaceAll(explanation.str(), {{"\n", "\n   "}});
     return MatchRecursiveImpl(item, option,
                               std::integral_constant<size_t, index + 1>());
   }
@@ -693,7 +820,7 @@ class ShapePatternBaseImpl {
  public:
   bool Match(const ::xla::Shape* shape, MatchOption option) const {
     if (shape == nullptr) {
-      EXPLAIN << "Shape is null";
+      XLA_PATTERN_MATCHER_EXPLAIN << "Shape is null";
     }
     return shape != nullptr;
   }
@@ -714,8 +841,8 @@ class ShapePatternEqualImpl {
 
   bool Match(const ::xla::Shape* shape, MatchOption option) const {
     if (!ShapeUtil::Equal(*shape_, *shape)) {
-      EXPLAIN << "Shape not equal to "
-              << ShapeUtil::HumanStringWithLayout(*shape_);
+      XLA_PATTERN_MATCHER_EXPLAIN << "Shape not equal to "
+                                  << ShapeUtil::HumanStringWithLayout(*shape_);
       return false;
     }
     return true;
@@ -738,8 +865,8 @@ class ShapePatternCompatibleImpl {
 
   bool Match(const ::xla::Shape* shape, MatchOption option) const {
     if (!ShapeUtil::Compatible(*shape_, *shape)) {
-      EXPLAIN << "Shape not compatible with "
-              << ShapeUtil::HumanString(*shape_);
+      XLA_PATTERN_MATCHER_EXPLAIN << "Shape not compatible with "
+                                  << ShapeUtil::HumanString(*shape_);
       return false;
     }
     return true;
@@ -762,8 +889,8 @@ class ShapePatternElementTypeImpl {
 
   bool Match(const ::xla::Shape* shape, MatchOption option) const {
     if (shape->element_type() != element_type_) {
-      EXPLAIN << "Shape does not have element type "
-              << PrimitiveType_Name(element_type_);
+      XLA_PATTERN_MATCHER_EXPLAIN << "Shape does not have element type "
+                                  << PrimitiveType_Name(element_type_);
       return false;
     }
     return true;
@@ -786,8 +913,8 @@ class ShapePatternDimsImpl {
 
   bool Match(const ::xla::Shape* shape, MatchOption option) const {
     if (shape->dimensions() != dims_) {
-      EXPLAIN << "Shape does not have dimensions [" << absl::StrJoin(dims_, ",")
-              << "]";
+      XLA_PATTERN_MATCHER_EXPLAIN << "Shape does not have dimensions ["
+                                  << absl::StrJoin(dims_, ",") << "]";
       return false;
     }
     return true;
@@ -808,7 +935,7 @@ class ShapePatternIsScalarImpl {
 
   bool Match(const ::xla::Shape* shape, MatchOption option) const {
     if (!ShapeUtil::IsScalar(*shape)) {
-      EXPLAIN << "Shape is not a scalar";
+      XLA_PATTERN_MATCHER_EXPLAIN << "Shape is not a scalar";
       return false;
     }
     return true;
@@ -826,7 +953,7 @@ class ShapePatternIsArrayImpl {
 
   bool Match(const ::xla::Shape* shape, MatchOption option) const {
     if (!shape->IsArray()) {
-      EXPLAIN << "Shape is not an array";
+      XLA_PATTERN_MATCHER_EXPLAIN << "Shape is not an array";
       return false;
     }
     return true;
@@ -843,8 +970,8 @@ class ShapePatternIsDenseArrayImpl {
   explicit constexpr ShapePatternIsDenseArrayImpl() = default;
 
   bool Match(const ::xla::Shape* shape, MatchOption option) const {
-    if (!LayoutUtil::IsDenseArray(*shape)) {
-      EXPLAIN << "Shape is not a dense array";
+    if (!shape->IsArray()) {
+      XLA_PATTERN_MATCHER_EXPLAIN << "Shape is not a dense array";
       return false;
     }
     return true;
@@ -862,7 +989,7 @@ class ShapePatternIsTupleImpl {
 
   bool Match(const ::xla::Shape* shape, MatchOption option) const {
     if (!shape->IsTuple()) {
-      EXPLAIN << "Shape is not a tuple";
+      XLA_PATTERN_MATCHER_EXPLAIN << "Shape is not a tuple";
       return false;
     }
     return true;
@@ -881,7 +1008,7 @@ class ShapePatternEffectiveScalarImpl {
 
   bool Match(const ::xla::Shape* shape, MatchOption option) const {
     if (!ShapeUtil::IsEffectiveScalar(*shape)) {
-      EXPLAIN << "Shape is not an effective scalar";
+      XLA_PATTERN_MATCHER_EXPLAIN << "Shape is not an effective scalar";
       return false;
     }
     return true;
@@ -899,11 +1026,11 @@ class ShapePatternRankImpl {
   explicit constexpr ShapePatternRankImpl(int64_t rank) : rank_(rank) {}
 
   bool Match(const ::xla::Shape* shape, MatchOption option) const {
-    if (shape->rank() != rank_) {
+    if (shape->dimensions().size() != rank_) {
       if (rank_ == 0) {
-        EXPLAIN << "Shape is not a scalar";
+        XLA_PATTERN_MATCHER_EXPLAIN << "Shape is not a scalar";
       } else {
-        EXPLAIN << "Shape does not have rank " << rank_;
+        XLA_PATTERN_MATCHER_EXPLAIN << "Shape does not have rank " << rank_;
       }
       return false;
     }
@@ -938,11 +1065,11 @@ class ShapePatternLayoutImpl {
 
   bool Match(::xla::Shape* shape, MatchOption option) const {
     if (!LayoutUtil::HasLayout(*shape)) {
-      EXPLAIN << "Shape does not have a layout";
+      XLA_PATTERN_MATCHER_EXPLAIN << "Shape does not have a layout";
       return false;
     }
     if (!layout_.Match(shape->mutable_layout(), option)) {
-      EXPLAIN << "\nin layout";
+      XLA_PATTERN_MATCHER_EXPLAIN << "\nin layout";
       return false;
     }
     return true;
@@ -993,11 +1120,11 @@ class ShapePatternSubshapeImpl {
   template <typename ShapeType>
   bool MatchImpl(ShapeType* shape, MatchOption option) const {
     if (!ShapeUtil::IndexIsValid(*shape, index_)) {
-      EXPLAIN << "No subshape at " << ShapeIndex(index_);
+      XLA_PATTERN_MATCHER_EXPLAIN << "No subshape at " << ShapeIndex(index_);
       return false;
     }
     if (!subshape_.Match(GetSubshape(shape), option)) {
-      EXPLAIN << "\nin subshape at " << ShapeIndex(index_);
+      XLA_PATTERN_MATCHER_EXPLAIN << "\nin subshape at " << ShapeIndex(index_);
       return false;
     }
     return true;
@@ -1031,9 +1158,10 @@ class ShapePattern {
       return true;
     }
     if (shape) {
-      EXPLAIN << "\nin "
-              << (shape->has_layout() ? ShapeUtil::HumanStringWithLayout(*shape)
-                                      : ShapeUtil::HumanString(*shape));
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "\nin "
+          << (shape->has_layout() ? ShapeUtil::HumanStringWithLayout(*shape)
+                                  : ShapeUtil::HumanString(*shape));
     }
     return false;
   }
@@ -1046,9 +1174,10 @@ class ShapePattern {
       }
       return true;
     }
-    EXPLAIN << "\nin "
-            << (shape->has_layout() ? ShapeUtil::HumanStringWithLayout(*shape)
-                                    : ShapeUtil::HumanString(*shape));
+    XLA_PATTERN_MATCHER_EXPLAIN
+        << "\nin "
+        << (shape->has_layout() ? ShapeUtil::HumanStringWithLayout(*shape)
+                                : ShapeUtil::HumanString(*shape));
     return false;
   }
 
@@ -1106,6 +1235,10 @@ class ShapePattern {
   template <typename LayoutType, typename LayoutImpl>
   auto WithLayout(const LayoutPattern<LayoutType, LayoutImpl>& layout) const {
     return AppendImpl(ShapePatternLayoutImpl<LayoutType, LayoutImpl>(layout));
+  }
+
+  constexpr auto WithLayout(absl::Span<const int64_t> minor_to_major) const {
+    return WithLayout(Layout().WithMinorToMajor(minor_to_major));
   }
 
   constexpr auto WithLayoutEqualTo(const ::xla::Layout* layout) const {
@@ -1200,7 +1333,7 @@ class HloInstructionPatternBaseImpl {
  public:
   bool Match(const ::xla::HloInstruction* inst, MatchOption option) const {
     if (inst == nullptr) {
-      EXPLAIN << "HloInstruction* is null";
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction* is null";
       return false;
     }
     return true;
@@ -1222,7 +1355,8 @@ class HloInstructionPatternNameImpl {
 
   bool Match(const ::xla::HloInstruction* inst, MatchOption option) const {
     if (inst->name() != name_) {
-      EXPLAIN << "HloInstruction not named \"" << name_ << "\"";
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction not named \"" << name_
+                                  << "\"";
       return false;
     }
     return true;
@@ -1244,10 +1378,11 @@ class HloInstructionIsImpl {
 
   bool Match(const ::xla::HloInstruction* inst, MatchOption option) const {
     if (inst != inst_) {
-      EXPLAIN << "HloInstruction " << std::hex << std::nouppercase
-              << std::showbase << reinterpret_cast<uint64_t>(inst) << " is not "
-              << reinterpret_cast<uint64_t>(inst_) << " ("
-              << InstToString(inst_) << ")";
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "HloInstruction " << std::hex << std::nouppercase << std::showbase
+          << reinterpret_cast<uint64_t>(inst) << " is not "
+          << reinterpret_cast<uint64_t>(inst_) << " (" << InstToString(inst_)
+          << ")";
       return false;
     }
     return true;
@@ -1273,12 +1408,13 @@ class HloInstructionPatternOpcodeImpl {
 
   bool Match(const ::xla::HloInstruction* inst, MatchOption option) const {
     if (invert_ && inst->opcode() == opcode_) {
-      EXPLAIN << "HloInstruction has opcode " << opcode_
-              << ", expected anything else";
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction has opcode " << opcode_
+                                  << ", expected anything else";
       return false;
     }
     if (!invert_ && inst->opcode() != opcode_) {
-      EXPLAIN << "HloInstruction doesn't have opcode " << opcode_;
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction doesn't have opcode "
+                                  << opcode_;
       return false;
     }
     return true;
@@ -1311,11 +1447,13 @@ class HloInstructionCustomCallTargetImpl {
         !absl::c_linear_search(custom_call_targets_,
                                inst->custom_call_target())) {
       if (custom_call_targets_.size() == 1) {
-        EXPLAIN << "HloInstruction is not a custom call with a target '"
-                << custom_call_targets_.front() << "'";
+        XLA_PATTERN_MATCHER_EXPLAIN
+            << "HloInstruction is not a custom call with a target '"
+            << custom_call_targets_.front() << "'";
       } else {
-        EXPLAIN << "HloInstruction is not a custom call with a target in {"
-                << absl::StrJoin(custom_call_targets_, ", ") << "}";
+        XLA_PATTERN_MATCHER_EXPLAIN
+            << "HloInstruction is not a custom call with a target in {"
+            << absl::StrJoin(custom_call_targets_, ", ") << "}";
       }
       return false;
     }
@@ -1344,7 +1482,8 @@ class HloInstructionPatternNumOperandsImpl {
 
   bool Match(const ::xla::HloInstruction* inst, MatchOption option) const {
     if (inst->operand_count() != num_operands_) {
-      EXPLAIN << "HloInstruction doesn't have " << num_operands_ << " operands";
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction doesn't have "
+                                  << num_operands_ << " operands";
       return false;
     }
     return true;
@@ -1370,7 +1509,7 @@ class HloInstructionPatternShapeImpl {
 
   bool Match(const ::xla::HloInstruction* inst, MatchOption option) const {
     if (!shape_.Match(&inst->shape(), option)) {
-      EXPLAIN << "\nin output shape";
+      XLA_PATTERN_MATCHER_EXPLAIN << "\nin output shape";
       return false;
     }
     return true;
@@ -1378,7 +1517,7 @@ class HloInstructionPatternShapeImpl {
 
   bool Match(::xla::HloInstruction* inst, MatchOption option) const {
     if (!shape_.Match(inst->mutable_shape(), option)) {
-      EXPLAIN << "\nin output shape";
+      XLA_PATTERN_MATCHER_EXPLAIN << "\nin output shape";
       return false;
     }
     return true;
@@ -1422,19 +1561,20 @@ class HloInstructionPatternOperandImpl {
   template <typename HloInstructionType>
   bool MatchImpl(HloInstructionType* inst, MatchOption option) const {
     if (operand_index_ >= inst->operand_count()) {
-      EXPLAIN << "desired operand index " << operand_index_
-              << " is out of bounds";
+      XLA_PATTERN_MATCHER_EXPLAIN << "desired operand index " << operand_index_
+                                  << " is out of bounds";
       return false;
     }
     if (!operand_.Match(HloOperand(inst, operand_index_), option)) {
-      EXPLAIN << "\nin operand " << operand_index_;
+      XLA_PATTERN_MATCHER_EXPLAIN << "\nin operand " << operand_index_;
       return false;
     }
     if (option.single_user_only &&
         inst->operand(operand_index_)->user_count() != 1) {
-      EXPLAIN << "Operand " << operand_index_ << " of HloInstruction has "
-              << inst->operand(operand_index_)->user_count()
-              << " users. Expected 1.";
+      XLA_PATTERN_MATCHER_EXPLAIN << "Operand " << operand_index_
+                                  << " of HloInstruction has "
+                                  << inst->operand(operand_index_)->user_count()
+                                  << " users. Expected 1.";
       return false;
     }
     return true;
@@ -1477,7 +1617,7 @@ class HloInstructionPatternOperandIfPresentImpl {
       return true;
     }
     if (!operand_.Match(HloOperand(inst, operand_index_), option)) {
-      EXPLAIN << "\nin operand " << operand_index_;
+      XLA_PATTERN_MATCHER_EXPLAIN << "\nin operand " << operand_index_;
       return false;
     }
     return true;
@@ -1486,6 +1626,93 @@ class HloInstructionPatternOperandIfPresentImpl {
   int64_t operand_index_;
   HloInstructionPattern<OperandType, OperandImpl> operand_;
 };
+
+inline bool ExplainBinaryOperandsAnyOrder(
+    MatchOption option, absl::FunctionRef<bool(int, int, MatchOption)> match_fn,
+    absl::FunctionRef<void(int, std::ostream*, int64_t)> describe_fn) {
+  // If we are generating explanations, we have some work to do in order to
+  // generate a helpful error.
+  //
+  // First, try all four operand/matcher combinations, recording the
+  // failure explanations separately from option.explain_os. matches[i][j]
+  // tells us if matcher_i matches operand j.
+  bool matches[/*matcher*/ 2][/*operand*/ 2];
+  std::stringstream explanations[/*matcher*/ 2][/*operand*/ 2];
+  for (int i = 0; i < 2; ++i) {
+    for (int j = 0; j < 2; ++j) {
+      MatchOption new_option = option;
+      new_option.capture = false;
+      new_option.explain_os = &explanations[i][j];
+      matches[i][j] = match_fn(i, j, new_option);
+    }
+  }
+
+  // Check if the match succeeded.
+  for (int i = 0; i < 2; ++i) {
+    if (matches[0][i] && matches[1][(i + 1) % 2]) {
+      // Rerun the matches with capture enabled if necessary.
+      if (option.capture) {
+        bool matched =
+            match_fn(0, i, option) && match_fn(1, (i + 1) % 2, option);
+        DCHECK(matched);
+      }
+      return true;
+    }
+  }
+
+  auto describe_matcher = [&](int matcher_idx) {
+    XLA_PATTERN_MATCHER_EXPLAIN << "\n - ";
+    describe_fn(matcher_idx, option.explain_os, /*indent=*/3);
+    for (int i = 0; i < 2; ++i) {
+      if (matches[matcher_idx][/*operand*/ i]) {
+        continue;
+      }
+      XLA_PATTERN_MATCHER_EXPLAIN << "\ndoes not match "
+                                  << (i == 0 ? "LHS" : "RHS") << ":\n";
+      XLA_PATTERN_MATCHER_EXPLAIN << " - ";
+      XLA_PATTERN_MATCHER_EXPLAIN << absl::StrReplaceAll(
+          explanations[matcher_idx][/*operand*/ i].str(), {{"\n", "\n   "}});
+    }
+  };
+
+  // If we failed to match, one of the following is true:
+  //  1. op1 (op2) matches neither LHS nor RHS, or
+  //  2. op1 and op2 both match LHS (RHS), but neither matches RHS (LHS).
+  // We print different explanations depending on which case we're in.
+
+  // Case 1.
+  bool wrote_explanation = false;
+  for (int i = 0; !wrote_explanation && i < 2; ++i) {
+    if (!matches[i][0] && !matches[i][1]) {
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "HloInstruction's operands (ignoring order) did not match "
+          << (i == 0 ? "first" : "second") << " matcher. Specifically,";
+      describe_matcher(i);
+      wrote_explanation = true;
+    }
+  }
+
+  // Case 2.
+  for (int i = 0; !wrote_explanation && i < 2; ++i) {
+    if (matches[/*matcher*/ 0][/*operand*/ i] &&
+        matches[/*matcher*/ 1][/*operand*/ i]) {
+      CHECK(!matches[0][(i + 1) % 2]);
+      CHECK(!matches[1][(i + 1) % 2]);
+      CHECK(!wrote_explanation);
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "HloInstruction's " << (i == 1 ? "LHS" : "RHS")
+          << " operand did not match either of the two matchers. "
+             "Specifically,";
+      describe_matcher(0);
+      XLA_PATTERN_MATCHER_EXPLAIN << "\nand";
+      describe_matcher(1);
+      wrote_explanation = true;
+    }
+  }
+
+  CHECK(wrote_explanation);
+  return false;
+}
 
 // Matches a binary instruction whose operands come in any order.
 template <typename OperandType1, typename OperandImpl1, typename OperandType2,
@@ -1530,15 +1757,16 @@ class HloInstructionPatternBinaryOperandsAnyOrderImpl {
     // not-an-error via SFINAE.  Also this way lets us give better messages on
     // failure.
     if (inst->operand_count() != 2) {
-      EXPLAIN << "HloInstruction did not have two operands";
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction did not have two operands";
       return false;
     }
 
     if (option.single_user_only) {
       for (int i = 0; i < 2; ++i) {
         if (inst->operand(i)->user_count() != 1) {
-          EXPLAIN << "Operand " << i << " of HloInstruction has "
-                  << inst->operand(i)->user_count() << " users. Expected 1.";
+          XLA_PATTERN_MATCHER_EXPLAIN
+              << "Operand " << i << " of HloInstruction has "
+              << inst->operand(i)->user_count() << " users. Expected 1.";
           return false;
         }
       }
@@ -1563,93 +1791,22 @@ class HloInstructionPatternBinaryOperandsAnyOrderImpl {
       return try_match(0, 1) || try_match(1, 0);
     }
 
-    // If we are generating explanations, we have some work to do in order to
-    // generate a helpful error.
-    //
-    // First, try all four operand/matcher combinations, recording the
-    // failure explanations separately from option.explain_os. matches[i][j]
-    // tells us if matcher_i matches operand j.
-    bool matches[/*matcher*/ 2][/*operand*/ 2];
-    std::stringstream explanations[/*matcher*/ 2][/*operand*/ 2];
-    for (int i = 0; i < 2; ++i) {
-      for (int j = 0; j < 2; ++j) {
-        MatchOption new_option = option;
-        new_option.capture = false;
-        new_option.explain_os = &explanations[i][j];
-        matches[i][j] = i == 0 ? op1_.Match(operand(inst, j), new_option)
-                               : op2_.Match(operand(inst, j), new_option);
-      }
-    }
-
-    // Check if the match succeeded.
-    for (int i = 0; i < 2; ++i) {
-      if (matches[0][i] && matches[1][(i + 1) % 2]) {
-        // Rerun the matches with capture enabled if necessary.
-        if (option.capture) {
-          auto* operand1 = operand(inst, i);
-          auto* operand2 = operand(inst, (i + 1) % 2);
-          bool matched =
-              op1_.Match(operand1, option) && op2_.Match(operand2, option);
-          DCHECK(matched);
-        }
-        return true;
-      }
-    }
-
-    auto describe_matcher = [&](int matcher_idx) {
-      EXPLAIN << "\n - ";
-      if (matcher_idx == 0) {
-        op1_.DescribeTo(option.explain_os, /*indent=*/3);
-      } else {
-        CHECK_EQ(matcher_idx, 1);
-        op2_.DescribeTo(option.explain_os, /*indent=*/3);
-      }
-      for (int i = 0; i < 2; ++i) {
-        if (matches[matcher_idx][/*operand*/ i]) {
-          continue;
-        }
-        EXPLAIN << "\ndoes not match " << (i == 0 ? "LHS" : "RHS") << ":\n";
-        EXPLAIN << " - ";
-        EXPLAIN << absl::StrReplaceAll(
-            explanations[matcher_idx][/*operand*/ i].str(), {{"\n", "\n   "}});
-      }
-    };
-
-    // If we failed to match, one of the following is true:
-    //  1. op1 (op2) matches neither LHS nor RHS, or
-    //  2. op1 and op2 both match LHS (RHS), but neither matches RHS (LHS).
-    // We print different explanations depending on which case we're in.
-
-    // Case 1.
-    bool wrote_explanation = false;
-    for (int i = 0; !wrote_explanation && i < 2; ++i) {
-      if (!matches[i][0] && !matches[i][1]) {
-        EXPLAIN << "HloInstruction's operands (ignoring order) did not match "
-                << (i == 0 ? "first" : "second") << " matcher. Specifically,";
-        describe_matcher(i);
-        wrote_explanation = true;
-      }
-    }
-
-    // Case 2.
-    for (int i = 0; !wrote_explanation && i < 2; ++i) {
-      if (matches[/*matcher*/ 0][/*operand*/ i] &&
-          matches[/*matcher*/ 1][/*operand*/ i]) {
-        CHECK(!matches[0][(i + 1) % 2]);
-        CHECK(!matches[1][(i + 1) % 2]);
-        CHECK(!wrote_explanation);
-        EXPLAIN << "HloInstruction's " << (i == 1 ? "LHS" : "RHS")
-                << " operand did not match either of the two matchers. "
-                   "Specifically,";
-        describe_matcher(0);
-        EXPLAIN << "\nand";
-        describe_matcher(1);
-        wrote_explanation = true;
-      }
-    }
-
-    CHECK(wrote_explanation);
-    return false;
+    return ExplainBinaryOperandsAnyOrder(
+        option,
+        /*match_fn=*/
+        [&](int matcher_idx, int operand_idx, MatchOption opt) {
+          return matcher_idx == 0 ? op1_.Match(operand(inst, operand_idx), opt)
+                                  : op2_.Match(operand(inst, operand_idx), opt);
+        },
+        /*describe_fn=*/
+        [&](int matcher_idx, std::ostream* os, int64_t indent) {
+          if (matcher_idx == 0) {
+            op1_.DescribeTo(os, indent);
+          } else {
+            CHECK_EQ(matcher_idx, 1);
+            op2_.DescribeTo(os, indent);
+          }
+        });
   }
 
   HloInstructionPattern<OperandType1, OperandImpl1> op1_;
@@ -1680,12 +1837,13 @@ class HloInstructionPatternFusionKindImpl {
   template <typename HloInstructionType>
   bool MatchImpl(HloInstructionType* inst, MatchOption option) const {
     if (inst->opcode() != HloOpcode::kFusion) {
-      EXPLAIN << "HloInstruction does not have fusion kind " << ToString(kind_)
-              << "; it's not a fusion";
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction does not have fusion kind "
+                                  << ToString(kind_) << "; it's not a fusion";
       return false;
     }
     if (inst->fusion_kind() != kind_) {
-      EXPLAIN << "HloInstruction does not have fusion kind " << ToString(kind_);
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction does not have fusion kind "
+                                  << ToString(kind_);
       return false;
     }
     return true;
@@ -1717,12 +1875,13 @@ class HloInstructionPatternTupleIndexImpl {
   template <typename HloInstructionType>
   bool MatchImpl(HloInstructionType* inst, MatchOption option) const {
     if (inst->opcode() != HloOpcode::kGetTupleElement) {
-      EXPLAIN << "HloInstruction is not a GTE with index " << tuple_index_
-              << "; it's not a GTE at all";
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction is not a GTE with index "
+                                  << tuple_index_ << "; it's not a GTE at all";
       return false;
     }
     if (inst->tuple_index() != tuple_index_) {
-      EXPLAIN << "HloInstruction is not a GTE with index " << tuple_index_;
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction is not a GTE with index "
+                                  << tuple_index_;
       return false;
     }
     return true;
@@ -1754,7 +1913,8 @@ class HloInstructionPatternParameterNumImpl {
   bool MatchImpl(HloInstructionType* inst, MatchOption option) const {
     if (inst->opcode() != HloOpcode::kParameter ||
         inst->parameter_number() != parameter_num_) {
-      EXPLAIN << "HloInstruction is not parameter " << parameter_num_;
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction is not parameter "
+                                  << parameter_num_;
       return false;
     }
     return true;
@@ -1769,12 +1929,12 @@ class HloInstructionPatternOneUseOrUserImpl {
  protected:
   bool MatchOneUser(const HloInstruction* inst, MatchOption option) const {
     if (inst->user_count() != 1) {
-      EXPLAIN << "HloInstruction has " << inst->user_count()
-              << " users, but expected exactly one.";
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction has " << inst->user_count()
+                                  << " users, but expected exactly one.";
       if (inst->user_count() > 1) {
-        EXPLAIN << "\nAll users:";
+        XLA_PATTERN_MATCHER_EXPLAIN << "\nAll users:";
         for (const HloInstruction* user : inst->users()) {
-          EXPLAIN << "\n - " << InstToString(user);
+          XLA_PATTERN_MATCHER_EXPLAIN << "\n - " << InstToString(user);
         }
       }
       return false;
@@ -1795,9 +1955,10 @@ class HloInstructionPatternOneUseImpl
         inst->users()[0]->operands(),
         [&](const HloInstruction* operand) { return operand == inst; });
     if (use_count != 1) {
-      EXPLAIN << "HloInstruction is used " << use_count
-              << " times by its user, but is expected to be used just once: "
-              << InstToString(inst->users()[0]);
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "HloInstruction is used " << use_count
+          << " times by its user, but is expected to be used just once: "
+          << InstToString(inst->users()[0]);
       return false;
     }
     return true;
@@ -1819,6 +1980,54 @@ class HloInstructionPatternOneUserImpl
     *os << "which has exactly one user (but possibly is used multiple times by "
            "that instruction)";
   }
+};
+
+class HloInstructionPatternNumUserImpl {
+ public:
+  explicit constexpr HloInstructionPatternNumUserImpl(int64_t user_num)
+      : user_num_(user_num) {}
+  bool Match(const ::xla::HloInstruction* inst, MatchOption option) const {
+    if (inst->user_count() != user_num_) {
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction has " << inst->user_count()
+                                  << " users, but expected exactly "
+                                  << user_num_ << " users.";
+      return false;
+    }
+    return true;
+  }
+
+  void DescribeTo(std::ostream* os, int64_t indent = 0) const {
+    *os << "which has exactly " << user_num_
+        << " users (but possibly is used multiple times by "
+           "same instruction)";
+  }
+
+ private:
+  int64_t user_num_;
+};
+
+class HloInstructionPatternAtMostNumUserImpl {
+ public:
+  explicit constexpr HloInstructionPatternAtMostNumUserImpl(int64_t user_num)
+      : user_num_(user_num) {}
+  bool Match(const ::xla::HloInstruction* inst, MatchOption option) const {
+    if (inst->user_count() > user_num_) {
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction has " << inst->user_count()
+                                  << " users, but expected less than or equal "
+                                  << user_num_ << " users.";
+      return false;
+    }
+    return true;
+  }
+
+  void DescribeTo(std::ostream* os, int64_t indent = 0) const {
+    *os << "which has less than or equal " << user_num_
+        << " users (but possibly is used multiple times by "
+           "same instruction)";
+  }
+
+ private:
+  int64_t user_num_;
 };
 
 class HloInstructionPatternComparisonDirectionImpl {
@@ -1845,8 +2054,8 @@ class HloInstructionPatternComparisonDirectionImpl {
   bool MatchImpl(HloInstructionType* inst, MatchOption option) const {
     if (inst->opcode() != HloOpcode::kCompare ||
         inst->comparison_direction() != direction_) {
-      EXPLAIN << "HloInstruction is not comparison "
-              << ComparisonDirectionToString(direction_);
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction is not comparison "
+                                  << ComparisonDirectionToString(direction_);
       return false;
     }
     return true;
@@ -1882,8 +2091,9 @@ class HloInstructionPatternConvDnumsImpl {
   bool MatchImpl(HloInstructionType* inst, MatchOption option) const {
     if (inst->opcode() != HloOpcode::kConvolution &&
         inst->opcode() != HloOpcode::kCustomCall) {
-      EXPLAIN << "HloInstruction is not convolution or custom-call and so "
-                 "can't have convolution_dimension_numbers";
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "HloInstruction is not convolution or custom-call and so "
+             "can't have convolution_dimension_numbers";
       return false;
     }
 
@@ -1891,10 +2101,11 @@ class HloInstructionPatternConvDnumsImpl {
         inst->convolution_dimension_numbers();
     if (!tsl::protobuf::util::MessageDifferencer::Equals(dnums_,
                                                          actual_dnums)) {
-      EXPLAIN << "convolution_dimension_numbers "
-              << ConvolutionDimensionNumbersToString(actual_dnums)
-              << " don't match expected "
-              << ConvolutionDimensionNumbersToString(dnums_);
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "convolution_dimension_numbers "
+          << ConvolutionDimensionNumbersToString(actual_dnums)
+          << " don't match expected "
+          << ConvolutionDimensionNumbersToString(dnums_);
       return false;
     }
     return true;
@@ -1910,7 +2121,8 @@ class HloInstructionPredicateImpl {
   bool Match(const HloInstruction* inst, MatchOption option) const {
     bool match = fn_(inst);
     if (!match) {
-      EXPLAIN << "HloInstruction does not match user-specified predicate";
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "HloInstruction does not match user-specified predicate";
     }
     return match;
   }
@@ -1921,6 +2133,237 @@ class HloInstructionPredicateImpl {
 
  private:
   HloPredicate fn_;
+};
+
+class HloInstructionContractingDimsImpl {
+ public:
+  explicit HloInstructionContractingDimsImpl(
+      absl::Span<const int64_t> lhs_contracting_dims,
+      absl::Span<const int64_t> rhs_contracting_dims)
+      : lhs_contracting_dims_(lhs_contracting_dims.begin(),
+                              lhs_contracting_dims.end()),
+        rhs_contracting_dims_(rhs_contracting_dims.begin(),
+                              rhs_contracting_dims.end()) {}
+
+  bool Match(const ::xla::HloInstruction* inst, MatchOption option) const {
+    return MatchImpl(inst, option);
+  }
+
+  bool Match(::xla::HloInstruction* inst, MatchOption option) const {
+    return MatchImpl(inst, option);
+  }
+
+  void DescribeTo(std::ostream* os, int64_t indent = 0) const {
+    *os << "with lhs_contracting_dims {"
+        << absl::StrJoin(lhs_contracting_dims_, ",")
+        << "} and rhs_contracting_dims {"
+        << absl::StrJoin(rhs_contracting_dims_, ",") << "}";
+  }
+
+ private:
+  template <typename HloInstructionType>
+  bool MatchImpl(HloInstructionType* inst, MatchOption option) const {
+    if (inst->opcode() != HloOpcode::kDot) {
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction is not dot so "
+                                     "can't have dot_dimension_numbers";
+      return false;
+    }
+
+    const DotDimensionNumbers& dnums = inst->dot_dimension_numbers();
+    if (absl::MakeSpan(dnums.lhs_contracting_dimensions()) !=
+        lhs_contracting_dims_) {
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "lhs_contracting_dimensions {"
+          << absl::StrJoin(dnums.lhs_contracting_dimensions(), ",")
+          << "} don't match expected {"
+          << absl::StrJoin(lhs_contracting_dims_, ",") << "}";
+      return false;
+    }
+
+    if (absl::MakeSpan(dnums.rhs_contracting_dimensions()) !=
+        rhs_contracting_dims_) {
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "rhs_contracting_dimensions {"
+          << absl::StrJoin(dnums.rhs_contracting_dimensions(), ",")
+          << "} don't match expected {"
+          << absl::StrJoin(rhs_contracting_dims_, ",") << "}";
+      return false;
+    }
+    return true;
+  }
+
+  absl::InlinedVector<int64_t, 8> lhs_contracting_dims_;
+  absl::InlinedVector<int64_t, 8> rhs_contracting_dims_;
+};
+
+class HloInstructionReplicaGroupsImpl {
+ public:
+  explicit HloInstructionReplicaGroupsImpl(
+      std::vector<std::vector<int64_t>> replica_groups)
+      : replica_groups_(std::move(replica_groups)) {}
+
+  bool Match(const ::xla::HloInstruction* inst, MatchOption option) const {
+    return MatchImpl(inst, option);
+  }
+
+  bool Match(::xla::HloInstruction* inst, MatchOption option) const {
+    return MatchImpl(inst, option);
+  }
+
+  void DescribeTo(std::ostream* os, int64_t indent = 0) const {
+    std::vector<std::string> replica_group_strs;
+    replica_group_strs.reserve(replica_groups_.size());
+    for (const std::vector<int64_t>& replica_group : replica_groups_) {
+      replica_group_strs.push_back(
+          absl::StrCat("{", absl::StrJoin(replica_group, ","), "}"));
+    }
+    *os << "with replica_group {" << absl::StrJoin(replica_group_strs, ",")
+        << "}";
+  }
+
+ private:
+  template <typename HloInstructionType>
+  bool MatchImpl(HloInstructionType* inst, MatchOption option) const {
+    const HloCollectiveInstruction* collective =
+        DynCast<HloCollectiveInstruction>(inst);
+    if (!collective) {
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction is not a collective";
+      return false;
+    }
+
+    if (absl::c_equal(collective->replica_groups(), replica_groups_,
+                      [](const ReplicaGroup& a, const std::vector<int64_t>& b) {
+                        return absl::c_equal(a.replica_ids(), b);
+                      })) {
+      return true;
+    }
+
+    std::ostringstream desc_stream;
+    DescribeTo(&desc_stream);
+
+    std::vector<std::string> replica_group_strs;
+    replica_group_strs.reserve(replica_groups_.size());
+    for (const ReplicaGroup& replica_group : collective->replica_groups()) {
+      replica_group_strs.push_back(absl::StrCat(
+          "{", absl::StrJoin(replica_group.replica_ids(), ","), "}"));
+    }
+    XLA_PATTERN_MATCHER_EXPLAIN
+        << "replica_group {" << absl::StrJoin(replica_group_strs, ",")
+        << "} don't match expected " << desc_stream.str();
+    return false;
+  }
+
+  std::vector<std::vector<int64_t>> replica_groups_;
+};
+
+class HloInstructionShardingImpl {
+ public:
+  explicit HloInstructionShardingImpl(
+      const std::optional<HloSharding>& sharding)
+      : sharding_(sharding) {}
+
+  bool Match(const ::xla::HloInstruction* inst, MatchOption option) const {
+    return MatchImpl(inst, option);
+  }
+
+  bool Match(::xla::HloInstruction* inst, MatchOption option) const {
+    return MatchImpl(inst, option);
+  }
+
+  void DescribeTo(std::ostream* os, int64_t indent = 0) const {
+    if (sharding_.has_value()) {
+      *os << "with sharding " << sharding_->ToString();
+    } else {
+      *os << "with no sharding";
+    }
+  }
+
+ private:
+  template <typename HloInstructionType>
+  bool MatchImpl(HloInstructionType* inst, MatchOption option) const {
+    if (!sharding_.has_value()) {
+      if (!inst->has_sharding()) {
+        return true;
+      }
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "HloInstruction is expected to have no sharding.";
+      return false;
+    }
+    if (inst->has_sharding()) {
+      if (inst->sharding() == sharding_.value()) {
+        return true;
+      }
+      XLA_PATTERN_MATCHER_EXPLAIN << "sharding " << inst->sharding().ToString()
+                                  << " don't match expected "
+                                  << sharding_->ToString();
+      return false;
+    } else {
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "HloInstruction has no sharding. Expected: "
+          << sharding_->ToString();
+      return false;
+    }
+  }
+
+  std::optional<HloSharding> sharding_;
+};
+
+class HloInstructionControlDepsImpl {
+ public:
+  explicit HloInstructionControlDepsImpl(
+      absl::Span<HloInstruction* const> preds,
+      absl::Span<HloInstruction* const> succs)
+      : preds_(preds), succs_(succs) {}
+
+  bool Match(const ::xla::HloInstruction* inst, MatchOption option) const {
+    return MatchImpl(inst, option);
+  }
+
+  bool Match(::xla::HloInstruction* inst, MatchOption option) const {
+    return MatchImpl(inst, option);
+  }
+
+  void DescribeTo(std::ostream* os, int64_t indent = 0) const {
+    auto print_deps = [os](absl::Span<HloInstruction* const> deps,
+                           absl::string_view type) {
+      if (deps.empty()) {
+        *os << "no control " << type;
+      } else {
+        *os << "control " << type << " {" << absl::StrJoin(deps, ",", fmt)
+            << "}";
+      }
+    };
+
+    *os << "with ";
+    print_deps(preds_, "predecessors");
+    *os << " and ";
+    print_deps(succs_, "successors");
+  }
+
+ private:
+  template <typename HloInstructionType>
+  bool MatchImpl(HloInstructionType* inst, MatchOption option) const {
+    auto match_deps = [&](absl::Span<HloInstruction* const> expected_deps,
+                          const PtrVec<HloInstruction*>& actual_deps,
+                          absl::string_view type) {
+      if (!absl::c_equal(expected_deps, actual_deps)) {
+        XLA_PATTERN_MATCHER_EXPLAIN
+            << "HloInstruction expected to have control " << type << " {"
+            << absl::StrJoin(expected_deps, ",", fmt) << "} but has {"
+            << absl::StrJoin(actual_deps, ",", fmt) << "}";
+        return false;
+      }
+      return true;
+    };
+    return match_deps(preds_, inst->control_predecessors(), "predecessors") &&
+           match_deps(succs_, inst->control_successors(), "successors");
+  }
+
+  static void fmt(std::string* out, const HloInstruction* inst) {
+    absl::StrAppend(out, inst->name());
+  };
+
+  absl::Span<HloInstruction* const> preds_, succs_;
 };
 
 // Matches a constant scalar or effective scalar, optionally with a given value.
@@ -1954,16 +2397,17 @@ class HloConstantScalarImpl {
   bool MatchImpl(InstTy* inst, MatchOption option) const {
     const auto* const_inst = DynCast<HloConstantInstruction>(inst);
     if (!const_inst) {
-      EXPLAIN << "HloInstruction is not a constant";
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction is not a constant";
       return false;
     }
     if (match_effective_scalar_ &&
         !ShapeUtil::IsEffectiveScalar(inst->shape())) {
-      EXPLAIN << "HloInstruction is not an effective scalar";
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "HloInstruction is not an effective scalar";
       return false;
     }
     if (!match_effective_scalar_ && !ShapeUtil::IsScalar(inst->shape())) {
-      EXPLAIN << "HloInstruction is not a scalar";
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction is not a scalar";
       return false;
     }
     if (!val_.has_value()) {
@@ -1972,14 +2416,15 @@ class HloConstantScalarImpl {
 
     auto const_inst_scalar_or = const_inst->literal().Reshape({});
     if (!const_inst_scalar_or.ok()) {
-      EXPLAIN << "could not convert matched literal to effective scalar";
+      XLA_PATTERN_MATCHER_EXPLAIN
+          << "could not convert matched literal to effective scalar";
       return false;
     }
     Literal const_inst_scalar = std::move(const_inst_scalar_or).value();
     if (!const_inst_scalar.IsEqualAt({}, *val_)) {
-      EXPLAIN << "HloInstruction's constant value "
-              << const_inst_scalar.ToStringWithoutShape()
-              << " did not match expected value " << *val_;
+      XLA_PATTERN_MATCHER_EXPLAIN << "HloInstruction's constant value "
+                                  << const_inst_scalar.ToStringWithoutShape()
+                                  << " did not match expected value " << *val_;
       return false;
     }
     return true;
@@ -2014,7 +2459,7 @@ class HloInstructionPattern {
       return true;
     }
     if (inst != nullptr) {
-      EXPLAIN << "\nin " << InstToString(inst);
+      XLA_PATTERN_MATCHER_EXPLAIN << "\nin " << InstToString(inst);
     }
     return false;
   }
@@ -2029,7 +2474,7 @@ class HloInstructionPattern {
       return true;
     }
     if (explain_instruction) {
-      EXPLAIN << "\nin " << InstToString(inst);
+      XLA_PATTERN_MATCHER_EXPLAIN << "\nin " << InstToString(inst);
     }
     return false;
   }
@@ -2106,13 +2551,20 @@ class HloInstructionPattern {
   }
 
   // Because we only specify the shape's element type and dims, this is
-  // effectivley checking shape-compatible-to, not shape-equal-to.  Perhaps this
+  // effectively checking shape-compatible-to, not shape-equal-to.  Perhaps this
   // function should be called WithShapeCompatibleTo, but the short name is
   // nice, and there's no ambiguity because there's no layout in the args!
   constexpr auto WithShape(PrimitiveType ty, absl::Span<const int64_t> dims) {
     return WithShape(Shape().WithElementType(ty).WithDims(dims));
   }
 
+  // Modifies the pattern to match only if the instruction's shape's element
+  // type, dims and minor to major dimension ordering match the given pattern.
+  constexpr auto WithShape(PrimitiveType ty, absl::Span<const int64_t> dims,
+                           absl::Span<const int64_t> minor_to_major) {
+    return WithShape(
+        Shape().WithElementType(ty).WithDims(dims).WithLayout(minor_to_major));
+  }
   // Make this a templated function to work around gcc 4.9.4 template infinite
   // recursion bug.
   template <typename Dummy = void>
@@ -2198,6 +2650,18 @@ class HloInstructionPattern {
     return AppendImpl(HloInstructionPatternOneUserImpl());
   }
 
+  // Modifies the pattern to match if the instruction is used by exactly
+  // user_num times by other instruction.
+  constexpr auto WithNumUser(int64_t user_num) const {
+    return AppendImpl(HloInstructionPatternNumUserImpl(user_num));
+  }
+
+  // Modifies the pattern to match if the instruction is used by less than
+  // user_num times by other instruction.
+  constexpr auto WithAtMostNumUser(int64_t user_num) const {
+    return AppendImpl(HloInstructionPatternAtMostNumUserImpl(user_num));
+  }
+
   // Modifies the pattern to match only if the instruction has the given
   // comparison direction.
   auto WithComparisonDirection(ComparisonDirection direction) const {
@@ -2213,6 +2677,29 @@ class HloInstructionPattern {
 
   auto WithPredicate(HloPredicate fn) const {
     return AppendImpl(HloInstructionPredicateImpl(std::move(fn)));
+  }
+
+  auto WithContractingDims(
+      absl::Span<const int64_t> lhs_contracting_dims,
+      absl::Span<const int64_t> rhs_contracting_dims) const {
+    return AppendImpl(HloInstructionContractingDimsImpl(lhs_contracting_dims,
+                                                        rhs_contracting_dims));
+  }
+
+  auto WithReplicaGroups(
+      std::vector<std::vector<int64_t>> replica_groups) const {
+    return AppendImpl(
+        HloInstructionReplicaGroupsImpl(std::move(replica_groups)));
+  }
+
+  auto WithSharding(absl::string_view sharding) const {
+    return AppendImpl(
+        HloInstructionShardingImpl(ParseSharding(sharding).value()));
+  }
+
+  auto WithControlDeps(absl::Span<HloInstruction* const> preds,
+                       absl::Span<HloInstruction* const> succs) {
+    return AppendImpl(HloInstructionControlDepsImpl(preds, succs));
   }
 
   void DescribeTo(std::ostream* os, int64_t indent = 0) const {
@@ -2287,6 +2774,11 @@ XLA_NULLOP_PATTERN(ReplicaId)
 #define XLA_UNOP_PATTERN(NAME)                                       \
   inline auto NAME() { return Op().WithOpcode(HloOpcode::k##NAME); } \
                                                                      \
+  template <typename HloInstructionType>                             \
+  inline auto NAME(HloInstructionType** matched_inst) {              \
+    return Op(matched_inst).WithOpcode(HloOpcode::k##NAME);          \
+  }                                                                  \
+                                                                     \
   template <typename Arg>                                            \
   inline auto NAME(Arg&& arg) {                                      \
     return Op()                                                      \
@@ -2301,22 +2793,30 @@ XLA_NULLOP_PATTERN(ReplicaId)
         .WithOperand(0, std::forward<Arg>(arg));                     \
   }
 XLA_UNOP_PATTERN(Abs)
-XLA_UNOP_PATTERN(RoundNearestAfz)
 XLA_UNOP_PATTERN(Bitcast)
 XLA_UNOP_PATTERN(BitcastConvert)
 XLA_UNOP_PATTERN(Broadcast)
+XLA_UNOP_PATTERN(Cbrt)
 XLA_UNOP_PATTERN(Ceil)
 XLA_UNOP_PATTERN(Convert)
 XLA_UNOP_PATTERN(Copy)
 XLA_UNOP_PATTERN(Cos)
-XLA_UNOP_PATTERN(AllReduce)
+XLA_UNOP_PATTERN(AllGatherStart)
+XLA_UNOP_PATTERN(AllGatherDone)
 XLA_UNOP_PATTERN(AllReduceStart)
 XLA_UNOP_PATTERN(AllReduceDone)
+XLA_UNOP_PATTERN(AllToAll)
+XLA_UNOP_PATTERN(RaggedAllToAll)
+XLA_UNOP_PATTERN(AsyncDone)
+XLA_UNOP_PATTERN(CollectiveBroadcast)
 XLA_UNOP_PATTERN(CollectivePermute)
 XLA_UNOP_PATTERN(CollectivePermuteStart)
 XLA_UNOP_PATTERN(CollectivePermuteDone)
 XLA_UNOP_PATTERN(Domain)
+XLA_UNOP_PATTERN(Erf)
 XLA_UNOP_PATTERN(Exp)
+XLA_UNOP_PATTERN(Exp2)
+XLA_UNOP_PATTERN(Expm1)
 XLA_UNOP_PATTERN(Fft)
 XLA_UNOP_PATTERN(Floor)
 XLA_UNOP_PATTERN(GetTupleElement)
@@ -2324,15 +2824,20 @@ XLA_UNOP_PATTERN(Imag)
 XLA_UNOP_PATTERN(Infeed)
 XLA_UNOP_PATTERN(IsFinite)
 XLA_UNOP_PATTERN(Log)
+XLA_UNOP_PATTERN(Log1p)
+XLA_UNOP_PATTERN(Log2)
+XLA_UNOP_PATTERN(Logistic)
 XLA_UNOP_PATTERN(Not)
 XLA_UNOP_PATTERN(Negate)
+XLA_UNOP_PATTERN(OptimizationBarrier)
 XLA_UNOP_PATTERN(Real)
 XLA_UNOP_PATTERN(Recv)
 XLA_UNOP_PATTERN(RecvDone)
 XLA_UNOP_PATTERN(ReducePrecision)
-XLA_UNOP_PATTERN(ReduceScatter)
 XLA_UNOP_PATTERN(Reshape)
 XLA_UNOP_PATTERN(Reverse)
+XLA_UNOP_PATTERN(RoundNearestAfz)
+XLA_UNOP_PATTERN(RoundNearestEven)
 XLA_UNOP_PATTERN(Rsqrt)
 XLA_UNOP_PATTERN(SendDone)
 XLA_UNOP_PATTERN(Sign)
@@ -2342,6 +2847,7 @@ XLA_UNOP_PATTERN(Sqrt)
 XLA_UNOP_PATTERN(Tan)
 XLA_UNOP_PATTERN(Tanh)
 XLA_UNOP_PATTERN(Transpose)
+XLA_UNOP_PATTERN(While)
 #undef XLA_UNOP_PATTERN
 
 // Helpers for binary instructions.
@@ -2430,6 +2936,7 @@ XLA_COMMUTATIVE_BINOP_PATTERN(Xor)
         .WithOperand(2, std::forward<Arg2>(arg2));                     \
   }
 XLA_TERNOP_PATTERN(Clamp);
+XLA_TERNOP_PATTERN(RaggedDot);
 XLA_TERNOP_PATTERN(Select);
 XLA_TERNOP_PATTERN(SelectAndScatter);
 #undef XLA_TERNOP_PATTERN
@@ -2467,11 +2974,19 @@ inline auto WithOperands(Matcher&& m, int64_t operand_num, FirstArg&& first_arg,
                                     .WithNumOperands(sizeof...(Args)),        \
                                 /*operand_num=*/0,                            \
                                 std::forward<Args>(args)...);                 \
+  }                                                                           \
+                                                                              \
+  template <typename HloInstructionType>                                      \
+  inline auto NAME(HloInstructionType** matched_inst) {                       \
+    return Op(matched_inst).WithOpcode(HloOpcode::k##NAME);                   \
   }
 
 // We could implement all ops as "variadic" ops, but it would make the
 // already-bad compile errors even worse.
 XLA_VARIADIC_OP_PATTERN(AfterAll);
+XLA_VARIADIC_OP_PATTERN(AllGather)
+XLA_VARIADIC_OP_PATTERN(AllReduce)
+XLA_VARIADIC_OP_PATTERN(AsyncStart)
 XLA_VARIADIC_OP_PATTERN(Concatenate);
 XLA_VARIADIC_OP_PATTERN(Conditional);
 XLA_VARIADIC_OP_PATTERN(DynamicSlice)
@@ -2479,7 +2994,9 @@ XLA_VARIADIC_OP_PATTERN(DynamicUpdateSlice)
 XLA_VARIADIC_OP_PATTERN(Fusion);
 XLA_VARIADIC_OP_PATTERN(Map)
 XLA_VARIADIC_OP_PATTERN(Reduce);
+XLA_VARIADIC_OP_PATTERN(ReduceScatter)
 XLA_VARIADIC_OP_PATTERN(ReduceWindow)
+XLA_VARIADIC_OP_PATTERN(ScaledDot);
 XLA_VARIADIC_OP_PATTERN(Scatter);
 XLA_VARIADIC_OP_PATTERN(Sort);
 XLA_VARIADIC_OP_PATTERN(Tuple);
@@ -2739,6 +3256,5 @@ inline auto SharedSubpattern(
 
 }  // namespace xla
 
-#undef EXPLAIN
-#pragma pop_macro("EXPLAIN")
+#undef XLA_PATTERN_MATCHER_EXPLAIN
 #endif  // XLA_SERVICE_PATTERN_MATCHER_H_

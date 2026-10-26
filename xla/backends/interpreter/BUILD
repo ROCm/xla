@@ -1,8 +1,19 @@
-load("@tsl//tsl/platform:rules_cc.bzl", "cc_library")
-load(
-    "@tsl//tsl/platform:build_config_root.bzl",
-    "if_static",
-)
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -15,10 +26,12 @@ cc_library(
     srcs = ["interpreter_transfer_manager.cc"],
     hdrs = ["interpreter_transfer_manager.h"],
     deps = [
-        "//xla/backends/interpreter:platform_id",
+        ":platform_id",
         "//xla/service:generic_transfer_manager",
+        "//xla/service:shaped_buffer",
         "//xla/service:transfer_manager",
-        "@com_google_absl//absl/memory",
+        "//xla/stream_executor:device_address",
+        "//xla/stream_executor:stream_executor_h",
     ],
     alwayslink = True,  # Contains per-platform transfer manager registration
 )
@@ -30,37 +43,36 @@ cc_library(
     deps = [
         ":executable",
         ":platform_id",
-        "//xla:status",
+        "//xla:literal",
         "//xla:status_macros",
-        "//xla:statusor",
+        "//xla:util",
+        "//xla/hlo/evaluator:hlo_evaluator",
         "//xla/hlo/ir:hlo",
-        "//xla/service:algebraic_simplifier",
+        "//xla/hlo/pass:hlo_pass_pipeline",
+        "//xla/hlo/transforms/expanders:cholesky_expander",
+        "//xla/hlo/transforms/expanders:dynamic_index_splitter",
+        "//xla/hlo/transforms/expanders:eigh_expander",
+        "//xla/hlo/transforms/expanders:qr_expander",
         "//xla/service:batchnorm_expander",
-        "//xla/service:cholesky_expander",
-        "//xla/service:comparison_expander",
         "//xla/service:compiler",
         "//xla/service:computation_placer",
         "//xla/service:custom_call_target_registry",
-        "//xla/service:dynamic_index_splitter",
-        "//xla/service:eigh_expander",
+        "//xla/service:dynamic_dimension_inference",
         "//xla/service:executable",
-        "//xla/service:flatten_call_graph",
-        "//xla/service:hlo_constant_folding",
         "//xla/service:hlo_cost_analysis",
-        "//xla/service:hlo_cse",
-        "//xla/service:hlo_dce",
         "//xla/service:hlo_module_config",
-        "//xla/service:hlo_pass",
-        "//xla/service:hlo_pass_pipeline",
         "//xla/service:layout_assignment",
-        "//xla/service:map_inliner",
-        "//xla/service:qr_expander",
-        "//xla/service:reshape_mover",
         "//xla/service:topk_rewriter",
         "//xla/service:triangular_solve_expander",
-        "//xla/service:while_loop_simplifier",
-        "//xla/stream_executor",
-        "@tsl//tsl/platform:errors",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
         "@tsl//tsl/platform:status",
     ],
     alwayslink = True,  # Contains compiler registration
@@ -70,10 +82,7 @@ cc_library(
     name = "platform_id",
     srcs = ["platform_id.cc"],
     hdrs = ["platform_id.h"],
-    deps = ["//xla/stream_executor"] + if_static(
-        ["@com_google_protobuf//:protobuf"],
-        ["@com_google_protobuf//:protobuf_headers"],
-    ),
+    deps = ["//xla/stream_executor:platform_id"],
 )
 
 cc_library(
@@ -84,18 +93,30 @@ cc_library(
         "//xla:literal",
         "//xla:shape_tree",
         "//xla:shape_util",
-        "//xla:statusor",
+        "//xla:status_macros",
+        "//xla:util",
+        "//xla:xla_data_proto_cc",
         "//xla:xla_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/service:dynamic_dimension_inference",
         "//xla/service:executable",
-        "//xla/service:hlo_execution_profile",
-        "//xla/service:maybe_owning_device_memory",
+        "//xla/service:maybe_owning_device_address",
         "//xla/service:shaped_buffer",
         "//xla/service:transfer_manager",
-        "//xla/stream_executor",
-        "//xla/stream_executor:event",
-        "@tsl//tsl/platform:statusor",
+        "//xla/stream_executor:device_address",
+        "//xla/stream_executor:device_address_allocator",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:vlog_is_on",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -105,29 +126,23 @@ cc_library(
     hdrs = ["executable.h"],
     deps = [
         ":executable_base",
-        ":executor",
         "//xla:literal",
         "//xla:shape_util",
-        "//xla:status_macros",
-        "//xla:statusor",
         "//xla:types",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/evaluator:hlo_evaluator",
         "//xla/hlo/ir:hlo",
+        "//xla/service:dynamic_dimension_inference",
         "//xla/service:executable",
         "//xla/service:hlo_cost_analysis",
         "//xla/service:hlo_execution_profile",
         "//xla/service:hlo_module_config",
-        "//xla/service:maybe_owning_device_memory",
         "//xla/service:shaped_buffer",
-        "//xla/service:transfer_manager",
-        "//xla/stream_executor",
-        "@com_google_absl//absl/memory",
+        "//xla/stream_executor:stream_executor_h",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:mutex",
     ],
 )
 
@@ -138,12 +153,20 @@ cc_library(
     deps = [
         ":executor",
         ":platform_id",
-        "//xla/stream_executor",
-        "//xla/stream_executor/platform",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor:executor_cache",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:platform_manager",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor/platform:initialize",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
-        "@tsl//tsl/platform:status",
+        "@com_google_absl//absl/strings:string_view",
+        "@tsl//tsl/platform:statusor",
     ],
-    alwayslink = True,  # Registers itself with the MultiPlatformManager.
+    alwayslink = True,  # Registers itself with the PlatformManager.
 )
 
 cc_library(
@@ -151,13 +174,23 @@ cc_library(
     srcs = ["executor.cc"],
     hdrs = ["executor.h"],
     deps = [
-        "//xla:shape_util",
-        "//xla:status_macros",
         "//xla:xla_data_proto_cc",
-        "//xla/stream_executor",
+        "//xla/stream_executor:device_address",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor:event",
+        "//xla/stream_executor:generic_memory_allocation",
+        "//xla/stream_executor:generic_memory_allocator",
+        "//xla/stream_executor:memory_allocation",
+        "//xla/stream_executor:memory_allocator",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_executor_common",
+        "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor/host:host_stream",
-        "@com_google_absl//absl/functional:any_invocable",
-        "@com_google_absl//absl/types:span",
-        "@tsl//tsl/platform:logging",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )

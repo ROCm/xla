@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,11 +18,11 @@ limitations under the License.
 
 #include <string>
 
+#include "absl/status/status.h"
+#include "xla/layout.h"
 #include "xla/printer.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/types.h"
-#include "xla/xla_data.pb.h"
-#include "tsl/platform/status.h"
 
 namespace xla {
 
@@ -41,7 +41,7 @@ class ShapeLayout {
   // Assigns the layouts in this ShapeLayout to the Layout fields of the given
   // shape. 'to_shape' and the shape of the ShapeLayout object must be
   // compatible.
-  Status AssignLayoutToShape(Shape* to_shape) const;
+  absl::Status AssignLayoutToShape(Shape* to_shape) const;
 
   // Returns true if the Layouts in this ShapeLayout match the layouts in the
   // given shape. Returns false otherwise. If the given shape is not compatible
@@ -54,10 +54,14 @@ class ShapeLayout {
 
   // Copies the layout from the given shape into this ShapeLayout. 'other_shape'
   // must be compatible with the ShapeLayout's shape.
-  Status CopyLayoutFromShape(const Shape& other_shape);
+  absl::Status CopyLayoutFromShape(const Shape& other_shape);
 
   // Clears (Layout::Clear) all the Layouts stored in this object.
   void Clear();
+  void Clear(ShapeIndexView shape_index);
+  // Clears all the tiles in the layouts stored in this object.
+  void ClearTiles();
+  void ClearTiles(ShapeIndexView shape_index);
 
   // Sets all Layouts stored in this object to the default layout.
   void SetToDefaultLayout();
@@ -73,9 +77,17 @@ class ShapeLayout {
   // layout directly on the shape. Shape must not be a tuple.
   const Layout& layout() const;
 
-  // Returns true if all layouts have been set for this ShapeLayout object. That
-  // is, every array has a layout.
+  // Returns true if all layouts (of all subshapes) have been set for this
+  // ShapeLayout object.
   bool LayoutIsSet() const;
+  // Returns true if any layouts (of any subshapes) have been set for this
+  // ShapeLayout object.
+  bool AnyLayoutIsSet() const;
+
+  // Returns true if all layouts (of all subshapes) have a minor_to_major set.
+  bool MinorToMajorInLayoutIsSet() const;
+  // Returns true if any layouts (of any subshapes) have a minor_to_major set.
+  bool AnyMinorToMajorInLayoutIsSet() const;
 
   // Resets the layout on the shape to the provided layout. Shape must not be a
   // tuple.

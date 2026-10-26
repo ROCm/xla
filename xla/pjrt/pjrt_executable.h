@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_PJRT_PJRT_EXECUTABLE_H_
 #define XLA_PJRT_PJRT_EXECUTABLE_H_
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -25,19 +26,40 @@ limitations under the License.
 #include <variant>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "google/protobuf/descriptor.h"
+#include "xla/backends/gpu/target_config/target_config.h"
 #include "xla/client/executable_build_options.h"
+#include "xla/ffi/execution_context.h"
 #include "xla/hlo/ir/hlo_module.h"
-#include "xla/pjrt/execute_options.pb.h"
+#include "xla/layout.h"
+#include "xla/literal.h"
+#include "xla/pjrt/compiled_memory_stats.h"
+#include "xla/pjrt/pjrt_abi_version.h"
 #include "xla/pjrt/pjrt_common.h"
+#include "xla/pjrt/pjrt_device_dimensions.h"
+#include "xla/pjrt/pjrt_layout.h"
+#include "xla/pjrt/proto/compile_options.pb.h"
+#include "xla/pjrt/proto/executable_metadata.pb.h"
+#include "xla/pjrt/proto/execute_options.pb.h"
+#include "xla/runtime/device_id.h"
 #include "xla/service/hlo.pb.h"
 #include "xla/service/hlo_cost_analysis.h"
-#include "xla/statusor.h"
+#include "xla/shape.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
+
+class CustomOptions;
+
+class PjRtClient;
 
 // Provides configuration for implementations that support compile and execute
 // spanning multiple slices. A slice is a set of devices connected by dedicated
@@ -71,6 +93,10 @@ struct CompileOptions {
   // tuple and passed as a single parameter.
   bool parameter_is_tupled_arguments = false;
 
+  // Flattened output indices that should use individual definition events when
+  // supported. Other outputs use the primary execute event.
+  absl::flat_hash_set<int> individually_defined_output_indices;
+
   // XLA's compilation time options.
   ExecutableBuildOptions executable_build_options;
 
@@ -86,40 +112,54 @@ struct CompileOptions {
   // Set multi_slice_config to trigger compilation for DCN connected multi
   // slice operation.
   const MultiSliceConfig* multi_slice_config = nullptr;
+  std::string serialized_multi_slice_config = "";
 
   // Key-value string pairs, parsed in order to set miscellaneous options,
   // overriding if appropriate.
-  using OptionOverride = std::variant<std::string, bool, int64_t>;
-  std::vector<std::pair<std::string, OptionOverride>> env_option_overrides;
+  using OptionOverride = std::variant<std::string, bool, int64_t, double>;
+  using EnvironmentOptionOverrides =
+      std::vector<std::pair<std::string, OptionOverride>>;
+  EnvironmentOptionOverrides env_option_overrides;
+
+  std::optional<xla::gpu::GpuTargetConfig> gpu_target_config;
+
+  // Allow to modify the input MLIR / XLA program.
+  // This is used to run passes on the MLIR parameter without having to clone it
+  // first, thus saving memory. Additionally, it allows us to deallocate the
+  // MLIR later in the compile, when we don't use it anymore.
+  bool allow_in_place_mlir_modification = false;
 
   // Used to indicate the precision configuration.
   PrecisionConfig::Precision matrix_unit_operand_precision =
       PrecisionConfig::DEFAULT;
 
   // Applies env_option_overrides to executable_build_options.debug_options().
-  Status ApplyAllOptionOverrides();
+  absl::Status ApplyAllOptionOverrides();
 
   // Applies a single option to executable_build_options.debug_options().
-  Status ApplyOption(const std::string& key, const OptionOverride& value);
+  absl::Status ApplyOption(const std::string& key, const OptionOverride& value);
 
-  Status ApplyOptionFromString(const tsl::protobuf::FieldDescriptor* field,
-                               const std::string& value);
+  absl::Status ApplyOptionFromString(
+      const tsl::protobuf::FieldDescriptor* field, const std::string& value);
+
+  static absl::StatusOr<EnvironmentOptionOverrides> LoadEnvOptionOverrides(
+      const google::protobuf::Map<std::string, xla::OptionOverrideProto>&
+          env_option_overrides);
 
   // Serialize the CompileOptions into a CompileOptionsProto.
-  StatusOr<CompileOptionsProto> ToProto() const;
+  absl::StatusOr<CompileOptionsProto> ToProto() const;
 
   // Deserialize the CompileOptionsProto into a CompileOptions.
-  static StatusOr<CompileOptions> FromProto(const CompileOptionsProto& proto);
+  static absl::StatusOr<CompileOptions> FromProto(
+      const CompileOptionsProto& proto);
 };
+
+// Returns true if the compilation is an early exit compilation.
+bool IsEarlyExitCompilation(const xla::CompileOptions& compile_options);
 
 struct LoadOptions {
   // Origin of the subslice of the target topology to run computation on.
-  struct ComputationOrigin {
-    int x = 0;
-    int y = 0;
-    int z = 0;
-  };
-  std::optional<ComputationOrigin> computation_origin;
+  std::optional<xla::PjRtDeviceDimensions> computation_origin;
 
   // multi_slice_config to associate with the executable during load of a multi
   // slice operation.
@@ -129,6 +169,16 @@ struct LoadOptions {
 class ExecuteContext {
  public:
   virtual ~ExecuteContext() = default;
+  virtual absl::string_view kind() const { return "base"; }
+
+  ffi::ExecutionContext& ffi_context() { return ffi_context_; }
+  const ffi::ExecutionContext& ffi_context() const { return ffi_context_; }
+
+ private:
+  // XLA FFI execution context is a mechanism to attach arbitrary user data to
+  // a particular call of PjRtLoadedExecutable::Execute and forward it to custom
+  // calls implemented as XLA FFI handlers.
+  ffi::ExecutionContext ffi_context_;
 };
 
 struct PjRtTransferMetadata {
@@ -139,7 +189,6 @@ struct PjRtTransferMetadata {
 };
 
 class PjRtChunk;
-class PjRtTransferMetadata;
 class CopyToDeviceStream;
 
 struct SendCallback {
@@ -159,8 +208,9 @@ struct SendCallback {
   // TODO(chky): Currently the callback invocation order may not be consistent
   // with the HLO send op invocation order, due to limitations in some PjRt
   // implementation. Consider making it strictly the same order as HLO program.
-  std::function<Status(const PjRtTransferMetadata& metadata, PjRtChunk chunk,
-                       size_t total_size_in_bytes, bool done)>
+  std::function<absl::Status(const PjRtTransferMetadata& metadata,
+                             PjRtChunk chunk, size_t total_size_in_bytes,
+                             bool done)>
       callback;
 };
 
@@ -176,26 +226,36 @@ struct RecvCallback {
       callback;
 };
 
+struct HloOutputCallback {
+  int64_t callback_id;
+  int num_operands;
+  // The callback for receiving reconstructed HLO output literals.
+  //
+  // Arguments:
+  // - replica_id: The ID of the replica this output corresponds to.
+  // - partition_id: The ID of the manual partition.
+  // - literals: The reconstructed tensor values produced by the HLO
+  // instruction.
+  //             Missing operands are represented by nullptr.
+  std::function<void(int64_t replica_id, int64_t partition_id,
+                     absl::Span<std::shared_ptr<const Literal> const> literals)>
+      callback;
+};
+
 struct ExecuteOptions {
-  // If true, the client must pass a single PjRtBuffer which contains all of
-  // the arguments as a single XLA tuple, otherwise each argument must be
-  // passed in its own PjRtBuffer. May only be true if the executable was
-  // compiled with parameter_is_tupled_arguments==true.
-  bool arguments_are_tupled = false;
-  // If true, the computation must return a tuple, which will be destructured
-  // into its elements.
-  bool untuple_result = false;
   // If non-zero, identifies this execution as part of a potentially
   // multi-device launch. This can be used to detect scheduling errors, e.g. if
   // multi-host programs are launched in different orders on different hosts,
   // the launch IDs may be used by the runtime to detect the mismatch.
   int32_t launch_id = 0;
   // If non-null, an opaque context passed to an execution that may be used to
-  // supply additional arguments to a derived class of PjRtExecutable.
+  // supply additional arguments to a derived class of PjRtExecutable. It is
+  // a caller responsibility to ensure that the context is valid for the
+  // duration of the execution.
   const ExecuteContext* context = nullptr;
   // If true, check that the PjRtBuffer argument shapes match the compiled
   // shapes. Otherwise, any shape with the right size on device may be passed.
-  bool strict_shape_checking = true;
+  bool strict_shape_checking = false;
 
   // Set multi_slice_config when the computation spans multiple slices. The
   // config should match what was used during compilation to generate this
@@ -209,6 +269,13 @@ struct ExecuteOptions {
   // These callbacks must outlive the execution.
   absl::Span<const std::vector<SendCallback>> send_callbacks;
   absl::Span<const std::vector<RecvCallback>> recv_callbacks;
+  // The HLO output callbacks for PjRt execution. These callbacks are used to
+  // receive reconstructed HLO instruction output literals. Unlike send/recv
+  // callbacks, this is a flat span since a single callback instance handles
+  // invocations across all replicas and partitions, with the `replica_id` and
+  // `partition_id` passed directly as arguments. These callbacks must outlive
+  // the execution.
+  absl::Span<const HloOutputCallback> hlo_output_callbacks;
 
   // If true, send callbacks are passed PjRtChunks in major-to-minor layout, and
   // recv functions should pass major-to-minor chunks to
@@ -226,6 +293,9 @@ struct ExecuteOptions {
   enum class ExecutionMode { kDefault = 0, kSynchronous, kAsynchronous };
   ExecutionMode execution_mode = ExecutionMode::kDefault;
 
+  // If not null, measure the execution profile and store it.
+  ExecutionProfile* execution_profile = nullptr;
+
   // A set of indices denoting the input buffers that should not be donated.
   // An input buffer may be non-donable, for example, if it is referenced more
   // than once. Since such runtime information is not available at compile time,
@@ -235,26 +305,58 @@ struct ExecuteOptions {
   // specific input buffers.
   absl::flat_hash_set<int> non_donatable_input_indices;
 
+  // Execution stream ID identifies the series of executions that must be
+  // executed in program order.  Executions with different execution stream IDs
+  // may be executed in any order and concurrently.
+  int64_t execution_stream_id = 0;
+
+  // If non-null, per-execution custom options passed to the runtime.
+  std::shared_ptr<const CustomOptions> custom_options;
+
+  // The `call_location` field is used to pass down call site location
+  // information from higher-level frameworks like JAX and PyTorch to the PJRT
+  // plugin. This field stores the source location (e.g., file:line) of the
+  // Python code that triggered the execution of this compiled program. This
+  // differs from the source location metadata stored in `OpMetadata`, which
+  // refers to the origin of individual operations within the HLO module.
+  // The plugin can use `call_location` for debugging and error reporting,
+  // allowing users to pinpoint which program execution led to an issue.
+  // The `call_location` pointer is owned by the caller and must point to a
+  // null-terminated string. It is only valid for the duration of the C API
+  // call. The plugin must copy the string if it needs to be stored.
+  std::string call_location = "";
+
+  // The latest known incarnation ids for all alive tasks, keyed by task id.
+  absl::flat_hash_map<int, IncarnationId> incarnations;
+
+  // The PRNG seed to use for execution. A seed of 0 means that the seed is not
+  // set and that the default seed (usually random) should be used.
+  int64_t seed = 0;
+
+  // If true, use arena allocation for output buffers. When this is true, a
+  // single device buffer is allocated for all output buffers, and each output
+  // buffer is a sub-buffer of the arena. The allocated arena will be released
+  // only after all the sub-buffers are deleted.
+  bool use_output_arena = false;
+
   absl::StatusOr<ExecuteOptionsProto> ToProto() const;
   static absl::StatusOr<ExecuteOptions> FromProto(
       const ExecuteOptionsProto& proto);
-};
 
-// Static device memory usage for a compiled program.
-// The on-device memory needed to run an executable is at least
-//   generated_code_size_in_bytes
-//   + argument_size_in_bytes + output_size_in_bytes - alias_size_in_bytes
-//   + temp_size_in_bytes.
-struct CompiledMemoryStats {
-  int64_t generated_code_size_in_bytes = 0;
-  int64_t argument_size_in_bytes = 0;
-  int64_t output_size_in_bytes = 0;
-  // How much argument is reused for output.
-  int64_t alias_size_in_bytes = 0;
-  int64_t temp_size_in_bytes = 0;
-
-  std::string serialized_hlo_proto = "";
-  std::string DebugString() const;
+  // Pretty-printing for ExecutionMode enum.
+  template <typename Sink>
+  friend void AbslStringify(Sink& sink, const ExecutionMode& mode) {
+    absl::Format(&sink, "%s", [&] {
+      switch (mode) {
+        case ExecutionMode::kDefault:
+          return "default";
+        case ExecutionMode::kSynchronous:
+          return "synchronous";
+        case ExecutionMode::kAsynchronous:
+          return "asynchronous";
+      }
+    }());
+  }
 };
 
 class PjRtExecutable {
@@ -270,19 +372,54 @@ class PjRtExecutable {
   // Unique name for this executable, e.g., HloModule name.
   virtual absl::string_view name() const = 0;
 
-  // Return an HloModule (optimized) per partition.
-  virtual StatusOr<std::vector<std::shared_ptr<HloModule>>> GetHloModules()
-      const = 0;
+  // Return HloModule (optimized).
+  virtual absl::StatusOr<std::shared_ptr<HloModule>> GetHloModule() const {
+    return absl::UnimplementedError("GetHloModule is not implemented");
+  }
+
+  // Return an array of HloModule (optimized) per partition.
+  virtual absl::StatusOr<std::vector<std::shared_ptr<HloModule>>>
+  GetHloModules() const;
+
+  // Unoptimized hlo module.
+  virtual std::optional<HloModuleProto> GetUnoptimizedHloModule() const {
+    return std::nullopt;
+  }
 
   // Returns an output Shape per program, the size should be equal to
   // `GetHloModules()`.
-  virtual StatusOr<std::vector<Shape>> GetOutputShapes() const;
+  virtual absl::StatusOr<std::vector<Shape>> GetOutputShapes() const;
+
+  // Returns a list of element types for each output, the size of the outer list
+  // should be equal to `GetHloModules()`.
+  virtual absl::StatusOr<std::vector<std::vector<PrimitiveType>>>
+  GetOutputElementTypes() const;
+
+  // Returns a list of dimensions for each output, the size of the outer list
+  // should be equal to `GetHloModules()`.
+  virtual absl::StatusOr<std::vector<std::vector<DimensionVector>>>
+  GetOutputDimensions() const;
+
+  // Returns the layout of each input parameter.
+  virtual absl::StatusOr<std::vector<std::shared_ptr<const PjRtLayout>>>
+  GetParameterLayouts() const;
+
+  // Returns the layout of each output.
+  virtual absl::StatusOr<std::vector<std::shared_ptr<const PjRtLayout>>>
+  GetOutputLayouts() const;
+
+  // Returns a list of lists of memory kind strings for parameter. The returned
+  // value is `[num_programs, num_parameters]`. The size of the outer list
+  // should be equal to `GetHloModules()`. Under SPMD, one can use
+  // `GetParameterMemoryKinds().front()`.
+  virtual absl::StatusOr<std::vector<std::vector<absl::string_view>>>
+  GetParameterMemoryKinds() const = 0;
 
   // Returns a list of lists of memory kind strings for output. The returned
   // value is `[num_programs, num_output]`. The size of the outer list should be
   // equal to `GetHloModules()`. Under SPMD, one can use
   // `GetOutputMemoryKinds().front()`.
-  virtual StatusOr<std::vector<std::vector<absl::string_view>>>
+  virtual absl::StatusOr<std::vector<std::vector<absl::string_view>>>
   GetOutputMemoryKinds() const = 0;
 
   // Returns a list of parameter OpSharding protos.
@@ -293,38 +430,47 @@ class PjRtExecutable {
 
   // Return memory stats that allow callers to estimate device memory usage
   // when running this executable.
-  virtual StatusOr<CompiledMemoryStats> GetCompiledMemoryStats() const {
-    return Unimplemented("Retrieving CompiledMemoryStats is not supported.");
+  virtual absl::StatusOr<CompiledMemoryStats> GetCompiledMemoryStats() const {
+    return absl::UnimplementedError(
+        "GetCompiledMemoryStats is not implemented.");
   }
 
   // Returns named values for cost properties of this executable (such as
   // operations, size of input/outputs, and run time estimate). Properties may
   // differ for different platforms.
-  virtual StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
-  GetCostAnalysis() const = 0;
+  virtual absl::StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
+  GetCostAnalysis() const {
+    return absl::UnimplementedError("GetCostAnalysis is not implemented.");
+  }
 
   // Serialize this executable into a string and return the value.
-  virtual StatusOr<std::string> SerializeExecutable() const {
-    return Unimplemented("Serializing executable is not supported.");
+  virtual absl::StatusOr<std::string> SerializeExecutable() const {
+    return absl::UnimplementedError("SerializeExecutable is not implemented.");
+  }
+
+  virtual absl::StatusOr<std::unique_ptr<PjRtExecutableAbiVersion>>
+  GetAbiVersion() const {
+    return absl::UnimplementedError("GetAbiVersion is not implemented.");
   }
 
   // Return a fingerprint of this executable.
-  virtual StatusOr<std::string> FingerprintExecutable() const {
-    return Unimplemented("Fingerprinting executable is not supported.");
+  virtual absl::StatusOr<std::string> FingerprintExecutable() const {
+    return absl::UnimplementedError(
+        "FingerprintExecutable is not implemented.");
   }
 
-  virtual StatusOr<struct CompileOptions> GetCompileOptions() const {
-    return Unimplemented("CompileOptions not available.");
+  virtual absl::StatusOr<struct CompileOptions> GetCompileOptions() const {
+    return absl::UnimplementedError("GetCompileOptions is not implemented.");
   }
 };
 
 class PjRtExecutableUtil {
  public:
-  static StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
+  static absl::StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
   RunHloCostAnalysis(const PjRtExecutable& executable,
                      HloCostAnalysis* hlo_cost_analysis);
 
-  static StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
+  static absl::StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
   RunHloCostAnalysis(
       const std::vector<std::shared_ptr<xla::HloModule>>& hlo_modules,
       HloCostAnalysis* hlo_cost_analysis);

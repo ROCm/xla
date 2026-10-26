@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,16 +16,19 @@ limitations under the License.
 #ifndef XLA_SERVICE_BUFFER_VALUE_H_
 #define XLA_SERVICE_BUFFER_VALUE_H_
 
+#include <cstdint>
 #include <functional>
+#include <ostream>
 #include <string>
 
-#include "absl/types/span.h"
+#include "absl/base/attributes.h"
+#include "absl/functional/any_invocable.h"
+#include "absl/log/check.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/service/hlo.pb.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/types.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/logging.h"
 
 namespace xla {
 
@@ -34,7 +37,7 @@ namespace xla {
 // TODO(b/78906445) Delete this class when TuplePointsToAnalysis is unused.
 //
 // XLA arrays are trivially a single BufferValue. Tuples are made up of more
-// than one BufferValue: an BufferValue for the pointer vector, and an
+// than one BufferValue: a BufferValue for the pointer vector, and a
 // BufferValue for each child element.
 //
 // Every BufferValue is defined by a particular instruction and most
@@ -90,7 +93,7 @@ class BufferValue {
   using Id = int64_t;
 
   // Functions which return the size and alignment of a logical buffer in bytes.
-  using SizeFunction = std::function<int64_t(const BufferValue&)>;
+  using SizeFunction = absl::AnyInvocable<int64_t(const BufferValue&) const>;
   using AlignmentFunction = std::function<int64_t(BufferValue::Color)>;
 
   // Prevent value being copied, allowing comparison by pointer,
@@ -142,7 +145,8 @@ class BufferValue {
   // Whether this buffer contains a tuple.
   bool IsTuple() const { return is_tuple_; }
 
-  // Whether this buffer contains an array.
+  // Whether this buffer contains an array, that is, has an array shape or a
+  // buffer shape.
   bool IsArray() const { return is_array_; }
 
   bool operator<(const BufferValue& other) const { return id_ < other.id_; }
@@ -157,7 +161,7 @@ class BufferValue {
   static LogicalBufferProto::Location ToLocationProto(
       const HloInstruction& instruction, const ShapeIndex& index);
 
-  const Color kInvalidColor = -1;
+  static constexpr Color kInvalidColor = -1;
 
  protected:
   BufferValue(HloInstruction* instruction, const ShapeIndex& index, Id id);
@@ -171,6 +175,8 @@ class BufferValue {
   // delete LogicalBuffer and this class, we don't refactor all the shared
   // features from LogicalBuffer and HloValue into this class.
   Id id_ : 62;
+  // Whether the buffer corresponds to array storage, that is, the buffer
+  // has an array-shape or a buffer-shape.
   bool is_array_ : 1;
   bool is_tuple_ : 1;
   Color color_ = kInvalidColor;

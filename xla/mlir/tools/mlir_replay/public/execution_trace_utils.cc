@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/mlir/tools/mlir_replay/public/execution_trace_utils.h"
 
+#include <cassert>
 #include <complex>
 #include <cstdint>
 #include <functional>
@@ -24,15 +25,28 @@ limitations under the License.
 #include <utility>
 #include <variant>
 
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
-#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
+#include "llvm/Support/Casting.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Region.h"
+#include "mlir/IR/Types.h"
+#include "mlir/Support/LLVM.h"
+#include "xla/literal.h"
+#include "xla/mlir/tools/mlir_interpreter/framework/interpreter_value.h"
+#include "xla/mlir/tools/mlir_interpreter/framework/tensor_or_memref.h"
 #include "xla/mlir/tools/mlir_replay/public/execution_trace.pb.h"
-#include "xla/mlir_hlo/tools/mlir_interpreter/framework/interpreter_value.h"
-#include "xla/mlir_hlo/tools/mlir_interpreter/framework/tensor_or_memref.h"
-#include "tsl/platform/statusor.h"
+#include "xla/primitive_util.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/xla_data.pb.h"
 
 namespace mlir {
 namespace interpreter {
@@ -82,7 +96,7 @@ struct TraceInterpreterValueVisitor {
       out.add_shape(size);
     }
     SetElementType<T>();
-    for (const auto& index : v.view.indices()) {
+    for (const auto& index : v.view.Indices()) {
       Add(v.at(index));
     }
   }
@@ -117,15 +131,11 @@ struct TraceInterpreterValueVisitor {
   static TracedValue::ElementType GetElementType(const std::complex<T>&) {
     return TracedValue::COMPLEX;
   }
-
-  static TracedValue::ElementType GetElementType(const Tuple&) {
-    return TracedValue::UNKNOWN;
-  }
 };
 
 }  // namespace
 
-void ExecutionTraceListener::beforeOp(ArrayRef<InterpreterValue> args,
+void ExecutionTraceListener::BeforeOp(ArrayRef<InterpreterValue> args,
                                       Operation* op) {
   auto* inst = regions_.back()->add_instructions();
   inst->set_name(op->getName().getStringRef().str());
@@ -134,7 +144,7 @@ void ExecutionTraceListener::beforeOp(ArrayRef<InterpreterValue> args,
   }
 }
 
-void ExecutionTraceListener::afterOp(ArrayRef<InterpreterValue> results) {
+void ExecutionTraceListener::AfterOp(ArrayRef<InterpreterValue> results) {
   auto* traced_results =
       regions_.back()->mutable_instructions()->rbegin()->mutable_results();
   for (const auto& result : results) {
@@ -142,7 +152,7 @@ void ExecutionTraceListener::afterOp(ArrayRef<InterpreterValue> results) {
   }
 }
 
-void ExecutionTraceListener::enterRegion(ArrayRef<InterpreterValue> bbargs,
+void ExecutionTraceListener::EnterRegion(ArrayRef<InterpreterValue> bbargs,
                                          Region& region) {
   if (regions_.empty()) {
     regions_.push_back(trace_->mutable_trace());
@@ -158,7 +168,7 @@ void ExecutionTraceListener::enterRegion(ArrayRef<InterpreterValue> bbargs,
   }
 }
 
-void ExecutionTraceListener::leaveRegion(ArrayRef<InterpreterValue> yielded) {
+void ExecutionTraceListener::LeaveRegion(ArrayRef<InterpreterValue> yielded) {
   for (const auto& result : yielded) {
     *regions_.back()->add_results() = ValueToTracedValue(result);
   }
@@ -168,7 +178,7 @@ void ExecutionTraceListener::leaveRegion(ArrayRef<InterpreterValue> yielded) {
 llvm::SmallVector<mlir::Attribute> ValueToAttribute(
     const InterpreterValue& value, mlir::Type type) {
   if (std::holds_alternative<Tuple>(value.storage)) {
-    auto types = type.cast<TupleType>().getTypes();
+    auto types = mlir::cast<TupleType>(type).getTypes();
     const auto& t = std::get<Tuple>(value.storage);
     llvm::SmallVector<mlir::Attribute> attrs;
     for (const auto& [v, ty] : llvm::zip(t.values, types)) {
@@ -179,24 +189,24 @@ llvm::SmallVector<mlir::Attribute> ValueToAttribute(
     return attrs;
   }
 
-  if (!value.isTensor()) {
+  if (!value.IsTensor()) {
     return {cast<DenseElementsAttr>(
-                ValueToAttribute(value.asUnitTensor(),
+                ValueToAttribute(value.AsUnitTensor(),
                                  mlir::RankedTensorType::get({}, type))
                     .front())
                 .getValues<mlir::Attribute>()[0]};
   }
 
-  if (!type.isa<ShapedType>()) {
+  if (!mlir::isa<ShapedType>(type)) {
     return {};
   }
 
-  auto shaped_ty = type.cast<ShapedType>();
-  return {dispatchScalarType(shaped_ty, [&](auto dummy) -> mlir::Attribute {
+  auto shaped_ty = mlir::cast<ShapedType>(type);
+  return {DispatchScalarType(shaped_ty, [&](auto dummy) -> mlir::Attribute {
     using T = decltype(dummy);
     auto& t = std::get<TensorOrMemref<T>>(value.storage);
     SmallVector<T> vals;
-    for (const auto& index : t.view.indices()) {
+    for (const auto& index : t.view.Indices()) {
       vals.push_back(t.at(index));
     }
     auto attr_ty =
@@ -219,21 +229,21 @@ TensorOrMemref<T> ArrayLiteralToTensor(const xla::Literal& literal) {
   }
   SmallVector<int64_t> shape{literal.shape().dimensions().begin(),
                              literal.shape().dimensions().end()};
-  auto result = TensorOrMemref<T>::empty(shape, layout);
-  assert(literal.size_bytes() == result.buffer->getByteSize() &&
+  auto result = TensorOrMemref<T>::Empty(shape, layout);
+  assert(literal.size_bytes() == result.buffer->GetByteSize() &&
          "expected buffer sizes to match");
   memcpy(result.buffer->at(0, 0), literal.untyped_data(),
-         result.buffer->getByteSize());
+         result.buffer->GetByteSize());
   return result;
 }
 }  // namespace
 
-tsl::StatusOr<InterpreterValue> LiteralToValue(const xla::Literal& literal) {
+absl::StatusOr<InterpreterValue> LiteralToValue(const xla::Literal& literal) {
   if (literal.shape().IsTuple()) {
     auto elements = literal.Clone().DecomposeTuple();
     Tuple result;
     for (auto& element : elements) {
-      TF_ASSIGN_OR_RETURN(auto converted, LiteralToValue(element));
+      ABSL_ASSIGN_OR_RETURN(auto converted, LiteralToValue(element));
       result.values.push_back(
           std::make_shared<InterpreterValue>(std::move(converted)));
     }
@@ -241,11 +251,17 @@ tsl::StatusOr<InterpreterValue> LiteralToValue(const xla::Literal& literal) {
   }
 
   if (literal.shape().IsToken()) {
-    return tsl::errors::Unimplemented("token arguments are not implemented");
+    return absl::UnimplementedError("token arguments are not implemented");
   }
 
   if (literal.shape().IsArray()) {
-    switch (literal.shape().element_type()) {
+    auto type = literal.shape().element_type();
+    if (xla::primitive_util::IsF8Type(type)) {
+      return absl::UnimplementedError(
+          absl::StrCat(xla::primitive_util::LowercasePrimitiveTypeName(type),
+                       " not implemented"));
+    }
+    switch (type) {
       case xla::PRED:
         return {{ArrayLiteralToTensor<bool>(literal)}};
       case xla::S8:
@@ -265,23 +281,13 @@ tsl::StatusOr<InterpreterValue> LiteralToValue(const xla::Literal& literal) {
       case xla::U64:
         return {{ArrayLiteralToTensor<uint64_t>(literal)}};
       case xla::F16:
-        return tsl::errors::Unimplemented("F16 not implemented");
+        return absl::UnimplementedError("F16 not implemented");
       case xla::F32:
         return {{ArrayLiteralToTensor<float>(literal)}};
       case xla::BF16:
-        return tsl::errors::Unimplemented("BF16 not implemented");
+        return absl::UnimplementedError("BF16 not implemented");
       case xla::F64:
         return {{ArrayLiteralToTensor<double>(literal)}};
-      case xla::F8E5M2:
-        return tsl::errors::Unimplemented("F8E5M2 not implemented");
-      case xla::F8E4M3FN:
-        return tsl::errors::Unimplemented("F8E4M3FN not implemented");
-      case xla::F8E4M3B11FNUZ:
-        return tsl::errors::Unimplemented("F8E4M3B11FNUZ not implemented");
-      case xla::F8E5M2FNUZ:
-        return tsl::errors::Unimplemented("F8E5M2FNUZ not implemented");
-      case xla::F8E4M3FNUZ:
-        return tsl::errors::Unimplemented("F8E4M3FNUZ not implemented");
       case xla::C64:
         return {{ArrayLiteralToTensor<std::complex<float>>(literal)}};
       case xla::C128:
@@ -292,23 +298,23 @@ tsl::StatusOr<InterpreterValue> LiteralToValue(const xla::Literal& literal) {
     }
   }
 
-  return tsl::errors::InvalidArgument("unexpected literal type");
+  return absl::InvalidArgumentError("unexpected literal type");
 }
 
-tsl::StatusOr<InterpreterValue> LiteralToValue(
+absl::StatusOr<InterpreterValue> LiteralToValue(
     const xla::LiteralProto& literal) {
-  TF_ASSIGN_OR_RETURN(auto deserialized,
-                      xla::Literal::CreateFromProto(literal));
+  ABSL_ASSIGN_OR_RETURN(auto deserialized,
+                        xla::Literal::CreateFromProto(literal));
   return LiteralToValue(deserialized);
 }
 
-tsl::StatusOr<InterpreterValue> LiteralToValue(const xla::LiteralProto& literal,
-                                               mlir::Type type) {
-  TF_ASSIGN_OR_RETURN(auto result, LiteralToValue(literal));
-  return {dispatchScalarType(type, [&](auto dummy) -> InterpreterValue {
+absl::StatusOr<InterpreterValue> LiteralToValue(
+    const xla::LiteralProto& literal, mlir::Type type) {
+  ABSL_ASSIGN_OR_RETURN(auto result, LiteralToValue(literal));
+  return {DispatchScalarType(type, [&](auto dummy) -> InterpreterValue {
     TensorOrMemref<decltype(dummy)> cast;
-    cast.view = result.view();
-    cast.buffer = result.buffer();
+    cast.view = result.View();
+    cast.buffer = result.GetBuffer();
     return {cast};
   })};
 }
@@ -319,7 +325,7 @@ TracedValue ValueToTracedValue(const InterpreterValue& value) {
   return visitor.out;
 }
 
-tsl::StatusOr<InterpreterValue> TracedValueToValue(
+absl::StatusOr<InterpreterValue> TracedValueToValue(
     const TracedValue& traced_value) {
   auto extract = [&](auto dummy, auto& elements) -> InterpreterValue {
     using T = decltype(dummy);
@@ -328,8 +334,8 @@ tsl::StatusOr<InterpreterValue> TracedValueToValue(
     }
 
     auto result =
-        TensorOrMemref<T>::empty(llvm::to_vector(traced_value.shape()));
-    for (auto [index, element] : llvm::zip(result.view.indices(), elements)) {
+        TensorOrMemref<T>::Empty(llvm::to_vector(traced_value.shape()));
+    for (auto [index, element] : llvm::zip(result.view.Indices(), elements)) {
       result.at(index) = element;
     }
     return {result};
@@ -341,10 +347,10 @@ tsl::StatusOr<InterpreterValue> TracedValueToValue(
     }
 
     auto result =
-        TensorOrMemref<T>::empty(llvm::to_vector(traced_value.shape()));
+        TensorOrMemref<T>::Empty(llvm::to_vector(traced_value.shape()));
     int64_t i = 0;
-    for (auto it = result.view.indices().begin(),
-              end = result.view.indices().end();
+    for (auto it = result.view.Indices().begin(),
+              end = result.view.Indices().end();
          it != end; ++it, i += 2) {
       result.at(*it) = {elements[i], elements[i + 1]};
     }
@@ -395,14 +401,14 @@ tsl::StatusOr<InterpreterValue> TracedValueToValue(
     case TracedValue::TUPLE:
       Tuple result;
       for (const auto& elem : traced_value.tuple_elements()) {
-        TF_ASSIGN_OR_RETURN(auto converted, TracedValueToValue(elem));
+        ABSL_ASSIGN_OR_RETURN(auto converted, TracedValueToValue(elem));
         result.values.push_back(
             std::make_shared<InterpreterValue>(std::move(converted)));
       }
       return {{std::move(result)}};
   }
-  return tsl::errors::InvalidArgument("unexpected type: " +
-                                      traced_value.DebugString());
+  return absl::InvalidArgumentError("unexpected type: " +
+                                    traced_value.DebugString());
 }
 
 llvm::SmallVector<const InstructionTrace*> FindOpExecutionsInTrace(

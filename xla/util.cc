@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,55 +17,47 @@ limitations under the License.
 
 #include <stdarg.h>
 
-#include <cmath>
+#include <algorithm>
+#include <cstdint>
+#include <functional>
+#include <iterator>
 #include <limits>
-#include <numeric>
-#include <optional>
+#include <sstream>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/base/casts.h"
-#include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/str_split.h"
-#include "xla/types.h"
-#include "tsl/platform/env.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/types/span.h"
+#include "google/protobuf/descriptor.h"
+#include "google/protobuf/text_format.h"
 #include "tsl/platform/numbers.h"
+#include "tsl/platform/protobuf.h"
 #include "tsl/platform/stacktrace.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/logging.h"
+#include "xla/types.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 
-std::vector<int64_t> ToMixedRadix(const int64_t n,
-                                  absl::Span<const int64_t> bounds) {
-  if (bounds.empty()) {
-    return {};
-  }
-
-  std::vector<int64_t> digits;
-  digits.reserve(bounds.size());
-  int64_t divisor = Product(bounds);
-  CHECK_GT(divisor, 0);
-  int64_t remainder = n % divisor;
-  for (const int64_t radix : bounds) {
-    CHECK_GT(radix, 0);
-    divisor /= radix;
-    CHECK_GT(divisor, 0);
-
-    // The divisor is always 1 for the last iteration.
-    digits.push_back(remainder / divisor);
-    remainder = remainder % divisor;
-  }
-  return digits;
-}
-
-Status WithLogBacktrace(const Status& status) {
+absl::Status WithLogBacktrace(const absl::Status& status) {
   CHECK(!status.ok());
   VLOG(1) << status.ToString();
   VLOG(2) << tsl::CurrentStackTrace();
@@ -88,10 +80,11 @@ ScopedLoggingTimer::ScopedLoggingTimer(absl::string_view label, bool enabled,
 void ScopedLoggingTimer::StopAndLog() {
   if (enabled_) {
     uint64_t end_micros = tsl::Env::Default()->NowMicros();
-    double secs = (end_micros - start_micros_) / 1000000.0;
+    uint64_t elapsed_micros = end_micros - start_micros_;
+    double secs = elapsed_micros / 1000000.0;
 
     TimerStats& stats = *timer_stats_;
-    absl::MutexLock lock(&stats.stats_mutex);
+    absl::MutexLock lock(stats.stats_mutex);
     stats.cumulative_secs += secs;
     if (secs > stats.max_secs) {
       stats.max_secs = secs;
@@ -100,6 +93,7 @@ void ScopedLoggingTimer::StopAndLog() {
 
     LOG(INFO).AtLocation(file_, line_)
         << label_ << " time: " << tsl::strings::HumanReadableElapsedTime(secs)
+        << " (" << elapsed_micros << " us)"
         << " (cumulative: "
         << tsl::strings::HumanReadableElapsedTime(stats.cumulative_secs)
         << ", max: " << tsl::strings::HumanReadableElapsedTime(stats.max_secs)
@@ -110,14 +104,16 @@ void ScopedLoggingTimer::StopAndLog() {
 
 ScopedLoggingTimer::~ScopedLoggingTimer() { StopAndLog(); }
 
-Status AddStatus(Status prior, absl::string_view context) {
+absl::Status AddStatus(absl::Status prior, absl::string_view context) {
   CHECK(!prior.ok());
-  return Status{prior.code(), absl::StrCat(context, ": ", prior.message())};
+  return absl::Status{prior.code(),
+                      absl::StrCat(context, ": ", prior.message())};
 }
 
-Status AppendStatus(Status prior, absl::string_view context) {
+absl::Status AppendStatus(absl::Status prior, absl::string_view context) {
   CHECK(!prior.ok());
-  return Status{prior.code(), absl::StrCat(prior.message(), ": ", context)};
+  return absl::Status{prior.code(),
+                      absl::StrCat(prior.message(), ": ", context)};
 }
 
 std::string Reindent(absl::string_view original,
@@ -132,8 +128,9 @@ std::string Reindent(absl::string_view original,
 
 template <typename FloatT>
 static void RoundTripNanPayload(FloatT value, std::string* result) {
+  static_assert(std::numeric_limits<FloatT>::has_quiet_NaN);
   static_assert(!std::is_same<FloatT, tsl::float8_e4m3fn>::value,
-                "RoundTripNanPayload does not support E4M3");
+                "RoundTripNanPayload does not support E4M3FN");
   static_assert(!std::is_same<FloatT, tsl::float8_e4m3fnuz>::value,
                 "RoundTripNanPayload does not support E4M3FNUZ");
   static_assert(!std::is_same<FloatT, tsl::float8_e5m2fnuz>::value,
@@ -158,7 +155,17 @@ static std::string GenericRoundTripFpToString(FloatT value) {
                          static_cast<double>(value));
 }
 
+std::string RoundTripFpToString(tsl::float4_e2m1fn value) {
+  return GenericRoundTripFpToString(value);
+}
+
 std::string RoundTripFpToString(tsl::float8_e5m2 value) {
+  std::string result = GenericRoundTripFpToString(value);
+  RoundTripNanPayload(value, &result);
+  return result;
+}
+
+std::string RoundTripFpToString(tsl::float8_e4m3 value) {
   std::string result = GenericRoundTripFpToString(value);
   RoundTripNanPayload(value, &result);
   return result;
@@ -179,7 +186,28 @@ std::string RoundTripFpToString(tsl::float8_e4m3fn value) {
   return result;
 }
 
-std::string RoundTripFpToString(tsl::float8_e4m3b11 value) {
+std::string RoundTripFpToString(tsl::float8_e4m3b11fnuz value) {
+  std::string result = GenericRoundTripFpToString(value);
+  return result;
+}
+
+std::string RoundTripFpToString(tsl::float8_e3m4 value) {
+  std::string result = GenericRoundTripFpToString(value);
+  RoundTripNanPayload(value, &result);
+  return result;
+}
+
+std::string RoundTripFpToString(tsl::float8_e8m0fnu value) {
+  std::string result = GenericRoundTripFpToString(value);
+  return result;
+}
+
+std::string RoundTripFpToString(tsl::float6_e3m2fn value) {
+  std::string result = GenericRoundTripFpToString(value);
+  return result;
+}
+
+std::string RoundTripFpToString(tsl::float6_e2m3fn value) {
   std::string result = GenericRoundTripFpToString(value);
   return result;
 }
@@ -265,9 +293,10 @@ std::string HumanReadableNumOps(double flops, double nanoseconds,
       absl::EndsWith(sp, "b")) {
     *throughput.rbegin() = 'G';
   }
-  throughput += absl::StrCat(op_prefix, "OP/s");
+  absl::StrAppend(&throughput, op_prefix, "OP/s");
   return throughput;
 }
+
 }  // namespace
 
 std::string HumanReadableNumFlops(double flops, double nanoseconds) {
@@ -279,43 +308,19 @@ std::string HumanReadableNumTranscendentalOps(double trops,
   return HumanReadableNumOps(trops, nanoseconds, "TR");
 }
 
-void LogLines(int sev, absl::string_view text, const char* fname, int lineno) {
-  const int orig_sev = sev;
-  if (sev == tsl::FATAL) {
-    sev = tsl::ERROR;
-  }
-
-  // Protect calls with a mutex so we don't interleave calls to LogLines from
-  // multiple threads.
-  static absl::Mutex log_lines_mu(absl::kConstInit);
-  absl::MutexLock lock(&log_lines_mu);
-
-  size_t cur = 0;
-  while (cur < text.size()) {
-    size_t eol = text.find('\n', cur);
-    if (eol == absl::string_view::npos) {
-      eol = text.size();
-    }
-    auto msg = text.substr(cur, eol - cur);
-    tsl::internal::LogString(fname, lineno, sev,
-                             std::string(msg.data(), msg.size()));
-    cur = eol + 1;
-  }
-
-  if (orig_sev == tsl::FATAL) {
-    tsl::internal::LogString(fname, lineno, orig_sev,
-                             "Aborting due to errors.");
-  }
-}
-
-int64_t Product(absl::Span<const int64_t> xs) {
-  return std::accumulate(xs.begin(), xs.end(), static_cast<int64_t>(1),
-                         std::multiplies<int64_t>());
+std::vector<int64_t> ElemwiseProduct(absl::Span<const int64_t> a,
+                                     absl::Span<const int64_t> b) {
+  CHECK_EQ(a.size(), b.size());
+  std::vector<int64_t> result;
+  absl::c_transform(a, b, std::back_inserter(result),
+                    std::multiplies<int64_t>());
+  return result;
 }
 
 absl::InlinedVector<std::pair<int64_t, int64_t>, 8> CommonFactors(
     absl::Span<const int64_t> a, absl::Span<const int64_t> b) {
-  CHECK_EQ(Product(a), Product(b));
+  CHECK_EQ(Product(a), Product(b)) << "a=[" << absl::StrJoin(a, ",") << "], b=["
+                                   << absl::StrJoin(b, ",") << "]";
   absl::InlinedVector<std::pair<int64_t, int64_t>, 8> bounds;
   if (absl::c_equal(a, b)) {
     bounds.reserve(a.size() + 1);
@@ -439,6 +444,20 @@ ConvertedDimensionNumbers ConvertDimensionNumbers(
   absl::c_sort(dimensions.to_dimensions);
   return dimensions;
 }
+
+DimensionVector GetNonContractingDims(
+    int64_t rank, absl::Span<const int64_t> contracting_dim_numbers,
+    absl::Span<const int64_t> batch_dim_numbers) {
+  DimensionVector non_contracting_dim_numbers;
+  for (int64_t i = 0; i < rank; ++i) {
+    if (!absl::c_linear_search(contracting_dim_numbers, i) &&
+        !absl::c_linear_search(batch_dim_numbers, i)) {
+      non_contracting_dim_numbers.push_back(i);
+    }
+  }
+  return non_contracting_dim_numbers;
+}
+
 std::string SanitizeFileName(std::string file_name) {
   for (char& c : file_name) {
     if (c == '/' || c == '\\' || c == '[' || c == ']' || c == ' ') {
@@ -448,54 +467,50 @@ std::string SanitizeFileName(std::string file_name) {
   return file_name;
 }
 
+std::string SanitizeOpName(absl::string_view op_name, char separator,
+                           absl::string_view replace_with) {
+  auto pos = op_name.rfind(separator);
+  if (pos > 0 && pos != absl::string_view::npos) {
+    absl::string_view suffix = op_name.substr(pos + 1);
+    if (std::all_of(suffix.begin(), suffix.end(), absl::ascii_isdigit)) {
+      op_name = op_name.substr(0, pos);
+    }
+  }
+  return absl::StrReplaceAll(op_name,
+                             {{std::string(1, separator), replace_with}});
+}
+
 bool DistinctNumbersAreConsecutiveIfSorted(absl::Span<const int64_t> seq) {
   return *absl::c_max_element(seq) - *absl::c_min_element(seq) ==
          seq.size() - 1;
 }
 
-// Utility function to split a double-precision float (F64) into a pair of F32s.
-// For a p-bit number, and a splitting point (p/2) <= s <= (p - 1), the
-// algorithm produces a (p - s)-bit value 'hi' and a non-overlapping (s - 1)-bit
-// value 'lo'. See Theorem 4 in [1] (attributed to Dekker) or [2] for the
-// original theorem by Dekker.
-//
-// For double-precision F64s, which contain a 53 bit mantissa (52 of them
-// explicit), we can represent the most significant 49 digits as the unevaluated
-// sum of two single-precision floats 'hi' and 'lo'. The 'hi' float stores the
-// most significant 24 bits and the sign bit of 'lo' together with its mantissa
-// store the remaining 25 bits. The exponent of the resulting representation is
-// still restricted to 8 bits of F32.
-//
-// References:
-// [1] A. Thall, Extended-Precision Floating-Point Numbers for GPU Computation,
-//     SIGGRAPH Research Posters, 2006.
-//     (http://andrewthall.org/papers/df64_qf128.pdf)
-// [2] T. J. Dekker, A floating point technique for extending the available
-//     precision, Numerische Mathematik, vol. 18, pp. 224–242, 1971.
-std::pair<float, float> SplitF64ToF32(double x) {
-  const float x_f32 = static_cast<float>(x);
-
-  // Early return if x is an infinity or NaN.
-  if (!std::isfinite(x_f32)) {
-    // Only values within the range of F32 are supported, unless it is infinity.
-    // Small values with large negative exponents would be rounded to zero.
-    if (std::isfinite(x)) {
-      LOG(WARNING) << "Out of range F64 constant detected: " << x;
+std::string PrintAllFields(const tsl::protobuf::Message& message) {
+  tsl::protobuf::TextFormat::Printer tsl_printer;
+  const tsl::protobuf::Reflection* reflection = message.GetReflection();
+  std::stringstream result;
+  std::string buffer;
+  const tsl::protobuf::Descriptor* descriptor = message.GetDescriptor();
+  for (int i = 0; i < descriptor->field_count(); ++i) {
+    const tsl::protobuf::FieldDescriptor* field = descriptor->field(i);
+    if (field->is_repeated()) {
+      result << field->name() << ": [";
+      for (int j = 0; j < reflection->FieldSize(message, field); ++j) {
+        if (j > 0) {
+          result << ", ";
+        }
+        tsl_printer.PrintFieldValueToString(message, field, j, &buffer);
+        result << buffer;
+      }
+      result << "]\n";
+    } else {
+      result << field->name() << ": ";
+      tsl_printer.PrintFieldValueToString(message, field, -1, &buffer);
+      result << buffer << "\n";
     }
-    return std::make_pair(x_f32, 0.0f);
   }
-
-  // The high float is simply the double rounded to the nearest float. Because
-  // we are rounding to nearest with ties to even, the error introduced in
-  // rounding is less than half an ULP in the high ULP.
-  const float hi = x_f32;
-  // We can compute the low term using Sterbenz' lemma: If a and b are two
-  // positive floating point numbers and a/2 ≤ b ≤ 2a, then their difference can
-  // be computed exactly.
-  // Note: the difference is computed exactly but is rounded to the nearest
-  // float which will introduce additional error.
-  const float lo = static_cast<float>(x - static_cast<double>(hi));
-  return std::make_pair(hi, lo);
+  return result.str();
 }
 
+int64_t Product(absl::Span<const int64_t> xs) { return Product<int64_t>(xs); }
 }  // namespace xla

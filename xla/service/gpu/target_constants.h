@@ -1,4 +1,4 @@
-/* Copyright 2019 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2019 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ inline const char* TargetTriple() {
 // NVPTXTargetMachine.cpp.
 inline const char* DataLayout() {
   static constexpr char kDataLayout[] =
-      "e-i64:64-i128:128-v16:16-v32:32-n16:32:64";
+      "e-p6:32:32-i64:64-i128:128-i256:256-v16:16-v32:32-n16:32:64";
   return kDataLayout;
 }
 }  // namespace nvptx
@@ -53,6 +53,21 @@ inline const char* DataLayout() {
 }
 
 }  // namespace amdgpu
+
+namespace spir {
+// The triple that represents our target on SPIR-V backend.
+inline const char* TargetTriple() {
+  static constexpr char kTargetTriple[] = "spirv64-unknown-unknown";
+  return kTargetTriple;
+}
+
+// The data layout of the emitted module.
+inline const char* DataLayout() {
+  // Let SPIR-V backend choose a default layout.
+  static constexpr char kDataLayout[] = "";
+  return kDataLayout;
+}
+}  // namespace spir
 
 }  // namespace gpu
 }  // namespace xla

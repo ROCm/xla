@@ -1,3 +1,17 @@
+// Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// ==============================================================================
 // RUN: mlir-hlo-opt --split-input-file %s --detensorize-scf-ops | \
 // RUN: FileCheck %s --dump-input=always
 
@@ -75,8 +89,8 @@ func.func @if_return(%cond: i1) -> tensor<f32> {
 
 // CHECK-LABEL: @if_return
 // CHECK-SAME:    (%[[COND:.*]]:
-// CHECK:       %[[C0:.*]] = arith.constant 0
-// CHECK:       %[[C1:.*]] = arith.constant 1
+// CHECK-DAG:   %[[C0:.*]] = arith.constant 0
+// CHECK-DAG:   %[[C1:.*]] = arith.constant 1
 // CHECK:       %[[RESULT_SCALAR:.*]] = scf.if %[[COND]] -> (f32) {
 // CHECK:         scf.yield %[[C0]]
 // CHECK:       } else {
@@ -99,9 +113,9 @@ func.func @for(%arg: tensor<f32>) -> tensor<f32> {
 
 // CHECK-LABEL: @for
 // CHECK-SAME:    (%[[ARG:.*]]:
-// CHECK:       %[[CST:.*]] = arith.constant 0.0
-// CHECK:       %[[C0:.*]] = arith.constant 0
-// CHECK:       %[[C1:.*]] = arith.constant 1
+// CHECK-DAG:   %[[CST:.*]] = arith.constant 0.0
+// CHECK-DAG:   %[[C0:.*]] = arith.constant 0
+// CHECK-DAG:   %[[C1:.*]] = arith.constant 1
 // CHECK:       %[[ARG_SCALAR:.*]] = tensor.extract %[[ARG]]
 // CHECK:       %[[RESULT_SCALAR:.*]] = scf.for {{.*}} iter_args(%{{.*}} = %[[ARG_SCALAR]])
 // CHECK:         scf.yield %[[CST]]

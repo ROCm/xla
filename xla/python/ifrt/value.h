@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,12 +16,15 @@ limitations under the License.
 #ifndef XLA_PYTHON_IFRT_VALUE_H_
 #define XLA_PYTHON_IFRT_VALUE_H_
 
+#include <cstdint>
+#include <optional>
 #include <string>
 
-#include "llvm/Support/ExtensibleRTTI.h"
-#include "xla/python/ifrt/future.h"
-#include "xla/status.h"
-#include "tfrt/concurrency/ref_count.h"  // from @tf_runtime
+#include "absl/status/statusor.h"
+#include "xla/python/ifrt/rtti.h"
+#include "xla/python/ifrt/user_context.h"
+#include "xla/tsl/concurrency/future.h"
+#include "xla/tsl/concurrency/ref_count.h"
 
 namespace xla {
 namespace ifrt {
@@ -30,7 +33,7 @@ class Client;
 
 // Abstract superclass of values such as arrays.
 class Value : public tsl::ReferenceCounted<Value>,
-              public llvm::RTTIExtends<Value, llvm::RTTIRoot> {
+              public RTTIExtends<Value, RTTIRoot> {
  public:
   Value() = default;
 
@@ -42,17 +45,28 @@ class Value : public tsl::ReferenceCounted<Value>,
 
   virtual Client* client() const = 0;
 
+  // Returns the user context associated with the creation of this array.
+  virtual UserContextRef user_context() const = 0;
+
+  // Returns a byte size of a value. It follows the same semantics as
+  // `Layout::ByteSize()`. If the value represents multiple nested objects, it
+  // returns the sum of the byte sizes of all nested objects inside the value.
+  virtual absl::StatusOr<std::optional<int64_t>> ByteSize() const = 0;
+
   // Returns a future that becomes ready when the buffer is computed or has an
   // error.
-  virtual Future<Status> GetReadyFuture() const = 0;
+  virtual tsl::Future<> GetReadyFuture() const = 0;
 
   // Deletes the value from the devices. The operation may be asynchronous. The
   // returned future will have the result of the deletion on the devices, and
   // will be triggered after all values have been deleted.
   // Implementations that do not track the completion of the deletion operation
   // may make the future immediately ready with an OK status.
-  // TODO(phawkins): decide if we want Delete() to be idempotent.
-  virtual Future<Status> Delete() = 0;
+  //
+  // Deletion is idempotent. Deleting an already deleted value is allowed, and
+  // all the futures returned by different calls to Delete() will become ready
+  // with the same status.
+  virtual tsl::Future<> Delete() = 0;
 
   // Returns whether the value has been enqueued for deletion from the devices.
   virtual bool IsDeleted() const = 0;
@@ -61,6 +75,8 @@ class Value : public tsl::ReferenceCounted<Value>,
 
   static char ID;  // NOLINT
 };
+
+using ValueRef = tsl::RCReference<Value>;
 
 }  // namespace ifrt
 }  // namespace xla

@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,19 +16,35 @@ limitations under the License.
 #include "xla/service/cpu/parallel_task_assignment.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <memory>
+#include <utility>
+#include <vector>
 
-#include "absl/strings/str_cat.h"
+#include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "tsl/platform/cpu_info.h"
+#include "xla/backends/cpu/codegen/target_machine_features.h"
+#include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/cpu/backend_config.pb.h"
 #include "xla/service/cpu/ir_emission_utils.h"
-#include "xla/service/cpu/shape_partition.h"
+#include "xla/service/hlo_cost_analysis.h"
 #include "xla/service/llvm_ir/dynamic_update_slice_util.h"
+#include "xla/shape.h"
+#include "xla/shape_partition.h"
+#include "xla/util.h"
 
-namespace xla {
-namespace cpu {
+namespace xla::cpu {
 
 class SimpleCostModel : public ParallelCostModel {
  public:
@@ -80,8 +96,8 @@ class DefaultCostModel : public ParallelCostModel {
       // TODO(b/29630486) Develop system bandwidth model.
       max_parallelism = std::min<int64_t>(
           max_parallelism_, std::ceil(std::sqrt(tsl::port::MaxParallelism())));
-      // Use shape size instruction cost and L2 cache size min per-thread cost.
-      instruction_cost = shape_size_(instruction->shape());
+      // Use bytes accessed cost and L2 cache size min per-thread cost.
+      instruction_cost = bytes_accessed;
       min_cost_per_thread = 256LL << 10;  // 256KB L2 Cache size.
     } else {
       // Use max parallelism for compute bound instructions.
@@ -118,16 +134,18 @@ ParallelTaskAssignment::ParallelTaskAssignment(
   // Run cost analysis on 'module'.
   auto cost_analysis = std::make_unique<HloCostAnalysis>(shape_size);
   HloComputation* computation = module->entry_computation();
-  Status status = computation->root_instruction()->Accept(cost_analysis.get());
+  absl::Status status =
+      computation->root_instruction()->Accept(cost_analysis.get());
   if (status.ok()) {
     // Set default cost model based on 'cost_analysis'.
-    cost_model_.reset(new DefaultCostModel(max_parallelism, shape_size,
-                                           std::move(cost_analysis)));
+    cost_model_ = std::make_unique<DefaultCostModel>(
+        max_parallelism, shape_size, std::move(cost_analysis));
   } else {
     // Fall back to a simple cost model based on hlo size and L2 cache size.
     // Note that HloCostAnalysis can returns an error status (likely because
     // HLOs like CustomCall are not yet implemented in the HloCostAnalysis).
-    cost_model_.reset(new SimpleCostModel(max_parallelism, shape_size));
+    cost_model_ =
+        std::make_unique<SimpleCostModel>(max_parallelism, shape_size);
   }
 }
 
@@ -146,8 +164,20 @@ int64_t ParallelTaskAssignment::GetTargetParallelTaskCount(
   // TODO(b/27458679) Parallelize instructions which are skipped here.
   auto opcode = instruction->opcode();
   if (llvm_ir::MayBeImplementedAsInPlaceDynamicUpdateSlice(instruction) ||
-      instruction->shape().IsTuple() || opcode == HloOpcode::kRng ||
-      opcode == HloOpcode::kConstant) {
+      opcode == HloOpcode::kRng || opcode == HloOpcode::kConstant) {
+    return 1;
+  }
+
+  // Skip custom fusions.
+  if (opcode == HloOpcode::kFusion) {
+    const HloFusionInstruction* fusion =
+        Cast<HloFusionInstruction>(instruction);
+    if (fusion->fusion_kind() == HloInstruction::FusionKind::kCustom) {
+      return 1;
+    }
+  }
+
+  if (instruction->shape().IsTuple() && !instruction->IsLoopFusion()) {
     return 1;
   }
 
@@ -172,7 +202,7 @@ int64_t ParallelTaskAssignment::GetTargetParallelTaskCount(
   return 1;
 }
 
-StatusOr<bool> ParallelTaskAssigner::Run(
+absl::StatusOr<bool> ParallelTaskAssigner::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   XLA_VLOG_LINES(2, "ParallelTaskAssigner ENTRY");
@@ -204,18 +234,35 @@ bool ParallelTaskAssigner::AssignParallelTasksHelper(
   std::vector<HloInstruction*> instructions(computation->instructions().begin(),
                                             computation->instructions().end());
   for (auto* instruction : instructions) {
-    // Assign parallel tasks to sub-computations for While and Call HLOs.
+    // Assign parallel tasks to sub-computations for While, Conditional and Call
+    // HLOs.
     // TODO(b/27458679) Evaluate alternative intra-op parallelism placement,
     // and support other callable computations like reduce.
+    bool control_flow_hlo = false;
+
     if (instruction->opcode() == HloOpcode::kWhile) {
+      control_flow_hlo = true;
       changed |= AssignParallelTasksHelper(module, instruction->while_body(),
                                            hlo_to_parallel_tasks);
-      continue;
+
+    } else if (instruction->opcode() == HloOpcode::kConditional) {
+      control_flow_hlo = true;
+      for (HloComputation* branch : instruction->branch_computations()) {
+        changed |=
+            AssignParallelTasksHelper(module, branch, hlo_to_parallel_tasks);
+      }
+
     } else if (instruction->opcode() == HloOpcode::kCall) {
+      control_flow_hlo = true;
       changed |= AssignParallelTasksHelper(module, instruction->to_apply(),
                                            hlo_to_parallel_tasks);
+    }
+
+    // Continue to the next instruction if we handled control flow above.
+    if (control_flow_hlo) {
       continue;
     }
+
     // Skip if no parallel tasks were computed in first pass.
     auto it = hlo_to_parallel_tasks.find(instruction);
     if (it == hlo_to_parallel_tasks.end()) {
@@ -223,9 +270,19 @@ bool ParallelTaskAssigner::AssignParallelTasksHelper(
     }
     // Get target parallel task count computed for 'instruction'.
     const int64_t target_parallel_task_count = (*it).second;
+    const Shape& root_0_shape = instruction->shape().IsTuple()
+                                    ? instruction->shape().tuple_shapes(0)
+                                    : instruction->shape();
+    const Shape& indexing_shape =
+        root_0_shape.IsTuple() ? root_0_shape.tuple_shapes(0) : root_0_shape;
+
+    if (!indexing_shape.IsArray()) {
+      continue;
+    }
+
     // Assign feasible dimension partitions (based on actual dimension sizes).
-    auto dim_partition_counts = ShapePartitionAssigner(instruction->shape())
-                                    .Run(target_parallel_task_count);
+    auto dim_partition_counts =
+        ShapePartitionAssigner(indexing_shape).Run(target_parallel_task_count);
     const int64_t total_partition_count =
         ShapePartitionAssigner::GetTotalPartitionCount(dim_partition_counts);
     if (total_partition_count <= 1) {
@@ -233,22 +290,14 @@ bool ParallelTaskAssigner::AssignParallelTasksHelper(
       continue;
     }
 
-    // Outline 'instruction' in 'computation' for parallel task assignment.
-    auto* call = module->OutlineExpressionFromComputation(
-        {instruction}, absl::StrCat("parallel_", instruction->name()),
-        computation);
-
-    // Set assigned dimension partitioning to 'instruction'.
-    auto* new_root = call->to_apply()->root_instruction();
     BackendConfig backend_config;
     absl::c_copy(dim_partition_counts,
                  tsl::protobuf::RepeatedFieldBackInserter(
                      backend_config.mutable_outer_dimension_partitions()));
-    TF_CHECK_OK(new_root->set_backend_config(backend_config));
+    CHECK_OK(instruction->set_backend_config(backend_config));
 
     VLOG(2) << "Assigned parallel task count: " << total_partition_count
-            << " to instruction: " << new_root->name()
-            << " parent: " << new_root->parent()->name();
+            << " to instruction: " << instruction->name();
     changed = true;
   }
   return changed;
@@ -274,5 +323,4 @@ void ParallelTaskAssigner::ComputeTargetParallelTasks(
   }
 }
 
-}  // namespace cpu
-}  // namespace xla
+}  // namespace xla::cpu

@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,24 +15,23 @@ limitations under the License.
 
 #include "xla/hlo/ir/dfs_hlo_visitor.h"
 
-#include <string>
-
+#include "absl/status/status.h"
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/types.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/tsl/platform/logging.h"
 #include "xla/util.h"
-#include "tsl/platform/logging.h"
 
 namespace xla {
 
 template <typename HloInstructionPtr>
-Status DfsHloVisitorBase<HloInstructionPtr>::HandleElementwiseUnary(
+absl::Status DfsHloVisitorBase<HloInstructionPtr>::HandleElementwiseUnary(
     HloInstructionPtr hlo) {
   return Unimplemented("DfsHloVisitor::HandleElementwiseUnary: %s",
                        HloOpcodeString(hlo->opcode()));
 }
 
 template <typename HloInstructionPtr>
-Status DfsHloVisitorBase<HloInstructionPtr>::HandleElementwiseBinary(
+absl::Status DfsHloVisitorBase<HloInstructionPtr>::HandleElementwiseBinary(
     HloInstructionPtr hlo) {
   return Unimplemented("DfsHloVisitor::HandleElementwiseBinary: %s",
                        HloOpcodeString(hlo->opcode()));
@@ -50,7 +49,7 @@ void DfsHloVisitorBase<HloInstructionPtr>::SetVisiting(
     const HloInstruction& instruction) {
   VLOG(3) << "marking HLO " << &instruction << " as visiting: ";
   DCHECK(NotVisited(instruction));
-  visit_state_[instruction.unique_id()] = VisitState::kVisiting;
+  SetVisitState(instruction.unique_id(), VisitState::kVisiting);
 }
 
 template <typename HloInstructionPtr>
@@ -58,17 +57,19 @@ void DfsHloVisitorBase<HloInstructionPtr>::SetVisited(
     const HloInstruction& instruction) {
   VLOG(3) << "marking HLO " << &instruction << " as visited: ";
   DCHECK(NotVisited(instruction) || IsVisiting(instruction));
-  visit_state_[instruction.unique_id()] = VisitState::kVisited;
+  SetVisitState(instruction.unique_id(), VisitState::kVisited);
 }
 
 template <typename HloInstructionPtr>
-Status DfsHloVisitorBase<HloInstructionPtr>::Preprocess(HloInstructionPtr) {
-  return OkStatus();
+absl::Status DfsHloVisitorBase<HloInstructionPtr>::Preprocess(
+    HloInstructionPtr) {
+  return absl::OkStatus();
 }
 
 template <typename HloInstructionPtr>
-Status DfsHloVisitorBase<HloInstructionPtr>::Postprocess(HloInstructionPtr) {
-  return OkStatus();
+absl::Status DfsHloVisitorBase<HloInstructionPtr>::Postprocess(
+    HloInstructionPtr) {
+  return absl::OkStatus();
 }
 
 // Explicit instantiations.

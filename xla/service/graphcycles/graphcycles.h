@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@ limitations under the License.
 #ifndef XLA_SERVICE_GRAPHCYCLES_GRAPHCYCLES_H_
 #define XLA_SERVICE_GRAPHCYCLES_GRAPHCYCLES_H_
 
+#include <cstdint>
+#include <string>
 #include <vector>
 
 // GraphCycles detects the introduction of a cycle into a directed
@@ -44,7 +46,7 @@ limitations under the License.
 
 #include "absl/types/span.h"
 
-namespace tensorflow {
+namespace xla {
 
 // NOTE!!!
 // For now a copy of this is forked to net/plaque. If you
@@ -98,8 +100,8 @@ class GraphCycles {
 
   // Return or set the node data for a node.  This data is unused
   // by the implementation.
-  void *GetNodeData(int32_t node) const;
-  void SetNodeData(int32_t node, void *data);
+  void* GetNodeData(int32_t node) const;
+  void SetNodeData(int32_t node, void* data);
 
   // Find a path from "source" to "dest".  If such a path exists, place the
   // node IDs of the nodes on the path in the array path[], and return the
@@ -144,10 +146,11 @@ class GraphCycles {
   struct Rep;
 
  private:
-  Rep *rep_;  // opaque representation
-  GraphCycles(const GraphCycles &) = delete;
-  GraphCycles &operator=(const GraphCycles &) = delete;
+  Rep* rep_;  // opaque representation
+  GraphCycles(const GraphCycles&) = delete;
+  GraphCycles& operator=(const GraphCycles&) = delete;
 };
 
-}  // namespace tensorflow
+}  // namespace xla
+
 #endif  // XLA_SERVICE_GRAPHCYCLES_GRAPHCYCLES_H_

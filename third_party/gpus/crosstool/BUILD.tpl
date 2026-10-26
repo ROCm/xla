@@ -1,7 +1,23 @@
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 # This file is expanded from a template by cuda_configure.bzl
 # Update cuda_configure.bzl#verify_build_defines when adding new variables.
 
 load(":cc_toolchain_config.bzl", "cc_toolchain_config")
+load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda")
 
 licenses(["restricted"])
 
@@ -134,8 +150,16 @@ filegroup(
 )
 
 filegroup(
+    name = "cuda_nvcc_files",
+    srcs = %{cuda_nvcc_files},
+)
+
+filegroup(
     name = "crosstool_wrapper_driver_is_not_gcc",
-    srcs = ["clang/bin/crosstool_wrapper_driver_is_not_gcc"],
+    srcs = [
+      ":cuda_nvcc_files",
+      ":clang/bin/crosstool_wrapper_driver_is_not_gcc"
+    ],
 )
 
 filegroup(

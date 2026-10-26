@@ -1,0 +1,439 @@
+/* Copyright 2025 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include "xla/pjrt/gpu/se_gpu_topology_description.h"
+
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "absl/container/flat_hash_map.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
+#include "absl/types/span.h"
+#include "tsl/platform/fingerprint.h"
+#include "xla/layout.h"
+#include "xla/layout_util.h"
+#include "xla/pjrt/host_memory_spaces.h"
+#include "xla/pjrt/pjrt_compiler.h"
+#include "xla/pjrt/pjrt_device_description.h"
+#include "xla/pjrt/pjrt_device_dimensions.h"
+#include "xla/pjrt/pjrt_topology_description_registry.h"
+#include "xla/pjrt/proto/topology_description.pb.h"
+#include "xla/pjrt/se/pjrt_stream_executor_device_description.h"
+#include "xla/pjrt/se/stream_executor_platform_id_mapping.h"
+#include "xla/primitive_util.h"
+#include "xla/runtime/device_id.h"
+#include "xla/runtime/process_id.h"
+#include "xla/service/computation_placer.h"
+#include "xla/service/gpu_topology.h"
+#include "xla/service/gpu_topology.pb.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/tsl/lib/strings/proto_serialization.h"
+#include "xla/util.h"
+#include "xla/xla_data.pb.h"
+
+namespace xla {
+
+REGISTER_PJRT_TOPOLOGY_DESERIALIZER(
+    Cuda, xla::CudaId(), xla::CudaName(),
+    [](const xla::PjRtTopologyDescriptionProto& proto) {
+      return StreamExecutorGpuTopologyDescription::FromProto(proto);
+    });
+REGISTER_PJRT_TOPOLOGY_DESERIALIZER(
+    Rocm, xla::RocmId(), xla::RocmName(),
+    [](const xla::PjRtTopologyDescriptionProto& proto) {
+      return StreamExecutorGpuTopologyDescription::FromProto(proto);
+    });
+
+/*static*/ void StreamExecutorGpuTopologyDescription::SetupDeviceDescription(
+    PjRtStreamExecutorDeviceDescription& description,
+    const std::string& device_vendor, const std::string& compute_capability,
+    int core_count, int64_t device_memory_bytes_limit,
+    int64_t shared_memory_per_block_optin, int partition_index,
+    const std::string& fabric_uuid) {
+  std::vector<int64_t> v_coords(description.coords().begin(),
+                                description.coords().end());
+
+  absl::flat_hash_map<std::string, PjRtDeviceAttribute> attributes = {
+      {"coords", xla::PjRtDeviceAttribute(v_coords)},
+      {"device_vendor", device_vendor},
+      // TODO - b/435521225: `slice_index` is deprecated. Use
+      // `partition_index`, which better aligns with NVIDIA's terminology.
+      {"slice_index", static_cast<int64_t>(partition_index)},
+      {"partition_index", static_cast<int64_t>(partition_index)},
+      {"compute_capability", xla::PjRtDeviceAttribute(compute_capability)},
+      {"device_memory_bytes_limit", device_memory_bytes_limit},
+      {"shared_memory_per_block_optin", shared_memory_per_block_optin},
+      {"core_count", static_cast<int64_t>(core_count)},
+      {"fabric_uuid", fabric_uuid},
+  };
+  description.SetAttributes(std::move(attributes));
+  description.SetToString(absl::StrFormat(
+      "StreamExecutorGpuDevice(device_kind=%s, id=%i, process_index=%i, "
+      "partition_index=%i))",
+      description.device_kind(), description.id(), description.process_index(),
+      partition_index));
+  description.SetDebugString(absl::StrFormat(
+      "%s_%i(process=%i,(%i))", description.device_kind(), description.id(),
+      description.process_index(), v_coords[0]));
+}
+
+std::vector<std::unique_ptr<const PjRtDeviceDescription>>
+StreamExecutorGpuTopologyDescription::DeviceDescriptions() const {
+  std::vector<std::unique_ptr<const PjRtDeviceDescription>> devices;
+  if (gpu_topology_->number_of_devices() <= 0) {
+    return devices;
+  }
+  devices.reserve(gpu_topology_->number_of_devices());
+  for (int device_id = 0; device_id < gpu_topology_->number_of_devices();
+       ++device_id) {
+    devices.push_back(CreateDeviceDescription(device_id));
+  }
+  return devices;
+}
+
+std::unique_ptr<PjRtStreamExecutorDeviceDescription>
+StreamExecutorGpuTopologyDescription::CreateDeviceDescription(
+    int device_id) const {
+  // Instead of "host", we use "process", as it's more accurate and consistent
+  // with PjRt terminology. In a multi-process setting, a host can have multiple
+  // processes, e.g., one process per GPU.
+  const int32_t num_devices_per_process = gpu_topology_->num_devices_per_host();
+  const int32_t num_processes_per_partition =
+      gpu_topology_->num_hosts_per_partition();
+  // The local_device_id, process_index and partition_index are inferred from
+  // the global device id. It requires the global topology is symmetric:
+  //  - all partitions have the same number of processes.
+  //  - all processes have the same number of devices.
+  //  - processes of the same partition are adjacent to each other.
+  //
+  // And it also requires the ids assignments follows the PjRt topology
+  // exchange protocol in xla/pjrt/distributed/topology_util.cc:
+  //  - ids are densely assigned and start from 0
+  //  - from lower process index to higher process index
+  //  - within the process, from lower device ordinal to higher device ordinal
+  //
+  // If the above requirements are not met, users should get the device
+  // description by looking up individual device from PjRt client.
+  const int local_device_id =
+      num_devices_per_process == -1 ? 0 : (device_id % num_devices_per_process);
+  const int process_index =
+      num_devices_per_process == -1 ? 0 : (device_id / num_devices_per_process);
+  const int process_index_in_partition =
+      process_index == -1 ? 0 : (process_index % num_processes_per_partition);
+  const int partition_index =
+      num_processes_per_partition == -1
+          ? 0
+          : (process_index / num_processes_per_partition);
+  auto description = std::make_unique<PjRtStreamExecutorDeviceDescription>(
+      device_id, local_device_id, process_index, process_index_in_partition,
+      partition_index, std::string(platform_version()));
+  if (target_config_.has_value()) {
+    std::string compute_capability = "<unknown compute-capability>";
+    std::string gpu_vendor = "<unknown gpu vendor>";
+    if (target_config_->gpu_device_info().has_cuda_compute_capability()) {
+      const auto& cap =
+          target_config_->gpu_device_info().cuda_compute_capability();
+      compute_capability = absl::StrCat(cap.major(), ".", cap.minor());
+      gpu_vendor = "NVIDIA Corporation";
+    }
+
+    StreamExecutorGpuTopologyDescription::SetupDeviceDescription(
+        *description, gpu_vendor, compute_capability,
+        target_config_->gpu_device_info().core_count(),
+        target_config_->gpu_device_info().device_memory_size(),
+        target_config_->gpu_device_info().shared_memory_per_block_optin(),
+        /*partition_index=*/0, /*fabric_uuid=*/"");
+  }
+  return description;
+}
+
+absl::StatusOr<uint64_t> StreamExecutorGpuTopologyDescription::Fingerprint()
+    const {
+  GpuTopologyProto proto = gpu_topology_->ToProto();
+
+  stream_executor::GpuDeviceInfoProto* device_info =
+      proto.mutable_gpu_target_config()->mutable_gpu_device_info();
+  if (device_info->device_memory_size() > 0) {
+    // Round `device_memory_size` to the nearest GiB to produce deterministic
+    // fingerprint even if the memory size is slightly different.
+    //
+    // TODO(b/563487743): Fix `device_memory_size` to return a stable lower
+    // bound instead and get rid of this logic.
+    static constexpr int64_t kGiB = 1 << 30;
+    device_info->set_device_memory_size(
+        (device_info->device_memory_size() + kGiB / 2) / kGiB * kGiB);
+  }
+  // Exclude `model_str` from the fingerprint as the rest of the proto already
+  // contains the same info and the device memory size in model str can make the
+  // fingerprint non-portable across GPUs.
+  device_info->clear_model_str();
+
+  std::string result;
+  if (!tsl::SerializeToStringDeterministic(proto, &result)) {
+    return absl::InternalError("Failed to serialize gpu_topology");
+  }
+  return tsl::Fingerprint64(result);
+}
+
+absl::StatusOr<std::pair<ProcessId, int>> StreamExecutorGpuTopologyDescription::
+    ProcessIdAndIndexOnProcessForLogicalDeviceOfDefaultType(
+        GlobalDeviceId device_id) const {
+  if (device_id.value() < 0 ||
+      device_id.value() >= gpu_topology_->number_of_devices()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Device id ", device_id.value(), " is out of range [0, ",
+                     gpu_topology_->number_of_devices(), ")"));
+  }
+  const int32_t num_devices_per_process =
+      gpu_topology_->num_devices_per_process();
+  if (num_devices_per_process <= 0) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Invalid num_devices_per_process: ", num_devices_per_process));
+  }
+  const int local_device_id = device_id.value() % num_devices_per_process;
+  const int process_index = device_id.value() / num_devices_per_process;
+  return std::make_pair(ProcessId(process_index), local_device_id);
+}
+
+absl::StatusOr<std::pair<PjRtDeviceDimensions, int32_t>>
+StreamExecutorGpuTopologyDescription::
+    ChipCoordAndCoreIndexForLogicalDeviceOfDefaultType(
+        GlobalDeviceId device_id) const {
+  if (device_id.value() < 0 ||
+      device_id.value() >= gpu_topology_->number_of_devices()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Chip id ", device_id.value(), " is out of range [0, ",
+                     gpu_topology_->number_of_devices(), ")"));
+  }
+  auto device_desc = CreateDeviceDescription(device_id.value());
+  const auto& coords = device_desc->coords();
+  if (coords.size() != 3) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "GPU topology must have 3 dimensions, but got ", coords.size()));
+  }
+  return std::make_pair(PjRtDeviceDimensions{coords[0], coords[1], coords[2]},
+                        0);
+}
+
+absl::StatusOr<Layout> StreamExecutorGpuTopologyDescription::GetDefaultLayout(
+    PrimitiveType element_type, absl::Span<const int64_t> dims) const {
+  if (!primitive_util::IsArrayType(element_type)) {
+    return InvalidArgument("Element type %s does not support layout",
+                           PrimitiveType_Name(element_type));
+  }
+  Shape shape = ShapeUtil::MakeShape(element_type, dims);
+  Layout layout = LayoutUtil::GetWithDefaultLayout(shape).layout();
+  // `GetWithDefaultLayout` returns a padded layout for sub-byte types since the
+  // notion of "default" is context dependent and in this case means the default
+  // for literals for historical reasons. Because of this, we need to manually
+  // populate the `element_size_in_bits` for sub-byte types here.
+  if (primitive_util::IsSubByteNonPredType(element_type)) {
+    layout.set_element_size_in_bits(primitive_util::BitWidth(element_type));
+  }
+  return layout;
+}
+
+absl::StatusOr<xla::Shape>
+StreamExecutorGpuTopologyDescription::MakeCanonicalShapeForMemorySpace(
+    int memory_space_kind_id, xla::Shape shape,
+    const xla::Layout* layout) const {
+  if (shape.IsToken()) {
+    return shape;
+  }
+
+  if (layout != nullptr) {
+    *shape.mutable_layout() = *layout;
+    if (primitive_util::IsSubByteNonPredType(shape.element_type())) {
+      ABSL_ASSIGN_OR_RETURN(
+          Layout default_layout,
+          GetDefaultLayout(shape.element_type(), shape.dimensions()));
+      if (default_layout.element_size_in_bits() !=
+          shape.layout().element_size_in_bits()) {
+        return InvalidArgument(
+            "Device buffers require %d bits per element for an element type "
+            "%s, but got layout %s for shape %s",
+            default_layout.element_size_in_bits(),
+            PrimitiveType_Name(shape.element_type()), layout->ToString(),
+            shape.ToString());
+      }
+    }
+  } else {
+    ABSL_ASSIGN_OR_RETURN(
+        *shape.mutable_layout(),
+        GetDefaultLayout(shape.element_type(), shape.dimensions()));
+  }
+
+  shape = ShapeUtil::DeviceShapeToHostShape(shape);
+  if (primitive_util::IsSubByteNonPredType(shape.element_type())) {
+    shape.mutable_layout()->set_element_size_in_bits(
+        primitive_util::BitWidth(shape.element_type()));
+  }
+
+  static const int kPinnedHostMemorySpaceKindId =
+      static_cast<int>(tsl::Fingerprint32("pinned_host"));
+  static const int kDeviceMemorySpaceKindId =
+      static_cast<int>(tsl::Fingerprint32("device"));
+
+  // Only allow pinned host memory or device memory.
+  if (memory_space_kind_id == kPinnedHostMemorySpaceKindId) {
+    shape.mutable_layout()->set_memory_space(Layout::kHostMemorySpace);
+  } else if (memory_space_kind_id == kDeviceMemorySpaceKindId) {
+    if (shape.has_layout()) {
+      shape.mutable_layout()->set_memory_space(Layout::kDefaultMemorySpace);
+    }
+  } else {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "MakeCanonicalShapeForMemorySpace: invalid memory space kind ID: ",
+        memory_space_kind_id));
+  }
+
+  return shape;
+}
+
+absl::Span<const int>
+StreamExecutorGpuTopologyDescription::GetMemorySpaceKindIds() const {
+  static const int kGpuMemorySpaceKindIds[] = {
+      static_cast<int>(tsl::Fingerprint32("device")),
+      PinnedHostMemorySpace::kKindId};
+  return absl::MakeConstSpan(kGpuMemorySpaceKindIds);
+}
+
+bool StreamExecutorGpuTopologyDescription::IsMemorySpaceOnCpu(
+    int memory_space_kind_id) const {
+  return memory_space_kind_id == PinnedHostMemorySpace::kKindId;
+}
+
+absl::StatusOr<PjRtDeviceDimensions>
+StreamExecutorGpuTopologyDescription::ChipBounds() const {
+  return PjRtDeviceDimensions{gpu_topology_->num_partitions(),
+                              gpu_topology_->num_hosts_per_partition(),
+                              gpu_topology_->num_devices_per_host()};
+}
+
+absl::StatusOr<DeviceAssignment>
+StreamExecutorGpuTopologyDescription::GetDefaultDeviceAssignment(
+    int process_index, int num_replicas,
+    std::optional<int> num_replicas_per_slice, int num_partitions,
+    const MultiSliceConfig* multi_slice_config) const {
+  if (num_replicas_per_slice.has_value() || multi_slice_config) {
+    return absl::UnimplementedError(
+        "Multi-slice GetDefaultDeviceAssignment is not supported.");
+  }
+  if (gpu_topology_->num_devices_per_host() == -1 ||
+      gpu_topology_->number_of_devices() <
+          (process_index + 1) * gpu_topology_->num_devices_per_host()) {
+    return absl::InvalidArgumentError(absl::StrFormat(
+        "GetDefaultDeviceAssignment is not supported for (process_index: %d, "
+        "num_devices: %d, num_devices_per_host: %d.",
+        process_index, gpu_topology_->number_of_devices(),
+        gpu_topology_->num_devices_per_host()));
+  }
+  if (num_partitions == 1 &&
+      num_replicas <= gpu_topology_->num_devices_per_host()) {
+    xla::DeviceAssignment assignment(num_replicas, 1);
+    for (int i = 0; i < num_replicas; ++i) {
+      assignment(i, 0) =
+          process_index * gpu_topology_->num_devices_per_host() + i;
+    }
+    return assignment;
+  }
+  ABSL_ASSIGN_OR_RETURN(
+      stream_executor::PlatformId se_platform_id,
+      StreamExecutorPlatformIdMapping::Global().GetStreamExecutorPlatformId(
+          platform_id()));
+  return ComputationPlacer::GetForPlatform(se_platform_id)
+      ->AssignDevices(num_replicas, num_partitions);
+}
+
+absl::StatusOr<xla::PjRtTopologyDescriptionProto>
+StreamExecutorGpuTopologyDescription::ToProto() const {
+  PjRtTopologyDescriptionProto proto;
+  proto.set_platform_id(platform_id());
+  proto.set_platform_name(platform_name());
+  proto.set_platform_version(platform_version());
+  proto.set_is_subslice_topology(is_subslice_topology());
+
+  GpuTopologyProto gpu_topology_proto = gpu_topology_->ToProto();
+  proto.mutable_platform_specific_topology()->PackFrom(gpu_topology_proto);
+  return proto;
+}
+
+absl::StatusOr<std::unique_ptr<StreamExecutorGpuTopologyDescription>>
+StreamExecutorGpuTopologyDescription::FromProto(
+    const xla::PjRtTopologyDescriptionProto& proto) {
+  const bool is_cuda = proto.platform_id() == xla::CudaId() ||
+                       proto.platform_name() == xla::CudaName();
+  const bool is_rocm = proto.platform_id() == xla::RocmId() ||
+                       proto.platform_name() == xla::RocmName();
+  if (!is_cuda && !is_rocm) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "The platform is not a GPU platform. platform_id: ",
+        proto.platform_id(), ", platform_name: '", proto.platform_name(), "'"));
+  }
+  if (!proto.platform_specific_topology().Is<GpuTopologyProto>()) {
+    return absl::InvalidArgumentError(
+        "The platform_specific_topology is not a GpuTopologyProto.");
+  }
+  GpuTopologyProto gpu_topology_proto;
+  if (!proto.platform_specific_topology().UnpackTo(&gpu_topology_proto)) {
+    return absl::InvalidArgumentError(
+        "Failed to unpack GpuTopologyProto from platform_specific_topology "
+        "Any.");
+  }
+  ABSL_ASSIGN_OR_RETURN(std::shared_ptr<const GpuTopology> gpu_topology,
+                        GpuTopology::FromProto(gpu_topology_proto));
+  absl::flat_hash_map<std::string, PjRtDeviceAttribute> attributes;
+  std::optional<stream_executor::GpuTargetConfigProto> target_config;
+  if (gpu_topology->has_gpu_target_config()) {
+    target_config = gpu_topology->gpu_target_config().ToProto();
+    attributes.insert({"device_memory_bytes_limit",
+                       target_config->gpu_device_info().device_memory_size()});
+  }
+  return std::make_unique<StreamExecutorGpuTopologyDescription>(
+      proto.platform_id(), proto.platform_name(), std::move(gpu_topology),
+      attributes, std::move(target_config));
+}
+
+absl::StatusOr<int>
+StreamExecutorGpuTopologyDescription::GetMemorySpaceKindForShape(
+    const xla::Shape& shape) const {
+  int kind = GetMemorySpaceKindIds()[0];
+  if (shape.has_layout()) {
+    switch (shape.layout().memory_space()) {
+      case Layout::kHostMemorySpace:
+        return GetMemorySpaceKindIds()[1];
+        break;
+      case Layout::kGenericFastMemorySpace:
+      case Layout::kCollectiveMemorySpace:
+      case Layout::kDefaultMemorySpace:
+        break;
+      default:
+        return InvalidArgument("Unexpected memory space %d in output layout",
+                               shape.layout().memory_space());
+    }
+  }
+  return kind;
+}
+
+}  // namespace xla

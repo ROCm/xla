@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,16 +13,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <gtest/gtest.h>
+
 #include <optional>
 #include <string>
-#include <vector>
 
-#include "xla/tests/hlo_test_base.h"
+#include "xla/error_spec.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
 
 namespace xla {
 namespace {
 
-class AlgebraicSimplifierOverflowTest : public HloTestBase {};
+class AlgebraicSimplifierOverflowTest
+    : public HloInterpreterReferenceMixin<HloTestBase> {};
 
 // Test that the algebraic simplifier does not generate integer overflows
 // by moving the subtraction to the other side of the comparison

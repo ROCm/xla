@@ -1,4 +1,4 @@
-/* Copyright 2020 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2020 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,20 +15,21 @@ limitations under the License.
 
 #include "xla/python/xplane_to_profile_instructions.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
 
-#include "xla/service/hlo.pb.h"
-#include "xla/tests/verified_hlo_module.h"
-#include "tsl/platform/test.h"
-#include "tsl/profiler/convert/xla_op_utils.h"
 #include "tsl/profiler/protobuf/profiled_instructions.pb.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
-#include "tsl/profiler/rpc/client/save_profile.h"
-#include "tsl/profiler/utils/file_system_utils.h"
-#include "tsl/profiler/utils/xplane_builder.h"
-#include "tsl/profiler/utils/xplane_schema.h"
+#include "xla/hlo/testlib/verified_hlo_module.h"
+#include "xla/service/hlo.pb.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/tsl/profiler/convert/xla_op_utils.h"
+#include "xla/tsl/profiler/rpc/client/save_profile.h"
+#include "xla/tsl/profiler/utils/file_system_utils.h"
+#include "xla/tsl/profiler/utils/xplane_builder.h"
+#include "xla/tsl/profiler/utils/xplane_schema.h"
 
 namespace xla {
 namespace {
@@ -42,6 +43,9 @@ using tsl::profiler::StatType;
 using tsl::profiler::XEventBuilder;
 using tsl::profiler::XLineBuilder;
 using tsl::profiler::XPlaneBuilder;
+
+std::atomic<int64_t> next_unique_id;
+int64_t GetUniqueId() { return next_unique_id.fetch_add(1); }
 
 void CreateXSpace(XSpace* space, int first_device_latency,
                   int second_device_latency) {
@@ -64,6 +68,7 @@ void CreateXSpace(XSpace* space, int first_device_latency,
   event2.AddStatValue(*host_plane.GetOrCreateStatMetadata("tf_op"),
                       *host_plane.GetOrCreateStatMetadata("Conv2D"));
 
+  int64_t program_id = 1;
   XPlaneBuilder device_plane(space->add_planes());
   device_plane.SetName(GpuPlaneName(0));
   device_plane.SetId(0);
@@ -75,26 +80,42 @@ void CreateXSpace(XSpace* space, int first_device_latency,
   event3.SetDurationNs(first_device_latency);
   event3.AddStatValue(
       *device_plane.GetOrCreateStatMetadata(GetStatTypeStr(StatType::kHloOp)),
-      *device_plane.GetOrCreateStatMetadata("slice"));
+      *device_plane.GetOrCreateStatMetadata("custom-call"));
   event3.AddStatValue(*device_plane.GetOrCreateStatMetadata(
                           GetStatTypeStr(StatType::kHloModule)),
                       *device_plane.GetOrCreateStatMetadata("test_module"));
-
+  event3.AddStatValue(*device_plane.GetOrCreateStatMetadata(
+                          GetStatTypeStr(StatType::kProgramId)),
+                      program_id);
+  event3.AddStatValue(*device_plane.GetOrCreateStatMetadata(
+                          GetStatTypeStr(StatType::kScopeRangeId)),
+                      GetUniqueId());
   XPlaneBuilder device_plane_2(space->add_planes());
   device_plane_2.SetName(GpuPlaneName(1));
   device_plane_2.SetId(0);
   XLineBuilder stream2 = device_plane.GetOrCreateLine(30);
   stream2.SetName("gpu stream 1");
-  XEventBuilder event5 =
-      stream1.AddEvent(*device_plane.GetOrCreateEventMetadata("kernel1"));
-  event5.SetTimestampNs(180000);
-  event5.SetDurationNs(second_device_latency);
-  event5.AddStatValue(
-      *device_plane.GetOrCreateStatMetadata(GetStatTypeStr(StatType::kHloOp)),
-      *device_plane.GetOrCreateStatMetadata("slice"));
-  event5.AddStatValue(*device_plane.GetOrCreateStatMetadata(
-                          GetStatTypeStr(StatType::kHloModule)),
-                      *device_plane.GetOrCreateStatMetadata("test_module"));
+  // model second_device_latency as being made up of two kernels back to back
+  int64_t scope_range_id = GetUniqueId();
+  const int kNumKernels = 2;
+  for (int i = 0; i < kNumKernels; ++i) {
+    XEventBuilder event5 =
+        stream1.AddEvent(*device_plane.GetOrCreateEventMetadata("kernel1"));
+    event5.SetTimestampNs(180000 + i * second_device_latency / kNumKernels);
+    event5.SetDurationNs(second_device_latency / kNumKernels);
+    event5.AddStatValue(
+        *device_plane.GetOrCreateStatMetadata(GetStatTypeStr(StatType::kHloOp)),
+        *device_plane.GetOrCreateStatMetadata("custom-call"));
+    event5.AddStatValue(*device_plane.GetOrCreateStatMetadata(
+                            GetStatTypeStr(StatType::kHloModule)),
+                        *device_plane.GetOrCreateStatMetadata("test_module"));
+    event5.AddStatValue(*device_plane.GetOrCreateStatMetadata(
+                            GetStatTypeStr(StatType::kProgramId)),
+                        program_id);
+    event5.AddStatValue(*device_plane.GetOrCreateStatMetadata(
+                            GetStatTypeStr(StatType::kScopeRangeId)),
+                        scope_range_id);
+  }
 }
 
 void CreateXSpaceWithFingerprint(XSpace* space, int first_device_latency,
@@ -150,9 +171,10 @@ void CreateXSpaceWithFingerprint(XSpace* space, int first_device_latency,
     (*attributes.mutable_map())["fingerprint_before_lhs"] = "08a5";
     root->add_frontend_attributes(attributes);
     xla::HloModuleProto hlo_module_proto = module->ToProto();
+    hlo_module_proto.set_id(1);
     xla::HloProto hlo_proto;
     *hlo_proto.mutable_hlo_module() = hlo_module_proto;
-    int64_t program_id = 0;
+    int64_t program_id = 1;
     tsl::profiler::XEventMetadata* event_metadata =
         metadata_plane.GetOrCreateEventMetadata(program_id);
     event_metadata->set_name(tsl::profiler::HloModuleNameWithProgramId(
@@ -168,7 +190,7 @@ void CreateXSpaceWithFingerprint(XSpace* space, int first_device_latency,
 }
 
 TEST(XplaneToProfiledInstructionsProtoTest,
-     ConvertXplaneToProfiledInstructionsProto) {
+     ConvertXplaneUnderLogdirToProfiledInstructionsProto) {
   tensorflow::profiler::ProfiledInstructionsProto profile_proto;
   std::string logdir = testing::TempDir() + "/logdir";
   std::string run = tsl::profiler::GetCurrentTimeStampAsString();
@@ -186,14 +208,15 @@ TEST(XplaneToProfiledInstructionsProtoTest,
   EXPECT_TRUE(status.ok());
 
   EXPECT_TRUE(
-      ConvertXplaneToProfiledInstructionsProto(path, &profile_proto).ok());
+      ConvertXplaneUnderLogdirToProfiledInstructionsProto(path, &profile_proto)
+          .ok());
   EXPECT_EQ(profile_proto.costs_size(), 1);
   EXPECT_EQ(profile_proto.costs(0).cost_us(), 10);
-  EXPECT_EQ(profile_proto.costs(0).name(), "slice");
+  EXPECT_EQ(profile_proto.costs(0).name(), "custom-call");
 }
 
 TEST(XplaneToProfiledInstructionsProtoTest,
-     ConvertXplaneToProfiledInstructionsProtoWithFingerprint) {
+     ConvertXplaneUnderLogdirToProfiledInstructionsProtoWithFingerprint) {
   tensorflow::profiler::ProfiledInstructionsProto profile_proto;
   std::string logdir = testing::TempDir() + "/logdir";
   std::string run = tsl::profiler::GetCurrentTimeStampAsString();
@@ -211,10 +234,47 @@ TEST(XplaneToProfiledInstructionsProtoTest,
   EXPECT_TRUE(status.ok());
 
   EXPECT_TRUE(
-      ConvertXplaneToProfiledInstructionsProto(path, &profile_proto).ok());
+      ConvertXplaneUnderLogdirToProfiledInstructionsProto(path, &profile_proto)
+          .ok());
   EXPECT_EQ(profile_proto.costs_size(), 1);
   EXPECT_EQ(profile_proto.costs(0).cost_us(), 10);
-  EXPECT_EQ(profile_proto.costs(0).name(), "08a5::slice");
+  EXPECT_EQ(profile_proto.costs(0).name(), "08a5::custom-call");
+}
+
+TEST(XplaneToProfiledInstructionsProtoTest,
+     ConvertXplaneToProfiledInstructionsProto) {
+  tensorflow::profiler::ProfiledInstructionsProto profile_proto;
+
+  XSpace xspace_a;
+  CreateXSpace(&xspace_a, 10000, 10000);
+
+  XSpace xspace_b;
+  CreateXSpace(&xspace_b, 15000, 5000);
+
+  EXPECT_TRUE(ConvertXplaneToProfiledInstructionsProto({xspace_a, xspace_b},
+                                                       &profile_proto)
+                  .ok());
+  EXPECT_EQ(profile_proto.costs_size(), 1);
+  EXPECT_EQ(profile_proto.costs(0).cost_us(), 10);
+  EXPECT_EQ(profile_proto.costs(0).name(), "custom-call");
+}
+
+TEST(XplaneToProfiledInstructionsProtoTest,
+     ConvertXplaneToProfiledInstructionsProtoWithFingerprint) {
+  tensorflow::profiler::ProfiledInstructionsProto profile_proto;
+
+  XSpace xspace_a;
+  CreateXSpaceWithFingerprint(&xspace_a, 10000, 10000);
+
+  XSpace xspace_b;
+  CreateXSpaceWithFingerprint(&xspace_b, 15000, 5000);
+
+  EXPECT_TRUE(ConvertXplaneToProfiledInstructionsProto({xspace_a, xspace_b},
+                                                       &profile_proto)
+                  .ok());
+  EXPECT_EQ(profile_proto.costs_size(), 1);
+  EXPECT_EQ(profile_proto.costs(0).cost_us(), 10);
+  EXPECT_EQ(profile_proto.costs(0).name(), "08a5::custom-call");
 }
 
 }  // namespace

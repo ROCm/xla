@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -12,18 +12,105 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
-
 #include "xla/service/gpu/gpu_fusible.h"
 
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "xla/debug_options_flags.h"
+#include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/service/hlo_parser.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/hlo/parser/hlo_parser.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/utils/hlo_traversal.h"
+#include "xla/service/gpu/alias_info.h"
+#include "xla/service/gpu/gpu_device_info_for_tests.h"
+#include "xla/service/gpu/hlo_fusion_analysis.h"
+#include "xla/service/instruction_fusion.h"
+#include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/device_description.pb.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/xla.pb.h"
 
 namespace xla {
 namespace gpu {
+namespace {
 
-using GpuFusibleTest = HloTestBase;
+using ::testing::ElementsAre;
+using ::testing::UnorderedElementsAre;
+
+absl::StatusOr<se::DeviceDescription> MakeDeviceDescription() {
+  ABSL_ASSIGN_OR_RETURN(stream_executor::DeviceDescription device_description,
+                        stream_executor::DeviceDescription::FromProto(
+                            stream_executor::GpuDeviceInfoProto{}));
+  device_description.set_threads_per_warp(32);
+  return device_description;
+}
+
+se::DeviceDescription B200WithCUDA129() {
+  se::DeviceDescription result = TestGpuDeviceInfo::B200SXMDeviceInfo();
+  result.set_compile_time_toolkit_version(
+      stream_executor::SemanticVersion(12, 9, 0));
+  return result;
+}
+
+class GpuFusibleTest : public HloHardwareIndependentTestBase {
+ public:
+  void SetUp() override {
+    ASSERT_OK_AND_ASSIGN(device_description_, MakeDeviceDescription());
+    alias_info_ = std::make_unique<GpuAliasInfo>(device_description_);
+  }
+
+  DebugOptions GetDebugOptionsForTest() const override {
+    auto debug_options = GetDebugOptionsFromFlags();
+    debug_options.set_xla_gpu_experimental_max_unroll_factor(32);
+    return debug_options;
+  }
+
+  bool IsReduceInputFusion(const HloInstruction& instr) const {
+    return ::xla::gpu::IsReduceInputFusion(instr, device_description_);
+  }
+
+  bool IsInputFusibleReduction(const HloInstruction& instr) const {
+    return ::xla::gpu::IsInputFusibleReduction(instr, device_description_);
+  }
+
+  FusionDecision IsProducerMultiOutputFusible(
+      const HloInstruction& producer) const {
+    return ::xla::gpu::IsProducerMultiOutputFusible(producer, alias_info_.get(),
+                                                    device_description_);
+  }
+
+  bool IsFusibleAsMultiOutputFusionRoot(const HloInstruction& instr) const {
+    return ::xla::gpu::IsFusibleAsMultiOutputFusionRoot(instr,
+                                                        device_description_);
+  }
+
+  FusionDecision FusionHeroesAreCompatible(const HloInstruction* hero1,
+                                           const HloInstruction* hero2) const {
+    return ::xla::gpu::FusionHeroesAreCompatible(hero1, hero2,
+                                                 device_description_);
+  }
+
+  FusionDecision ShapesCompatibleForMultiOutputFusion(
+      const HloInstruction& instr1, const HloInstruction& instr2) const {
+    return ::xla::gpu::ShapesCompatibleForMultiOutputFusion(
+        instr1, instr2, device_description_);
+  }
+
+  const se::DeviceDescription& device_description() const {
+    return device_description_;
+  }
+
+ private:
+  se::DeviceDescription device_description_;
+  std::unique_ptr<GpuAliasInfo> alias_info_;
+};
 
 const char kModulePrefix[] = R"(
     HloModule test_module
@@ -210,6 +297,114 @@ TEST_F(GpuFusibleTest,
   EXPECT_FALSE(IsPhysicallyTransposing(*loop_fusion));
 }
 
+TEST_F(GpuFusibleTest, TransposesMinorDimension) {
+  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
+    ENTRY entry {
+      default_layout = f32[10,20,30,40]{3,2,1,0} parameter(0)
+      non_default_layout = f32[10,20,30,40]{1,2,3,0} parameter(1)
+
+      transpose_minor_default = f32[10,20,40,30]{3,2,1,0} transpose(default_layout), dimensions={0,1,3,2}
+      no_transpose_minor_default = f32[10,20,40,30]{2,3,1,0} transpose(default_layout), dimensions={0,1,3,2}
+      transpose_major_default = f32[10,30,20,40]{3,2,1,0} transpose(default_layout), dimensions={0,2,1,3}
+
+      transpose_minor_non_default = f32[10,30,20,40]{1,2,3,0} transpose(non_default_layout), dimensions={0,2,1,3}
+      no_transpose_minor_non_default = f32[10,20,40,30]{1,2,0,3} transpose(non_default_layout), dimensions={0,1,3,2}
+      transpose_major_non_default = f32[10,20,40,30]{1,2,3,0} transpose(non_default_layout), dimensions={0,1,3,2}
+
+      ROOT r = tuple(transpose_minor_default, no_transpose_minor_default, transpose_major_default,
+                     transpose_minor_non_default, no_transpose_minor_non_default, transpose_major_non_default)
+    })"));
+
+  auto* tuple = (*module)->entry_computation()->root_instruction();
+  EXPECT_TRUE(TransposesMinorDimension(tuple->operand(0)));
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(1)));
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(2)));
+  EXPECT_TRUE(TransposesMinorDimension(tuple->operand(3)));
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(4)));
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(5)));
+}
+
+TEST_F(GpuFusibleTest, TransposesMinorDimensionSkipTrivialDimensions) {
+  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
+    ENTRY entry {
+      default_layout = f32[10,20,1,1]{3,2,1,0} parameter(0)
+      non_default_layout = f32[10,20,1,1]{1,2,3,0} parameter(1)
+
+      // Only trivial dimensions are swapped.
+      transpose_minor_default = f32[10,20,1,1]{3,2,1,0} transpose(default_layout), dimensions={0,1,3,2}
+      // The first non-trivial dimension is still the same in input and output.
+      transpose_nontrivial_minor_default = f32[10,1,20,1]{3,2,1,0} transpose(default_layout), dimensions={0,2,1,3}
+      no_transpose_minor_default = f32[10,20,1,1]{2,3,1,0} transpose(default_layout), dimensions={0,1,3,2}
+      // We swap the most major dimension with a trivial dimension.
+      transpose_one_major_default = f32[1,20,10,1]{3,2,1,0} transpose(default_layout), dimensions={2,1,0,3}
+      // The first two non-trivial dimensions are swapped.
+      transpose_two_major_default = f32[20,10,1,1]{3,2,1,0} transpose(default_layout), dimensions={1,0,2,3}
+
+      transpose_minor_non_default = f32[10,1,20,1]{1,2,3,0} transpose(non_default_layout), dimensions={0,2,1,3}
+      no_transpose_minor_non_default = f32[10,20,1,1]{1,2,0,3} transpose(non_default_layout), dimensions={0,1,3,2}
+      transpose_major_non_default = f32[10,20,1,1]{1,2,3,0} transpose(non_default_layout), dimensions={0,1,3,2}
+
+      ROOT r = tuple(transpose_minor_default, transpose_nontrivial_minor_default, no_transpose_minor_default, transpose_one_major_default, transpose_two_major_default,
+                     transpose_minor_non_default, no_transpose_minor_non_default, transpose_major_non_default)
+    })"));
+
+  auto* tuple = (*module)->entry_computation()->root_instruction();
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(0)));
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(1)));
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(2)));
+  EXPECT_TRUE(TransposesMinorDimension(tuple->operand(3)));
+  EXPECT_TRUE(TransposesMinorDimension(tuple->operand(4)));
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(5)));
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(6)));
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(7)));
+}
+
+TEST_F(GpuFusibleTest, CopyTransposesMinorDimension) {
+  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
+    ENTRY entry {
+      default_layout = f32[10,20,30,40]{3,2,1,0} parameter(0)
+      non_default_layout = f32[10,20,30,40]{1,2,3,0} parameter(1)
+
+      copy_transpose_minor_default = f32[10,20,30,40]{2,3,1,0} copy(default_layout)
+      copy_no_transpose_minor_default = f32[10,20,30,40]{3,2,1,0} copy(default_layout)
+
+      copy_transpose_minor_non_default = f32[10,20,30,40]{2,1,3,0} copy(non_default_layout)
+      copy_no_transpose_minor_non_default = f32[10,20,30,40]{1,2,3,0} copy(non_default_layout)
+
+      ROOT r = tuple(copy_transpose_minor_default, copy_no_transpose_minor_default,
+                     copy_transpose_minor_non_default, copy_no_transpose_minor_non_default)
+    })"));
+
+  auto* tuple = (*module)->entry_computation()->root_instruction();
+  EXPECT_TRUE(TransposesMinorDimension(tuple->operand(0)));
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(1)));
+  EXPECT_TRUE(TransposesMinorDimension(tuple->operand(2)));
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(3)));
+}
+
+TEST_F(GpuFusibleTest, CopyTransposesMinorDimensionSkipTrivialDimensions) {
+  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
+    ENTRY entry {
+      default_layout = f32[10,20,1,1]{3,2,1,0} parameter(0)
+      non_default_layout = f32[10,20,1,1]{1,2,3,0} parameter(1)
+
+      copy_transpose_minor_default = f32[10,20,1,1]{2,3,1,0} copy(default_layout)
+      copy_no_transpose_minor_default = f32[10,20,1,1]{3,2,1,0} copy(default_layout)
+
+      copy_transpose_minor_non_default = f32[10,20,1,1]{2,0,3,1} copy(non_default_layout)
+      copy_no_transpose_minor_non_default = f32[10,20,1,1]{1,2,3,0} copy(non_default_layout)
+
+      ROOT r = tuple(copy_transpose_minor_default, copy_no_transpose_minor_default,
+                     copy_transpose_minor_non_default, copy_no_transpose_minor_non_default)
+    })"));
+
+  auto* tuple = (*module)->entry_computation()->root_instruction();
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(0)));
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(1)));
+  EXPECT_TRUE(TransposesMinorDimension(tuple->operand(2)));
+  EXPECT_FALSE(TransposesMinorDimension(tuple->operand(3)));
+}
+
 TEST_F(GpuFusibleTest, IsReduceInputFusion_ReductionToVector) {
   auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
     ENTRY entry {
@@ -232,7 +427,6 @@ TEST_F(GpuFusibleTest, IsReduceInputFusion_ElementalReduction) {
     ENTRY entry {
       c0 = f32[] parameter(0)
       p1 = f32[8,512,5,16,1,1]{5,4,3,2,1,0} parameter(1)
-      // Reduction lowered by GpuElementalIrEmitter.
       ROOT reduce = f32[512,5,1,1]{3,2,1,0} reduce(p1, c0), dimensions={3,0},
         to_apply=scalar_add
     })"))
@@ -370,25 +564,16 @@ TEST_F(GpuFusibleTest,
 }
 
 TEST_F(GpuFusibleTest, CustomFusionIsNotFusibleAsConsumer) {
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
-                          ParseAndReturnVerifiedModule(R"(
-HloModule m
-
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                       ParseAndReturnVerifiedModule(R"(
 triton_fusion {
-  p0 = f16[20,3]{1,0} parameter(0)
-  p1 = f16[3,40]{1,0} parameter(1)
-  dot = f16[20,40]{1,0} dot(p0, p1),
-    lhs_contracting_dims={1}, rhs_contracting_dims={0}
-  ROOT c = f16[20,40]{0,1} copy(dot)
+  p = s32[20,3] parameter(0)
+  ROOT neg = s32[20,3] negate(p)
 }
 
 ENTRY e {
-  p0 = f16[20,3]{1,0} parameter(0)
-  n = f16[20,3]{1,0} negate(p0)
-  p1 = f16[3,40]{1,0} parameter(1)
-  ROOT r = f16[20,40]{0,1} fusion(n, p1),
-    kind=kCustom,
-    calls=triton_fusion
+  p = s32[20,3] parameter(0)
+  ROOT r = s32[20,3] fusion(p), kind=kCustom, calls=triton_fusion
 })"));
   const HloInstruction* root = module->entry_computation()->root_instruction();
   EXPECT_FALSE(IsFusibleAsMultiOutputFusionRoot(*root));
@@ -1056,11 +1241,12 @@ TEST_F(GpuFusibleTest, ProducerConsumerFusionReduceUnfriendlyLoopFusion) {
   auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
     mixed_input_layouts_computation {
       p0.1 = f16[128,1024,32,32]{1,3,2,0} parameter(0)
-      p1.1 = f16[128,1024,32,32]{3,2,1,0} parameter(1)
-      copy = f16[128,1024,32,32]{1,3,2,0} copy(p1.1)
+      p1.1 = f16[128,1024,33,33]{3,2,1,0} parameter(1)
+      copy = f16[128,1024,33,33]{1,3,2,0} copy(p1.1)
+      slice = f16[128,1024,32,32]{1,3,2,0} slice(copy), slice={[0:128],[0:1024],[0:32],[0:32]}
       c0 = f16[] constant(0)
       broadcast = f16[128,1024,32,32]{1,3,2,0} broadcast(c0), dimensions={}
-      greater-than = pred[128,1024,32,32]{1,3,2,0} compare(copy, broadcast), direction=GT
+      greater-than = pred[128,1024,32,32]{1,3,2,0} compare(slice, broadcast), direction=GT
       ROOT root = f16[128,1024,32,32]{1,3,2,0} select(greater-than, p0.1, broadcast)
     }
     fused_reduce {
@@ -1070,8 +1256,8 @@ TEST_F(GpuFusibleTest, ProducerConsumerFusionReduceUnfriendlyLoopFusion) {
       ROOT reduce = f32[1024]{0} reduce(convert, c0.2), dimensions={0,2,3}, to_apply=scalar_add
     }
     ENTRY reduce {
-      p0 = f16[128,1024,32,32]{3,2,1,0} parameter(0)
-      p1 = f16[128,1024,32,32]{1,3,2,0} parameter(1)
+      p0 = f16[128,1024,32,32]{1,3,2,0} parameter(0)
+      p1 = f16[128,1024,33,33]{3,2,1,0} parameter(1)
       loop_fusion = f16[128,1024,32,32]{1,3,2,0} fusion(p0, p1), kind=kLoop, calls=mixed_input_layouts_computation
       reduce_fusion = f32[1024]{0} fusion(loop_fusion), kind=kInput, calls=fused_reduce
       ROOT root = (f32[1024]{0}, f16[128,1024,32,32]{1,3,2,0}) tuple(reduce_fusion, loop_fusion)
@@ -1114,210 +1300,681 @@ TEST_F(GpuFusibleTest, ProducerConsumerFusionInPlaceOperation) {
   EXPECT_TRUE(ShapesCompatibleForMultiOutputFusion(*dus, *transpose));
 }
 
-TEST_F(GpuFusibleTest, NonscalarConstantsNotFused) {
+TEST_F(GpuFusibleTest, BitwidthChangingBitcastIsNotFusible) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+e {
+  a = s32[7,2]{1,0} parameter(0)
+  b = s16[7]{0} bitcast(a)
+})")
+                    .value();
+  EXPECT_FALSE(IsProducerMultiOutputFusible(
+      *module->entry_computation()->root_instruction()));
+}
+
+TEST_F(GpuFusibleTest, ChooseFusionKind) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+HloModule module
+
+ENTRY computation {
+    p = f32[5000,6000]{1,0} parameter(0)
+    c = f32[6000,5000] transpose(p), dimensions={1,0}
+    ROOT r = f32[300,20,5000] reshape(c)
+}
+)")
+                    .value();
+  const HloInstruction* root = module->entry_computation()->root_instruction();
+  const HloInstruction* producer = root->operand(0);
+  EXPECT_EQ(ChooseFusionKind(*producer, *root, device_description()),
+            HloInstruction::FusionKind::kInput);
+}
+
+TEST_F(GpuFusibleTest, GetFusionRoots1) {
   auto module = ParseAndReturnVerifiedModule(R"(
     HloModule test_module
 
-    add {
-      lhs = f32[] parameter(0)
-      rhs = f32[] parameter(1)
-      ROOT add = f32[] add(lhs, rhs)
+    fusion {
+      p0 = s32[] parameter(0)
+      custom-call = (bf16[], s32[]) custom-call(p0), custom_call_target="my_custom_call"
+      get-tuple-element.0 = bf16[] get-tuple-element(custom-call), index=0
+      get-tuple-element.1 = s32[] get-tuple-element(custom-call), index=1
+      ROOT tuple = (bf16[], s32[], s32[]) tuple(get-tuple-element.0, get-tuple-element.1, p0)
     }
 
-    ENTRY BroadcastIntoReduce {
-      constant = f32[16] constant({0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15})
-      broadcast = f32[16,16,16,16]{3,2,1,0} broadcast(constant), dimensions={0}
-      constant.1 = f32[] constant(0)
-      reduce = f32[] reduce(broadcast, constant.1), dimensions={0,1,2,3},
-                                                         to_apply=add
-      ROOT root = (f32[], f32[], f32[16,16,16,16], f32[16]) tuple(reduce, constant.1, broadcast, constant)
-    })")
+    ENTRY entry{
+      p0 = s32[] parameter(0)
+      ROOT fusion = (bf16[], s32[], s32[]) fusion(p0), kind=kCustom, calls=fusion
+    }
+  )")
                     .value();
-  // Do not fuse if producer is a non-scalar constant or consumer is non-fusion
-  // node.
-  const HloInstruction* root = module->entry_computation()->root_instruction();
-  const HloInstruction* consumer = root->operand(0);
-  const HloInstruction* producer = root->operand(1);
-  const HloInstruction* consumer2 = root->operand(2);
-  const HloInstruction* producer2 = root->operand(3);
-  EXPECT_FALSE(
-      static_cast<bool>(IsProducerConsumerFusible(*producer, *consumer)));
-  EXPECT_FALSE(
-      static_cast<bool>(IsProducerConsumerFusible(*producer2, *consumer2)));
+  auto called_computations =
+      module->entry_computation()->root_instruction()->called_computations();
+  ASSERT_EQ(called_computations.size(), 1);
+  auto fusion = called_computations.front();
+  auto roots = GetFusionRoots(*fusion);
+  auto custom_call = fusion->root_instruction()->operand(0)->operand(0);
+  auto parameter = fusion->root_instruction()->operand(2);
+  std::vector<const HloInstruction*> expected_roots{custom_call, custom_call,
+                                                    parameter};
+  EXPECT_EQ(roots, expected_roots);
 }
 
-TEST_F(GpuFusibleTest, FuseLayoutChangingOpWithElementwise) {
+TEST_F(GpuFusibleTest, GetFusionRoots2) {
   auto module = ParseAndReturnVerifiedModule(R"(
     HloModule test_module
-    ENTRY entry {
-      p0 = f32[16,16,16,16]{3,2,1,0} parameter(0)
-      copy = f32[16,16,16,16]{0,1,2,3} copy(p0)
-      ROOT add = f32[16,16,16,16]{0,1,2,3} add(copy, copy)
-    })")
-                    .value();
 
-  const HloInstruction* consumer =
-      module->entry_computation()->root_instruction();
-  const HloInstruction* producer = consumer->operand(0);
-  EXPECT_TRUE(
-      static_cast<bool>(IsProducerConsumerFusible(*producer, *consumer)));
+    fusion {
+      p0 = s32[] parameter(0)
+      custom-call.1 = bf16[] custom-call(p0), custom_call_target="my_custom_call1"
+      custom-call.2 = bf16[] custom-call(p0), custom_call_target="my_custom_call2"
+      ROOT tuple = (bf16[], bf16[], s32[]) tuple(custom-call.1, custom-call.2, p0)
+    }
+
+    ENTRY entry{
+      p0 = s32[] parameter(0)
+      ROOT fusion = (bf16[], bf16[], s32[]) fusion(p0), kind=kCustom, calls=fusion
+    }
+  )")
+                    .value();
+  auto called_computations =
+      module->entry_computation()->root_instruction()->called_computations();
+  ASSERT_EQ(called_computations.size(), 1);
+  auto fusion = called_computations.front();
+  auto roots = GetFusionRoots(*fusion);
+  auto custom_call1 = fusion->root_instruction()->operand(0);
+  auto custom_call2 = fusion->root_instruction()->operand(1);
+  auto parameter = fusion->root_instruction()->operand(2);
+  std::vector<const HloInstruction*> expected_roots{custom_call1, custom_call2,
+                                                    parameter};
+  EXPECT_EQ(roots, expected_roots);
 }
 
-TEST_F(GpuFusibleTest, CreatesHeavyComputation_NonfusionInstr) {
-  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
-    ENTRY entry {
-      p_0 = f32[20,50] parameter(0)
+TEST_F(GpuFusibleTest, GetFusionRoots3) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+    HloModule test_module
 
-      constant_1 = f32[] constant(1)
-      reduce-window_1 = f32[21,41] reduce-window(p_0, constant_1),
-        window={size=20x10 pad=0_20x0_0}, to_apply=scalar_add
+    fusion {
+      p0 = s32[] parameter(0)
+      custom-call = (bf16[], s32[]) custom-call(p0), custom_call_target="my_custom_call"
+      get-tuple-element.0 = bf16[] get-tuple-element(custom-call), index=0
+      custom-call.2 = bf16[] custom-call(p0), custom_call_target="my_custom_call2"
+      get-tuple-element.1 = s32[] get-tuple-element(custom-call), index=1
+      ROOT tuple = (bf16[], bf16[], s32[], s32[]) tuple(get-tuple-element.0, custom-call.2, get-tuple-element.1, p0)
+    }
 
-      constant_2 = f32[] constant(2)
-      reduce-window_2 = f32[21,41] reduce-window(p_0, constant_2),
-        window={size=20x10 pad=0_20x0_0}, to_apply=scalar_add
-
-      ROOT root = (f32[21,41], f32[21,41])
-        tuple(reduce-window_1, reduce-window_2)
-    })"))
+    ENTRY entry{
+      p0 = s32[] parameter(0)
+      ROOT fusion = (bf16[], bf16[], s32[], s32[]) fusion(p0), kind=kCustom, calls=fusion
+    }
+  )")
                     .value();
-  const HloInstruction* root = module->entry_computation()->root_instruction();
-  const HloInstruction* producer = root->operand(0);
-  const HloInstruction* consumer = root->operand(1);
-  EXPECT_TRUE(CreatesHeavyComputation(*producer, *consumer));
+  auto called_computations =
+      module->entry_computation()->root_instruction()->called_computations();
+  ASSERT_EQ(called_computations.size(), 1);
+  auto fusion = called_computations.front();
+  auto roots = GetFusionRoots(*fusion);
+  auto custom_call1 = fusion->root_instruction()->operand(0)->operand(0);
+  auto custom_call2 = fusion->root_instruction()->operand(1);
+  auto parameter = fusion->root_instruction()->operand(3);
+  std::vector<const HloInstruction*> expected_roots{custom_call1, custom_call2,
+                                                    custom_call1, parameter};
+  EXPECT_EQ(roots, expected_roots);
 }
 
-TEST_F(GpuFusibleTest, DoesNotCreateHeavyComputation_NonfusionInstr) {
-  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
+TEST_F(GpuFusibleTest, GetFusionRootsWithGTEMakeTupleSequence) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+    HloModule test_module
+
+    fusion {
+      p0 = s32[] parameter(0)
+      p1 = s32[32] parameter(1)
+      custom-call = (bf16[], s32[], u32[]) custom-call(p1), custom_call_target="my_custom_call"
+      get-tuple-element.0 = bf16[] get-tuple-element(custom-call), index=0
+      get-tuple-element.1 = s32[] get-tuple-element(custom-call), index=1
+      bitcast = s32[1] bitcast(get-tuple-element.1)
+      dynamic-update-slice = s32[32] dynamic-update-slice(p1, bitcast, p0)
+      get-tuple-element.2 = u32[] get-tuple-element(custom-call), index=2
+      ROOT tuple = (bf16[], s32[32], u32[]) tuple(get-tuple-element.0, dynamic-update-slice, get-tuple-element.2)
+    }
+
+    ENTRY entry{
+      p0 = s32[] parameter(0)
+      bitcast = s32[32] bitcast(p0)
+      ROOT fusion = (bf16[], s32[32], u32[]) fusion(p0, bitcast), kind=kCustom, calls=fusion
+    }
+  )")
+                    .value();
+
+  auto called_computations =
+      module->entry_computation()->root_instruction()->called_computations();
+  ASSERT_EQ(called_computations.size(), 1);
+  auto fusion = called_computations.front();
+  auto roots = GetFusionRoots(*fusion);
+  auto custom_call = fusion->root_instruction()->operand(0)->operand(0);
+  auto dus = fusion->root_instruction()->operand(1);
+  std::vector<const HloInstruction*> expected_result{custom_call, dus,
+                                                     custom_call};
+  EXPECT_EQ(roots, expected_result);
+}
+
+TEST_F(GpuFusibleTest, GetFusionRootsWithMakeTupleGTESequence) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+    HloModule test_module
+
+    fusion {
+      p0 = s32[] parameter(0)
+      p1 = s32[32] parameter(1)
+      custom-call = (bf16[], s32[], u32[]) custom-call(p1), custom_call_target="my_custom_call"
+      get-tuple-element.0 = bf16[] get-tuple-element(custom-call), index=0
+      get-tuple-element.1 = s32[] get-tuple-element(custom-call), index=1
+      bitcast = s32[1] bitcast(get-tuple-element.1)
+      dynamic-update-slice = s32[32] dynamic-update-slice(p1, bitcast, p0)
+      get-tuple-element.2 = u32[] get-tuple-element(custom-call), index=2
+      tuple = (bf16[], s32[32], u32[]) tuple(get-tuple-element.0, dynamic-update-slice, get-tuple-element.2)
+      get-tuple-element.3 = bf16[] get-tuple-element(tuple), index=0
+      get-tuple-element.4 = u32[] get-tuple-element(tuple), index=2
+      ROOT tuple2 = (bf16[], s32[32], u32[]) tuple(get-tuple-element.3, dynamic-update-slice, get-tuple-element.4)
+    }
+
+    ENTRY entry{
+      p0 = s32[] parameter(0)
+      bitcast = s32[32] bitcast(p0)
+      ROOT fusion = (bf16[], s32[32], u32[]) fusion(p0, bitcast), kind=kCustom, calls=fusion
+    }
+  )")
+                    .value();
+
+  auto called_computations =
+      module->entry_computation()->root_instruction()->called_computations();
+  ASSERT_EQ(called_computations.size(), 1);
+  auto fusion = called_computations.front();
+  auto roots = GetFusionRoots(*fusion);
+  auto tuple_inst = fusion->root_instruction()->operand(0)->operand(0);
+  auto custom_call = tuple_inst->operand(0)->operand(0);
+  auto dus = fusion->root_instruction()->operand(1);
+  std::vector<const HloInstruction*> expected_result{custom_call, dus,
+                                                     custom_call};
+  EXPECT_EQ(roots, expected_result);
+}
+
+TEST_F(GpuFusibleTest, GetFusionRootsWithTupleMultipleSameOperands) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+    HloModule test_module
+
+    fusion {
+      p1 = s32[32] parameter(0)
+      add0 = s32[32] add(p1, p1)
+      ROOT _ = (s32[32], s32[32]) tuple(add0, add0)
+    }
+
     ENTRY entry {
-      p_0 = f32[3,5] parameter(0)
-      constant = f32[] constant(1)
-      broadcast = f32[3, 5] broadcast(f32[] constant), dimensions={}
-      scaled_p_0 = f32[3,5] multiply(f32[3, 5] broadcast, f32[3,5]{1, 0} p_0)
+      p0 = s32[32] parameter(0)
+      ROOT fusion = (s32[32], s32[32]) fusion(p0), kind=kCustom, calls=fusion
+    }
+  )")
+                    .value();
 
-      p_1 = f32[2,5] parameter(1)
-      reduce-window = f32[3,5] reduce-window(p_1, constant),
-        window={size=2x1 pad=0_2x0_0}, to_apply=scalar_add
+  auto called_computations =
+      module->entry_computation()->root_instruction()->called_computations();
+  ASSERT_EQ(called_computations.size(), 1);
 
-      ROOT root = (f32[3,5], f32[3,5]) tuple(reduce-window, scaled_p_0)
+  auto fusion = called_computations.front();
+  auto roots = GetFusionRoots(*fusion);
+  auto add0 = fusion->root_instruction()->operand(0);
+  EXPECT_THAT(GetFusionRoots(*fusion), ElementsAre(add0, add0));
+}
+
+TEST_F(GpuFusibleTest, GetFusibleComputations) {
+  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
+    fused_reduce {
+      p0 = f32[128,1024] parameter(0)
+      c0 = f32[] constant(0)
+      ROOT reduce = f32[128]{0} reduce(p0, c0), dimensions={1}, to_apply=scalar_add
+    }
+    body_a {
+      p0 = f32[128,1024] parameter(0)
+      ROOT reduce_fusion = f32[128] fusion(p0), kind=kInput, calls=fused_reduce
+    }
+    body_b {
+      p0 = f32[128,1024] parameter(0)
+      c0 = f32[] constant(0)
+      ROOT bc = f32[128] broadcast(c0), dimensions={}
+    }
+    body_c {
+      p0 = f32[128,1024] parameter(0)
+      c0 = f32[] constant(0)
+      ROOT bc = f32[128] broadcast(c0), dimensions={}
+    }
+    ENTRY main {
+      p0 = s32[] parameter(0)
+      p1 = f32[128,1024] parameter(1)
+      called = f32[128] call(p1), to_apply=body_c,
+        frontend_attributes={_xla_stream_annotation="1"}
+      ROOT conditional = f32[128] conditional(p0, p1, p1),
+        branch_computations={body_a, body_b}
     })"))
                     .value();
+
+  // fused_reduce is already fused, scalar_add is not fusible.
+  auto fusible = GetFusibleComputations(*module, {});
+  EXPECT_THAT(fusible,
+              UnorderedElementsAre(module->GetComputationWithName("body_c"),
+                                   // From the conditional
+                                   module->GetComputationWithName("body_a"),
+                                   module->GetComputationWithName("body_b"),
+                                   module->entry_computation()));
+}
+
+TEST_F(GpuFusibleTest, GetSharedMemoryUsage) {
+  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
+    wrapped_transpose {
+      p0 = f32[128,1024,2]{2,1,0} parameter(0)
+      ROOT transpose = f32[1024,128,2]{2,1,0} transpose(p0), dimensions={1,0,2}
+    }
+    ENTRY main {
+      p = f32[128,1024,2] parameter(0)
+      ROOT res = f32[1024,128,2]{2,1,0} fusion(p), kind=kInput, calls=wrapped_transpose
+    })"))
+                    .value();
+  FusionInfoCache cache(device_description());
+  auto fusion = module->entry_computation()->root_instruction();
+  EXPECT_EQ(cache.GetSharedMemoryUsage(*fusion), 32 * 33 * 2 * 4);
+}
+
+TEST_F(GpuFusibleTest, GetSharedMemoryUsageForPackedTranspose) {
+  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
+    wrapped_transpose {
+      p0 = s8[128,64,10,6] parameter(0)
+      ROOT transpose = s8[128,6,10,64] transpose(p0), dimensions={0,3,2,1}
+    }
+    ENTRY main {
+      p0 = s8[128,64,10,6] parameter(0)
+      ROOT res = s8[128,6,10,64] fusion(p0), kind=kInput, calls=wrapped_transpose
+    })"))
+                    .value();
+  FusionInfoCache cache(device_description());
+  auto fusion = module->entry_computation()->root_instruction();
+  EXPECT_EQ(cache.GetSharedMemoryUsage(*fusion), 32 * 32 * 4 * 4);
+}
+
+TEST_F(GpuFusibleTest, GetSharedMemoryUsageVariadicReduction) {
+  ASSERT_OK_AND_ASSIGN(
+      auto module, ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
+        reducer {
+          p0 = pred[] parameter(0)
+          p1 = s32[] parameter(1)
+          p2 = pred[] parameter(2)
+          p3 = s32[] parameter(3)
+          ROOT %tuple.20.0 = (pred[], s32[]) tuple(p2, p3)
+        }
+        reduce {
+          p0 = pred[4,128,128] parameter(0)
+          p1 = s32[4,128,128] parameter(1)
+          cfalse = pred[] constant(false)
+          c0 = s32[] constant(0)
+          ROOT reduce = (pred[4,128], s32[4,128]) reduce(p0, p1, cfalse, c0),
+            dimensions={1}, to_apply=reducer
+        }
+        ENTRY main {
+          p0 = pred[4,128,128] parameter(0)
+          p1 = s32[4,128,128] parameter(1)
+          ROOT fusion = (pred[4,128], s32[4,128]) fusion(p0, p1),
+            kind=kInput, calls=reduce
+        })")));
+  FusionInfoCache cache(device_description());
+  auto fusion = module->entry_computation()->root_instruction();
+  constexpr int kMaxVectorSize = 4;
+  EXPECT_EQ(
+      cache.GetSharedMemoryUsage(*fusion),
+      (sizeof(int8_t) + sizeof(int32_t)) * 32 * (32 * kMaxVectorSize + 1));
+}
+
+TEST_F(GpuFusibleTest, IsConsumerTheOnlyNonRootUser) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+e {
+  p = s8[] parameter(0)
+  n = s8[] negate(p)
+  b = s8[1] bitcast(p)
+  t = tuple(b, n)
+})"));
+
+  const HloInstruction& p =
+      *module->entry_computation()->parameter_instruction(0);
+  const HloInstruction& n = *p.users().front();
+  EXPECT_TRUE(IsConsumerTheOnlyNonRootUser(p, n));
+}
+
+TEST_F(GpuFusibleTest, MayCausePerformanceDropIfUnrolledSmallReduceWindowIsOk) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule m
+
+add {
+  lhs = f16[] parameter(0)
+  rhs = f16[] parameter(1)
+  ROOT result = f16[] add(lhs, rhs)
+}
+
+ENTRY main {
+  p0 = f16[2048,5,40,2048]{3,2,1,0} parameter(0)
+  constant_0 = f16[] constant(0)
+  ROOT reduce_window_sum = f16[2048,5,5,2048]{3,2,1,0} reduce-window(p0, constant_0), window={size=1x1x8x1 stride=1x1x8x1}, to_apply=add
+}
+)"));
   const HloInstruction* root = module->entry_computation()->root_instruction();
-  const HloInstruction* producer = root->operand(0);
-  const HloInstruction* consumer = root->operand(1);
-  EXPECT_FALSE(CreatesHeavyComputation(*producer, *consumer));
+  auto fusion_adaptor = HloFusionAdaptor::ForInstruction(root);
+  EXPECT_FALSE(MayCausePerformanceDropIfUnrolled(*fusion_adaptor));
 }
 
 TEST_F(GpuFusibleTest,
-       DoesNotCreateHeavyComputation_NonoverlappingReduceWindows) {
-  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
-    ENTRY entry {
-      p_0 = f32[2,5] parameter(0)
+       MayCausePerformanceDropIfUnrolledLargerReduceWindowIsNotOk) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule m
 
-      constant_1 = f32[] constant(1)
-      reduce-window_1 = f32[3,5] reduce-window(p_0, constant_1),
-        window={size=2x1 pad=0_2x0_0}, to_apply=scalar_add
+add {
+  lhs = f16[] parameter(0)
+  rhs = f16[] parameter(1)
+  ROOT result = f16[] add(lhs, rhs)
+}
 
-      constant_2 = f32[] constant(2)
-      reduce-window_2 = f32[2,3] reduce-window(p_0, constant_2),
-        window={size=2x1 pad=0_2x0_0 stride=2x2}, to_apply=scalar_add
-
-      ROOT root = (f32[3,5], f32[2,3]) tuple(reduce-window_1, reduce-window_2)
-    })"))
-                    .value();
+ENTRY main {
+  p0 = f16[2048,10,40,2048]{3,2,1,0} parameter(0)
+  constant_0 = f16[] constant(0)
+  ROOT reduce_window_sum = f16[2048,5,5,2048]{3,2,1,0} reduce-window(p0, constant_0), window={size=1x2x8x1 stride=1x2x8x1}, to_apply=add
+}
+)"));
   const HloInstruction* root = module->entry_computation()->root_instruction();
-  const HloInstruction* producer = root->operand(0);
-  const HloInstruction* consumer = root->operand(1);
-  EXPECT_FALSE(CreatesHeavyComputation(*producer, *consumer));
+  auto fusion_adaptor = HloFusionAdaptor::ForInstruction(root);
+  EXPECT_TRUE(MayCausePerformanceDropIfUnrolled(*fusion_adaptor));
 }
 
-TEST_F(GpuFusibleTest, CreatesHeavyComputation_ReduceWindowGather) {
-  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
-    ENTRY entry {
-      p0 = s32[512,512,2] parameter(0)
-      p1 = f32[1,1,512,512] parameter(1)
-      constant_1 = f32[] constant(0)
-      reduce-window.1 = reduce-window(p1, constant_1),
-        window={size=1x1x16x16 stride=1x1x16x16}, to_apply=scalar_add
-      ROOT ret = gather(reduce-window.1, p0), offset_dims={0,1,2,3},
-        collapsed_slice_dims={}, start_index_map={1,2},
-        index_vector_dim=2, slice_sizes={1,1,1,1}
-    })"))
-                    .value();
-  auto gather = module->entry_computation()->root_instruction();
-  auto reduce_window = gather->operand(0);
-  EXPECT_EQ(gather->opcode(), HloOpcode::kGather);
-  EXPECT_EQ(reduce_window->opcode(), HloOpcode::kReduceWindow);
-  EXPECT_FALSE(IfFusedReadsElementsMultipleTimes(*reduce_window));
-  EXPECT_TRUE(IsExpensiveToRepeat(*reduce_window));
-  EXPECT_TRUE(IfFusedReadsElementsMultipleTimes(*gather));
-  EXPECT_TRUE(CreatesHeavyComputation(*reduce_window, *gather));
+TEST_F(GpuFusibleTest, ComputeLoopFusionConfig) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule m
+
+ENTRY main {
+  p0 = f16[2048,1024]{1,0} parameter(0)
+  ROOT res = f16[2048,1024]{1,0} negate(p0)
+}
+)"));
+  const HloInstruction& root = *module->entry_computation()->root_instruction();
+  EXPECT_EQ(
+      ComputeLoopFusionConfig(HloFusionAnalysis::Create(
+                                  root, TestGpuDeviceInfo::H100SXMDeviceInfo()),
+                              root.shape()),
+      4);
+
+  EXPECT_EQ(
+      ComputeLoopFusionConfig(HloFusionAnalysis::Create(
+                                  root, TestGpuDeviceInfo::B200SXMDeviceInfo()),
+                              root.shape()),
+      8);
+
+  EXPECT_EQ(
+      ComputeLoopFusionConfig(
+          HloFusionAnalysis::Create(root, B200WithCUDA129()), root.shape()),
+      16);
 }
 
-TEST_F(GpuFusibleTest, CreatesHeavyComputation_FusionInstr) {
-  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
-    fused_producer {
-      operand = f32[20,20] parameter(0)
-      constant = f32[] constant(1)
-      ROOT reduce-window = f32[11,11] reduce-window(operand, constant),
-        window={size=20x20 pad=0_10x0_10}, to_apply=scalar_add
-    }
+TEST_F(GpuFusibleTest, ComputeLoopFusionConfig32Bit) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule m
 
-    fused_consumer {
-      operand_0 = f32[11,11] parameter(0)
-      operand_1 = f32[11,11] parameter(1)
-      constant = f32[] constant(1)
-      reduce-window = f32[11,11] reduce-window(operand_1, constant),
-        window={size=2x2 pad=0_1x0_1}, to_apply=scalar_add
-      ROOT scaled_operand_1 =
-        f32[11,11] multiply(f32[11,11] operand_0, f32[11,11] reduce-window)
-    }
+ENTRY main {
+  p0 = f32[2048,1024]{1,0} parameter(0)
+  ROOT res = f32[2048,1024]{1,0} negate(p0)
+}
+)"));
+  const HloInstruction& root = *module->entry_computation()->root_instruction();
+  EXPECT_EQ(
+      ComputeLoopFusionConfig(HloFusionAnalysis::Create(
+                                  root, TestGpuDeviceInfo::H100SXMDeviceInfo()),
+                              root.shape()),
+      4);
 
-    ENTRY entry {
-      p0 = f32[20,20] parameter(0)
-      p1 = f32[11,11] parameter(1)
-      producer = f32[11,11] fusion(p0), kind=kLoop, calls=fused_producer
-      consumer = f32[11,11] fusion(p1, producer), kind=kLoop, calls=fused_consumer
-      ROOT root = (f32[11,11], f32[11,11]) tuple(producer, consumer)
-    })"))
-                    .value();
+  EXPECT_EQ(
+      ComputeLoopFusionConfig(HloFusionAnalysis::Create(
+                                  root, TestGpuDeviceInfo::B200SXMDeviceInfo()),
+                              root.shape()),
+      4);
+
+  EXPECT_EQ(
+      ComputeLoopFusionConfig(
+          HloFusionAnalysis::Create(root, B200WithCUDA129()), root.shape()),
+      8);
+}
+
+TEST_F(GpuFusibleTest, FourBitTypeUnrolled16or32xOnBlackwell) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+e {
+  n = s4[1024000] negate(s4[1024000] parameter(0))
+})"));
+  const HloInstruction& root = *module->entry_computation()->root_instruction();
+  EXPECT_EQ(
+      ComputeLoopFusionConfig(HloFusionAnalysis::Create(
+                                  root, TestGpuDeviceInfo::H100SXMDeviceInfo()),
+                              root.shape()),
+      4);
+  EXPECT_EQ(
+      ComputeLoopFusionConfig(HloFusionAnalysis::Create(
+                                  root, TestGpuDeviceInfo::B200SXMDeviceInfo()),
+                              root.shape()),
+      16);
+  EXPECT_EQ(
+      ComputeLoopFusionConfig(
+          HloFusionAnalysis::Create(root, B200WithCUDA129()), root.shape()),
+      32);
+}
+
+TEST_F(GpuFusibleTest, FourBitConcatenationUnrolled16or32xOnBlackwell) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+e {
+  ROOT c = s4[2048000] concatenate(s4[1024000] parameter(0), s4[1024000] parameter(1)), dimensions={0}
+})"));
+  const HloInstruction& root = *module->entry_computation()->root_instruction();
+  EXPECT_EQ(
+      ComputeLoopFusionConfig(HloFusionAnalysis::Create(
+                                  root, TestGpuDeviceInfo::H100SXMDeviceInfo()),
+                              root.shape()),
+      4);
+  EXPECT_EQ(
+      ComputeLoopFusionConfig(HloFusionAnalysis::Create(
+                                  root, TestGpuDeviceInfo::B200SXMDeviceInfo()),
+                              root.shape()),
+      16);
+  EXPECT_EQ(
+      ComputeLoopFusionConfig(
+          HloFusionAnalysis::Create(root, B200WithCUDA129()), root.shape()),
+      32);
+}
+
+TEST_F(GpuFusibleTest, ComputeLoopFusionConfigForLoopReduce) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule m
+
+max {
+  p0 = f16[] parameter(0)
+  p1 = f16[] parameter(1)
+  ROOT add = f16[] maximum(p0, p1)
+}
+
+ENTRY main {
+  p0 = f16[303104,8]{1,0} parameter(0)
+  neg_inf = f16[] constant(-inf)
+  ROOT res = f16[303104]{0} reduce(p0, neg_inf), dimensions={1}, to_apply=max
+}
+)"));
   const HloInstruction* root = module->entry_computation()->root_instruction();
-  const HloInstruction* producer = root->operand(0);
-  const HloInstruction* consumer = root->operand(1);
-  EXPECT_TRUE(CreatesHeavyComputation(*producer, *consumer));
+  se::DeviceDescription device_info_h100{
+      TestGpuDeviceInfo::H100SXMDeviceInfo()};
+  auto analysis = HloFusionAnalysis::Create(*root, device_info_h100);
+  auto config = ComputeLoopFusionConfig(analysis, root->shape());
+  EXPECT_EQ(config, 4);
+
+  se::DeviceDescription device_info_b200{
+      TestGpuDeviceInfo::B200SXMDeviceInfo()};
+  analysis = HloFusionAnalysis::Create(*root, device_info_b200);
+  config = ComputeLoopFusionConfig(analysis, root->shape());
+  EXPECT_EQ(config, 4);
 }
 
-TEST_F(GpuFusibleTest, DoesNotCreateHeavyComputation_FusionInstr) {
-  auto module = ParseAndReturnVerifiedModule(absl::StrCat(kModulePrefix, R"(
-    fused_producer {
-      p_0 = f32[2,2] parameter(0)
-      constant = f32[] constant(1)
-      ROOT reduce-window = f32[2,2] reduce-window(p_0, constant),
-        window={size=2x2 pad=0_1x0_1}, to_apply=scalar_add
-    }
+TEST_F(GpuFusibleTest, ComputeLoopFusionConfigForLoopPadFusion) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule m
 
-    fused_consumer {
-      p_0 = f32[2,2] parameter(0)
-
-      p_1 = f32[2,2] parameter(1)
-      constant = f32[] constant(1)
-      reduce-window = f32[2,2] reduce-window(p_1, constant),
-        window={size=2x2 pad=0_1x0_1}, to_apply=scalar_add
-
-      ROOT scaled_p_1 = f32[2,2] multiply(f32[2, 2] p_0, f32[2,2] reduce-window)
-    }
-
-    ENTRY entry {
-      p_0 = f32[2,2] parameter(0)
-      producer = f32[2,2] fusion(p_0), kind=kLoop, calls=fused_producer
-      consumer = f32[2,2] fusion(producer, p_0), kind=kLoop, calls=fused_consumer
-      ROOT root = (f32[2,2], f32[2,2]) tuple(producer, consumer)
-    })"))
-                    .value();
+ENTRY main {
+  param_0 = s8[512,128,128,6]{3,2,1,0} parameter(0)
+  zero = s8[] constant(0)
+  ROOT pad = s8[512,129,129,6]{3,2,1,0} pad(param_0, zero), padding=0_0x0_1x0_1x0_0
+}
+)"));
   const HloInstruction* root = module->entry_computation()->root_instruction();
-  const HloInstruction* producer = root->operand(0);
-  const HloInstruction* consumer = root->operand(1);
-  EXPECT_FALSE(CreatesHeavyComputation(*producer, *consumer));
+  se::DeviceDescription device_info_h100{
+      TestGpuDeviceInfo::H100SXMDeviceInfo()};
+  auto analysis = HloFusionAnalysis::Create(*root, device_info_h100);
+  auto config = ComputeLoopFusionConfig(analysis, root->shape());
+  EXPECT_EQ(config, 4);
+
+  se::DeviceDescription device_info_b200{
+      TestGpuDeviceInfo::B200SXMDeviceInfo()};
+  analysis = HloFusionAnalysis::Create(*root, device_info_b200);
+  config = ComputeLoopFusionConfig(analysis, root->shape());
+  // As we often cannot vectorize the loads, unrolling to more than factor 8
+  // usually doesn't help and in fact we may hit register pressure.
+  EXPECT_EQ(config, 8);
 }
 
+TEST_F(GpuFusibleTest, ComputeLoopFusionConfigForLoopTransposeSmallMinorDim) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule m
+
+ENTRY main {
+  p0 = f16[256,2048,4]{2,1,0} parameter(0)
+  ROOT res = f16[2048,256,4]{2,1,0} transpose(p0), dimensions={1,0,2}
+}
+)"));
+  const HloInstruction* root = module->entry_computation()->root_instruction();
+  se::DeviceDescription device_info_h100{
+      TestGpuDeviceInfo::H100SXMDeviceInfo()};
+  auto analysis = HloFusionAnalysis::Create(*root, device_info_h100);
+  auto config = ComputeLoopFusionConfig(analysis, root->shape());
+  EXPECT_EQ(config, 4);
+
+  se::DeviceDescription device_info_b200{
+      TestGpuDeviceInfo::B200SXMDeviceInfo()};
+  analysis = HloFusionAnalysis::Create(*root, device_info_b200);
+  config = ComputeLoopFusionConfig(analysis, root->shape());
+  EXPECT_EQ(config, 8);
+}
+
+TEST_F(GpuFusibleTest, ComputeLoopFusionConfigForLoopTransposeLargerMinorDim) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule m
+
+ENTRY main {
+  p0 = f16[256,2048,8]{2,1,0} parameter(0)
+  ROOT res = f16[2048,256,8]{2,1,0} transpose(p0), dimensions={1,0,2}
+}
+)"));
+  const HloInstruction* root = module->entry_computation()->root_instruction();
+  se::DeviceDescription device_info_h100{
+      TestGpuDeviceInfo::H100SXMDeviceInfo()};
+  auto analysis = HloFusionAnalysis::Create(*root, device_info_h100);
+  auto config = ComputeLoopFusionConfig(analysis, root->shape());
+  EXPECT_EQ(config, 4);
+
+  se::DeviceDescription device_info_b200{
+      TestGpuDeviceInfo::B200SXMDeviceInfo()};
+  analysis = HloFusionAnalysis::Create(*root, device_info_b200);
+  config = ComputeLoopFusionConfig(analysis, root->shape());
+  EXPECT_EQ(config, 8);
+}
+
+TEST_F(GpuFusibleTest,
+       ComputeLoopFusionConfigForLoopTransposeEffectiveLargerMinorDim) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule m
+
+ENTRY main {
+  p0 = f16[256,2048,4,2]{3,2,1,0} parameter(0)
+  ROOT res = f16[2048,256,4,2]{3,2,1,0} transpose(p0), dimensions={1,0,2,3}
+}
+)"));
+  const HloInstruction* root = module->entry_computation()->root_instruction();
+  se::DeviceDescription device_info_h100{
+      TestGpuDeviceInfo::H100SXMDeviceInfo()};
+  auto analysis = HloFusionAnalysis::Create(*root, device_info_h100);
+  auto config = ComputeLoopFusionConfig(analysis, root->shape());
+  EXPECT_EQ(config, 4);
+
+  se::DeviceDescription device_info_b200{
+      TestGpuDeviceInfo::B200SXMDeviceInfo()};
+  analysis = HloFusionAnalysis::Create(*root, device_info_b200);
+  config = ComputeLoopFusionConfig(analysis, root->shape());
+  EXPECT_EQ(config, 8);
+}
+
+TEST_F(GpuFusibleTest, ContainsScan) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule m
+
+add {
+  p0 = f32[] parameter(0)
+  p1 = f32[] parameter(1)
+  add = f32[] add(p0, p1)
+  ROOT t = (f32[], f32[]) tuple(add, add)
+}
+
+scan_computation.1 {
+  p0.1 = f32[10] parameter(0)
+  c0.1 = f32[] constant(0)
+  scan.1 = (f32[10], f32[]) scan(p0.1, c0.1), dimensions={0}, num_carries=1, to_apply=add
+  ROOT gte.1 = f32[10] get-tuple-element(scan.1), index=0
+}
+
+scan_computation.2 {
+  p0.2 = f32[10] parameter(0)
+  c0.2 = f32[] constant(0)
+  scan.2 = (f32[10], f32[]) scan(p0.2, c0.2), dimensions={0}, num_carries=1, to_apply=add
+  ROOT gte.2 = f32[10] get-tuple-element(scan.2), index=0
+}
+
+nested_scan_computation {
+  p0.3 = f32[10] parameter(0)
+  ROOT nested_scan = f32[10] fusion(p0.3), kind=kLoop, calls=scan_computation.2
+}
+
+loop_computation {
+  p0.4 = f32[10] parameter(0)
+  ROOT mul = f32[10] multiply(p0.4, p0.4)
+}
+
+ENTRY main {
+  p0 = f32[10] parameter(0)
+  c = f32[] constant(0)
+  scan_direct = (f32[10], f32[]) scan(p0, c), dimensions={0}, num_carries=1, to_apply=add
+  scan_fusion = f32[10] fusion(p0), kind=kLoop, calls=scan_computation.1
+  nested_scan_fusion = f32[10] fusion(p0), kind=kLoop, calls=nested_scan_computation
+  loop_fusion = f32[10] fusion(p0), kind=kLoop, calls=loop_computation
+  ROOT tuple = tuple(scan_direct, scan_fusion, nested_scan_fusion, loop_fusion)
+}
+)"));
+  const HloComputation* entry = module->entry_computation();
+  const HloInstruction* root = entry->root_instruction();
+  EXPECT_TRUE(ContainsScan(*root->operand(0)));
+  EXPECT_TRUE(ContainsScan(*root->operand(1)));
+  EXPECT_TRUE(ContainsScan(*root->operand(2)));
+  EXPECT_FALSE(ContainsScan(*root->operand(3)));
+  EXPECT_FALSE(ContainsScan(*root));
+
+  FusionInfoCache cache(device_description());
+  EXPECT_TRUE(ContainsScan(*root->operand(0), &cache));
+  EXPECT_TRUE(ContainsScan(*root->operand(1), &cache));
+  EXPECT_TRUE(ContainsScan(*root->operand(2), &cache));
+  EXPECT_FALSE(ContainsScan(*root->operand(3), &cache));
+  EXPECT_FALSE(ContainsScan(*root, &cache));
+  cache.Invalidate(root->operand(1));
+  EXPECT_TRUE(ContainsScan(*root->operand(1), &cache));
+}
+
+}  // namespace
 }  // namespace gpu
 }  // namespace xla

@@ -15,11 +15,16 @@ limitations under the License.
 
 #include "tsl/platform/unbounded_work_queue.h"
 
+#include <functional>
+#include <memory>
+
 #include "absl/memory/memory.h"
-#include "tsl/platform/random.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/synchronization/notification.h"
 #include "tsl/platform/blocking_counter.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/test.h"
+#include "tsl/platform/random.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/test.h"
 
 namespace tsl {
 namespace {
@@ -28,40 +33,44 @@ class UnboundedWorkQueueTest : public ::testing::Test {
  protected:
   UnboundedWorkQueueTest()
       : work_queue_(
-            absl::make_unique<UnboundedWorkQueue>(Env::Default(), "test")) {}
+            std::make_unique<UnboundedWorkQueue>(Env::Default(), "test")) {}
   ~UnboundedWorkQueueTest() override = default;
 
   void RunMultipleCopiesOfClosure(const int num_closures,
                                   std::function<void()> fn) {
     for (int i = 0; i < num_closures; ++i) {
-      work_queue_->Schedule([this, fn]() {
+      work_queue_ptr_->Schedule([this, fn]() {
         fn();
-        mutex_lock l(mu_);
+        absl::MutexLock l(mu_);
         ++closure_count_;
-        cond_var_.notify_all();
+        cond_var_.SignalAll();
       });
     }
   }
 
   void BlockUntilClosuresDone(const int num_closures) {
-    mutex_lock l(mu_);
+    absl::MutexLock l(mu_);
     while (closure_count_ < num_closures) {
-      cond_var_.wait(l);
+      cond_var_.Wait(&mu_);
     }
   }
 
   void ResetQueue() { work_queue_.reset(); }
 
   int NumClosuresExecuted() {
-    mutex_lock l(mu_);
+    absl::MutexLock l(mu_);
     return closure_count_;
   }
 
  private:
-  mutex mu_;
+  absl::Mutex mu_;
   int closure_count_ TF_GUARDED_BY(mu_) = 0;
-  condition_variable cond_var_;
+  absl::CondVar cond_var_;
   std::unique_ptr<UnboundedWorkQueue> work_queue_;
+  // `std::unique_ptr::reset()` sets `work_queue_` to nullptr before invoking
+  // `~UnboundedWorkQueue()`, so closures that schedule nested work during
+  // `ResetQueue()` use this cached pointer to avoid racing on `work_queue_`.
+  UnboundedWorkQueue* const work_queue_ptr_ = work_queue_.get();
 };
 
 TEST_F(UnboundedWorkQueueTest, SingleClosure) {
@@ -98,7 +107,20 @@ TEST_F(UnboundedWorkQueueTest, RacyDestructor) {
   // Run `num_closures` closures, then delete `work_queue_`.
   RunMultipleCopiesOfClosure(num_closures, []() {});
   ResetQueue();
-  EXPECT_LE(NumClosuresExecuted(), num_closures);
+  EXPECT_EQ(NumClosuresExecuted(), num_closures);
+}
+
+TEST_F(UnboundedWorkQueueTest, NestedClosureDuringDestructor) {
+  constexpr int num_closures = 10;
+  absl::Notification started;
+  RunMultipleCopiesOfClosure(1, [&]() {
+    started.Notify();
+    Env::Default()->SleepForMicroseconds(1000);
+    RunMultipleCopiesOfClosure(num_closures, []() {});
+  });
+  started.WaitForNotification();
+  ResetQueue();
+  EXPECT_EQ(NumClosuresExecuted(), num_closures + 1);
 }
 
 }  // namespace

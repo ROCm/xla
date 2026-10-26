@@ -1,3 +1,18 @@
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 licenses(["restricted"])
 
 package(default_visibility = ["//visibility:public"])
@@ -14,20 +29,26 @@ platform(
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
     ],
-    remote_execution_properties = """
-        properties:{
-          name: "container-image"
-          value: "docker://gcr.io/tensorflow-testing/tf-win2019-rbe@sha256:775f2889a35e7cc87f8e1dc83f3195acb4e709cebe3572cf3ae591ccef27e7e8"
-        }
-        properties:{
-          name: "OSFamily"
-          value: "Windows"
-        }
-        properties:{
-          name: "Pool" value: "default"
-        }
-        properties:{
-          name: "dockerNetwork" value: "off"
-        }
-        """,
+    exec_properties = {
+        "container-image": "docker://gcr.io/tensorflow-testing/tf-win2019-rbe@sha256:d3577d20dea75966faf7fd03479c71462441937df5694259109c2ee1d002a3dd",
+        "OSFamily": "Windows",
+        "Pool": "default",
+        "dockerNetwork": "off",
+    },
+)
+
+# Register the clang-cl platform
+platform(
+    name = "x64_windows-clang-cl",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@bazel_tools//tools/cpp:clang-cl",
+    ],
+    exec_properties = {
+        "container-image": "docker://gcr.io/tensorflow-testing/tf-win2019-rbe@sha256:d3577d20dea75966faf7fd03479c71462441937df5694259109c2ee1d002a3dd",
+        "OSFamily": "Windows",
+        "Pool": "default",
+        "dockerNetwork": "off",
+    },
 )

@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,19 +15,56 @@ limitations under the License.
 
 #include "xla/tests/literal_test_util.h"
 
+#include <gtest/gtest.h>
+
+#include <optional>
+#include <string>
+
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#include "xla/literal_comparison.h"
-#include "tsl/platform/env.h"
 #include "tsl/platform/path.h"
-#include "tsl/platform/test.h"
+#include "xla/error_spec.h"
+#include "xla/literal.h"
+#include "xla/literal_comparison.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/test.h"
 
 namespace xla {
 
 namespace {
 
-// Writes the given literal to a file in the test temporary directory.
-void WriteLiteralToTempFile(const LiteralSlice& literal,
-                            const std::string& name) {
+// Callback helper that dumps literals to temporary files in the event of a
+// miscomparison.
+void OnMiscompare(const LiteralSlice& expected, const LiteralSlice& actual,
+                  const LiteralSlice& mismatches,
+                  const ShapeIndex& /*shape_index*/,
+                  const literal_comparison::ErrorBuckets& /*error_buckets*/) {
+  LOG(INFO) << "expected: shape=" << ShapeUtil::HumanString(expected.shape())
+            << ", value=" << literal_comparison::ToStringTruncated(expected);
+  LOG(INFO) << "actual:   shape=" << ShapeUtil::HumanString(actual.shape())
+            << ", value=" << literal_comparison::ToStringTruncated(actual);
+  LOG(INFO) << "Dumping literals to temp files...";
+  LiteralTestUtil::WriteLiteralToTempFile(expected, "expected");
+  LiteralTestUtil::WriteLiteralToTempFile(actual, "actual");
+  LiteralTestUtil::WriteLiteralToTempFile(mismatches, "mismatches");
+}
+
+::testing::AssertionResult StatusToAssertion(const absl::Status& s) {
+  if (s.ok()) {
+    return ::testing::AssertionSuccess();
+  }
+  return ::testing::AssertionFailure() << s.message();
+}
+
+}  // namespace
+
+/* static */ void LiteralTestUtil::WriteLiteralToTempFile(
+    const LiteralSlice& literal, const std::string& name) {
   // Bazel likes for tests to write "debugging outputs" like these to
   // TEST_UNDECLARED_OUTPUTS_DIR.  This plays well with tools that inspect test
   // results, especially when they're run on remote machines.
@@ -39,52 +76,17 @@ void WriteLiteralToTempFile(const LiteralSlice& literal,
   auto* env = tsl::Env::Default();
   std::string filename = tsl::io::JoinPath(
       outdir, absl::StrFormat("tempfile-%d-%s", env->NowMicros(), name));
-  TF_CHECK_OK(tsl::WriteBinaryProto(env, absl::StrCat(filename, ".pb"),
-                                    literal.ToProto()));
-  TF_CHECK_OK(tsl::WriteStringToFile(env, absl::StrCat(filename, ".txt"),
-                                     literal.ToString()));
+  CHECK_OK(tsl::WriteBinaryProto(env, absl::StrCat(filename, ".pb"),
+                                 literal.ToProto()));
+  CHECK_OK(tsl::WriteStringToFile(env, absl::StrCat(filename, ".txt"),
+                                  literal.ToString()));
   LOG(ERROR) << "wrote Literal to " << name << " file: " << filename
              << ".{pb,txt}";
 }
 
-// Callback helper that dumps literals to temporary files in the event of a
-// miscomparison.
-void OnMiscompare(const LiteralSlice& expected, const LiteralSlice& actual,
-                  const LiteralSlice& mismatches,
-                  const ShapeIndex& /*shape_index*/,
-                  const literal_comparison::ErrorBuckets& /*error_buckets*/) {
-  LOG(INFO) << "expected: " << ShapeUtil::HumanString(expected.shape()) << " "
-            << literal_comparison::ToStringTruncated(expected);
-  LOG(INFO) << "actual:   " << ShapeUtil::HumanString(actual.shape()) << " "
-            << literal_comparison::ToStringTruncated(actual);
-  LOG(INFO) << "Dumping literals to temp files...";
-  WriteLiteralToTempFile(expected, "expected");
-  WriteLiteralToTempFile(actual, "actual");
-  WriteLiteralToTempFile(mismatches, "mismatches");
-}
-
-::testing::AssertionResult StatusToAssertion(const Status& s) {
-  if (s.ok()) {
-    return ::testing::AssertionSuccess();
-  }
-  return ::testing::AssertionFailure() << s.message();
-}
-
-}  // namespace
-
 /* static */ ::testing::AssertionResult LiteralTestUtil::EqualShapes(
     const Shape& expected, const Shape& actual) {
   return StatusToAssertion(literal_comparison::EqualShapes(expected, actual));
-}
-
-/* static */ ::testing::AssertionResult LiteralTestUtil::EqualShapesAndLayouts(
-    const Shape& expected, const Shape& actual) {
-  if (expected.ShortDebugString() != actual.ShortDebugString()) {
-    return ::testing::AssertionFailure()
-           << "want: " << expected.ShortDebugString()
-           << " got: " << actual.ShortDebugString();
-  }
-  return ::testing::AssertionSuccess();
 }
 
 /* static */ ::testing::AssertionResult LiteralTestUtil::Equal(

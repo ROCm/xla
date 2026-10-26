@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,20 +15,30 @@ limitations under the License.
 
 #include "xla/service/layout_normalization.h"
 
-#include <optional>
-#include <utility>
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
-#include "xla/tests/hlo_test_base.h"
-#include "tsl/platform/test.h"
+#include <functional>
+#include <optional>
+
+#include "absl/log/check.h"
+#include "absl/strings/string_view.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/service/scatter_simplifier.h"
 
 namespace xla {
 namespace {
 
-class LayoutNormalizationTest : public HloTestBase {
+class LayoutNormalizationTest : public HloHardwareIndependentTestBase {
  public:
-  void CheckLayoutNormalization(absl::string_view hlo,
-                                std::optional<absl::string_view> expected) {
-    RunAndFilecheckHloRewrite(hlo, LayoutNormalization{}, expected);
+  void CheckLayoutNormalization(
+      absl::string_view hlo, std::optional<absl::string_view> expected,
+      std::function<void(HloModule*)> after_pass_checks = nullptr) {
+    RunAndFilecheckHloRewrite(hlo, LayoutNormalization{}, expected,
+                              after_pass_checks);
   }
 };
 
@@ -47,6 +57,19 @@ ENTRY main {
 // CHECK:  [[abs_2:%[^ ]+]] = f32[4,5]{1,0} abs([[bitcast_1]])
 // CHECK:  ROOT [[bitcast_2_3:%[^ ]+]] = f32[5,4]{0,1} bitcast([[abs_2]])
 )");
+}
+
+TEST_F(LayoutNormalizationTest,
+       TestInstructionsWithNormalizedLayoutAreSkipped) {
+  const char* hlo = R"(
+HloModule module
+
+ENTRY main {
+  p = f32[5,4]{1,0} parameter(0)
+  ROOT o = f32[5,4]{1,0} abs(p)
+}
+)";
+  CheckLayoutNormalization(hlo, /*expected=*/std::nullopt);
 }
 
 TEST_F(LayoutNormalizationTest, TestUnary) {
@@ -132,14 +155,13 @@ HloModule module
 ENTRY main {
   a = f32[5,4]{1,0} parameter(0)
   t = f32[4,5]{0,1} transpose(a), dimensions={1,0}
-  ROOT out = abs(t)
+  ROOT out = f32[4,5]{0,1} abs(t)
 }
 )";
 
   CheckLayoutNormalization(hlo, R"(
 // CHECK: [[a_0:%[^ ]+]] = f32[5,4]{1,0} parameter(0)
-// CHECK: [[bitcast_1:%[^ ]+]] = f32[5,4]{1,0} bitcast([[a_0]])
-// CHECK: [[abs_2:%[^ ]+]] = f32[5,4]{1,0} abs([[bitcast_1]])
+// CHECK: [[abs_2:%[^ ]+]] = f32[5,4]{1,0} abs([[a_0]])
 // CHECK: ROOT [[bitcast_3_3:%[^ ]+]] = f32[4,5]{0,1} bitcast([[abs_2]])
 )");
 }
@@ -175,8 +197,7 @@ ENTRY main {
 
   CheckLayoutNormalization(hlo, R"(
 // CHECK: [[bitcast_0:%[^ ]+]] = f32[1,5,4,3]{3,2,1,0} bitcast([[p_1:%[^ ]+]])
-// CHECK: [[transpose_2:%[^ ]+]] = f32[1,5,4,3]{3,2,1,0} transpose([[bitcast_0]]), dimensions={0,1,2,3}
-// CHECK: [[abs_3:%[^ ]+]] = f32[1,5,4,3]{3,2,1,0} abs([[transpose_2]])
+// CHECK: [[abs_3:%[^ ]+]] = f32[1,5,4,3]{3,2,1,0} abs([[bitcast_0]])
 )");
 }
 
@@ -235,6 +256,24 @@ ENTRY main {
 )");
 }
 
+TEST_F(LayoutNormalizationTest, BroadcastOperandLayoutNotInverseOfItself) {
+  const char* hlo = R"(
+HloModule module
+
+ENTRY main {
+  a = f32[4,3,5]{0,2,1} parameter(0)
+  b = f32[4,3,2,5]{0,1,2,3} broadcast(a), dimensions={0,1,3}
+  ROOT out = abs(b)
+}
+)";
+
+  CheckLayoutNormalization(hlo, R"(
+// CHECK: [[bitcast_1:%[^ ]+]] = f32[3,5,4]{2,1,0} bitcast
+// CHECK: [[broadcast_0:%[^ ]+]] = f32[5,2,3,4]{3,2,1,0} broadcast([[bitcast_1]]), dimensions={2,0,3}
+// CHECK: [[abs_2:%[^ ]+]] = f32[5,2,3,4]{3,2,1,0} abs([[broadcast_0]])
+)");
+}
+
 TEST_F(LayoutNormalizationTest, BroadcastCustomOutputLayout) {
   const char* hlo = R"(
 HloModule module
@@ -242,14 +281,13 @@ HloModule module
 ENTRY main {
   a = f32[2,3]{1,0} parameter(0)
   b = f32[2,4,3]{1,2,0} broadcast(a), dimensions={0,2}
-  ROOT out = abs(b)
+  ROOT out = f32[2,4,3]{1,2,0} abs(b)
 }
 )";
 
   CheckLayoutNormalization(hlo, R"(
 // CHECK: [[a_0:%[^ ]+]] = f32[2,3]{1,0} parameter(0)
-// CHECK: [[bitcast_1:%[^ ]+]] = f32[2,3]{1,0} bitcast([[a_0]])
-// CHECK: [[broadcast_2:%[^ ]+]] = f32[2,3,4]{2,1,0} broadcast([[bitcast_1]]), dimensions={0,1}
+// CHECK: [[broadcast_2:%[^ ]+]] = f32[2,3,4]{2,1,0} broadcast([[a_0]]), dimensions={0,1}
 // CHECK: [[abs_3:%[^ ]+]] = f32[2,3,4]{2,1,0} abs([[broadcast_2]])
 // CHECK: ROOT [[bitcast_3_4:%[^ ]+]] = f32[2,4,3]{1,2,0} bitcast([[abs_3]])
 )");
@@ -262,17 +300,11 @@ HloModule module
 ENTRY main {
   a = f32[2,3]{1,0} parameter(0)
   b = f32[3,4,2]{2,1,0} broadcast(a), dimensions={2,0}
-  ROOT out = abs(b)
+  ROOT out = f32[3,4,2]{2,1,0} abs(b)
 }
 )";
 
-  CheckLayoutNormalization(hlo, R"(
-// CHECK: [[a_0:%[^ ]+]] = f32[2,3]{1,0} parameter(0)
-// CHECK: [[bitcast_1:%[^ ]+]] = f32[2,3]{1,0} bitcast([[a_0]])
-// CHECK: [[broadcast_2:%[^ ]+]] = f32[3,4,2]{2,1,0} broadcast([[bitcast_1]]), dimensions={2,0}
-// CHECK: [[abs_3:%[^ ]+]] = f32[3,4,2]{2,1,0} abs([[broadcast_2]])
-// CHECK: ROOT [[bitcast_3_4:%[^ ]+]] = f32[3,4,2]{2,1,0} bitcast([[abs_3]])
-)");
+  CheckLayoutNormalization(hlo, std::nullopt);
 }
 
 TEST_F(LayoutNormalizationTest, BroadcastCustomOutputLayoutWithDegenerate) {
@@ -282,13 +314,13 @@ HloModule module
 ENTRY main {
   a = f32[9]{0} parameter(0)
   b = f32[2,1,4,9]{2,0,1,3} broadcast(a), dimensions={3}
-  ROOT out = abs(b)
+  ROOT out = f32[2,1,4,9]{2,0,1,3} abs(b)
 }
 )";
 
   CheckLayoutNormalization(hlo, R"(
-// CHECK: [[bitcast_0:%[^ ]+]] = f32[9]{0} bitcast([[a_1:%[^ ]+]])
-// CHECK: [[broadcast_2:%[^ ]+]] = f32[9,1,2,4]{3,2,1,0} broadcast([[bitcast_0]]), dimensions={0}
+// CHECK: [[a:%[^ ]+]] = f32[9]{0} parameter(0)
+// CHECK: [[broadcast_2:%[^ ]+]] = f32[9,1,2,4]{3,2,1,0} broadcast([[a]]), dimensions={0}
 // CHECK: [[abs_3:%[^ ]+]] = f32[9,1,2,4]{3,2,1,0} abs([[broadcast_2]])
 // CHECK: ROOT [[bitcast_3_4:%[^ ]+]] = f32[2,1,4,9]{2,0,1,3} bitcast([[abs_3]])
 )");
@@ -308,6 +340,23 @@ ENTRY main {
   CheckLayoutNormalization(hlo, R"(
 // CHECK:  [[broadcast_0:%[^ ]+]] = f32[1,5,2,1,3,4,1]{6,5,4,3,2,1,0} broadcast([[bitcast_1:%[^ ]+]]), dimensions={1,5,6}
 // CHECK:  [[abs_2:%[^ ]+]] = f32[1,5,2,1,3,4,1]{6,5,4,3,2,1,0} abs([[broadcast_0]])
+)");
+}
+
+TEST_F(LayoutNormalizationTest, IotaCustomOutputLayout) {
+  const char* hlo = R"(
+HloModule module
+
+ENTRY main {
+  a = f32[2,4,3]{1,2,0} iota(), iota_dimension=2
+  ROOT out = abs(a)
+}
+)";
+
+  CheckLayoutNormalization(hlo, R"(
+// CHECK: [[iota_2:%[^ ]+]] = f32[2,3,4]{2,1,0} iota(), iota_dimension=1
+// CHECK: [[abs_3:%[^ ]+]] = f32[2,3,4]{2,1,0} abs([[iota_2]])
+// CHECK: ROOT [[bitcast_3_4:%[^ ]+]] = f32[2,4,3]{1,2,0} bitcast([[abs_3]])
 )");
 }
 
@@ -542,15 +591,53 @@ HloModule module
 
 ENTRY main {
   p = f32[5,4]{0,1} parameter(0)
-  c = f32[5,4]{0,1} constant({...})
+  c = f32[5,4]{0,1} constant({{1,2,3,4},{5,6,7,8},{9,10,11,12},{13,14,15,16},{17,18,19,20}})
   ROOT o = f32[5,4]{0,1} add(p, c)
 }
 )";
   CheckLayoutNormalization(hlo, R"(
 // CHECK: [[p_0:%[^ ]+]] = f32[5,4]{0,1} parameter(0)
 // CHECK-NEXT: [[bitcast_1:%[^ ]+]] = f32[4,5]{1,0} bitcast([[p_0]])
-// CHECK-NEXT: [[constant_2:%[^ ]+]] = f32[4,5]{1,0} constant({...})
+// CHECK-NEXT: [[constant_2:%[^ ]+]] = f32[4,5]{1,0} constant(
+// CHECK-SAME{LITERAL}:                { { 1, 5, 9, 13, 17 }, { 2, 6, 10, 14, 18 }, { 3, 7, 11, 15, 19 }, { 4, 8, 12, 16, 20 } })
 // CHECK-NEXT: [[add_3:%[^ ]+]] = f32[4,5]{1,0} add([[bitcast_1]], [[constant_2]])
+// CHECK-NEXT: ROOT [[bitcast_3_4:%[^ ]+]] = f32[5,4]{0,1} bitcast([[add_3]])
+  )");
+}
+
+TEST_F(LayoutNormalizationTest, ZeroSizedConstant) {
+  const char* hlo = R"(
+  HloModule zero_sized_constant, entry_computation_layout={()->s32[0,179]{0,1}}
+  ENTRY main() -> s32[0,179] {
+    ROOT %constant = s32[0,179]{1,0} constant({  })
+  })";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
+  ASSERT_OK_AND_ASSIGN(auto status, LayoutNormalization().Run(module.get()));
+  EXPECT_FALSE(status);
+}
+
+TEST_F(LayoutNormalizationTest, ConstantAvoidRevisitOfUser) {
+  const char* hlo = R"(
+HloModule module
+
+ENTRY main {
+  c = f32[5,4]{0,1} constant({{1,2,3,4},{5,6,7,8},{9,10,11,12},{13,14,15,16},{17,18,19,20}})
+  s = f32[5,4]{0,1} sine(c)
+  t = f32[5,4]{0,1} tanh(s)
+  ROOT o = f32[5,4]{0,1} add(s, t)
+}
+)";
+  // If we allowed visiting the normalized user 's' of the constant, we would
+  // run into a CHECK failure, because the constant was normalized in-place and
+  // therefore would not be revisited.
+  CheckLayoutNormalization(hlo, R"(
+// CHECK: [[constant_2:%[^ ]+]] = f32[4,5]{1,0} constant(
+// CHECK-SAME{LITERAL}:           { { 1, 5, 9, 13, 17 }, { 2, 6, 10, 14, 18 }, { 3, 7, 11, 15, 19 }, { 4, 8, 12, 16, 20 } })
+// CHECK-NEXT: [[sine:%[^ ]+]] = f32[4,5]{1,0} sine([[constant_2]])
+// CHECK-NEXT: [[bitcast_1:%[^ ]+]] = f32[5,4]{0,1} bitcast([[sine]])
+// CHECK-NEXT: [[bitcast_2:%[^ ]+]] = f32[4,5]{1,0} bitcast([[bitcast_1]])
+// CHECK-NEXT: [[tanh:%[^ ]+]] = f32[4,5]{1,0} tanh([[bitcast_2]])
+// CHECK-NEXT: [[add_3:%[^ ]+]] = f32[4,5]{1,0} add([[bitcast_2]], [[tanh]])
 // CHECK-NEXT: ROOT [[bitcast_3_4:%[^ ]+]] = f32[5,4]{0,1} bitcast([[add_3]])
   )");
 }
@@ -577,10 +664,26 @@ TEST_F(LayoutNormalizationTest, Select) {
 HloModule module
 
 ENTRY main {
-  p0 = f32[1,17,9,9]{1,3,2,0} parameter(0)
-  p1 = f32[1,17,9,9]{1,3,2,0} parameter(1)
-  b = pred[1,17,9,9]{1,3,2,0} parameter(2)
-  ROOT out = f32[1,17,9,9]{1,3,2,0} select(b, p0, p1), metadata={op_name="test"}
+  lhs = f32[1,17,9,9]{1,3,2,0} parameter(0)
+  rhs = f32[1,17,9,9]{1,3,2,0} parameter(1)
+  p = pred[1,17,9,9]{1,3,2,0} parameter(2)
+  ROOT out = f32[1,17,9,9]{1,3,2,0} select(p, lhs, rhs), metadata={op_name="test"}
+}
+)";
+  CheckLayoutNormalization(hlo, R"(
+// CHECK: f32[1,9,9,17]{3,2,1,0} select({{.*}}, {{.*}}, {{.*}}), metadata={op_name="test"}
+)");
+}
+
+TEST_F(LayoutNormalizationTest, SelectScalarPredicate) {
+  const char* hlo = R"(
+HloModule module
+
+ENTRY main {
+  lhs = f32[1,17,9,9]{1,3,2,0} parameter(0)
+  rhs = f32[1,17,9,9]{1,3,2,0} parameter(1)
+  p = pred[] parameter(2)
+  ROOT out = f32[1,17,9,9]{1,3,2,0} select(p, lhs, rhs), metadata={op_name="test"}
 }
 )";
   CheckLayoutNormalization(hlo, R"(
@@ -594,10 +697,10 @@ HloModule module
 
 ENTRY main {
   input = f32[3,4,32]{1,0,2} parameter(0)
-  s1 = s32[] parameter(1)
-  s2 = s32[] parameter(2)
-  s3 = s32[] parameter(3)
-  ROOT out = f32[1,4,32]{1,0,2} dynamic-slice(input, s1, s2, s3), dynamic_slice_sizes={1,4,32}, metadata={op_name="test"}
+  p1 = s32[] parameter(1)
+  p2 = s32[] parameter(2)
+  p3 = s32[] parameter(3)
+  ROOT out = f32[1,4,32]{1,0,2} dynamic-slice(input, p1, p2, p3), dynamic_slice_sizes={1,4,32}, metadata={op_name="test"}
 }
   )";
   CheckLayoutNormalization(hlo, R"(
@@ -611,10 +714,10 @@ HloModule module
 
 ENTRY main {
   input = f32[1,4,32]{1,0,2} parameter(0)
-  s1 = s32[] parameter(1)
-  s2 = s32[] parameter(2)
-  s3 = s32[] parameter(3)
-  ROOT out = f32[1,4,32]{1,0,2} dynamic-slice(input, s1, s2, s3), dynamic_slice_sizes={1,4,32}, metadata={op_name="test"}
+  p1 = s32[] parameter(1)
+  p2 = s32[] parameter(2)
+  p3 = s32[] parameter(3)
+  ROOT out = f32[1,4,32]{1,0,2} dynamic-slice(input, p1, p2, p3), dynamic_slice_sizes={1,4,32}, metadata={op_name="test"}
 }
   )";
   CheckLayoutNormalization(hlo, R"(
@@ -667,10 +770,10 @@ TEST_F(LayoutNormalizationTest, Clamp) {
 HloModule m
 
 ENTRY main {
-  p0 = f32[64,1,32]{1,0,2} parameter(0)
-  p1 = f32[64,1,32]{1,0,2} parameter(1)
-  p2 = f32[64,1,32]{1,0,2} parameter(2)
-  ROOT out = f32[64,1,32]{1,0,2} clamp(f32[64,1,32]{1,0,2} p0, f32[64,1,32]{1,0,2} p1, f32[64,1,32]{1,0,2} p2), metadata={op_name="test"}
+  lb = f32[64,1,32]{1,0,2} parameter(0)
+  in = f32[64,1,32]{1,0,2} parameter(1)
+  ub = f32[64,1,32]{1,0,2} parameter(2)
+  ROOT out = f32[64,1,32]{1,0,2} clamp(f32[64,1,32]{1,0,2} lb, f32[64,1,32]{1,0,2} in, f32[64,1,32]{1,0,2} ub), metadata={op_name="test"}
 }
 )";
 
@@ -679,33 +782,324 @@ ENTRY main {
 )");
 }
 
-TEST_F(LayoutNormalizationTest, BitcastConvertToBiggerType) {
+TEST_F(LayoutNormalizationTest, ClampScalarBounds) {
   const char* hlo = R"(
 HloModule m
 
 ENTRY main {
-  p0 = u32[4,2]{0,1} parameter(0)
-  ROOT out = u64[4]{0} bitcast-convert(u32[4,2]{0,1} p0), metadata={op_name="test"}
+  lb = f32[] parameter(0)
+  in = f32[64,1,32]{1,0,2} parameter(1)
+  ub = f32[] parameter(2)
+  ROOT out = f32[64,1,32]{1,0,2} clamp(f32[] lb, f32[64,1,32]{1,0,2} in, f32[] ub), metadata={op_name="test"}
 }
 )";
 
   CheckLayoutNormalization(hlo, R"(
-// CHECK: bitcast-convert({{.*}}), metadata={op_name="test"}
+// CHECK: f32[32,64,1]{2,1,0} clamp({{.*}}, {{.*}}, {{.*}}), metadata={op_name="test"}
 )");
 }
 
-TEST_F(LayoutNormalizationTest, BitcastConvertToSmallerType) {
+TEST_F(LayoutNormalizationTest, ClampScalarLb) {
   const char* hlo = R"(
 HloModule m
 
 ENTRY main {
-  p0 = u64[4]{0} parameter(0)
-  ROOT out = u32[4,2]{0,1} bitcast-convert(u64[4]{0} p0), metadata={op_name="test"}
+  lb = f32[] parameter(0)
+  in = f32[64,1,32]{1,0,2} parameter(1)
+  ub = f32[64,1,32]{1,0,2} parameter(2)
+  ROOT out = f32[64,1,32]{1,0,2} clamp(f32[] lb, f32[64,1,32]{1,0,2} in, f32[64,1,32]{1,0,2} ub), metadata={op_name="test"}
 }
 )";
 
   CheckLayoutNormalization(hlo, R"(
-// CHECK: bitcast-convert({{.*}}), metadata={op_name="test"}
+// CHECK: f32[32,64,1]{2,1,0} clamp({{.*}}, {{.*}}, {{.*}}), metadata={op_name="test"}
+)");
+}
+
+TEST_F(LayoutNormalizationTest,
+       BitcastConvertToWiderTypeGetsDefaultOutputLayout) {
+  CheckLayoutNormalization(R"(
+e {
+  a = u32[3,5,2]{2,0,1} parameter(0)
+  b = u64[3,5]{0,1} bitcast-convert(a)
+})",
+                           R"(
+CHECK: u32[3,5,2]{2,0,1} parameter(0)
+CHECK-NEXT: u32[5,3,2]{2,1,0} bitcast
+CHECK-NEXT: u64[5,3]{1,0} bitcast-convert
+CHECK-NEXT: u64[3,5]{0,1} bitcast
+)");
+}
+
+TEST_F(LayoutNormalizationTest,
+       BitcastConvertToNarrowerTypeGetsDefaultOutputLayout) {
+  CheckLayoutNormalization(R"(
+e {
+  a = u64[3,5]{0,1} parameter(0)
+  b = u32[3,5,2]{2,0,1} bitcast-convert(a)
+})",
+                           R"(
+CHECK: u64[3,5]{0,1} parameter(0)
+CHECK-NEXT: u64[5,3]{1,0} bitcast
+CHECK-NEXT: u32[5,3,2]{2,1,0} bitcast-convert
+CHECK-NEXT: u32[3,5,2]{2,0,1} bitcast
+)");
+}
+
+TEST_F(LayoutNormalizationTest,
+       BitcastConvertFromNonContiguousDimensionIsNotNormalized) {
+  CheckLayoutNormalization(R"(
+e {
+a = u32[3,5,2]{0,2,1} parameter(0)
+b = u64[3,5]{0,1} bitcast-convert(a)
+})",
+                           R"(
+CHECK: u32[3,5,2]{0,2,1} parameter(0)
+CHECK-NEXT: u32[5,2,3]{2,1,0} bitcast
+CHECK-NEXT: u32[3,5,2]{0,2,1} bitcast
+CHECK-NEXT: u64[3,5]{0,1} bitcast-convert
+)");
+}
+
+TEST_F(LayoutNormalizationTest, Scatter) {
+  const char* hlo = R"(
+HloModule simplified_scatter
+
+region_0.10 {
+  Arg_0.11 = s16[] parameter(0)
+  Arg_1.12 = s16[] parameter(1)
+  ROOT maximum.13 = s16[] maximum(Arg_0.11, Arg_1.12)
+}
+
+ENTRY main.17 {
+  p0 = s16[3,2,2,14,16]{0,1,4,3,2} parameter(0)
+  p1 = s32[2,11]{0,1} parameter(1)
+  p2 = s16[11,3,5]{2,0,1} parameter(2)
+  ROOT scatter = s16[3,2,2,14,16]{0,1,4,3,2} scatter(p0, p1, p2), update_window_dims={1,2}, inserted_window_dims={1,2,3}, scatter_dims_to_operand_dims={4,0}, index_vector_dim=0, to_apply=region_0.10
+}
+)";
+
+  CheckLayoutNormalization(hlo, R"(
+// CHECK: scatter({{.*}}),
+// CHECK-SAME: update_window_dims={2,0}, inserted_window_dims={0,1,3}, scatter_dims_to_operand_dims={2,4}, index_vector_dim=1, to_apply=%region_0.10
+)",
+                           // Run the ScatterSimplifier afterwards, otherwise
+                           // the verifier will complain!
+                           [](HloModule* module) {
+                             CHECK_OK(ScatterSimplifier().Run(module).status());
+                           });
+}
+
+TEST_F(LayoutNormalizationTest, SimplifiedScatter) {
+  const char* hlo = R"(
+HloModule simplified_scatter
+
+region_0.10 {
+  Arg_0.11 = s16[] parameter(0)
+  Arg_1.12 = s16[] parameter(1)
+  ROOT maximum.13 = s16[] maximum(Arg_0.11, Arg_1.12)
+}
+
+ENTRY main.17 {
+  p0 = s16[16,3,2,2,14]{0,4,3,2,1} parameter(0)
+  p1 = s32[528,2]{1,0} parameter(1)
+  p2 = s16[528,5,3,1,1,1]{1,2,0,5,4,3} parameter(2)
+  ROOT scatter = s16[16,3,2,2,14]{0,4,3,2,1} scatter(p0, p1, p2), update_window_dims={1,2,3,4,5}, inserted_window_dims={}, scatter_dims_to_operand_dims={0,1}, index_vector_dim=1, to_apply=region_0.10
+}
+)";
+
+  CheckLayoutNormalization(hlo, R"(
+// CHECK: scatter({{.*}}),
+// CHECK-SAME: update_window_dims={4,0,1,2,5}, inserted_window_dims={}, scatter_dims_to_operand_dims={4,0}, index_vector_dim=1, to_apply=%region_0.10
+)",
+                           // Run the ScatterSimplifier afterwards, otherwise
+                           // the verifier will complain!
+                           [](HloModule* module) {
+                             CHECK_OK(ScatterSimplifier().Run(module).status());
+                           });
+}
+
+TEST_F(LayoutNormalizationTest, VariadicScatter) {
+  const char* hlo = R"(
+HloModule simplified_scatter
+
+region_0.10 {
+  Arg_0.11 = s16[] parameter(0)
+  Arg_1.12 = s16[] parameter(1)
+  Arg_2.13 = s16[] parameter(2)
+  Arg_3.14 = s16[] parameter(3)
+  maximum.15 = s16[] maximum(Arg_0.11, Arg_1.12)
+  maximum.16 = s16[] maximum(Arg_2.13, Arg_3.14)
+  ROOT res = (s16[], s16[]) tuple(maximum.15, maximum.16)
+}
+
+ENTRY main.17 {
+  p0 = s16[16,3,2,2,14]{0,4,3,2,1} parameter(0)
+  p1 = s16[16,3,2,2,14]{0,4,3,2,1} parameter(1)
+  p2 = s32[528,2]{1,0} parameter(2)
+  p3 = s16[528,5,3,1,1,1]{1,2,0,5,4,3} parameter(3)
+  p4 = s16[528,5,3,1,1,1]{1,2,0,5,4,3} parameter(4)
+  ROOT scatter = (s16[16,3,2,2,14]{0,4,3,2,1}, s16[16,3,2,2,14]{0,4,3,2,1}) scatter(p0, p1, p2, p3, p4), update_window_dims={1,2,3,4,5}, inserted_window_dims={}, scatter_dims_to_operand_dims={0,1}, index_vector_dim=1, to_apply=region_0.10
+}
+)";
+
+  CheckLayoutNormalization(hlo, R"(
+// CHECK: scatter({{.*}}),
+// CHECK-SAME: update_window_dims={4,0,1,2,5}, inserted_window_dims={}, scatter_dims_to_operand_dims={4,0}, index_vector_dim=1, to_apply=%region_0.10
+)",
+                           // Run the ScatterSimplifier afterwards, otherwise
+                           // the verifier will complain!
+                           [](HloModule* module) {
+                             CHECK_OK(ScatterSimplifier().Run(module).status());
+                           });
+}
+
+TEST_F(LayoutNormalizationTest, CompareInt4) {
+  const char* hlo = R"(
+HloModule module
+
+ENTRY main {
+  a = s4[10,11]{0,1:E(4)} parameter(0)
+  b = s4[10,11]{0,1:E(4)} parameter(1)
+  ROOT out = pred[10,11]{0,1} compare(a, b), direction=EQ
+}
+)";
+
+  CheckLayoutNormalization(hlo, R"(
+// CHECK: pred[11,10]{1,0} compare({{.*}})
+)");
+}
+
+TEST_F(LayoutNormalizationTest, RegressionJaxB25759) {
+  const char* hlo = R"(
+HloModule repro
+
+ENTRY main {
+  p0 = f32[2,3,2,2]{2,1,3,0} parameter(0)
+  p1 = f32[2,2,2,3] parameter(1)
+  transpose = f32[2,3,2,2]{2,1,3,0} transpose(p1), dimensions={0,3,1,2}
+  ROOT multiply = f32[2,3,2,2]{2,1,3,0} multiply(p0, transpose)
+})";
+
+  CheckLayoutNormalization(hlo, R"(
+// CHECK: %[[TRANSPOSE:.*]] = f32[2,2,3,2]{3,2,1,0} transpose
+// CHECK: multiply({{.*}}, %[[TRANSPOSE]])
+)");
+}
+
+TEST_F(LayoutNormalizationTest,
+       CustomCallTransformerModifiesInPlaceAndReturnsNullopt) {
+  const char* hlo = R"(
+HloModule module
+
+ENTRY main {
+  p0 = f32[2,2]{1,0} parameter(0)
+  ROOT custom-call = (f32[2,2]{1,0}) custom-call(p0), custom_call_target="foo"
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
+
+  CustomCallTransformer transformer = [](HloCustomCallInstruction* instruction)
+      -> absl::StatusOr<std::optional<HloInstruction*>> {
+    instruction->set_custom_call_target("bar");
+    return std::nullopt;
+  };
+
+  LayoutNormalization layout_normalization(transformer);
+  ASSERT_OK_AND_ASSIGN(bool changed, layout_normalization.Run(module.get()));
+
+  EXPECT_TRUE(changed);
+
+  // Verify the change actually happened
+  HloInstruction* root = module->entry_computation()->root_instruction();
+  EXPECT_EQ(root->custom_call_target(), "bar");
+}
+
+TEST_F(LayoutNormalizationTest, GetTupleElementDoesNotTriggerChange) {
+  const char* hlo = R"(
+HloModule module
+
+ENTRY main {
+  p0 = f32[2,2]{1,0} parameter(0)
+  tuple = (f32[2,2]{1,0}) tuple(p0)
+  ROOT gte = f32[2,2]{1,0} get-tuple-element(tuple), index=0
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
+
+  LayoutNormalization layout_normalization;
+  ASSERT_OK_AND_ASSIGN(bool changed, layout_normalization.Run(module.get()));
+
+  EXPECT_FALSE(changed);
+}
+
+TEST_F(LayoutNormalizationTest, Convolution) {
+  const char* hlo = R"(
+HloModule m
+
+ENTRY main {
+  p0 = f32[2,3,3,1]{1,2,3,0} parameter(0)
+  p1 = f32[1,1,1,32]{3,2,1,0} parameter(1)
+  ROOT conv = f32[2,3,3,32]{1,2,3,0} convolution(p0, p1), window={size=1x1}, dim_labels=b01f_01io->b01f
+}
+)";
+  CheckLayoutNormalization(hlo, R"(
+// CHECK: %[[P0:.*]] = f32[2,3,3,1]{1,2,3,0} parameter(0)
+// CHECK: %[[OP0:.*]] = f32[2,1,3,3]{3,2,1,0} bitcast(%[[P0]])
+// CHECK: %[[P1:.*]] = f32[1,1,1,32]{3,2,1,0} parameter(1)
+// CHECK: %[[CONV:.*]] = f32[2,32,3,3]{3,2,1,0} convolution({{.*}}, %[[P1]]), window={size=1x1}, dim_labels=bf10_01io->bf10
+// CHECK: f32[2,3,3,32]{1,2,3,0} bitcast(%[[CONV]])
+)");
+}
+
+TEST_F(LayoutNormalizationTest, ConvolutionRank3) {
+  const char* hlo = R"(
+HloModule m
+
+ENTRY main {
+  p0 = f32[2,3,1]{1,2,0} parameter(0)
+  p1 = f32[1,1,32]{2,1,0} parameter(1)
+  ROOT conv = f32[2,3,32]{1,2,0} convolution(p0, p1), window={size=1}, dim_labels=b0f_0io->b0f
+}
+)";
+  CheckLayoutNormalization(hlo, R"(
+// CHECK: %[[OP0:.*]] = f32[2,1,3]{2,1,0} bitcast
+// CHECK: %[[CONV:.*]] = f32[2,32,3]{2,1,0} convolution({{.*}}, %[[P1:.*]]), window={size=1}, dim_labels=bf0_0io->bf0
+// CHECK: f32[2,3,32]{1,2,0} bitcast(%[[CONV]])
+)");
+}
+
+TEST_F(LayoutNormalizationTest, ConvolutionRank5) {
+  const char* hlo = R"(
+HloModule m
+
+ENTRY main {
+  p0 = f32[2,3,4,5,1]{1,2,3,4,0} parameter(0)
+  p1 = f32[1,1,1,1,32]{4,3,2,1,0} parameter(1)
+  ROOT conv = f32[2,3,4,5,32]{1,2,3,4,0} convolution(p0, p1), window={size=1x1x1}, dim_labels=b012f_012io->b012f
+}
+)";
+  CheckLayoutNormalization(hlo, R"(
+// CHECK: %[[OP0:.*]] = f32[2,1,5,4,3]{4,3,2,1,0} bitcast
+// CHECK: %[[CONV:.*]] = f32[2,32,5,4,3]{4,3,2,1,0} convolution({{.*}}, %[[P1:.*]]), window={size=1x1x1}, dim_labels=bf210_012io->bf210
+// CHECK: f32[2,3,4,5,32]{1,2,3,4,0} bitcast(%[[CONV]])
+)");
+}
+
+TEST_F(LayoutNormalizationTest, ConvolutionWithFilterNormalization) {
+  const char* hlo = R"(
+HloModule m
+
+ENTRY main {
+  p0 = f32[2,3,3,1]{3,2,1,0} parameter(0)
+  p1 = f32[1,1,1,32]{0,1,2,3} parameter(1)
+  ROOT conv = f32[2,3,3,32]{3,2,1,0} convolution(p0, p1), window={size=1x1}, dim_labels=b01f_01io->b01f
+}
+)";
+  CheckLayoutNormalization(hlo, R"(
+// CHECK: %[[P1:.*]] = f32[1,1,1,32]{0,1,2,3} parameter(1)
+// CHECK: %[[OP1:.*]] = f32[32,1,1,1]{3,2,1,0} bitcast(%[[P1]])
+// CHECK: %[[CONV:.*]] = f32[2,3,3,32]{3,2,1,0} convolution(%[[P0:.*]], {{.*}}), window={size=1x1}, dim_labels=b01f_oi10->b01f
 )");
 }
 

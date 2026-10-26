@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,105 +13,254 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <memory>
-#include <utility>
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
-#include "xla/service/gpu/nvptx_compiler.h"
-#include "xla/tests/hlo_test_base.h"
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "absl/strings/escaping.h"
+#include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/Support/raw_ostream.h"
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/MLIRContext.h"
+#include "riegeli/bytes/string_writer.h"
+#include "xla/backends/gpu/codegen/triton/support.h"
+#include "xla/backends/gpu/tests/hlo_pjrt_gpu_test_base.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/literal.h"
+#include "xla/literal_util.h"
+#include "xla/pjrt/proto/compile_options.pb.h"
+#include "xla/service/compiled_module.h"
+#include "xla/service/compiler.h"
+#include "xla/service/executable.h"
+#include "xla/service/gpu/gpu_executable.h"
+#include "xla/service/gpu_topology.h"
+#include "xla/service/hlo_runner_interface.h"
+#include "xla/tests/literal_test_util.h"
+#include "xla/util/split_proto/split_executable_and_options_writer.h"
+#include "xla/xla.pb.h"
 
 namespace xla {
 namespace gpu {
+using ::testing::IsEmpty;
+using ::testing::Not;
 
-using GpuAotCompilationTest = HloTestBase;
+class GpuAotCompilationTest : public HloPjRtGpuTestBase {
+ protected:
+  void SetUp() override {
+    HloPjRtGpuTestBase::SetUp();
+    debug_options_ = GetDebugOptionsForTest();
+  }
 
-TEST_F(GpuAotCompilationTest, LoadExecutableFromAotCompilation) {
-  const absl::string_view hlo_string = R"(
-HloModule Test
+  DebugOptions debug_options_;
+};
 
-ENTRY main {
-  a = f32[100, 200]{1,0} parameter(0)
-  ROOT b = f32[100, 200]{0,1} copy(a)
-}
-)";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(hlo_string));
+TEST_F(GpuAotCompilationTest, ExportAndLoadExecutable) {
+  const absl::string_view hlo_string = R"hlo(
+    HloModule Test
 
-  NVPTXCompiler compiler;
-  TF_ASSERT_OK_AND_ASSIGN(se::Platform * platform,
-                          se::MultiPlatformManager::PlatformWithName("cuda"));
-  TF_ASSERT_OK_AND_ASSIGN(se::StreamExecutor * stream_exec,
-                          platform->ExecutorForDevice(0));
+    ENTRY main {
+      a = f32[100, 200]parameter(0)
+      ROOT b = f32[100, 200] copy(a)
+    }
+)hlo";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_string));
 
   // Compile AOT.
-  auto module_group = std::make_unique<HloModuleGroup>(std::move(module));
-  AotCompilationOptions aot_options(compiler.PlatformId());
-  aot_options.set_executor(stream_exec);
-  TF_ASSERT_OK_AND_ASSIGN(
-      std::vector<std::unique_ptr<AotCompilationResult>> aot_results,
-      compiler.CompileAheadOfTime(std::move(module_group), aot_options));
+  AotCompilationOptions aot_options(stream_executor_platform_id());
+  aot_options.set_gpu_topology(
+      GetSingleDeviceGpuTopology("", gpu_target_config()));
+
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<std::unique_ptr<CompiledModule>> aot_results,
+      compiler()->CompileAheadOfTime(std::move(module), aot_options));
 
   // Serialize-deserialize AOT compilation result.
-  TF_ASSERT_OK_AND_ASSIGN(std::string serialized_aot_result,
-                          aot_results[0]->SerializeAsString());
-  TF_ASSERT_OK_AND_ASSIGN(
-      std::unique_ptr<AotCompilationResult> aot_result,
-      compiler.LoadAotCompilationResult(serialized_aot_result));
+  ASSERT_OK_AND_ASSIGN(std::string serialized_aot_result,
+                       aot_results[0]->SerializeAsString());
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<CompiledModule> aot_result,
+      compiler()->LoadAotCompilationResult(serialized_aot_result));
 
   // Load Executable from AOT compilation result.
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<Executable> executable,
-                          aot_result->LoadExecutable(&compiler, stream_exec));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Executable> executable,
+      std::move(*aot_result)
+          .LoadExecutable(stream_executor_platform_id(), device_description(),
+                          debug_options_));
+
+  auto* gpu_executable = dynamic_cast<GpuExecutable*>(executable.get());
+  ASSERT_NE(gpu_executable, nullptr);
+  EXPECT_THAT(gpu_executable->buffer_allocations_debug_summary(),
+              Not(IsEmpty()));
 }
 
 TEST_F(GpuAotCompilationTest, AotCompilationWithoutGpuDevice) {
-  const absl::string_view hlo_string = R"(
-HloModule Test
+  const absl::string_view hlo_string = R"hlo(
+    HloModule Test
 
-ENTRY main {
-  a = f32[100, 200]{1,0} parameter(0)
-  ROOT b = f32[100, 200]{0,1} copy(a)
-}
-)";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(hlo_string));
-
-  NVPTXCompiler compiler;
-  TF_ASSERT_OK_AND_ASSIGN(se::Platform * platform,
-                          se::MultiPlatformManager::PlatformWithName("cuda"));
-  TF_ASSERT_OK_AND_ASSIGN(se::StreamExecutor * stream_exec,
-                          platform->ExecutorForDevice(0));
-
-  auto module_group = std::make_unique<HloModuleGroup>(std::move(module));
-
-  const stream_executor::DeviceDescription& device_description =
-      stream_exec->GetDeviceDescription();
-  stream_executor::CudaComputeCapability cuda_compute_capability =
-      device_description.cuda_compute_capability();
-  stream_executor::RocmComputeCapability rocm_compute_capability =
-      device_description.rocm_compute_capability();
+    ENTRY main {
+      a = f32[100, 200] parameter(0)
+      ROOT b = f32[100, 200] copy(a)
+    }
+)hlo";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_string));
 
   // Stream executor is not passed as an option.
-  GpuTargetConfig gpu_target_config;
-  gpu_target_config.gpu_device_info = GetGpuDeviceInfo(stream_exec);
-  gpu_target_config.gpu_version = cuda_compute_capability;
-  gpu_target_config.platform_name = stream_exec->platform()->Name();
+  AotCompilationOptions aot_options(stream_executor_platform_id());
+  aot_options.set_gpu_topology(
+      GetSingleDeviceGpuTopology("", gpu_target_config()));
 
-  AotCompilationOptions aot_options(compiler.PlatformId());
-  aot_options.set_target_config(gpu_target_config);
-
-  TF_ASSERT_OK_AND_ASSIGN(
-      std::vector<std::unique_ptr<AotCompilationResult>> aot_results,
-      compiler.CompileAheadOfTime(std::move(module_group), aot_options));
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<std::unique_ptr<CompiledModule>> aot_results,
+      compiler()->CompileAheadOfTime(std::move(module), aot_options));
 
   // Serialize-deserialize AOT compilation result.
-  TF_ASSERT_OK_AND_ASSIGN(std::string serialized_aot_result,
-                          aot_results[0]->SerializeAsString());
-  TF_ASSERT_OK_AND_ASSIGN(
-      std::unique_ptr<AotCompilationResult> aot_result,
-      compiler.LoadAotCompilationResult(serialized_aot_result));
+  ASSERT_OK_AND_ASSIGN(std::string serialized_aot_result,
+                       aot_results[0]->SerializeAsString());
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<CompiledModule> aot_result,
+      compiler()->LoadAotCompilationResult(serialized_aot_result));
 
   // Load Executable from AOT compilation result.
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<Executable> executable,
-                          aot_result->LoadExecutable(&compiler, stream_exec));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Executable> executable,
+      std::move(*aot_result)
+          .LoadExecutable(stream_executor_platform_id(), device_description(),
+                          debug_options_));
+}
+
+namespace {
+
+using ::mlir::ArrayRef;
+using ::mlir::NamedAttribute;
+
+std::string CreateTritonCustomCallBackendConfig() {
+  mlir::MLIRContext context_;
+  mlir::Builder builder(&context_);
+
+  // Create the backend_config for the triton custom call.
+  const std::string kMLIRText = R"mlir(
+    module {
+      tt.func public @add_one(%arg0: !tt.ptr<f32> {tt.divisibility = 32 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 32 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 32 : i32}, %arg3: !tt.ptr<f32> {tt.divisibility = 32 : i32}) {
+        %0 = tt.get_program_id x : i32
+        %1 = tt.load %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<f32>
+        %2 = tt.load %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<f32>
+        %cst = arith.constant 1.000000e+00 : f32
+        %3 = arith.addf %1, %cst : f32
+        tt.store %arg2, %3 {cache = 1 : i32, evict = 1 : i32} : !tt.ptr<f32>
+        tt.store %arg3, %2 {cache = 1 : i32, evict = 1 : i32} : !tt.ptr<f32>
+        tt.return
+      }
+    }
+  )mlir";
+
+  NamedAttribute name =
+      builder.getNamedAttr("name", builder.getStringAttr("add_one"));
+  NamedAttribute ir =
+      builder.getNamedAttr("ir", builder.getStringAttr(kMLIRText));
+  NamedAttribute num_stages =
+      builder.getNamedAttr("num_stages", builder.getI32IntegerAttr(3));
+  NamedAttribute num_warps =
+      builder.getNamedAttr("num_warps", builder.getI32IntegerAttr(4));
+  NamedAttribute grid_x =
+      builder.getNamedAttr("grid_x", builder.getI32IntegerAttr(1));
+  NamedAttribute grid_y =
+      builder.getNamedAttr("grid_y", builder.getI32IntegerAttr(1));
+  NamedAttribute grid_z =
+      builder.getNamedAttr("grid_z", builder.getI32IntegerAttr(1));
+  NamedAttribute debug =
+      builder.getNamedAttr("debug", builder.getBoolAttr(false));
+
+  std::vector<NamedAttribute> attributes = {
+      name, ir, num_stages, num_warps, grid_x, grid_y, grid_z, debug};
+  ArrayRef<NamedAttribute> attributesRef(attributes);
+  mlir::DictionaryAttr backend_config =
+      mlir::DictionaryAttr::get(&context_, attributesRef);
+
+  // Parse the backend_config into a string.
+  std::string backend_config_str;
+  llvm::raw_string_ostream(backend_config_str) << backend_config;
+
+  return backend_config_str;
+}
+
+}  // namespace
+
+TEST_F(GpuAotCompilationTest, ExportAndLoadExecutableWithTriton) {
+  auto triton_support = EnsureTritonSupportsComputeCapability(
+      device_description().gpu_compute_capability());
+  if (!triton_support.ok()) {
+    GTEST_SKIP() << triton_support;
+  }
+
+  const absl::string_view hlo_string_template = R"hlo(
+    HloModule Test
+
+    ENTRY main {
+    a = f32[] parameter(0)
+    b = f32[] parameter(1)
+    ROOT c = (f32[],f32[]) custom-call(a, b), custom_call_target="__gpu$xla.gpu.triton", backend_config="%s"
+    }
+    )hlo";
+
+  std::string hlo_string =
+      absl::StrFormat(hlo_string_template,
+                      absl::CEscape(CreateTritonCustomCallBackendConfig()));
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(hlo_string));
+
+  // Compile AOT.
+  AotCompilationOptions aot_options(stream_executor_platform_id());
+  aot_options.set_gpu_topology(
+      GetSingleDeviceGpuTopology("", gpu_target_config()));
+
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<std::unique_ptr<CompiledModule>> aot_results,
+      compiler()->CompileAheadOfTime(std::move(module), aot_options));
+
+  // Serialize-deserialize AOT compilation result.
+  ASSERT_OK_AND_ASSIGN(std::string serialized_aot_result,
+                       aot_results[0]->SerializeAsString());
+
+  // Load and execute via PjRt test runner.
+  ExecutableAndOptionsProto proto;
+  *proto.mutable_serialized_executable() = std::move(serialized_aot_result);
+  proto.set_pjrt_client_name("PjRtStreamExecutorClient");
+  proto.mutable_compile_options()
+      ->mutable_executable_build_options()
+      ->set_num_replicas(1);
+  proto.mutable_compile_options()
+      ->mutable_executable_build_options()
+      ->set_num_partitions(1);
+  std::string serialized_split_proto;
+  ASSERT_OK(WriteSplitExecutableAndOptions(
+      proto,
+      std::make_unique<riegeli::StringWriter<>>(&serialized_split_proto)));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<OpaqueExecutable> executable,
+      test_runner().DeserializeExecutable(serialized_split_proto));
+
+  const xla::Literal literal_1 = xla::LiteralUtil::CreateR0<float>(1.0f);
+  const xla::Literal literal_2 = xla::LiteralUtil::CreateR0<float>(2.0f);
+  const xla::Literal literal_3 = xla::LiteralUtil::CreateR0<float>(3.0f);
+
+  ASSERT_OK_AND_ASSIGN(Literal result,
+                       test_runner().ExecuteWithExecutable(
+                           executable.get(), {&literal_1, &literal_3}));
+
+  EXPECT_TRUE(LiteralTestUtil::Equal(
+      LiteralUtil::MakeTuple({&literal_2, &literal_3}), result));
 }
 
 }  // namespace gpu

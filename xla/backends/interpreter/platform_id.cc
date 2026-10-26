@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,10 +14,12 @@ limitations under the License.
 ==============================================================================*/
 #include "xla/backends/interpreter/platform_id.h"
 
+#include "xla/stream_executor/platform_id.h"
+
 namespace stream_executor {
 namespace interpreter {
 
-PLATFORM_DEFINE_ID(kXlaInterpreterPlatformId);
+PLATFORM_DEFINE_ID(kXlaInterpreterPlatformId, Interpreter);
 
 }  // namespace interpreter
 }  // namespace stream_executor

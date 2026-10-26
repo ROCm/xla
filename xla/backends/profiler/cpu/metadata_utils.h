@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,11 +16,11 @@ limitations under the License.
 #ifndef XLA_BACKENDS_PROFILER_CPU_METADATA_UTILS_H_
 #define XLA_BACKENDS_PROFILER_CPU_METADATA_UTILS_H_
 
-#include "xla/service/hlo.pb.h"
-#include "tsl/profiler/convert/xla_op_utils.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
-#include "tsl/profiler/utils/xplane_builder.h"
-#include "tsl/profiler/utils/xplane_schema.h"
+#include "xla/service/hlo.pb.h"
+#include "xla/tsl/profiler/convert/xla_op_utils.h"
+#include "xla/tsl/profiler/utils/xplane_builder.h"
+#include "xla/tsl/profiler/utils/xplane_schema.h"
 
 namespace xla {
 namespace profiler {
@@ -30,23 +30,28 @@ class MetadataXPlaneBuilder {
   explicit MetadataXPlaneBuilder(tsl::profiler::XPlane* raw_plane)
       : plane_(raw_plane),
         hlo_proto_stat_(plane_.GetOrCreateStatMetadata(
-            GetStatTypeStr(tsl::profiler::StatType::kHloProto))) {}
+            GetStatTypeStr(tsl::profiler::StatType::kHloProto))),
+        program_id_stat_(plane_.GetOrCreateStatMetadata(
+            GetStatTypeStr(tsl::profiler::StatType::kProgramId))) {}
 
   void AddHloProto(uint64_t program_id, const xla::HloProto& hlo_proto) {
+    auto name = tsl::profiler::HloModuleNameWithProgramId(
+        hlo_proto.hlo_module().name(), program_id);
     tsl::profiler::XEventMetadata* event_metadata =
-        plane_.GetOrCreateEventMetadata(program_id);
-    if (event_metadata->name().empty()) {
-      event_metadata->set_name(tsl::profiler::HloModuleNameWithProgramId(
-          hlo_proto.hlo_module().name(), program_id));
+        plane_.GetOrCreateEventMetadata(name);
+    if (event_metadata->display_name().empty()) {
+      event_metadata->set_display_name(name);
       tsl::profiler::XStatsBuilder<tsl::profiler::XEventMetadata> event_stats(
           event_metadata, &plane_);
       event_stats.AddStatValue(*hlo_proto_stat_, hlo_proto);
+      event_stats.AddStatValue(*program_id_stat_, program_id);
     }
   }
 
  private:
   tsl::profiler::XPlaneBuilder plane_;
   const tsl::profiler::XStatMetadata* hlo_proto_stat_ = nullptr;
+  const tsl::profiler::XStatMetadata* program_id_stat_ = nullptr;
 };
 
 }  // namespace profiler

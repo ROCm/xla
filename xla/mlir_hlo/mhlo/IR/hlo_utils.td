@@ -1,4 +1,4 @@
-/* Copyright 2019 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2019 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,14 +24,15 @@ include "mlir/IR/PatternBase.td"
 def NullArrayAttr : NativeCodeCall<"ArrayAttr()">;
 
 def NullChannelHandleAttr : NativeCodeCall<"mhlo::ChannelHandleAttr()">;
+def StableHLO_NullChannelHandleAttr : NativeCodeCall<"stablehlo::ChannelHandleAttr()">;
 
-def CastIntElementsAttr : NativeCodeCall<"$0.cast<DenseIntElementsAttr>()">;
+def CastIntElementsAttr : NativeCodeCall<"cast<DenseIntElementsAttr>($0)">;
 
 class ConstantSplat<string value> : NativeCodeCall<
     "hlo::getSplat(&$_builder, $0, " # value # ")">;
 
-class MHLO_ConstantLike<string value> : NativeCodeCall<
-    "chlo::getConstantLike($_builder, $_loc, " # value # ", $0)">;
+class StableHLO_ConstantLike<string value> : NativeCodeCall<
+    "::mlir::stablehlo::getConstantLike($_builder, $_loc, " # value # ", $0)">;
 
 def MHLO_ConstantLikeMaxFiniteValue : NativeCodeCall<
     "chlo::getConstantLikeMaxFiniteValue($_builder, $_loc, $0)">;
@@ -43,6 +44,8 @@ def MHLO_ConstantLikeNegInfValue : NativeCodeCall<
     "chlo::getConstantLikeInfValue($_builder, $_loc, $0, /*negative=*/true)">;
 
 def NullDenseIntElementsAttr : NativeCodeCall<"DenseIntElementsAttr()">;
+
+def NullDenseI64ArrayAttr : NativeCodeCall<"DenseI64ArrayAttr()">;
 
 def BinBroadcastDimensions : NativeCodeCall<
     "hlo::getBroadcastDimensionsAttr(&$_builder, $0, $1)">;
@@ -60,11 +63,11 @@ def IdentityBroadcastDims : AttrConstraint<
     CPred<"hlo::isSequenceStartingWith0($_self)">>;
 
 def ComplexElementType : Type<
-  CPred<"$_self.cast<ShapedType>().getElementType().isa<ComplexType>()">,
+  CPred<"isa<ComplexType>(cast<ShapedType>($_self).getElementType())">,
   "Complex element type">;
 
 def NonComplexElementType : Type<
-  CPred<"!$_self.cast<ShapedType>().getElementType().isa<ComplexType>()">,
+  CPred<"!isa<ComplexType>(cast<ShapedType>($_self).getElementType())">,
   "Non-complex element type">;
 
 #endif // MLIR_HLO_DIALECT_MHLO_IR_HLO_UTILS

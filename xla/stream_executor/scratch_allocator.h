@@ -1,4 +1,4 @@
-/* Copyright 2015 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2015 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,20 +16,22 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_SCRATCH_ALLOCATOR_H_
 #define XLA_STREAM_EXECUTOR_SCRATCH_ALLOCATOR_H_
 
+#include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <utility>
 
 #include "absl/container/inlined_vector.h"
-#include "xla/stream_executor/device_memory.h"
-#include "xla/stream_executor/device_memory_allocator.h"
-#include "xla/stream_executor/platform/port.h"
-#include "xla/stream_executor/temporary_device_memory.h"
-#include "tsl/platform/statusor.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/device_address_allocator.h"
+#include "xla/stream_executor/stream.h"
 
 namespace stream_executor {
-
-class Stream;
 
 // Interface for "scratch" allocator for device memory, which deallocates all
 // buffers it has allocated at destruction. Returned memory pointers are not
@@ -39,7 +41,7 @@ class Stream;
 // optionally request scratch space to speed up the operation.
 class ScratchAllocator {
  public:
-  virtual ~ScratchAllocator() {}
+  virtual ~ScratchAllocator() = default;
 
   // Returns a limit of memory this scratch allocator wants to produce, in
   // bytes. This information may be used to help select an algorithm.
@@ -51,31 +53,8 @@ class ScratchAllocator {
   //
   // This is a temporary allocation, and the caller is responsible for
   // deallocating at some known-safe point. See the class comment above.
-  virtual tsl::StatusOr<DeviceMemory<uint8_t>> AllocateBytes(
+  virtual absl::StatusOr<DeviceAddress<uint8_t>> AllocateBytes(
       int64_t byte_size) = 0;
-};
-
-// Allocates a single temporary memory allocation -- this memory is deallocated
-// at the next stream synchronization point after this object has gone out of
-// scope. This satisfies the lifetime and deallocation properties given in the
-// class comment above.
-//
-// Thread-compatible, but not thread-safe (use in scenarios where only one
-// thread will request the scratch allocation).
-class OneTimeScratchAllocator : public ScratchAllocator {
- public:
-  explicit OneTimeScratchAllocator(Stream* stream) : stream_(stream) {}
-
-  int64_t GetMemoryLimitInBytes() override { return -1; }
-
-  tsl::StatusOr<DeviceMemory<uint8_t>> AllocateBytes(
-      int64_t byte_size) override;
-
- private:
-  std::unique_ptr<TemporaryDeviceMemory<uint8_t>> temporary_;
-  Stream* stream_;
-
-  SE_DISALLOW_COPY_AND_ASSIGN(OneTimeScratchAllocator);
 };
 
 // Can allocate several times -- this memory is deallocated when the scratch
@@ -86,26 +65,66 @@ class OneTimeScratchAllocator : public ScratchAllocator {
 template <size_t N = 1>
 class OwningScratchAllocator : public ScratchAllocator {
  public:
-  OwningScratchAllocator(int device_ordinal, DeviceMemoryAllocator* allocator)
-      : device_ordinal_(device_ordinal), allocator_(allocator) {}
+  OwningScratchAllocator(int device_ordinal, DeviceAddressAllocator* allocator)
+      : device_ordinal_(device_ordinal), allocator_(allocator) {
+    CHECK(allocator_ != nullptr);
+  }
+
+  OwningScratchAllocator(OwningScratchAllocator&&) = default;
+  // The default move assignment operator will immediately destroy any existing
+  // `buffers_` in the target object. This can cause a use-after-free bug if
+  // those buffers are still in use by the GPU. Deleting the move assignment
+  // operator to prevent this issue. If move assignment is needed, a custom
+  // implementation must be provided that defers the cleanup of the old buffers
+  // similar to the destructor.
+  OwningScratchAllocator& operator=(OwningScratchAllocator&&) = delete;
+
+  ~OwningScratchAllocator() override {
+    if (buffers_.empty()) {
+      return;
+    }
+    // If the allocator supports asynchronous deallocation, we can rely on the
+    // default destruction of `buffers_` (which calls `Deallocate` via
+    // `ScopedDeviceAddress`) because the allocator will handle the
+    // synchronization.
+    if (allocator_->AllowsAsynchronousDeallocation()) {
+      return;
+    }
+    absl::StatusOr<Stream*> stream = allocator_->GetStream(device_ordinal_);
+    if (!stream.ok()) {
+      LOG(ERROR) << "Failed to get stream for asynchronous deallocation: "
+                 << stream.status();
+    } else if (*stream == nullptr) {
+      LOG(ERROR) << "Allocator returned a null stream for asynchronous "
+                    "deallocation.";
+    } else {
+      if (absl::Status s = (*stream)->DoHostCallback(
+              [buffers = std::move(buffers_)]() mutable { buffers.clear(); });
+          !s.ok()) {
+        LOG(ERROR) << "Failed to schedule scratch allocator cleanup: " << s;
+      }
+    }
+  }
 
   int64_t GetMemoryLimitInBytes() override { return -1; }
 
-  tsl::StatusOr<DeviceMemory<uint8_t>> AllocateBytes(
+  absl::StatusOr<DeviceAddress<uint8_t>> AllocateBytes(
       int64_t byte_size) override {
-    TF_ASSIGN_OR_RETURN(OwningDeviceMemory buffer,
-                        allocator_->Allocate(device_ordinal_, byte_size,
-                                             /*retry_on_failure=*/false));
+    if (byte_size < 0) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("byte_size must be non-negative, but got ", byte_size));
+    }
+    ABSL_ASSIGN_OR_RETURN(ScopedDeviceAddress<uint8_t> buffer,
+                          allocator_->Allocate(device_ordinal_, byte_size,
+                                               /*retry_on_failure=*/false));
     buffers_.push_back(std::move(buffer));
     return *buffers_.back();
   }
 
  private:
   int device_ordinal_;
-  DeviceMemoryAllocator* allocator_;
-  absl::InlinedVector<OwningDeviceMemory, N> buffers_;
-
-  SE_DISALLOW_COPY_AND_ASSIGN(OwningScratchAllocator);
+  DeviceAddressAllocator* allocator_;
+  absl::InlinedVector<ScopedDeviceAddress<uint8_t>, N> buffers_;
 };
 
 }  // namespace stream_executor

@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,13 +16,12 @@ limitations under the License.
 // This files implements the logic for converting multidimensional
 // `scf.parallel` loops into 1D loops.
 
-#include <memory>
 #include <numeric>
 #include <vector>
 
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Utils/Utils.h"
+#include "mlir/IR/PatternMatch.h"
 #include "transforms/passes.h"
 
 using ::mlir::scf::ParallelOp;
@@ -39,24 +38,17 @@ namespace {
 struct CollapseParallelLoopsTo1D
     : public impl::CollapseParallelLoopsTo1DPassBase<
           CollapseParallelLoopsTo1D> {
-  void runOnOperation() override;
+  void runOnOperation() override {
+    IRRewriter rewriter(&getContext());
+    getOperation()->walk([&](ParallelOp op) {
+      unsigned numLoops = op.getNumLoops();
+      if (numLoops == 1) return;
+      std::vector<unsigned> combinedLoops(numLoops);
+      std::iota(combinedLoops.begin(), combinedLoops.end(), 0u);
+      mlir::collapseParallelLoops(rewriter, op, {combinedLoops});
+    });
+  }
 };
 
 }  // namespace
 }  // namespace mlir
-
-using namespace mlir;
-
-void mlir::CollapseParallelLoopsTo1D::runOnOperation() {
-  getOperation()->walk([&](ParallelOp op) {
-    unsigned numLoops = op.getNumLoops();
-    if (numLoops == 1) return;
-    std::vector<unsigned> combinedLoops(numLoops);
-    std::iota(combinedLoops.begin(), combinedLoops.end(), 0u);
-    mlir::collapseParallelLoops(op, {combinedLoops});
-  });
-}
-
-std::unique_ptr<OperationPass<>> mlir::createCollapseParallelLoopsTo1DPass() {
-  return std::make_unique<CollapseParallelLoopsTo1D>();
-}

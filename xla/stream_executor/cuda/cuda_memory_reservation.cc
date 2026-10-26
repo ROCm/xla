@@ -1,0 +1,170 @@
+/* Copyright 2026 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include "xla/stream_executor/cuda/cuda_memory_reservation.h"
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "third_party/gpus/cuda/include/cuda.h"
+#include "third_party/gpus/cuda/include/cuda_runtime_api.h"
+#include "xla/stream_executor/activate_context.h"
+#include "xla/stream_executor/cuda/cuda_device_allocator.h"
+#include "xla/stream_executor/cuda/cuda_raw_memory_allocation.h"
+#include "xla/stream_executor/cuda/cuda_status.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/memory_allocation.h"
+#include "xla/stream_executor/stream_executor.h"
+#include "xla/util.h"
+
+namespace stream_executor::gpu {
+
+absl::StatusOr<std::unique_ptr<CudaMemoryReservation>>
+CudaMemoryReservation::Create(StreamExecutor* executor, uint64_t size) {
+  std::unique_ptr<ActivateContext> activation = executor->Activate();
+
+  CUdevice device;
+  ABSL_RETURN_IF_ERROR(
+      cuda::ToStatus(cuDeviceGet(&device, executor->device_ordinal())));
+
+  ABSL_ASSIGN_OR_RETURN(CudaDeviceAllocator::Options options,
+                        QueryDeviceAllocatorOptions(device));
+  return CreateWithDevice(executor, device, size, options);
+}
+
+absl::StatusOr<std::unique_ptr<CudaMemoryReservation>>
+CudaMemoryReservation::Create(StreamExecutor* executor, uint64_t size,
+                              const CudaDeviceAllocator::Options& options) {
+  std::unique_ptr<ActivateContext> activation = executor->Activate();
+
+  CUdevice device;
+  ABSL_RETURN_IF_ERROR(
+      cuda::ToStatus(cuDeviceGet(&device, executor->device_ordinal())));
+  return CreateWithDevice(executor, device, size, options);
+}
+
+absl::StatusOr<std::unique_ptr<CudaMemoryReservation>>
+CudaMemoryReservation::CreateWithDevice(
+    StreamExecutor* executor, CUdevice device, uint64_t size,
+    const CudaDeviceAllocator::Options& options) {
+  if (!options.use_vmm) {
+    return absl::InvalidArgumentError(
+        "CudaMemoryReservation requires CUDA VMM, but options.use_vmm is "
+        "false");
+  }
+
+  // The granularity query itself can be rejected for unsupported handle
+  // types; probe with the same fallback CudaDeviceAllocator uses.
+  ABSL_ASSIGN_OR_RETURN(VmmGranularityProbe probe,
+                        ProbeVmmGranularity(device, options));
+
+  // Same effective alignment as CudaDeviceAllocator. The mapping granularity
+  // reported to callers stays the driver's value.
+  size_t alignment = std::max(options.alignment, probe.granularity);
+  uint64_t padded_size = xla::RoundUpTo<uint64_t>(size, alignment);
+
+  CUdeviceptr ptr;
+  ABSL_RETURN_IF_ERROR(
+      cuda::ToStatus(cuMemAddressReserve(&ptr, padded_size, alignment, 0, 0)));
+
+  return std::unique_ptr<CudaMemoryReservation>(
+      new CudaMemoryReservation(executor, ptr, padded_size, probe.granularity));
+}
+
+CudaMemoryReservation::CudaMemoryReservation(StreamExecutor* executor,
+                                             CUdeviceptr ptr, uint64_t size,
+                                             size_t granularity)
+    : executor_(executor), ptr_(ptr), size_(size), granularity_(granularity) {}
+
+DeviceAddressBase CudaMemoryReservation::address() const {
+  return DeviceAddressBase(reinterpret_cast<void*>(ptr_), size_);
+}
+
+absl::Status CudaMemoryReservation::Map(size_t reservation_offset,
+                                        size_t allocation_offset, size_t size,
+                                        MemoryAllocation& allocation) {
+  auto* cuda_alloc = dynamic_cast<CudaRawMemoryAllocation*>(&allocation);
+  if (cuda_alloc == nullptr) {
+    return absl::InvalidArgumentError(
+        "CudaMemoryReservation::Map requires a CudaRawMemoryAllocation");
+  }
+  std::unique_ptr<ActivateContext> activation = executor_->Activate();
+  return cuda::ToStatus(cuMemMap(ptr_ + reservation_offset, size,
+                                 allocation_offset, cuda_alloc->GetHandle(),
+                                 0));
+}
+
+absl::Status CudaMemoryReservation::SetAccess(uint64_t reservation_offset,
+                                              size_t size) {
+  std::unique_ptr<ActivateContext> activation = executor_->Activate();
+
+  // Always grant access to the local device.
+  CUmemAccessDesc desc = {};
+  desc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+  desc.location.id = executor_->device_ordinal();
+  desc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+  ABSL_RETURN_IF_ERROR(
+      cuda::ToStatus(cuMemSetAccess(ptr_ + reservation_offset, size, &desc, 1),
+                     "cuMemSetAccess for local device"));
+
+  // Grant access to all P2P-capable peer devices. VA-mapped memory does not
+  // automatically inherit peer access, so NCCL collective operations using
+  // NVLink to read/write peer GPU buffers will deadlock without this.
+  int device_count = 0;
+  ABSL_RETURN_IF_ERROR(
+      cuda::ToStatus(cudaGetDeviceCount(&device_count), "cudaGetDeviceCount"));
+  for (int32_t peer = 0; peer < device_count; ++peer) {
+    if (peer == executor_->device_ordinal()) {
+      continue;
+    }
+    if (!executor_->CanEnablePeerAccessTo(peer)) {
+      continue;
+    }
+    desc.location.id = peer;
+    ABSL_RETURN_IF_ERROR(cuda::ToStatus(
+        cuMemSetAccess(ptr_ + reservation_offset, size, &desc, 1),
+        "cuMemSetAccess for peer device"));
+  }
+
+  return absl::OkStatus();
+}
+
+absl::Status CudaMemoryReservation::UnMap(size_t offset, size_t size) {
+  std::unique_ptr<ActivateContext> activation = executor_->Activate();
+  return cuda::ToStatus(cuMemUnmap(ptr_ + offset, size));
+}
+
+CudaMemoryReservation::~CudaMemoryReservation() {
+  if (ptr_ == 0) {
+    return;
+  }
+  std::unique_ptr<ActivateContext> activation = executor_->Activate();
+  // ScopedMapping owns each mapped slice and must be destroyed first. The
+  // reservation may have an unmapped tail, so unmapping the full range here
+  // would be invalid.
+  auto free_status = cuda::ToStatus(cuMemAddressFree(ptr_, size_),
+                                    "Error freeing CUDA address range");
+  if (!free_status.ok()) {
+    LOG(ERROR) << free_status.message();
+  }
+}
+
+}  // namespace stream_executor::gpu

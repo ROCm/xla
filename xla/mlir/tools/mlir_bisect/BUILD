@@ -1,6 +1,21 @@
-load("//xla:xla.bzl", "xla_cc_binary")
-load("@tsl//tsl/platform:rules_cc.bzl", "cc_library")
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("//xla:xla.default.bzl", "xla_cc_binary")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
 
 # copybara:uncomment package(default_applicable_licenses = ["//tensorflow:license"])
 
@@ -13,34 +28,33 @@ build_test(
 
 xla_cc_binary(
     name = "mlir-bisect",
+    testonly = True,
     srcs = ["mlir_bisect.cc"],
     visibility = ["//visibility:public"],
     deps = [
         ":bisect_lib",
-        "//xla/mlir/runtime/ir:rt",
+        "//xla:literal",
         "//xla/mlir/tools/mlir_bisect/rewrites",
+        "//xla/mlir/tools/mlir_interpreter/dialects",
+        "//xla/mlir/tools/mlir_interpreter/framework",
+        "//xla/mlir/tools/mlir_replay/public:execution_trace_proto_cc",
         "//xla/mlir/tools/mlir_replay/public:execution_trace_utils",
-        "//xla/mlir_hlo:deallocation",
-        "//xla/mlir_hlo:deallocation_passes",
-        "//xla/mlir_hlo:gml_st",
-        "//xla/mlir_hlo:gml_st_passes",
-        "//xla/mlir_hlo:gml_st_test_passes",
         "//xla/mlir_hlo:hlo_dialect_registration",
-        "//xla/mlir_hlo:lhlo",
-        "//xla/mlir_hlo:lmhlo_passes",
         "//xla/mlir_hlo:mhlo_passes",
-        "//xla/mlir_hlo:mlir_interpreter_dialects",
-        "//xla/mlir_hlo:mlir_interpreter_framework",
-        "//xla/mlir_hlo:thlo",
-        "//xla/mlir_hlo:thlo_passes",
         "//xla/service:hlo_proto_cc",
+        "@com_google_absl//absl/log:check",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:AffineUtils",
         "@llvm-project//mlir:AllPassesAndDialects",
         "@llvm-project//mlir:ArithDialect",
         "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:MlirReduceLib",
+        "@llvm-project//mlir:MemRefDialect",
+        "@llvm-project//mlir:Parser",
         "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:RegisterAllDialects",  # buildcleaner: keep
+        "@llvm-project//mlir:RegisterAllPasses",  # buildcleaner: keep
         "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:Transforms",
         "@tsl//tsl/platform:env",
         "@tsl//tsl/platform:platform_port",
     ],
@@ -61,6 +75,7 @@ cc_library(
         "//xla/mlir/tools/mlir_replay/public:execution_trace_proto_cc",
         "//xla/mlir/tools/mlir_replay/public:execution_trace_proto_cc_impl",
         "//xla/mlir/tools/mlir_replay/public:execution_trace_utils",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:LinalgDialect",
         "@llvm-project//mlir:Pass",

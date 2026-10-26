@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,45 +17,82 @@ limitations under the License.
 
 #include <algorithm>
 #include <cstdint>
-#include <functional>
-#include <iterator>
-#include <stack>
+#include <deque>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/container/inlined_vector.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/numbers.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_split.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "xla/debug_options_flags.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
+#include "xla/hlo/ir/hlo_clone_context.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/literal.h"
+#include "xla/hlo/ir/hlo_original_value.h"
+#include "xla/hlo/ir/hlo_original_value_util.h"
+#include "xla/hlo/ir/hlo_print_options.h"
+#include "xla/hlo/pass/hlo_pass_pipeline.h"
+#include "xla/hlo/transforms/simplifiers/hlo_dce.h"
+#include "xla/hlo/transforms/simplifiers/tuple_simplifier.h"
 #include "xla/map_util.h"
-#include "xla/service/hlo_cse.h"
-#include "xla/service/hlo_dce.h"
-#include "xla/service/hlo_pass_pipeline.h"
-#include "xla/service/hlo_verifier.h"
-#include "xla/service/tuple_simplifier.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
 #include "xla/status_macros.h"
-#include "xla/statusor.h"
-#include "xla/types.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
-#include "tsl/platform/errors.h"
 
 namespace xla {
 
 namespace conditional_opt {
+
+// Updates the OriginalValue of an instruction inside a conditional branch
+// after MoveOperandIntoBranch widened `argument_tuple`, the tuple passed to
+// the conditional as the branch argument, and with it the branch parameter
+// that reads the tuple. `instruction` is either that parameter or a
+// get-tuple-element reached from it.
+//
+// A get-tuple-element derives its OriginalValue from its operand, as usual. A
+// parameter has no operand to derive from, and self-naming its leaves would
+// claim that the original module produced the elements just added to it, so it
+// instead takes the OriginalValue of the argument tuple, whose value it holds.
+// Widening also replaces the element that the moved operand used to occupy, so
+// the leaves the parameter already had cannot simply be kept in place either.
+void UpdateOriginalValueForWidenedBranchArgument(
+    HloInstruction* instruction, const HloInstruction* argument_tuple) {
+  if (instruction->opcode() != HloOpcode::kParameter) {
+    instruction->set_original_value(
+        OriginalValue::CreateFromInstruction(instruction));
+    return;
+  }
+  if (argument_tuple != nullptr) {
+    CopyOriginalValue(argument_tuple, instruction, /*clone=*/true,
+                      /*issue_warning=*/true);
+  }
+}
 
 HloInstruction* CloneNestedTuples(HloInstruction* tuple) {
   if (!tuple->shape().IsTuple()) {
     return tuple;
   }
   std::vector<HloInstruction*> tuple_users, gte_users;
-  for (int i = 0; i < tuple->shape().tuple_shapes_size(); ++i) {
+  for (int i = 0; i < tuple->shape().tuple_shapes().size(); ++i) {
     gte_users.push_back(nullptr);
   }
   for (auto* tuple_user : tuple->users()) {
@@ -71,7 +108,7 @@ HloInstruction* CloneNestedTuples(HloInstruction* tuple) {
   if (!tuple_users.empty() || tuple->user_count() == 0 ||
       tuple == tuple->parent()->root_instruction()) {
     VLOG(5) << "CLONING: " << tuple->ToString() << "\n";
-    int64_t tuple_size = tuple->shape().tuple_shapes_size();
+    int64_t tuple_size = tuple->shape().tuple_shapes().size();
     std::vector<HloInstruction*> operands;
     operands.reserve(tuple_size);
     for (int64_t j = 0; j < tuple_size; ++j) {
@@ -93,7 +130,7 @@ HloInstruction* CloneNestedTuples(HloInstruction* tuple) {
                                             /* accept_different_shape =*/true);
     } else {
       for (auto tuple_user : tuple_users) {
-        TF_CHECK_OK(tuple->ReplaceUseWithDifferentShape(tuple_user, new_tuple));
+        CHECK_OK(tuple->ReplaceUseWithDifferentShape(tuple_user, new_tuple));
       }
     }
     return new_tuple;
@@ -113,7 +150,7 @@ class BoundaryVisitor {
   // start with an existing conditional computation.
   explicit BoundaryVisitor(HloInstruction* conditional) {
     Boundary b(Boundary::Position::kInsideBranch);
-    b.mutable_operands().push_back(conditional);
+    b.push_back(conditional);
     worklist_.push_back(b);
   }
   // Start with an empty work list.
@@ -133,7 +170,7 @@ class BoundaryVisitor {
     return b;
   }
   void AddToWorkList(const Boundary& b) {
-    CHECK(!b.operands().empty());
+    CHECK(!b.empty());
     worklist_.push_back(b);
   }
 
@@ -153,17 +190,6 @@ class BoundaryVisitor {
   std::deque<Boundary> worklist_;
   absl::flat_hash_set<Boundary> visited_;
 };
-
-template <class OpCollection>
-int64_t CountNonLeafOps(const OpCollection& ops) {
-  absl::flat_hash_set<HloInstruction*> op_set;
-  for (auto op : ops) {
-    if (!op_set.contains(op) && op->opcode() != HloOpcode::kConstant) {
-      op_set.insert(op);
-    }
-  }
-  return op_set.size();
-}
 
 // Returns estimation of potential reuses carried by a given pair of
 // instructions.  Use different integers to classify different levels
@@ -247,6 +273,14 @@ bool WorthHoisting(HloOpcode op, HloOpcode child_op) {
     case HloOpcode::kConstant:
     case HloOpcode::kReshape:
     case HloOpcode::kBroadcast:
+    case HloOpcode::kSlice:
+    case HloOpcode::kPad:
+    case HloOpcode::kDynamicSlice:
+    case HloOpcode::kDynamicUpdateSlice:
+    case HloOpcode::kGather:
+      // TODO: b/423941718 - Remove these once the bug is fixed.
+      // case HloOpcode::kConcatenate:
+      // case HloOpcode::kScatter:
       return true;
     default:
       if (HloInstruction::IsOpElementwise(op)) {
@@ -308,28 +342,85 @@ void CopyOutOfConditional(
   absl::InlinedVector<HloInstruction*, 4> new_operands;
   // All of the branch operands should have the same opcode and shape, so just
   // use branch 0.
-  const HloInstruction* branch0_inst = boundary.operands()[0];
+  const HloInstruction* branch0_inst = boundary[0];
   for (int i = 0; i < branch0_inst->operands().size(); ++i) {
     Boundary operand_boundary(boundary.GetPosition());
-    for (HloInstruction* operand : boundary.operands()) {
-      operand_boundary.mutable_operands().push_back(operand->operands()[i]);
+    for (HloInstruction* operand : boundary) {
+      operand_boundary.push_back(operand->mutable_operand(i));
     }
     VLOG(2) << "Looking for: " << operand_boundary.ToString();
     auto hoisted_boundaries_it = hoisted_boundaries.find(operand_boundary);
     CHECK(hoisted_boundaries_it != hoisted_boundaries.end());
     Boundary hoisted_boundary = hoisted_boundaries_it->second;
     CHECK(hoisted_boundary.IsOutsideBranchUser());
-    CHECK_EQ(hoisted_boundary.operands().size(), 1);
-    new_operands.push_back(hoisted_boundary.operands()[0]);
+    CHECK_EQ(hoisted_boundary.size(), 1);
+    new_operands.push_back(hoisted_boundary[0]);
   }
   HloInstruction* new_instruction = conditional->parent()->AddInstruction(
       branch0_inst->CloneWithNewOperands(branch0_inst->shape(), new_operands));
+  // The clone inherits branch 0's OriginalValue, but the hoisted instruction
+  // now computes on the values of whichever branch is taken at runtime, so
+  // that OriginalValue no longer describes it. Drop it here; callers that know
+  // the hoisted instruction reproduces a value of the original conditional
+  // (i.e. it replaces a get-tuple-element of the conditional) reassign the
+  // corresponding OriginalValue afterwards.
+  new_instruction->set_original_value(nullptr);
   VLOG(2) << "new instruction:" << new_instruction->ToString();
   // Maps the instruction outside of conditional to the instruction
   // inside of the conditional.
   Boundary hoisted_boundary(Boundary::Position::kOutsideBranchUser);
-  hoisted_boundary.mutable_operands().push_back(new_instruction);
+  hoisted_boundary.push_back(new_instruction);
   hoisted_boundaries[boundary] = hoisted_boundary;
+}
+
+// Builds the OriginalValue of a conditional whose result was rewritten by
+// MoveUserInstructionsIn, given its new `shape`.
+//
+// The first `kept_element_count` elements of the new result still hold the
+// values held by the elements of `old_original_value`, with the element at
+// `use_index` (if any) dropped and the elements after it shifted down. The
+// remaining elements hold the values of the instructions moved into the
+// branches, described in order by `moved_in_original_values`. The clones of a
+// moved instruction inside the branches carry its OriginalValue, so the new
+// element of every branch root agrees with the element built here.
+//
+// Returns nullptr if no element is known, matching
+// OriginalValue::CreateFromInstruction.
+std::shared_ptr<OriginalValue>
+BuildOriginalValueForConditionalWithMovedInInstructions(
+    const Shape& shape,
+    const std::shared_ptr<OriginalValue>& old_original_value,
+    int64_t kept_element_count, int64_t use_index,
+    absl::Span<const std::shared_ptr<OriginalValue>> moved_in_original_values) {
+  auto original_value = std::make_shared<OriginalValue>(shape);
+  bool has_original_value = false;
+  if (old_original_value != nullptr &&
+      !old_original_value->is_synthetic_call()) {
+    for (int64_t index = 0; index < kept_element_count; ++index) {
+      const int64_t old_index =
+          (use_index >= 0 && index >= use_index) ? index + 1 : index;
+      if (old_original_value->tree().find({old_index}) ==
+          old_original_value->tree().end()) {
+        continue;
+      }
+      original_value->mutable_tree()->CopySubtreeFrom(
+          old_original_value->tree(), {old_index}, {index});
+      has_original_value = true;
+    }
+  }
+  const int64_t moved_in_count = moved_in_original_values.size();
+  for (int64_t i = 0; i < moved_in_count; ++i) {
+    const std::shared_ptr<OriginalValue>& moved_in_original_value =
+        moved_in_original_values[i];
+    if (moved_in_original_value == nullptr ||
+        moved_in_original_value->is_synthetic_call()) {
+      continue;
+    }
+    original_value->mutable_tree()->CopySubtreeFrom(
+        moved_in_original_value->tree(), {}, {kept_element_count + i});
+    has_original_value = true;
+  }
+  return has_original_value ? original_value : nullptr;
 }
 
 // Copy the boundary into the conditional and update hoisted_boundaries.
@@ -337,22 +428,22 @@ void CopyIntoConditional(
     Boundary& boundary, HloInstruction* conditional,
     absl::flat_hash_map<Boundary, Boundary>& hoisted_boundaries) {
   CHECK(boundary.IsOutsideBranchUser() || boundary.IsOutsideBranchOperand());
-  CHECK_EQ(boundary.operands().size(), 1);
+  CHECK_EQ(boundary.size(), 1);
   int num_branches = conditional->branch_count();
   std::vector<absl::InlinedVector<HloInstruction*, 4>> new_operands(
       num_branches);
-  HloInstruction* op = boundary.operands()[0];
+  HloInstruction* op = boundary[0];
   for (HloInstruction* operand : op->operands()) {
     Boundary operand_boundary(boundary.GetPosition());
-    operand_boundary.mutable_operands().push_back(operand);
+    operand_boundary.push_back(operand);
     VLOG(2) << "Looking for: " << operand_boundary.ToString();
     auto hoisted_boundaries_it = hoisted_boundaries.find(operand_boundary);
     if (hoisted_boundaries_it != hoisted_boundaries.end()) {
       Boundary hoisted_boundary = hoisted_boundaries_it->second;
       CHECK(hoisted_boundary.IsInsideBranch());
-      CHECK_EQ(hoisted_boundary.operands().size(), num_branches);
+      CHECK_EQ(hoisted_boundary.size(), num_branches);
       for (int j = 0; j < num_branches; ++j) {
-        new_operands[j].push_back(hoisted_boundary.operands()[j]);
+        new_operands[j].push_back(hoisted_boundary[j]);
       }
     } else {
       for (int j = 0; j < num_branches; ++j) {
@@ -392,7 +483,7 @@ void CopyIntoConditional(
         conditional->branch_computation(j)->AddInstruction(
             op->CloneWithNewOperands(op->shape(), new_operands[j]));
     VLOG(2) << "new instruction:" << new_instruction->ToString();
-    hoisted_boundary.mutable_operands().push_back(new_instruction);
+    hoisted_boundary.push_back(new_instruction);
   }
   hoisted_boundaries[boundary] = hoisted_boundary;
 }
@@ -492,20 +583,26 @@ absl::flat_hash_set<int64_t> FindSpecialConverts(HloInstruction* old_root,
 // z = tuple(y.0, y.1, ...y.n)
 // Doing so ensures that we can accommodate the possible shape-change of the
 // conditional when the instructions are hoisted.
-Status RestructureConditionalInstruction(HloComputation* computation,
-                                         HloInstruction* conditional) {
+absl::Status RestructureConditionalInstruction(HloComputation* computation,
+                                               HloInstruction* conditional) {
   HloInstruction* old_root = computation->root_instruction();
   std::vector<HloInstruction*> new_operands;
   int cur_index = 0;
   for (; cur_index < ShapeUtil::TupleElementCount(conditional->shape());
        ++cur_index) {
-    new_operands.push_back(
+    HloInstruction* gte =
         computation->AddInstruction(HloInstruction::CreateGetTupleElement(
             ShapeUtil::GetTupleElementShape(conditional->shape(), cur_index),
-            conditional, cur_index)));
+            conditional, cur_index));
+    // The restructuring only reshuffles the result of the conditional, so the
+    // instructions it adds hold values the conditional already produced.
+    gte->set_original_value(OriginalValue::CreateFromInstruction(gte));
+    new_operands.push_back(gte);
   }
   HloInstruction* new_tuple =
       computation->AddInstruction(HloInstruction::CreateTuple(new_operands));
+  new_tuple->set_original_value(
+      OriginalValue::CreateFromInstruction(new_tuple));
   if (old_root == conditional) {
     computation->set_root_instruction(new_tuple);
   } else {
@@ -519,16 +616,16 @@ Status RestructureConditionalInstruction(HloComputation* computation,
       }
     }
     for (auto new_tuple_user : new_tuple_users) {
-      TF_RETURN_IF_ERROR(
+      ABSL_RETURN_IF_ERROR(
           conditional->ReplaceUseWith(new_tuple_user, new_tuple));
     }
   }
   VLOG(2) << "computation after root restructure:\n" << computation->ToString();
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-StatusOr<bool> ConvertSpecialMove(HloInstruction* conditional,
-                                  bool is_layout_sensitive) {
+absl::StatusOr<bool> ConvertSpecialMove(HloInstruction* conditional,
+                                        bool is_layout_sensitive) {
   int branch_count = conditional->branch_count();
   if (branch_count <= 0) {
     return false;
@@ -569,7 +666,7 @@ StatusOr<bool> ConvertSpecialMove(HloInstruction* conditional,
     return false;
   }
 
-  TF_RETURN_IF_ERROR(
+  ABSL_RETURN_IF_ERROR(
       RestructureConditionalInstruction(conditional->parent(), conditional));
 
   for (int branch = 0; branch < branch_count; branch++) {
@@ -615,10 +712,15 @@ StatusOr<bool> ConvertSpecialMove(HloInstruction* conditional,
     HloComputation* cur_branch = conditional->branch_computation(branch);
     HloInstruction* new_branch_root =
         cur_branch->AddInstruction(HloInstruction::CreateTuple(new_operands));
+    // The root now returns the operands of the hoisted converts in place of
+    // the converts themselves, so its OriginalValue is assembled from the
+    // operands it returns.
+    new_branch_root->set_original_value(
+        OriginalValue::CreateFromInstruction(new_branch_root));
     // The shape can vary since the operands to convert are now
     // being returned through the branches' root.
     cur_branch->set_root_instruction(new_branch_root, true /*new shape*/);
-    TF_CHECK_OK(cur_branch->RemoveInstruction(old_root));
+    CHECK_OK(cur_branch->RemoveInstruction(old_root));
 
     // Only one of the branches needs to change the conditional->parent().
     if (branch != 0) {
@@ -631,13 +733,49 @@ StatusOr<bool> ConvertSpecialMove(HloInstruction* conditional,
             conditional->mutable_operand(0),
             absl::MakeSpan(conditional->branch_computations()),
             absl::MakeSpan(conditional->operands()).subspan(1)));
+    // The new conditional returns the same values as the old one, except at
+    // the indices of the hoisted converts, which now return the operands of
+    // those converts. A different instruction produces those operands in each
+    // branch, so the elements holding them are left unknown, as are the
+    // elements appended for the converts' remaining operands.
+    if (const std::shared_ptr<OriginalValue>& old_original_value =
+            conditional->original_value();
+        old_original_value != nullptr &&
+        !old_original_value->is_synthetic_call()) {
+      auto new_original_value =
+          std::make_shared<OriginalValue>(newconditional->shape());
+      bool has_original_value = false;
+      const int64_t old_element_count =
+          conditional->shape().tuple_shapes().size();
+      for (int64_t index = 0; index < old_element_count; ++index) {
+        if (special_convert.contains(index) ||
+            old_original_value->tree().find({index}) ==
+                old_original_value->tree().end()) {
+          continue;
+        }
+        new_original_value->mutable_tree()->CopySubtreeFrom(
+            old_original_value->tree(), {index}, {index});
+        has_original_value = true;
+      }
+      if (has_original_value) {
+        newconditional->set_original_value(new_original_value);
+      }
+    }
     // Ensure that all the users of conditional refer to the new one.
-    TF_RETURN_IF_ERROR(
+    ABSL_RETURN_IF_ERROR(
         conditional->ReplaceAllUsesWithDifferentShape(newconditional));
-    TF_CHECK_OK(conditional_parent->RemoveInstruction(conditional));
+    CHECK_OK(conditional_parent->RemoveInstruction(conditional));
     conditional = newconditional;
+    // Sort the hoist set deterministically to avoid pointer-based
+    // non-determinism.
+    std::vector<HloInstruction*> to_hoist_list(to_hoist_set.begin(),
+                                               to_hoist_set.end());
+    absl::c_sort(to_hoist_list,
+                 [](const HloInstruction* a, const HloInstruction* b) {
+                   return a->unique_id() < b->unique_id();
+                 });
     // Add the hoisted instructions in the parent.
-    for (HloInstruction* hoist : to_hoist_set) {
+    for (HloInstruction* hoist : to_hoist_list) {
       VLOG(2) << "Hoisting instruction:" << hoist->ToString();
       int64_t hoist_index = map_inst_to_tuple_index[hoist];
       // Find out the gte that captured the hoisted instr result.
@@ -648,13 +786,19 @@ StatusOr<bool> ConvertSpecialMove(HloInstruction* conditional,
         HloInstruction* gte = conditional_parent->AddInstruction(
             HloInstruction::CreateGetTupleElement(op->shape(), conditional,
                                                   map_inst_to_tuple_index[op]));
+        gte->set_original_value(OriginalValue::CreateFromInstruction(gte));
         new_operands.push_back(gte);
       }
       HloInstruction* hoisted = conditional_parent->AddInstruction(
           hoist->CloneWithNewOperands(hoist->shape(), new_operands));
+      // The clone inherits the OriginalValue of branch 0's convert, but it now
+      // converts the value of whichever branch is taken. It reproduces exactly
+      // the value this get-tuple-element of the conditional used to produce,
+      // so it takes over its OriginalValue instead.
+      hoisted->set_original_value(gte_hoist->original_value());
       VLOG(2) << "Hoisted instruction in parent:" << hoisted->ToString();
-      TF_RETURN_IF_ERROR(gte_hoist->ReplaceAllUsesWith(hoisted));
-      TF_CHECK_OK(conditional_parent->RemoveInstruction(gte_hoist));
+      ABSL_RETURN_IF_ERROR(gte_hoist->ReplaceAllUsesWith(hoisted));
+      CHECK_OK(conditional_parent->RemoveInstruction(gte_hoist));
     }
     // No need to explicitly delete a hoisted instruction since if its dead
     // then the subsequent DCE will remove it.
@@ -667,7 +811,7 @@ StatusOr<bool> ConvertSpecialMove(HloInstruction* conditional,
 // are the shape of the operands are identical and their properties are
 // identical. Will start from the root instruction of each branch and get
 // the identical ops to hoist.
-StatusOr<bool> ConditionalCodeMotion::MoveInstructionOut(
+absl::StatusOr<bool> ConditionalCodeMotion::MoveInstructionOut(
     HloInstruction* conditional, std::vector<Boundary>& to_move_out,
     std::vector<Boundary>& new_boundaries) {
   if (to_move_out.empty()) {
@@ -688,14 +832,14 @@ StatusOr<bool> ConditionalCodeMotion::MoveInstructionOut(
           << "\n";
   int64_t op_index = 0;
   for (const Boundary& b : new_boundaries) {
-    HloInstruction* op = b.operands()[0];
+    HloInstruction* op = b[0];
     CHECK(op != nullptr);
     VLOG(2) << "Mapping new boundary instr: " << op->ToString() << "\n";
     HloInstruction* gtr = conditional_parent->AddInstruction(
         HloInstruction::CreateGetTupleElement(op->shape(), conditional,
                                               op_index++));
     Boundary b2(Boundary::Position::kOutsideBranchUser);
-    b2.mutable_operands().push_back(gtr);
+    b2.push_back(gtr);
     hoisted_boundaries[b] = b2;
   }
   // Copy boundary instructions out of the conditional.
@@ -718,16 +862,22 @@ StatusOr<bool> ConditionalCodeMotion::MoveInstructionOut(
          conditional->called_computations()) {
       HloInstruction* root = called_computation->root_instruction();
       CHECK(root->operands().size() > index);
-      old_user_boundary.mutable_operands().push_back(root->operands()[index]);
+      old_user_boundary.push_back(root->operands()[index]);
     }
     CHECK(ContainsKey(hoisted_boundaries, old_user_boundary));
-    HloInstruction* new_opd =
-        hoisted_boundaries[old_user_boundary].operands()[0];
+    HloInstruction* new_opd = hoisted_boundaries[old_user_boundary][0];
     CHECK(new_opd != nullptr);
     VLOG(2) << "Try replace all uses of :" << old_user_boundary.ToString()
             << "\n";
-    TF_RETURN_IF_ERROR(user_instr->ReplaceAllUsesWith(new_opd));
-    TF_RETURN_IF_ERROR(conditional_parent->RemoveInstruction(user_instr));
+    // The hoisted instruction produces exactly the value that this
+    // get-tuple-element of the conditional used to produce, so it takes over
+    // its OriginalValue. Their shapes match because both correspond to operand
+    // `index` of the branch roots.
+    if (user_instr->original_value() != nullptr) {
+      new_opd->set_original_value(user_instr->original_value());
+    }
+    ABSL_RETURN_IF_ERROR(user_instr->ReplaceAllUsesWith(new_opd));
+    ABSL_RETURN_IF_ERROR(conditional_parent->RemoveInstruction(user_instr));
   }
   VLOG(2) << "Done changing conditional users\n"
           << conditional_parent->ToString() << "\n";
@@ -737,18 +887,21 @@ StatusOr<bool> ConditionalCodeMotion::MoveInstructionOut(
     auto computation = conditional->branch_computation(i);
     std::vector<HloInstruction*> elements;
     for (const auto& b1 : new_boundaries) {
-      HloInstruction* op = b1.operands()[i];
+      HloInstruction* op = b1[i];
       CHECK(op != nullptr);
       VLOG(2) << "Adding to root " << i << " with " << op->ToString() << "\n";
       elements.push_back(op);
     }
     HloInstruction* tuple =
         computation->AddInstruction(HloInstruction::CreateTuple(elements));
+    // The new root returns the boundary values that remain inside the branch,
+    // so its OriginalValue is assembled from those operands.
+    tuple->set_original_value(OriginalValue::CreateFromInstruction(tuple));
     computation->set_root_instruction(tuple, true);
     VLOG(2) << "computation is :" << computation->ToString() << "\n";
     // Remove hoisted instructions from the branches.
     for (const auto& b2 : to_move_out) {
-      auto instr_to_remove = b2.operands()[i];
+      HloInstruction* instr_to_remove = b2[i];
       // Double check to make sure it is safe to delete the instruction.
       // Complications may arise due to some operations in the alternative
       // branches (branches 1..n) being placed into the boundaries multiple
@@ -757,7 +910,7 @@ StatusOr<bool> ConditionalCodeMotion::MoveInstructionOut(
           instr_to_remove->IsDead()) {
         VLOG(2) << "Removing boundary:" << b2.ToString() << "\n";
         VLOG(2) << "computation: " << computation->ToString() << "\n";
-        TF_RETURN_IF_ERROR(computation->RemoveInstruction(instr_to_remove));
+        ABSL_RETURN_IF_ERROR(computation->RemoveInstruction(instr_to_remove));
       }
     }
   }
@@ -765,6 +918,12 @@ StatusOr<bool> ConditionalCodeMotion::MoveInstructionOut(
   HloInstruction* new_root =
       conditional->branch_computation(0)->root_instruction();
   *conditional->mutable_shape() = new_root->shape();
+  // The conditional now returns the boundary values that remain inside the
+  // branches. Which value each element holds depends on the branch taken at
+  // runtime, so no single instruction of the original module corresponds to
+  // it. The OriginalValue of the original conditional result has been
+  // transferred to the hoisted instructions that reproduce it above.
+  conditional->set_original_value(nullptr);
   // Keep conditional instruction sharding consistent with the branches. Note
   // that this sharding could be lost after this pass.
   conditional->copy_sharding(new_root);
@@ -774,17 +933,23 @@ StatusOr<bool> ConditionalCodeMotion::MoveInstructionOut(
 }
 
 // Hoist conditional users from outside to inside the branches.
-StatusOr<bool> ConditionalCodeMotion::MoveUserInstructionsIn(
+absl::StatusOr<bool> ConditionalCodeMotion::MoveUserInstructionsIn(
     HloInstruction* conditional, std::vector<Boundary>& to_move_in) {
   if (to_move_in.empty()) {
     return false;
   }
+
+  if (!conditional->shape().IsTuple() && conditional->user_count() > 1) {
+    // This function cannot handle this case.
+    return false;
+  }
+
   // Mapping boundaries to be moved to their new representations.
   absl::flat_hash_map<Boundary, Boundary> hoisted_boundaries;
   int64_t to_move_in_size = to_move_in.size();
   int64_t branch_count = conditional->branch_count();
   HloGetTupleElementInstruction* tuple_use =
-      DynCast<HloGetTupleElementInstruction>(to_move_in[0].operands()[0]);
+      DynCast<HloGetTupleElementInstruction>(to_move_in[0][0]);
   // If use_index is -1, the old conditional root entry used by to_move_in
   // instructions still need to be included as an entry of the modified
   // conditional root, and the new result of the to_move_in instructions
@@ -800,9 +965,18 @@ StatusOr<bool> ConditionalCodeMotion::MoveUserInstructionsIn(
   // 0 to save the old operand being used.
   int64_t op_index =
       conditional->shape().IsTuple()
-          ? ((use_index >= 0) ? conditional->shape().tuple_shapes_size() - 1
-                              : conditional->shape().tuple_shapes_size())
+          ? ((use_index >= 0) ? conditional->shape().tuple_shapes().size() - 1
+                              : conditional->shape().tuple_shapes().size())
           : 0;
+  // The OriginalValue of the conditional and the number of elements of its
+  // result that survive the transformation, captured before the result is
+  // rewritten below.
+  const std::shared_ptr<OriginalValue> old_original_value =
+      conditional->original_value();
+  const int64_t kept_element_count = op_index;
+  // OriginalValue of each element appended to the conditional result, in the
+  // order the elements are appended.
+  std::vector<std::shared_ptr<OriginalValue>> moved_in_original_values;
   // Use to map the tuple_use instruction to its operand;
   Boundary b_opd_use(Boundary::Position::kInsideBranch);
   Boundary b_old_root(Boundary::Position::kInsideBranch);
@@ -810,44 +984,48 @@ StatusOr<bool> ConditionalCodeMotion::MoveUserInstructionsIn(
   for (int i = 0; i < branch_count; i++) {
     auto computation = conditional->branch_computation(i);
     auto old_root = computation->root_instruction();
-    b_old_root.mutable_operands().push_back(old_root);
+    b_old_root.push_back(old_root);
     std::vector<HloInstruction*> operands;
     if (old_root->opcode() == HloOpcode::kTuple) {
       // Use operands of old_root directly, so old_root can be removed later.
       for (int i = 0; i < old_root->operand_count(); ++i) {
         if (i != use_index) {
-          operands.push_back(old_root->operands()[i]);
+          operands.push_back(old_root->mutable_operand(i));
         } else {  // Map conditional use to the tuple operand.
-          b_opd_use.mutable_operands().push_back(old_root->operands()[i]);
+          b_opd_use.push_back(old_root->mutable_operand(i));
         }
       }
     } else if (old_root->shape().IsTuple()) {
       // If old_root is not a kTuple but has tuple shape, elements within the
       // tuple must be extracted first to be used by the new instructions.
       const Shape& old_shape = old_root->shape();
-      for (int i = 0; i < old_shape.tuple_shapes_size(); ++i) {
+      for (int i = 0; i < old_shape.tuple_shapes().size(); ++i) {
         auto element =
             computation->AddInstruction(HloInstruction::CreateGetTupleElement(
                 old_shape.tuple_shapes(i), old_root, i));
         if (i != use_index) {
           operands.push_back(element);
         } else {
-          b_opd_use.mutable_operands().push_back(element);
+          b_opd_use.push_back(element);
         }
       }
     } else {
       // If old_root is not a tuple and does not have tuple shape, use it
       // to replace the conditional directly in the new computation.
-      b_opd_use.mutable_operands().push_back(conditional);
+      b_opd_use.push_back(conditional);
     }
 
     HloInstruction* new_root =
         computation->AddInstruction(HloInstruction::CreateTuple(operands));
+    // The new root returns the values the branch still produces, so its
+    // OriginalValue is assembled from its operands.
+    new_root->set_original_value(
+        OriginalValue::CreateFromInstruction(new_root));
     VLOG(2) << "setting new root: " << new_root->ToString() << "\n";
     computation->set_root_instruction(new_root,
                                       /*accept_different_shape*/ true);
     if (old_root->opcode() == HloOpcode::kTuple) {
-      TF_RETURN_IF_ERROR(computation->RemoveInstruction(old_root));
+      ABSL_RETURN_IF_ERROR(computation->RemoveInstruction(old_root));
     }
     VLOG(2) << "new branch computation: " << computation->ToString() << "\n";
   }
@@ -861,24 +1039,24 @@ StatusOr<bool> ConditionalCodeMotion::MoveUserInstructionsIn(
     }
   }
   Boundary conditional_boundary(Boundary::Position::kOutsideBranchUser);
-  conditional_boundary.mutable_operands().push_back(conditional);
+  conditional_boundary.push_back(conditional);
   hoisted_boundaries[conditional_boundary] = b_old_root;
   if (use_index >= 0) {
     VLOG(2) << "Mapping GTE: " << tuple_use->ToString() << "\n";
     Boundary tuple_use_boundary(Boundary::Position::kOutsideBranchUser);
-    tuple_use_boundary.mutable_operands().push_back(tuple_use);
+    tuple_use_boundary.push_back(tuple_use);
     hoisted_boundaries[tuple_use_boundary] = b_opd_use;
   }
   int64_t cp_start = (tuple_use != nullptr) ? 1 : 0;
   for (int64_t to_move_index = cp_start; to_move_index < to_move_in_size;
        to_move_index++) {
     Boundary b_to_move = to_move_in[to_move_index];
-    HloInstruction* op = b_to_move.operands()[0];
+    HloInstruction* op = b_to_move[0];
     CHECK(op != nullptr);
     bool to_be_used_outside = true;
     VLOG(2) << "Mapping new boundary instr: " << op->ToString() << "\n";
     if (to_move_index < to_move_in_size - 1 && op->user_count() == 1 &&
-        op->users()[0] == to_move_in[to_move_index + 1].operands()[0]) {
+        op->users()[0] == to_move_in[to_move_index + 1][0]) {
       to_be_used_outside = false;
       VLOG(2) << "Instruction is not to be used outside the branch\n";
     }
@@ -887,10 +1065,12 @@ StatusOr<bool> ConditionalCodeMotion::MoveUserInstructionsIn(
     if (to_be_used_outside) {
       for (int i = 0; i < branch_count; ++i) {
         auto computation = conditional->branch_computation(i);
-        auto new_op = hoisted_boundaries[b_to_move].operands()[i];
-        auto new_root = computation->root_instruction();
+        HloInstruction* new_op = hoisted_boundaries[b_to_move][i];
+        HloInstruction* new_root = computation->root_instruction();
         new_root->AppendOperand(new_op);
         *new_root->mutable_shape()->add_tuple_shapes() = new_op->shape();
+        new_root->set_original_value(
+            OriginalValue::CreateFromInstruction(new_root));
         VLOG(2) << "Extending conditional root " << i << " : "
                 << new_root->ToString() << "\n";
       }
@@ -898,7 +1078,13 @@ StatusOr<bool> ConditionalCodeMotion::MoveUserInstructionsIn(
       HloInstruction* gtr = conditional->parent()->AddInstruction(
           HloInstruction::CreateGetTupleElement(op->shape(), conditional,
                                                 op_index++));
-      TF_RETURN_IF_ERROR(op->ReplaceAllUsesWith(gtr));
+      // This get-tuple-element now produces the value `op` produced outside
+      // the conditional, so it takes over its OriginalValue. The clones of
+      // `op` inside the branches keep the same OriginalValue, so the element
+      // just appended to every branch root agrees with it.
+      gtr->set_original_value(op->original_value());
+      moved_in_original_values.push_back(op->original_value());
+      ABSL_RETURN_IF_ERROR(op->ReplaceAllUsesWith(gtr));
       if (conditional->parent()->root_instruction() == op) {
         conditional->parent()->set_root_instruction(gtr);
       }
@@ -910,6 +1096,14 @@ StatusOr<bool> ConditionalCodeMotion::MoveUserInstructionsIn(
   HloInstruction* new_root =
       conditional->branch_computation(0)->root_instruction();
   *conditional->mutable_shape() = new_root->shape();
+  // The conditional now returns the values produced by the instructions moved
+  // into its branches, in addition to the elements of its old result that are
+  // still used outside. Rebuild its OriginalValue from the values its elements
+  // hold.
+  conditional->set_original_value(
+      BuildOriginalValueForConditionalWithMovedInInstructions(
+          conditional->shape(), old_original_value, kept_element_count,
+          use_index, moved_in_original_values));
   // Keep conditional instruction sharding consistent with the branches. Note
   // that this sharding could be lost after this pass.
   conditional->copy_sharding(new_root);
@@ -920,6 +1114,7 @@ StatusOr<bool> ConditionalCodeMotion::MoveUserInstructionsIn(
         VLOG(2) << "Resetting shape of user: " << user->ToString() << "\n";
         *user->mutable_shape() =
             conditional->shape().tuple_shapes(user->tuple_index());
+        user->set_original_value(OriginalValue::CreateFromInstruction(user));
       }
     }
   }
@@ -928,294 +1123,318 @@ StatusOr<bool> ConditionalCodeMotion::MoveUserInstructionsIn(
   return true;
 }
 
-Status ReplaceInputAndMoveIntoBranches(
-    HloInstruction* input, HloInstruction*& user,
-    absl::flat_hash_map<const HloInstruction*, int64_t>& op_map,
-    std::function<HloInstruction*(HloInstruction* branch_input)>
-        insert_into_branch) {
-  VLOG(2) << "MoveIntoBranches: input =" << input->ToString() << "\n";
-  VLOG(2) << "MoveIntoBranches: user =" << user->ToString() << "\n";
-  CHECK(input->user_count() == 1 || input->opcode() == HloOpcode::kBroadcast);
-  // The nested tuple indices leading from input to conditional parameter.
-  std::vector<std::vector<int64_t>> matching_tuple_indices;
-  absl::InlinedVector<HloInstruction*, 4> new_operands;
-  for (int64_t j = 0; j < input->operand_count(); ++j) {
-    VLOG(2) << "Push back input operand index: " << j;
-    auto operand = input->mutable_operand(j);
-    if (std::find(new_operands.begin(), new_operands.end(), operand) ==
-        new_operands.end()) {
-      new_operands.push_back(operand);
+class MoveOperandIntoBranch {
+ public:
+  MoveOperandIntoBranch() = default;
+  absl::Status operator()(HloInstruction* inst, HloInstruction*& user) {
+    VLOG(1) << "operand to move into branch: " << inst->ToString();
+    VLOG(2) << "MoveIntoBranches user =" << user->ToString() << "\n";
+    CHECK(inst->user_count() == 1 || inst->opcode() == HloOpcode::kBroadcast);
+
+    // Remember the new operands of inst (after erasing replicated entries).
+    auto new_operands = inst->unique_operands();
+    // Mapping from operands to their new locations in branch entry.
+    std::vector<std::vector<int64_t>> matching_tuple_indices;
+    ABSL_RETURN_IF_ERROR(
+        ReplaceInputInUser(inst, user, new_operands, matching_tuple_indices));
+    ABSL_RETURN_IF_ERROR(
+        MoveInputIntoBranch(inst, user, new_operands, matching_tuple_indices));
+    if (inst->user_count() == 0) {
+      ABSL_RETURN_IF_ERROR(inst->parent()->RemoveInstruction(inst));
     }
+    return absl::OkStatus();
   }
-  if (user->opcode() == HloOpcode::kTuple) {
-    // Find the nested tuple indices before reaching the conditional.
-    for (HloInstruction *input_now = input, *user_now = user;
-         user_now->opcode() != HloOpcode::kConditional;
-         input_now = user_now, user_now = user_now->users()[0]) {
-      std::vector<int64_t> matching_tuple_index;
-      for (int64_t i = 0; i < user_now->operand_count(); ++i) {
-        if (user_now->operand(i) != input_now) {
+
+ private:
+  // Push inst inside the branch where branch_input is the input parameter.
+  HloInstruction* InsertIntoBranch(HloInstruction* inst,
+                                   HloInstruction* branch_input) {
+    VLOG(2) << "Branch input=" << branch_input->ToString() << "\n";
+    auto branch_comp = branch_input->parent();
+    std::vector<HloInstruction*> operands(inst->operand_count());
+    for (int64_t i = 0; i < inst->operand_count(); ++i) {
+      VLOG(2) << "processing operand =" << i << "\n";
+      if (branch_input->shape().IsTuple()) {
+        int64_t j = PositionInContainer(inst->operands(), inst->operand(i));
+        VLOG(2) << "operand index = " << j << "\n";
+        if (j < i) {
+          operands[i] = operands[j];
+        } else {
+          int64_t index = op_map_.at(inst->operand(i));
+          CHECK(index < branch_input->shape().tuple_shapes().size());
+          operands[i] =
+              branch_comp->AddInstruction(HloInstruction::CreateGetTupleElement(
+                  branch_input->shape().tuple_shapes(index), branch_input,
+                  index));
+        }
+      } else {
+        CHECK(inst->operand(i) == inst->operand(0));
+        operands[i] = branch_input;
+      }
+    }
+    return branch_comp->AddInstruction(
+        inst->CloneWithNewOperands(inst->shape(), operands));
+  }
+  // Update branch_param and its users to take the new shape given in
+  // param_shape. Update branch_param param_shape and param_tuple to be the
+  // shape and the last tuple instruction updated. Returns whether branch shape
+  // is updated (whether the param is used).
+  bool UpdateParamShape(
+      std::vector<std::vector<int64_t>>& matching_tuple_indices,
+      const Shape* param_shape, HloInstruction*& branch_param,
+      HloInstruction*& param_tuple, const HloInstruction* argument_tuple) {
+    bool used = false;
+    // Update shapes from branch parameter to the immediate tuple user.
+    for (int64_t matching_index = matching_tuple_indices.size() - 1;
+         matching_index >= 0; --matching_index) {
+      auto* new_tuple = CloneNestedTuples(branch_param);
+      CHECK_NE(new_tuple, nullptr);
+      VLOG(5) << "Cloned new tuple:" << new_tuple->parent()->ToString() << "\n";
+      std::vector<std::vector<HloInstruction*>> gte_users;
+      gte_users.reserve(branch_param->shape().tuple_shapes().size());
+      for (int64_t j = 0; j < branch_param->shape().tuple_shapes().size();
+           ++j) {
+        gte_users.push_back(std::vector<HloInstruction*>());
+      }
+      for (auto* param_user : branch_param->users()) {
+        if (param_user->opcode() == HloOpcode::kGetTupleElement) {
+          CHECK_LT(param_user->tuple_index(), gte_users.size());
+          gte_users[param_user->tuple_index()].push_back(param_user);
+        }
+      }
+      used = false;
+      *branch_param->mutable_shape() = *param_shape;
+      UpdateOriginalValueForWidenedBranchArgument(branch_param, argument_tuple);
+      const Shape* new_param_shape = nullptr;
+      for (auto param_users : gte_users) {
+        if (param_users.empty()) {
           continue;
         }
-        matching_tuple_index.push_back(i);
-      }
-      CHECK(!matching_tuple_index.empty());
-      matching_tuple_indices.push_back(matching_tuple_index);
-      CHECK_EQ(user_now->user_count(), 1);
-    }
-    CHECK(!matching_tuple_indices.empty());
-    int64_t repl_count = 0;
-    for (auto opd_index : matching_tuple_indices[0]) {
-      HloInstruction* new_input =
-          (repl_count < new_operands.size())
-              ? new_operands[repl_count++]
-              : input->AddInstruction(HloInstruction::CreateTuple({}));
-      op_map[new_input] = opd_index;
-      VLOG(2) << "Mapping operand " << repl_count << " = "
-              << new_input->ToString() << " to " << opd_index;
-      TF_RETURN_IF_ERROR(
-          user->ReplaceOperandWithDifferentShape(opd_index, new_input));
-      *user->mutable_shape()->mutable_tuple_shapes(opd_index) =
-          new_input->shape();
-    }
-    while (repl_count < new_operands.size()) {
-      HloInstruction* new_input = new_operands[repl_count++];
-      auto new_input_in_user = std::find(user->operands().begin(),
-                                         user->operands().end(), new_input);
-      int64_t opd_index = (new_input_in_user == user->operands().end())
-                              ? user->operand_count()
-                              : new_input_in_user - user->operands().begin();
-      op_map[new_input] = opd_index;
-      CHECK(op_map.contains(new_input));
-      VLOG(2) << "Mapping operand " << new_input->ToString() << " to "
-              << opd_index;
-      user->AppendOperand(new_input);
-      user->mutable_shape()->mutable_tuple_shapes()->push_back(
-          new_input->shape());
-    }
-    int64_t nesting_index = 1;
-    for (auto user_now = user->users()[0];
-         nesting_index < matching_tuple_indices.size() &&
-         user_now->opcode() != HloOpcode::kConditional;
-         user = user_now, user_now = user_now->users()[0], nesting_index++) {
-      VLOG(2) << "Replacing tuple: " << user->ToString();
-      CHECK(user_now->shape().IsTuple());
-      for (auto opd_index : matching_tuple_indices[nesting_index]) {
-        *user_now->mutable_shape()->mutable_tuple_shapes(opd_index) =
-            user->shape();
-      }
-      VLOG(2) << "Done replacing tuple:" << user->ToString();
-      CHECK_EQ(user_now->user_count(), 1);
-    }
-    VLOG(2) << "User: " << user->ToString() << "\n";
-  }
-  HloInstruction* cond =
-      (user->opcode() != HloOpcode::kConditional && user->user_count() == 1)
-          ? user->users()[0]
-          : user;
-  if (user == cond) {
-    auto new_input =
-        input->AddInstruction(HloInstruction::CreateTuple(new_operands));
-    for (int64_t i = 0; i < new_operands.size(); ++i) {
-      op_map[new_operands[i]] = i;
-    }
-    user = new_input;
-    TF_RETURN_IF_ERROR(input->ReplaceUseWithDifferentShape(cond, new_input));
-  }
-  TF_RET_CHECK(cond->opcode() == HloOpcode::kConditional)
-      << "User has non-conditional users";
-  for (int64_t branch = 0; branch < cond->branch_count(); ++branch) {
-    if (cond->operand(branch + 1) != user) {
-      continue;
-    }
-    VLOG(2) << "Modifying conditional branch: " << branch << "\n";
-    auto branch_comp = cond->branch_computation(branch);
-    auto branch_param = branch_comp->parameter_instruction(0);
-    auto* param_shape = &user->shape();
-    VLOG(2) << "param_shape: " << param_shape->ToString() << "\n";
-    VLOG(2) << "branch parameter: " << branch_param->ToString() << "\n";
-    // The surrounding tuple containing the new instruction operands.
-    HloInstruction* param_tuple = branch_param;
-    if (matching_tuple_indices.empty()) {
-      VLOG(2) << "The original input is passed in as conditional parameter "
-                 "directly.";
-      VLOG(5) << branch_comp->ToString() << "\n";
-      *branch_param->mutable_shape() = *param_shape;
-      if (branch_param == branch_comp->root_instruction()) {
-        VLOG(2) << "Cloning root user";
-        auto new_user =
-            branch_comp->AddInstruction(HloInstruction::CreateGetTupleElement(
-                branch_param->shape().tuple_shapes(0), branch_param, 0));
-        VLOG(2) << "new_user: " << new_user->ToString() << "\n";
-        branch_comp->set_root_instruction(new_user,
-                                          /* accept_different_shape =*/true);
-      }
-    } else {
-      bool used = false;
-      // Update shapes from branch parameter to the immediate tuple containing
-      // input.
-      for (int64_t matching_index = matching_tuple_indices.size() - 1;
-           matching_index >= 0; --matching_index) {
-        auto* new_tuple = CloneNestedTuples(branch_param);
-        CHECK_NE(new_tuple, nullptr);
-        VLOG(5) << "Cloned new tuple:" << new_tuple->parent()->ToString()
-                << "\n";
-        std::vector<std::vector<HloInstruction*>> gte_users;
-        for (int64_t j = 0; j < branch_param->shape().tuple_shapes_size();
-             ++j) {
-          gte_users.push_back(std::vector<HloInstruction*>());
+        CHECK_EQ(param_users[0]->opcode(), HloOpcode::kGetTupleElement);
+        auto tuple_index = param_users[0]->tuple_index();
+        VLOG(1) << "Processing gte users: " << param_users.size() << "\n";
+        VLOG(1) << "tuple_index: " << tuple_index << "\n";
+        VLOG(1) << "matching_tuple_indices: "
+                << matching_tuple_indices[matching_index][0] << "\n";
+        if (matching_tuple_indices[matching_index].end() ==
+            absl::c_find(matching_tuple_indices[matching_index], tuple_index)) {
+          continue;
         }
-        for (auto* param_user : branch_param->users()) {
-          if (param_user->opcode() == HloOpcode::kGetTupleElement) {
-            CHECK_LT(param_user->tuple_index(), gte_users.size());
-            gte_users[param_user->tuple_index()].push_back(param_user);
-          }
-        }
-
-        used = false;
-        *branch_param->mutable_shape() = *param_shape;
-        const Shape* new_param_shape = nullptr;
-        for (auto param_users : gte_users) {
-          if (param_users.empty()) continue;
-          CHECK_EQ(param_users[0]->opcode(), HloOpcode::kGetTupleElement);
-          auto tuple_index = param_users[0]->tuple_index();
-          VLOG(1) << "Processing gte users: " << param_users.size() << "\n";
-          VLOG(1) << "tuple_index: " << tuple_index << "\n";
-          VLOG(1) << "matching_tuple_indices: "
-                  << matching_tuple_indices[matching_index][0] << "\n";
-          if (matching_tuple_indices[matching_index].end() ==
-              std::find(matching_tuple_indices[matching_index].begin(),
-                        matching_tuple_indices[matching_index].end(),
-                        tuple_index)) {
-            continue;
-          }
-          for (HloInstruction* param_user : param_users) {
-            VLOG(1) << "param_user: " << param_user->ToString() << "\n";
-            if (new_param_shape == nullptr) {
-              branch_param = param_user;
-              if (matching_index > 0) {
-                param_tuple = branch_param;
-              }
-              CHECK_GT(param_shape->tuple_shapes_size(), tuple_index);
-              new_param_shape = &param_shape->tuple_shapes(tuple_index);
-              param_shape = new_param_shape;
-              VLOG(1) << "new_param_shape: " << param_shape->ToString();
-              *param_user->mutable_shape() = *new_param_shape;
-              VLOG(1) << "branch parameter: " << param_user->ToString();
-              used = true;
-            } else {
-              VLOG(1) << "new_param_shape=" << new_param_shape->ToString();
-              *param_user->mutable_shape() = *new_param_shape;
-              TF_RETURN_IF_ERROR(param_user->ReplaceAllUsesWith(branch_param));
+        for (HloInstruction* param_user : param_users) {
+          VLOG(1) << "param_user: " << param_user->ToString() << "\n";
+          if (new_param_shape == nullptr) {
+            branch_param = param_user;
+            if (matching_index > 0) {
+              param_tuple = branch_param;
             }
+            CHECK_GT(param_shape->tuple_shapes().size(), tuple_index);
+            new_param_shape = &param_shape->tuple_shapes(tuple_index);
+            param_shape = new_param_shape;
+            VLOG(1) << "new_param_shape: " << param_shape->ToString();
+            *param_user->mutable_shape() = *new_param_shape;
+            param_user->set_original_value(
+                OriginalValue::CreateFromInstruction(param_user));
+            VLOG(1) << "branch parameter: " << param_user->ToString();
+            used = true;
+          } else {
+            VLOG(1) << "new_param_shape=" << new_param_shape->ToString();
+            *param_user->mutable_shape() = *new_param_shape;
+            param_user->set_original_value(
+                OriginalValue::CreateFromInstruction(param_user));
+            CHECK_OK(param_user->ReplaceAllUsesWith(branch_param));
           }
-        }
-        if (!used) {
-          break;
         }
       }
       if (!used) {
-        VLOG(2) << "instruction is not used in this branch.";
-        continue;
+        break;
       }
     }
-    // Insert code and replace the uses of the changed parameter.
-    auto inserted = insert_into_branch(param_tuple);
-    VLOG(2) << "Inserted operands:" << inserted->ToString() << "\n";
-    std::vector<HloInstruction*> tuple_users = branch_param->users();
-    for (auto param_user : tuple_users) {
-      if (param_user == inserted ||
-          (param_user->opcode() == HloOpcode::kGetTupleElement &&
-           param_user != branch_comp->root_instruction())) {
-        continue;
-      }
-      TF_RETURN_IF_ERROR(
-          branch_param->ReplaceUseWithDifferentShape(param_user, inserted));
-
-      std::function<void(HloInstruction*)> UpdateTupleUsers =
-          [&UpdateTupleUsers](HloInstruction* param_user) {
-            for (auto new_user : param_user->users()) {
-              if (new_user->opcode() == HloOpcode::kTuple) {
-                for (int64_t opd_index = 0;
-                     opd_index < new_user->operand_count(); ++opd_index) {
-                  if (new_user->operands()[opd_index] != param_user) {
-                    continue;
-                  }
-                  *new_user->mutable_shape()->mutable_tuple_shapes(opd_index) =
-                      param_user->shape();
-                  UpdateTupleUsers(new_user);
-                  VLOG(2) << "Updated tuple user: " << new_user->ToString()
-                          << "\n";
-                }
-              }
-            }
-          };
-      UpdateTupleUsers(inserted);
-    }
-    // We can create invalid get-tuple-element() instructions when the output
-    // is not a tuple. Clean them away here.
-    // The algorithm creates some get-tuple-element() instructions, then when
-    // instructions are added to the conditional branch the algorithm can
-    // replace the operand of the GTE with an array shape. Because we use
-    // ReplaceWithDifferentShape() that's accepted. We used to rely on the
-    // TupleSimplifier to clean that up, but we shouldn't (because cleaning up
-    // invalid patterns is not the job of the TupleSimplifier).
-    // TODO(b/263496154): Change the algorithm in conditional code motion to
-    // avoid having invalid patterns lingering around at the end of the
-    // algorithm.
-    while (branch_comp->root_instruction()->opcode() ==
-               HloOpcode::kGetTupleElement &&
-           !branch_comp->root_instruction()->operand(0)->shape().IsTuple()) {
-      branch_comp->set_root_instruction(
-          branch_comp->root_instruction()->mutable_operands()[0]);
-    }
+    return used;
   }
-  return OkStatus();
-}
-
-Status MoveIntoBranch(
-    HloInstruction* inst, HloInstruction*& user,
-    absl::flat_hash_map<const HloInstruction*, int64_t>& op_map) {
-  VLOG(1) << "operand to move into branch: " << inst->ToString();
-  TF_CHECK_OK(ReplaceInputAndMoveIntoBranches(
-      inst, user, op_map, [&](HloInstruction* branch_input) {
-        VLOG(2) << "Branch input=" << branch_input->ToString() << "\n";
-        auto branch_comp = branch_input->parent();
-        std::vector<HloInstruction*> operands(inst->operand_count());
-        for (int64_t i = 0; i < inst->operand_count(); ++i) {
-          VLOG(2) << "processing operand =" << i << "\n";
-          if (branch_input->shape().IsTuple()) {
-            int64_t j = std::find(inst->operands().begin(),
-                                  inst->operands().end(), inst->operands()[i]) -
-                        inst->operands().begin();
-            VLOG(2) << "operand index = " << j << "\n";
-            CHECK(j < branch_input->shape().tuple_shapes_size());
-            if (j < i) {
-              operands[i] = operands[j];
-            } else {
-              CHECK(op_map.contains(inst->operands()[i]));
-              int64_t index = op_map[inst->operands()[i]];
-              operands[i] = branch_comp->AddInstruction(
-                  HloInstruction::CreateGetTupleElement(
-                      branch_input->shape().tuple_shapes(index), branch_input,
-                      index));
-            }
-          } else {
-            CHECK(inst->operands()[i] == inst->operands()[0]);
-            operands[i] = branch_input;
+  // Replace input with its operands inside user. Use matching_tuple_indices to
+  // remember which operands of input is matched to which entries in the new
+  // user.
+  absl::Status ReplaceInputInUser(
+      HloInstruction* input, HloInstruction*& user,
+      absl::InlinedVector<HloInstruction*, 2>& new_operands,
+      std::vector<std::vector<int64_t>>& matching_tuple_indices) {
+    if (user->opcode() == HloOpcode::kTuple) {
+      // Find the nested tuple indices before reaching the conditional.
+      for (HloInstruction *input_now = input, *user_now = user;
+           user_now->opcode() != HloOpcode::kConditional;
+           input_now = user_now, user_now = user_now->users()[0]) {
+        std::vector<int64_t> matching_tuple_index;
+        for (int64_t i = 0; i < user_now->operand_count(); ++i) {
+          if (user_now->operand(i) != input_now) {
+            continue;
           }
+          matching_tuple_index.push_back(i);
         }
-        return branch_comp->AddInstruction(
-            inst->CloneWithNewOperands(inst->shape(), operands));
-      }));
-  if (inst->user_count() == 0) {
-    TF_RETURN_IF_ERROR(inst->parent()->RemoveInstruction(inst));
+        CHECK(!matching_tuple_index.empty());
+        matching_tuple_indices.push_back(matching_tuple_index);
+        CHECK_EQ(user_now->user_count(), 1);
+      }
+      CHECK(!matching_tuple_indices.empty());
+      int64_t repl_count = 0;
+      for (auto opd_index : matching_tuple_indices[0]) {
+        HloInstruction* new_input =
+            (repl_count < new_operands.size())
+                ? new_operands[repl_count++]
+                : input->AddInstruction(HloInstruction::CreateTuple({}));
+        op_map_[new_input] = opd_index;
+        VLOG(2) << "Mapping operand " << repl_count << " = "
+                << new_input->ToString() << " to " << opd_index;
+        ABSL_RETURN_IF_ERROR(
+            user->ReplaceOperandWithDifferentShape(opd_index, new_input));
+        *user->mutable_shape()->mutable_tuple_shapes(opd_index) =
+            new_input->shape();
+      }
+      while (repl_count < new_operands.size()) {
+        HloInstruction* new_input = new_operands[repl_count++];
+        auto new_input_in_user = absl::c_find(user->operands(), new_input);
+        int64_t opd_index = (new_input_in_user == user->operands().end())
+                                ? user->operand_count()
+                                : new_input_in_user - user->operands().begin();
+        op_map_[new_input] = opd_index;
+        CHECK(op_map_.contains(new_input));
+        VLOG(2) << "Mapping operand " << new_input->ToString() << " to "
+                << opd_index;
+        user->AppendOperand(new_input);
+        user->mutable_shape()->mutable_tuple_shapes()->push_back(
+            new_input->shape());
+      }
+      // The operands of the argument tuple changed, so its OriginalValue is
+      // reassembled from them.
+      user->set_original_value(OriginalValue::CreateFromInstruction(user));
+      int64_t nesting_index = 1;
+      for (auto user_now = user->users()[0];
+           nesting_index < matching_tuple_indices.size() &&
+           user_now->opcode() != HloOpcode::kConditional;
+           user = user_now, user_now = user_now->users()[0], nesting_index++) {
+        VLOG(2) << "Replacing tuple: " << user->ToString();
+        CHECK(user_now->shape().IsTuple());
+        for (auto opd_index : matching_tuple_indices[nesting_index]) {
+          *user_now->mutable_shape()->mutable_tuple_shapes(opd_index) =
+              user->shape();
+        }
+        user_now->set_original_value(
+            OriginalValue::CreateFromInstruction(user_now));
+        VLOG(2) << "Done replacing tuple:" << user->ToString();
+        CHECK_EQ(user_now->user_count(), 1);
+      }
+      VLOG(2) << "User: " << user->ToString() << "\n";
+    }
+    return absl::OkStatus();
   }
-  return OkStatus();
-}
+  absl::Status MoveInputIntoBranch(
+      HloInstruction* input, HloInstruction*& user,
+      absl::InlinedVector<HloInstruction*, 2>& new_operands,
+      std::vector<std::vector<int64_t>>& matching_tuple_indices) {
+    HloInstruction* cond =
+        (user->opcode() != HloOpcode::kConditional && user->user_count() == 1)
+            ? user->users()[0]
+            : user;
+    if (user == cond) {
+      auto new_input =
+          input->AddInstruction(HloInstruction::CreateTuple(new_operands));
+      new_input->set_original_value(
+          OriginalValue::CreateFromInstruction(new_input));
+      for (int64_t i = 0; i < new_operands.size(); ++i) {
+        op_map_[new_operands[i]] = i;
+      }
+      user = new_input;
+      ABSL_RETURN_IF_ERROR(
+          input->ReplaceUseWithDifferentShape(cond, new_input));
+    }
+    TF_RET_CHECK(cond->opcode() == HloOpcode::kConditional)
+        << "User has non-conditional users";
+    for (int64_t branch = 0; branch < cond->branch_count(); ++branch) {
+      if (cond->operand(branch + 1) != user) {
+        continue;
+      }
+      VLOG(2) << "Modifying conditional branch: " << branch << "\n";
+      auto branch_comp = cond->branch_computation(branch);
+      auto branch_param = branch_comp->parameter_instruction(0);
+      auto* param_shape = &user->shape();
+      VLOG(2) << "param_shape: " << param_shape->ToString() << "\n";
+      VLOG(2) << "branch parameter: " << branch_param->ToString() << "\n";
+      // The surrounding tuple containing the new instruction operands.
+      HloInstruction* param_tuple = branch_param;
+      if (matching_tuple_indices.empty()) {
+        VLOG(2) << "The original input is passed in as conditional parameter "
+                   "directly.";
+        VLOG(5) << branch_comp->ToString() << "\n";
+        *branch_param->mutable_shape() = *param_shape;
+        UpdateOriginalValueForWidenedBranchArgument(branch_param, user);
+        if (branch_param == branch_comp->root_instruction()) {
+          VLOG(2) << "Cloning root user";
+          auto new_user =
+              branch_comp->AddInstruction(HloInstruction::CreateGetTupleElement(
+                  branch_param->shape().tuple_shapes(0), branch_param, 0));
+          VLOG(2) << "new_user: " << new_user->ToString() << "\n";
+          branch_comp->set_root_instruction(new_user,
+                                            /* accept_different_shape =*/true);
+        }
+      } else {
+        if (!UpdateParamShape(matching_tuple_indices, param_shape, branch_param,
+                              param_tuple, user)) {
+          VLOG(2) << "instruction is not used in this branch.";
+          continue;
+        }
+      }
+      // Insert code and replace the uses of the changed parameter.
+      auto inserted = InsertIntoBranch(input, param_tuple);
+      VLOG(2) << "Inserted operands:" << inserted->ToString() << "\n";
+      std::vector<HloInstruction*> tuple_users = branch_param->users();
+      for (auto param_user : tuple_users) {
+        if (param_user == inserted ||
+            (param_user->opcode() == HloOpcode::kGetTupleElement &&
+             param_user != branch_comp->root_instruction())) {
+          continue;
+        }
+        ABSL_RETURN_IF_ERROR(
+            branch_param->ReplaceUseWithDifferentShape(param_user, inserted));
+        // We can create invalid get-tuple-element() instructions when the
+        // output is not a tuple. Clean them away here.
+        if (branch_comp->root_instruction()->opcode() ==
+                HloOpcode::kGetTupleElement &&
+            !branch_comp->root_instruction()->operand(0)->shape().IsTuple()) {
+          branch_comp->set_root_instruction(
+              branch_comp->root_instruction()->mutable_operand(0),
+              /* accept_different_shape =*/true);
+        }
+        UpdateTupleUsers(inserted);
+      }
+    }
+    return absl::OkStatus();
+  }
+  void UpdateTupleUsers(HloInstruction* param_user) {
+    for (auto new_user : param_user->users()) {
+      if (new_user->opcode() == HloOpcode::kTuple) {
+        for (int64_t opd_index = 0; opd_index < new_user->operand_count();
+             ++opd_index) {
+          if (new_user->operands()[opd_index] != param_user) {
+            continue;
+          }
+          *new_user->mutable_shape()->mutable_tuple_shapes(opd_index) =
+              param_user->shape();
+          // This element now holds the value of the instruction inserted into
+          // the branch, so the OriginalValue of the tuple is reassembled from
+          // its operands.
+          new_user->set_original_value(
+              OriginalValue::CreateFromInstruction(new_user));
+          UpdateTupleUsers(new_user);
+          VLOG(2) << "Updated tuple user: " << new_user->ToString() << "\n";
+        }
+      }
+    }
+  }
+
+  absl::flat_hash_map<const HloInstruction*, int64_t> op_map_;
+};
 
 // Hoist operands of a conditional from outside to inside the branches.
-StatusOr<bool> ConditionalCodeMotion::MoveOperandInstructionsIn(
+absl::StatusOr<bool> ConditionalCodeMotion::MoveOperandInstructionsIn(
     HloInstruction* conditional, std::vector<Boundary>& to_move_in) {
   // Mapping boundaries to be moved to their new representations.
   int64_t to_move_in_size = to_move_in.size();
@@ -1225,11 +1444,11 @@ StatusOr<bool> ConditionalCodeMotion::MoveOperandInstructionsIn(
           << conditional->ToString(HloPrintOptions::Fingerprint()) << "\n";
   HloInstruction* user = conditional;
   int64_t user_index = 0;
-  absl::flat_hash_map<const HloInstruction*, int64_t> op_map;
+  MoveOperandIntoBranch move_into_branch;
   for (int64_t to_move_index = 0; to_move_index < to_move_in_size;
        to_move_index++) {
     Boundary b_to_move = to_move_in[to_move_index];
-    HloInstruction* op = b_to_move.operands()[0];
+    HloInstruction* op = b_to_move[0];
     CHECK_NE(op, nullptr);
     if (op->user_count() == 1) {
       user = op->users()[0];
@@ -1248,7 +1467,7 @@ StatusOr<bool> ConditionalCodeMotion::MoveOperandInstructionsIn(
       users.push_back(std::make_pair(
           user_now->users()[0], user_now->users()[0]->operand_index(user_now)));
     }
-    TF_RETURN_IF_ERROR(MoveIntoBranch(op, user, op_map));
+    ABSL_RETURN_IF_ERROR(move_into_branch(op, user));
     // Update the user chain of the original op to find the new user.
     for (int64_t i = users.size() - 1; i > 0; --i) {
       CHECK_NE(users[i].first, nullptr);
@@ -1273,8 +1492,12 @@ class GroupConnectedBoundaries {
   HloInstruction* conditional_;
   HloComputation* conditional_parent_;
   bool is_layout_sensitive_;
+  bool has_outfeed_;
   // Instructions that have been visited but are not going to be moved.
   absl::flat_hash_map<HloInstruction*, int>& visited_count_;
+  // Distinct operands of an instruction that are not constants, counted once
+  // per conditional.
+  absl::flat_hash_map<const HloInstruction*, int>& non_leaf_operand_count_;
   // The following four lines are configurations of the cost model, which will
   // be used to determine whether to move an instruction (move_config_) and
   // how strongly preferred it is to keep a pair of ops together
@@ -1344,6 +1567,22 @@ class GroupConnectedBoundaries {
     return *loc;
   }
 
+  // Number of distinct operands of hlo other than constants. Every boundary
+  // that reaches hlo asks for it, so it is counted once per conditional.
+  int NonLeafOperandCount(const HloInstruction* hlo) {
+    auto [it, inserted] = non_leaf_operand_count_.try_emplace(hlo);
+    if (inserted) {
+      absl::flat_hash_set<const HloInstruction*> op_set;
+      for (const HloInstruction* op : hlo->operands()) {
+        if (op->opcode() != HloOpcode::kConstant) {
+          op_set.insert(op);
+        }
+      }
+      it->second = op_set.size();
+    }
+    return it->second;
+  }
+
   static std::vector<int64_t>& EnsureSearchConfig(
       std::vector<int64_t>& search_config) {
     if (search_config.empty()) {
@@ -1354,15 +1593,18 @@ class GroupConnectedBoundaries {
 
  public:
   explicit GroupConnectedBoundaries(
-      HloInstruction* conditional, bool is_layout_sensitive,
+      HloInstruction* conditional, bool is_layout_sensitive, bool has_outfeed,
       absl::flat_hash_map<HloInstruction*, int>& visited_count,
+      absl::flat_hash_map<const HloInstruction*, int>& non_leaf_operand_count,
       std::vector<std::vector<int64_t>>* move_config,
       std::vector<std::vector<int64_t>>* reuse_config,
       std::vector<int64_t>& search_config)
       : conditional_(conditional),
         conditional_parent_(conditional->parent()),
         is_layout_sensitive_(is_layout_sensitive),
+        has_outfeed_(has_outfeed),
         visited_count_(visited_count),
+        non_leaf_operand_count_(non_leaf_operand_count),
         move_config_(*move_config),
         reuse_config_(*reuse_config),
         search_config_vec_(EnsureSearchConfig(search_config)),
@@ -1374,6 +1616,13 @@ class GroupConnectedBoundaries {
   // instructions. Use different integers to classify different levels
   // of reuses. Assume all instructions can be fused to enable data reuses.
   int64_t ReusesCarriedBy(HloInstruction* op, HloInstruction* user) {
+    // Side-effecting instructions can't be fused (see
+    // HloInstruction::IsFusible), so a side-effecting custom-call user carries
+    // no reuse.
+    if (user->opcode() == HloOpcode::kCustomCall &&
+        Cast<HloCustomCallInstruction>(user)->custom_call_has_side_effect()) {
+      return 0;
+    }
     std::vector<int64_t>& curconfig =
         reuse_config_[static_cast<uint32_t>(op->opcode())];
     // Flip the reuse configuration if tuning the cost model.
@@ -1391,25 +1640,49 @@ class GroupConnectedBoundaries {
             << "\n";
     if (config < 0) {
       // Assume the reuse decreases with increasing user count.
-      int count1 = CountNonLeafOps(op->users());
-      int count2 = CountNonLeafOps(user->operands());
+      int count1 = op->user_count();
+      int count2 = NonLeafOperandCount(user);
       return (-config) / count1 / count2;
     }
     return config;
   }
   void clear_recently_visited() {
     for (const auto& boundary : new_boundaries_) {
-      visited_count_.erase(boundary.operands()[0]);
+      visited_count_.erase(boundary[0]);
     }
   }
   // Returns true if `instruction` is worth hoisting.
-  bool WorthHoisting(HloInstruction* instruction, Boundary::Position pos,
-                     int64_t index) {
+  bool WorthHoisting(const Boundary& b, int64_t index) {
+    HloInstruction* instruction = b[0];
+    Boundary::Position pos = b.GetPosition();
     // This is needed for the "moving-in" transformation, to prevent the root
     // of the parent computation (which contains the conditional) to be moved
     // inside the conditional.
     VLOG(1) << "Check Worth hoisting\n";
     HloOpcode opcode = instruction->opcode();
+    if (pos == Boundary::Position::kInsideBranch &&
+        opcode == HloOpcode::kBroadcast) {
+      Boundary next_boundary = GetNextBoundary(b, 0);
+      HloOpcode op0 = next_boundary[0]->opcode();
+      bool all_same_opcode = absl::c_all_of(
+          next_boundary,
+          [&](HloInstruction* inst) { return inst->opcode() == op0; });
+      if (!all_same_opcode) {
+        VLOG(1) << "Not moving broadcast out b/c its operands have different "
+                   "opcodes.";
+        return false;
+      }
+      if (!InstructionWithinBranchIdentical(next_boundary,
+                                            is_layout_sensitive_)) {
+        VLOG(1) << "Not moving broadcast out b/c its operand is not identical.";
+        return false;
+      }
+    }
+    if (pos == Boundary::Position::kOutsideBranchUser &&
+        opcode == HloOpcode::kBroadcast) {
+      VLOG(1) << "Do not move broadcast into branches as a user.";
+      return false;
+    }
     if (opcode == HloOpcode::kTuple &&
         instruction == conditional_parent_->root_instruction()) {
       VLOG(1) << "Do not move conditional parent.";
@@ -1504,8 +1777,28 @@ class GroupConnectedBoundaries {
     return reuses;
   }
 
-  int64_t ReusesAfterBoundary(HloInstruction* user, int64_t tuple_idx = -1) {
+  // Depth cap for `ReusesAfterBoundary`. The walk is forward-only along user
+  // edges of a DAG, so it always terminates -- but the bound is the length of
+  // the longest single-consumer chain in the computation, and on a large decode
+  // program that is deep enough to exhaust the C++ stack (~160 bytes/frame)
+  // before it ends. Observed as a SIGSEGV with several hundred
+  // `ReusesAfterBoundary` frames while compiling a conditional emitted by
+  // `lax.cond`.
+  //
+  // Truncating is safe: this whole function is a heuristic benefit ESTIMATE
+  // feeding a cost model, and bailing out returns 0, the same conservative
+  // "found no reuse" answer the other early-outs above return. It can only make
+  // the pass decline to move a boundary it might otherwise have moved.
+  static constexpr int64_t kMaxReuseAnalysisDepth = 1000;
+
+  int64_t ReusesAfterBoundary(HloInstruction* user, int64_t tuple_idx = -1,
+                              int64_t depth = 0) {
     CHECK(user != nullptr);
+    if (depth > kMaxReuseAnalysisDepth) {
+      VLOG(2) << "Reuse analysis hit the depth cap at: " << user->ToString()
+              << "\n";
+      return 0;
+    }
     if (user->opcode() == HloOpcode::kConstant) {
       return 0;
     }
@@ -1569,9 +1862,9 @@ class GroupConnectedBoundaries {
           }
         } else if (op->opcode() == HloOpcode::kTuple) {
           VLOG(2) << "new tuple index = " << op->operand_index(user);
-          return ReusesAfterBoundary(op, op->operand_index(user));
+          return ReusesAfterBoundary(op, op->operand_index(user), depth + 1);
         } else {
-          return ReusesAfterBoundary(op, tuple_idx);
+          return ReusesAfterBoundary(op, tuple_idx, depth + 1);
         }
       } else if (op ==
                  conditional_->branch_computation(0)->root_instruction()) {
@@ -1605,15 +1898,14 @@ class GroupConnectedBoundaries {
     if ((boundaries[0].IsInsideBranch() ||
          boundaries[0].IsOutsideBranchOperand()) &&
         absl::c_count_if(boundaries, [](const Boundary& b) {
-          return b.operands()[0]->opcode() != HloOpcode::kTuple;
+          return b[0]->opcode() != HloOpcode::kTuple;
         }) == 0) {
       // The only boundary to move is the tuple op.
       return -1;
     }
     if (boundaries.size() == 1) {
       if (boundaries[0].IsOutsideBranchUser() &&
-          boundaries[0].operands()[0]->opcode() ==
-              HloOpcode::kGetTupleElement) {
+          boundaries[0][0]->opcode() == HloOpcode::kGetTupleElement) {
         // The only boundary of moving-in is the get_tuple_element op.
         return -1;
       }
@@ -1662,7 +1954,7 @@ class GroupConnectedBoundaries {
       return benefit;
     };
     for (const Boundary& b : boundaries) {
-      auto op = b.operands()[0];
+      auto op = b[0];
       if (op == conditional_->branch_computation(0)->root_instruction()) {
         continue;
       }
@@ -1677,34 +1969,34 @@ class GroupConnectedBoundaries {
     int64_t copy_folding_benefit = 0;
     if (boundaries[0].IsOutsideBranchUser()) {
       for (const Boundary& b : boundaries) {
-        auto op = b.operands()[0];
-        copy_folding_benefit += get_copy_folding_benefit(op);
+        copy_folding_benefit += get_copy_folding_benefit(b[0]);
       }
     }
     VLOG(2) << "Copy folding benefit: " << copy_folding_benefit;
 
     if (reuses_after == 0 && reuses_before == 0 && copy_folding_benefit == 0) {
       return -1;
-    } else if (boundaries[0].IsInsideBranch()) {
-      return reuses_after - reuses_before;
-    } else if (boundaries[0].IsOutsideBranchUser()) {
-      return reuses_before - reuses_after - 1 + copy_folding_benefit;
-    } else {
-      CHECK(boundaries[0].IsOutsideBranchOperand());
-      return reuses_after > 0;
     }
+    if (boundaries[0].IsInsideBranch()) {
+      return reuses_after - reuses_before;
+    }
+    if (boundaries[0].IsOutsideBranchUser()) {
+      return reuses_before - reuses_after - 1 + copy_folding_benefit;
+    }
+    CHECK(boundaries[0].IsOutsideBranchOperand());
+    return reuses_after > 0;
   }
 
   Boundary GetNextBoundary(const Boundary& b, int64_t op_index) {
     Boundary b2(b.GetPosition());
-    for (int j = 0; j < b.operands().size(); ++j) {
-      HloInstruction* inst = b.operands()[j];
+    for (int j = 0; j < b.size(); ++j) {
+      HloInstruction* inst = b[j];
       CHECK(inst != nullptr);
       HloInstruction* op = (b.IsInsideBranch() || b.IsOutsideBranchOperand())
                                ? inst->operands()[op_index]
                                : inst->users()[op_index];
       CHECK(op != nullptr);
-      b2.mutable_operands().push_back(op);
+      b2.push_back(op);
     }
     return b2;
   }
@@ -1713,15 +2005,14 @@ class GroupConnectedBoundaries {
   // dependent already considered for moving.
   bool IsSafeToMoveBoundary(const Boundary& next_boundary) {
     VLOG(1) << "Check is safe to move boundary.\n";
-    int64_t next_boundary_count =
-        (next_boundary.IsInsideBranch() ||
-         next_boundary.IsOutsideBranchOperand())
-            ? next_boundary.operands()[0]->user_count()
-            : CountNonLeafOps(next_boundary.operands()[0]->operands());
+    int64_t next_boundary_count = (next_boundary.IsInsideBranch() ||
+                                   next_boundary.IsOutsideBranchOperand())
+                                      ? next_boundary[0]->user_count()
+                                      : NonLeafOperandCount(next_boundary[0]);
     if (next_boundary_count <= 1) {
       if (next_boundary.IsOutsideBranchOperand() &&
-          next_boundary.operands()[0]->users()[0] == conditional_ &&
-          next_boundary.operands()[0] == conditional_->operand(0)) {
+          next_boundary[0]->users()[0] == conditional_ &&
+          next_boundary[0] == conditional_->operand(0)) {
         // Not safe to move if the operand is also the conditional operand(0)
         // in addition to being passed into the true or false branches.
         return false;
@@ -1729,51 +2020,45 @@ class GroupConnectedBoundaries {
 
       // If boundary has only a single or no dependent, safe to move.
       return true;
-    } else {
-      if (!ContainsKey(visited_count_, next_boundary.operands()[0])) {
-        VLOG(1) << "Skip next boundary " << next_boundary.ToString() << "\n"
-                << " because it has multiple dependents: "
+    }
+    if (!ContainsKey(visited_count_, next_boundary[0])) {
+      VLOG(1) << "Skip next boundary " << next_boundary.ToString() << "\n"
+              << " because it has multiple dependents: " << next_boundary_count
+              << "\n";
+      visited_count_[next_boundary[0]] = 1;
+      new_boundaries_.push_back(next_boundary);
+    } else if (next_boundary.size() == 1 ||
+               absl::c_linear_search(new_boundaries_, next_boundary)) {
+      if (++visited_count_[next_boundary[0]] == next_boundary_count) {
+        VLOG(2) << "Recovering next boundary " << next_boundary.ToString()
+                << "\n"
+                << " because all of its dependents have been visited: "
                 << next_boundary_count << "\n";
-        visited_count_[next_boundary.operands()[0]] = 1;
-        new_boundaries_.push_back(next_boundary);
-      } else {
-        auto pos = std::find(new_boundaries_.begin(), new_boundaries_.end(),
-                             next_boundary);
-        if (pos != new_boundaries_.end() ||
-            next_boundary.operands().size() == 1) {
-          int count = ++visited_count_[next_boundary.operands()[0]];
-          if (count == next_boundary_count) {
-            VLOG(2) << "Recovering next boundary " << next_boundary.ToString()
-                    << "\n"
-                    << " because all of its dependents have been visited: "
-                    << next_boundary_count << "\n";
-            visited_count_.erase(next_boundary.operands()[0]);
-            if (pos != new_boundaries_.end()) {
-              new_boundaries_.erase(pos);
-            }
-            return true;
-          }
-        } else {
-          VLOG(1) << "Skip incompatible multi-dependent boundary: "
-                  << next_boundary.ToString() << ":" << next_boundary_count
-                  << "\n";
-        }
+        visited_count_.erase(next_boundary[0]);
+        EraseElementFromVector(&new_boundaries_, next_boundary);
+        return true;
       }
     }
+    VLOG(1) << "Skip incompatible multi-dependent boundary: "
+            << next_boundary.ToString() << ":" << next_boundary_count << "\n";
     return false;
   }
+
+  int64_t CalculateMemorySize(const HloInstruction* hlo) {
+    if (hlo->shape().IsTuple() ||
+        (!has_outfeed_ && hlo->opcode() != HloOpcode::kReduce &&
+         absl::c_none_of(hlo->users(), HloPredicateIsOp<HloOpcode::kReduce>))) {
+      return 0;
+    }
+    return ShapeUtil::ByteSizeOf(hlo->shape(), 1) >> 9;
+  }
+
   // This function is reused both for moving the boundary outside or into a
   // conditional. As the result, the readability is somewhat compromised.
   // It might be nice to refactor this function to factor the outside-inside
   // considerations into separate function pointer parameters to improve
   // readability.
   void AddBoundaries(const Boundary& boundary) {
-    auto calc_memory_size = [](const HloInstruction* hlo) -> int64_t {
-      if (hlo->shape().IsTuple()) {
-        return 0;
-      }
-      return ShapeUtil::ByteSizeOf(hlo->shape(), 1) >> 9;
-    };
     BoundaryVisitor visitor;
     visitor.AddToWorkList(boundary);
     int64_t boundary_index = 0;
@@ -1782,51 +2067,48 @@ class GroupConnectedBoundaries {
       VLOG(1) << "visiting boundary " << b.ToString() << "\n";
       VLOG(1) << "boundary index=" << boundary_index << "\n";
       if ((b.IsOutsideBranchUser() || b.IsOutsideBranchOperand() ||
-           InstructionWithinBranchIdentical(b.operands(),
-                                            is_layout_sensitive_)) &&
-          IsSafeToMoveBoundary(b) &&
-          WorthHoisting(b.operands()[0], b.GetPosition(), boundary_index)) {
+           InstructionWithinBranchIdentical(b, is_layout_sensitive_)) &&
+          IsSafeToMoveBoundary(b) && WorthHoisting(b, boundary_index)) {
         connected_boundaries_.push_back(b);
         boundary_index++;
-        auto output_size = calc_memory_size(b.operands()[0]);
+        auto output_size = CalculateMemorySize(b[0]);
         connected_boundaries_memory_increase_ -= output_size;
         VLOG(1) << "memory incr = " << connected_boundaries_memory_increase_
                 << " after subtracting output size.\n";
         VLOG(1) << "boundary can be moved.";
         int64_t operand_count =
             (b.IsInsideBranch() || b.IsOutsideBranchOperand())
-                ? b.operands()[0]->operand_count()
-                : b.operands()[0]->users().size();
+                ? b[0]->operand_count()
+                : b[0]->users().size();
         for (int i = 0; i < operand_count; i++) {
           Boundary next_boundary = GetNextBoundary(b, i);
           VLOG(1) << "Add operand/user " << i << " to visit later\n";
           visitor.AddToWorkList(next_boundary);
           connected_boundaries_memory_increase_ +=
-              calc_memory_size(next_boundary.operands()[0]);
+              CalculateMemorySize(next_boundary[0]);
           VLOG(1) << "memory incr = " << connected_boundaries_memory_increase_
                   << " after adding shape size of operand " << i << "\n";
         }
       } else if (b.IsOutsideBranchOperand() &&
-                 b.operands()[0]->opcode() == HloOpcode::kBroadcast &&
+                 b[0]->opcode() == HloOpcode::kBroadcast &&
                  connected_boundaries_.size() > 1 &&
                  absl::c_find(
-                     b.operands()[0]->users(),
+                     b[0]->users(),
                      connected_boundaries_[connected_boundaries_.size() - 1]
-                         .operands()[0]) != b.operands()[0]->users().end() &&
-                 connected_boundaries_[connected_boundaries_.size() - 1]
-                         .operands()[0]
+                                          [0]) != b[0]->users().end() &&
+                 connected_boundaries_[connected_boundaries_.size() - 1][0]
                          ->opcode() != HloOpcode::kTuple) {
         // Try replicate the broadcast inside the conditional branches.
         VLOG(1) << "Replicating multi-use broadcasts:" << b.ToString() << "\n";
         connected_boundaries_.push_back(b);
-        auto output_size = calc_memory_size(b.operands()[0]) -
-                           calc_memory_size(b.operands()[0]->operand(0));
+        auto output_size =
+            CalculateMemorySize(b[0]) - CalculateMemorySize(b[0]->operand(0));
         connected_boundaries_memory_increase_ -= output_size;
         VLOG(1) << "memory incr = " << connected_boundaries_memory_increase_;
         VLOG(1) << "boundary can be moved.";
       } else {
         VLOG(1) << "boundary cannot be moved\n";
-        visited_count_[b.operands()[0]] = 1;
+        visited_count_[b[0]] = 1;
         new_boundaries_.push_back(b);
       }
     }
@@ -1838,7 +2120,7 @@ class GroupConnectedBoundaries {
     // the first set contains the boundary that is inside branches and
     // contains the root of all branches; the second set of boundaries
     // contains all the users of the conditional.
-    HloInstruction* inst = b.operands()[0];
+    HloInstruction* inst = b[0];
     if (inst == conditional) {
       int branch_count = inst->branch_count();
       // Add conditional roots as a new boundary to visit.
@@ -1847,20 +2129,29 @@ class GroupConnectedBoundaries {
         HloComputation* branch_computation = inst->branch_computation(i);
         HloInstruction* root_inst = branch_computation->root_instruction();
         CHECK(root_inst != nullptr);
-        boundary_in.mutable_operands().push_back(root_inst);
+        boundary_in.push_back(root_inst);
       }
       new_boundaries_.push_back(boundary_in);
+      // Sort the users deterministically before pushing them onto boundaries to
+      // maintain stable order.
+      std::vector<HloInstruction*> sorted_users(inst->users().begin(),
+                                                inst->users().end());
+      absl::c_sort(sorted_users,
+                   [](const HloInstruction* a, const HloInstruction* b) {
+                     return a->unique_id() < b->unique_id();
+                   });
+
       // Add conditional users as new boundaries to visit.
-      for (auto u : inst->users()) {
+      for (auto u : sorted_users) {
         Boundary boundary_in(Boundary::Position::kOutsideBranchUser);
-        boundary_in.mutable_operands().push_back(u);
+        boundary_in.push_back(u);
         new_boundaries_.push_back(boundary_in);
       }
       // Add conditional operands as new boundaries to visit.
       for (int64_t opd_idx = 1; opd_idx < inst->operand_count(); opd_idx++) {
         HloInstruction* u = inst->mutable_operand(opd_idx);
         Boundary boundary_in(Boundary::Position::kOutsideBranchOperand);
-        boundary_in.mutable_operands().push_back(u);
+        boundary_in.push_back(u);
         new_boundaries_.push_back(boundary_in);
       }
     } else {
@@ -1874,20 +2165,34 @@ class GroupConnectedBoundaries {
   }
 };
 
+// State of the boundary analysis of one conditional. The HLO does not change
+// while a conditional is analyzed, so the facts cached here stay valid until
+// the decision for the conditional is applied.
+struct ConditionalCodeMotion::ConditionalAnalysisState {
+  // Whether a branch of the conditional contains an outfeed.
+  bool has_outfeed = false;
+  // Number of times each instruction has been visited for moving.
+  absl::flat_hash_map<HloInstruction*, int> visited_count;
+  // Number of distinct operands of an instruction that are not constants, by
+  // instruction.
+  absl::flat_hash_map<const HloInstruction*, int> non_leaf_operand_count;
+};
+
 ConditionalCodeMotion::Decision ConditionalCodeMotion::ConsiderCodeMotion(
     HloInstruction* conditional, const Boundary& cur_boundary,
     std::vector<Boundary>& to_move, std::vector<Boundary>& new_boundaries,
-    absl::flat_hash_map<HloInstruction*, int>& visited_count) {
-  GroupConnectedBoundaries connect(conditional, is_layout_sensitive_,
-                                   visited_count, &move_config_, &reuse_config_,
-                                   search_config_);
+    ConditionalAnalysisState& analysis) {
+  GroupConnectedBoundaries connect(
+      conditional, is_layout_sensitive_, analysis.has_outfeed,
+      analysis.visited_count, analysis.non_leaf_operand_count, &move_config_,
+      &reuse_config_, search_config_);
   auto move_in_or_out =
       connect.BoundariesToMoveInOrOut(conditional, cur_boundary);
   if (!move_in_or_out.first.empty()) {
     auto benefit = connect.BenefitForMovingBoundaries(
         move_in_or_out.first, search_config_map_.empty());
-    VLOG(2) << "benefit of moving in or out "
-            << cur_boundary.operands()[0]->ToString() << ":" << benefit << "\n";
+    VLOG(2) << "benefit of moving in or out " << cur_boundary[0]->ToString()
+            << ":" << benefit << "\n";
     if (benefit >= 0) {
       // Stop move instruction if the memory pressure is too high.
       if (move_in_or_out.second > 0 &&
@@ -1915,16 +2220,15 @@ ConditionalCodeMotion::Decision ConditionalCodeMotion::ConsiderCodeMotion(
                           ? Decision::Direction::kMoveOutOfBranch
                           : Decision::Direction::kMoveIntoBranch,
                       benefit);
-    } else {
-      connect.clear_recently_visited();
     }
+    connect.clear_recently_visited();
   } else {
     connect.AddNewBoundaries(new_boundaries);
   }
   return Decision(Decision::Direction::kNoChange, 0);
 }
 
-StatusOr<bool> ConditionalCodeMotion::Run(
+absl::StatusOr<bool> ConditionalCodeMotion::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   VLOG(2) << "Begin a new pass of conditional code motion optimization.\n";
@@ -1937,15 +2241,6 @@ StatusOr<bool> ConditionalCodeMotion::Run(
     return false;
   }
   bool changed = false;
-  bool cleanup_changed = false;
-  {
-    HloPassPipeline subpipeline("before_conditional_code_motion");
-    subpipeline.AddPass<HloCSE>(/*is_layout_sensitive=*/is_layout_sensitive_);
-    subpipeline.AddPass<HloDCE>();
-    TF_ASSIGN_OR_RETURN(auto cleanup_changed_now,
-                        subpipeline.Run(module, execution_threads));
-    cleanup_changed |= cleanup_changed_now;
-  }
   // Gather all the conditional ops in the module ahead of time, to avoid
   // potential complications of modifying the code that affecting traversal.
   std::vector<HloInstruction*> conditional_ops;
@@ -2013,8 +2308,14 @@ StatusOr<bool> ConditionalCodeMotion::Run(
     std::vector<std::vector<Boundary>> to_move_out, to_move_in;
     std::vector<std::vector<Boundary>> new_boundaries_for_moveout;
     std::vector<std::vector<Boundary>> new_boundaries_for_movein;
-    // Number of times each instruction has been visited for moving.
-    absl::flat_hash_map<HloInstruction*, int> visited_count;
+    // Shared by the analyses of all boundaries of this conditional.
+    ConditionalAnalysisState analysis;
+    analysis.has_outfeed = absl::c_any_of(
+        conditional->called_computations(),
+        [](const HloComputation* computation) {
+          return absl::c_any_of(computation->instructions(),
+                                HloPredicateIsOp<HloOpcode::kOutfeed>);
+        });
     int benefit_move_out = 0, benefit_move_in = 0;
     Decision::Direction final_d = Decision::Direction::kNoChange;
     // The conditional is moved into a worklist as the seed (starting point).
@@ -2033,7 +2334,7 @@ StatusOr<bool> ConditionalCodeMotion::Run(
       Boundary boundary = visitor.PopNextBoundary();
       VLOG(2) << "Analyzing boundary:" << boundary.ToString() << "\n";
       auto d = ConsiderCodeMotion(conditional, boundary, to_move, next_boundary,
-                                  visited_count);
+                                  analysis);
       switch (d.GetDirection()) {
         case Decision::Direction::kMoveOutOfBranch:
           VLOG(2) << "Local Decision is move out of branch\n";
@@ -2092,14 +2393,11 @@ StatusOr<bool> ConditionalCodeMotion::Run(
           conditional_computations[branch_i]--;
           // Need to translate the analysis result to generate correct result.
           auto update_boundary = [&](Boundary& boundary) {
-            auto cloned_instr =
-                clone_context.FindInstruction(boundary.operands()[i]);
+            auto cloned_instr = clone_context.FindInstruction(boundary[i]);
             CHECK(cloned_instr != nullptr);
-            VLOG(2) << "boundary before cloning:" << boundary.operands()[i]
-                    << "\n";
-            boundary.mutable_operands()[i] = cloned_instr;
-            VLOG(2) << "boundary after cloning:" << boundary.operands()[i]
-                    << "\n";
+            VLOG(2) << "boundary before cloning:" << boundary[i] << "\n";
+            boundary[i] = cloned_instr;
+            VLOG(2) << "boundary after cloning:" << boundary[i] << "\n";
           };
           // Only boundaries to move out need to be updated.
           if (final_d == Decision::Direction::kMoveOutOfBranch) {
@@ -2122,9 +2420,9 @@ StatusOr<bool> ConditionalCodeMotion::Run(
     if (final_d == Decision::Direction::kMoveOutOfBranch) {
       CHECK(to_move_out.size() == new_boundaries_for_moveout.size());
       for (int i = 0; i < to_move_out.size(); ++i) {
-        TF_ASSIGN_OR_RETURN(bool result,
-                            MoveInstructionOut(conditional, to_move_out[i],
-                                               new_boundaries_for_moveout[i]));
+        ABSL_ASSIGN_OR_RETURN(
+            bool result, MoveInstructionOut(conditional, to_move_out[i],
+                                            new_boundaries_for_moveout[i]));
         changed |= result;
       }
       VLOG(2) << "Done moving out of branches " << to_move_out.size()
@@ -2147,14 +2445,14 @@ StatusOr<bool> ConditionalCodeMotion::Run(
         if (to_move_in[i][0].IsOutsideBranchOperand()) {
           VLOG(1) << "Modifying code---number of operand boundaries to move in:"
                   << to_move_in[i].size() << "\n";
-          TF_ASSIGN_OR_RETURN(bool result, MoveOperandInstructionsIn(
-                                               conditional, to_move_in[i]));
+          ABSL_ASSIGN_OR_RETURN(bool result, MoveOperandInstructionsIn(
+                                                 conditional, to_move_in[i]));
           changed |= result;
         } else {
           VLOG(1) << "Modifying code---number of user boundaries to move in:"
                   << to_move_in[i].size() << "\n";
           CHECK(to_move_in[i][0].IsOutsideBranchUser());
-          TF_ASSIGN_OR_RETURN(
+          ABSL_ASSIGN_OR_RETURN(
               bool result, MoveUserInstructionsIn(conditional, to_move_in[i]));
           changed |= result;
         }
@@ -2163,11 +2461,11 @@ StatusOr<bool> ConditionalCodeMotion::Run(
         // Remove hoisted instructions from the branches.
         for (int64_t j = to_move_in[i].size() - 1; j >= 0; j--) {
           Boundary boundary_to_move_in = to_move_in[i][j];
-          HloInstruction* op = boundary_to_move_in.operands()[0];
+          HloInstruction* op = boundary_to_move_in[0];
           if (op->user_count() == 0 && op->parent() != nullptr) {
             VLOG(2) << "Removing boundary:" << boundary_to_move_in.ToString()
                     << "\n";
-            TF_RETURN_IF_ERROR(conditional->parent()->RemoveInstruction(op));
+            ABSL_RETURN_IF_ERROR(conditional->parent()->RemoveInstruction(op));
             VLOG(2) << "Done removing boundary.\n";
           }
         }
@@ -2191,7 +2489,7 @@ StatusOr<bool> ConditionalCodeMotion::Run(
       // cloning has been done by the earlier analysis.
       // TOOD[b/165848866]: extend solution to handle cloning for special
       // move.
-      TF_ASSIGN_OR_RETURN(
+      ABSL_ASSIGN_OR_RETURN(
           bool convert_result,
           ConvertSpecialMove(conditional, is_layout_sensitive_));
       if (convert_result) {
@@ -2213,11 +2511,10 @@ StatusOr<bool> ConditionalCodeMotion::Run(
     subpipeline.AddPass<HloDCE>();
     subpipeline.AddPass<TupleSimplifier>();
     subpipeline.AddPass<HloDCE>();
-    TF_ASSIGN_OR_RETURN(auto cleanup_changed_now, subpipeline.Run(module));
-    cleanup_changed |= cleanup_changed_now;
-  }
-  if (cleanup_changed) {
-    VLOG(2) << "subpipeline cleanup have modified code\n";
+    ABSL_ASSIGN_OR_RETURN(bool cleanup_changed, subpipeline.Run(module));
+    if (cleanup_changed) {
+      VLOG(2) << "subpipeline cleanup have modified code\n";
+    }
   }
   return changed;
 }

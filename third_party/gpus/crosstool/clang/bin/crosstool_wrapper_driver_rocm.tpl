@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Crosstool wrapper for compiling ROCm programs.
 
 SYNOPSIS:
@@ -20,18 +20,22 @@ import os
 import subprocess
 import re
 import sys
-import pipes
+import shlex
 
-# Template values set by rocm_configure.bzl.
-CPU_COMPILER = ('%{cpu_compiler}')
+# Get paths from environment variables set by toolchain features
+CPU_COMPILER = os.environ.get('HOST_COMPILER', '/usr/bin/clang')
+HIPCC_PATH = os.environ.get('HIPCC_PATH', '/opt/rocm/bin/hipcc')
+ROCM_PATH = os.environ.get('ROCM_PATH', '/opt/rocm')
+AMDGPU_TARGETS = os.environ.get('AMDGPU_TARGETS', '')
+HIPCC_ENV = os.environ.get('HIPCC_ENV', '')
+ROCR_RUNTIME_LIBRARY = os.environ.get('ROCR_RUNTIME_LIBRARY', 'amdhip64')
+TMPDIR = '%{tmpdir}'
+VERBOSE = os.environ.get('CROSSTOOL_VERBOSE', '0') == '1'
 
-HIPCC_PATH = '%{hipcc_path}'
-HIPCC_ENV = '%{hipcc_env}'
-HIP_RUNTIME_PATH = '%{hip_runtime_path}'
-HIP_RUNTIME_LIBRARY = '%{hip_runtime_library}'
-ROCR_RUNTIME_PATH = '%{rocr_runtime_path}'
-ROCR_RUNTIME_LIBRARY = '%{rocr_runtime_library}'
-VERBOSE = '%{crosstool_verbose}'=='1'
+# Derived paths
+HIP_RUNTIME_PATH = ROCM_PATH + '/lib'
+HIP_RUNTIME_LIBRARY = ROCM_PATH + '/lib'
+ROCR_RUNTIME_PATH = ROCM_PATH + '/lib'
 
 def Log(s):
   print('gpus/crosstool: {0}'.format(s))
@@ -74,7 +78,8 @@ def GetHostCompilerOptions(argv):
   parser.add_argument('-iquote', nargs='*', action='append')
   parser.add_argument('--sysroot', nargs=1)
   parser.add_argument('-g', nargs='*', action='append')
-  parser.add_argument('-fno-canonical-system-headers', action='store_true')
+  parser.add_argument('-no-canonical-prefixes', action='store_true')
+  parser.add_argument('--genco', action='store_true')
 
   args, _ = parser.parse_known_args(argv)
 
@@ -86,12 +91,34 @@ def GetHostCompilerOptions(argv):
     opts += ' -iquote ' + ' -iquote '.join(sum(args.iquote, []))
   if args.g:
     opts += ' -g' + ' -g'.join(sum(args.g, []))
-  #if args.fno_canonical_system_headers:
-  #  opts += ' -fno-canonical-system-headers'
+  if args.no_canonical_prefixes:
+    opts += ' -no-canonical-prefixes'
   if args.sysroot:
     opts += ' --sysroot ' + args.sysroot[0]
+  if args.genco:
+    opts += ' --genco'
 
   return opts
+
+def GetHipccOptions(argv):
+  """Collect the -hipcc_options values from argv.
+  Args:
+    argv: A list of strings, possibly the argv passed to main().
+  Returns:
+    The string that can be passed directly to hipcc.
+  """
+
+  parser = ArgumentParser()
+  # TODO find a better place for this
+  parser.add_argument('-gline-tables-only', action='store_true')
+
+  args, _ = parser.parse_known_args(argv)
+
+  hipcc_opts = ' -gline-tables-only ' if args.gline_tables_only else ''
+  for target in AMDGPU_TARGETS.split(','):
+    hipcc_opts += ' --offload-arch=' + target.strip()
+
+  return hipcc_opts
 
 def system(cmd):
   """Invokes cmd with os.system().
@@ -122,6 +149,7 @@ def InvokeHipcc(argv, log=False):
   """
 
   host_compiler_options = GetHostCompilerOptions(argv)
+  hipcc_compiler_options = GetHipccOptions(argv)
   opt_option = GetOptionValue(argv, 'O')
   m_options = GetOptionValue(argv, 'm')
   m_options = ''.join([' -m' + m for m in m_options if m in ['32', '64']])
@@ -156,11 +184,11 @@ def InvokeHipcc(argv, log=False):
   # Unfortunately, there are other options that have -c prefix too.
   # So allowing only those look like C/C++ files.
   src_files = [f for f in src_files if
-               re.search('\.cpp$|\.cc$|\.c$|\.cxx$|\.C$', f)]
+               re.search(r'\.cpp$|\.cc$|\.c$|\.cxx$|\.C$', f)]
   srcs = ' '.join(src_files)
   out = ' -o ' + out_file[0]
 
-  hipccopts = ' '
+  hipccopts = hipcc_compiler_options + ' '
   # In hip-clang environment, we need to make sure that hip header is included
   # before some standard math header like <complex> is included in any source.
   # Otherwise, we get build error.
@@ -179,6 +207,7 @@ def InvokeHipcc(argv, log=False):
   hipccopts += defines
   hipccopts += std_options
   hipccopts += m_options
+  hipccopts += ' --rocm-path="' + ROCM_PATH + '" '
 
   if depfiles:
     # Generate the dependency file
@@ -205,6 +234,8 @@ def InvokeHipcc(argv, log=False):
 
 
 def main():
+  if TMPDIR:
+    os.environ['TMPDIR'] = TMPDIR
   # ignore PWD env var
   os.environ['PWD']=''
 
@@ -220,13 +251,13 @@ def main():
   if args.x and args.x[0] == 'rocm':
     # compilation for GPU objects
     if args.rocm_log: Log('-x rocm')
-    leftover = [pipes.quote(s) for s in leftover]
+    leftover = [shlex.quote(s) for s in leftover]
     if args.rocm_log: Log('using hipcc')
     return InvokeHipcc(leftover, log=args.rocm_log)
 
   elif args.pass_exit_codes:
     # link
-    # with hipcc compiler invoked with -fno-gpu-rdc by default now, it's ok to 
+    # with hipcc compiler invoked with -fno-gpu-rdc by default now, it's ok to
     # use host compiler as linker, but we have to link with HCC/HIP runtime.
     # Such restriction would be revised further as the bazel script get
     # improved to fine tune dependencies to ROCm libraries.

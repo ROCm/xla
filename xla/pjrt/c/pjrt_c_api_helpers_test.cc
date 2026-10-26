@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,22 +14,37 @@ limitations under the License.
 ==============================================================================*/
 #include "xla/pjrt/c/pjrt_c_api_helpers.h"
 
-#include <cstdint>
-#include <string>
-#include <vector>
-
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "absl/container/flat_hash_map.h"
+#include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
+#include "absl/status/statusor.h"
 #include "absl/time/time.h"
+#include "stablehlo/dialect/Version.h"
+#include "xla/future.h"
 #include "xla/layout.h"
 #include "xla/pjrt/c/pjrt_c_api.h"
 #include "xla/pjrt/c/pjrt_c_api_wrapper_impl.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/status.h"
+#include "xla/pjrt/distributed/in_memory_key_value_store.h"
+#include "xla/pjrt/pjrt_common.h"
+#include "xla/tsl/distributed_runtime/call_options.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace pjrt {
 namespace {
 
+using ::absl_testing::IsOkAndHolds;
 using ::testing::HasSubstr;
 
 TEST(PjRtCApiHelperTest, ConvertValidPjRtValueType) {
@@ -56,7 +71,8 @@ TEST(PjRtCApiHelperTest, ValidOptionNameAndPjRtValueTypeIndex) {
       {"int64", PJRT_NamedValue_Type::PJRT_NamedValue_kInt64},
   });
   absl::flat_hash_map<std::string, xla::PjRtValueType> valid_map = {
-      {"string", "v1"}, {"int64", static_cast<int64_t>(1)}};
+      {"string", static_cast<std::string>("v1")},
+      {"int64", static_cast<int64_t>(1)}};
 
   TF_EXPECT_OK(ValidateCreateOptions(valid_map, expected));
 }
@@ -71,7 +87,7 @@ TEST(PjRtCApiHelperTest, InvalidOptionName) {
 
   auto status = ValidateCreateOptions(invalid_map, expected);
 
-  EXPECT_NE(status, tsl::OkStatus());
+  EXPECT_NE(status, absl::OkStatus());
   EXPECT_THAT(status.message(),
               HasSubstr("Unexpected option name passed to PJRT_Client_Create"));
 }
@@ -86,59 +102,43 @@ TEST(PjRtCApiHelperTest, InvalidOptionTypeIndex) {
 
   auto status = ValidateCreateOptions(invalid_map, expected);
 
-  EXPECT_NE(status, tsl::OkStatus());
+  EXPECT_NE(status, absl::OkStatus());
   EXPECT_THAT(status.message(),
               HasSubstr("Option passed to PJRT_Client_Create with name string "
-                        "has type index 1 but expected type index is 0"));
+                        "has type index 2 but expected type index is 0"));
 }
 
 TEST(PjRtCApiHelperTest, Callback) {
-  absl::flat_hash_map<std::string, std::string> kv_store;
-  absl::Mutex mu;
-  xla::PjRtClient::KeyValueGetCallback kv_get =
-      [&kv_store, &mu](const std::string& k,
-                       absl::Duration timeout) -> xla::StatusOr<std::string> {
-    absl::Duration wait_interval = absl::Milliseconds(10);
-    int num_retry = timeout / wait_interval;
-    for (int i = 0; i < num_retry; i++) {
-      {
-        absl::MutexLock lock(&mu);
-        auto iter = kv_store.find(k);
-        if (iter != kv_store.end()) {
-          return iter->second;
-        }
-      }
-      absl::SleepFor(wait_interval);
-    }
-    return absl::NotFoundError(
-        absl::StrCat(k, " is not found in the kv store."));
-  };
-  xla::PjRtClient::KeyValuePutCallback kv_put =
-      [&kv_store, &mu](const std::string& k,
-                       const std::string& v) -> xla::Status {
-    {
-      absl::MutexLock lock(&mu);
-      kv_store[k] = v;
-    }
-    return tsl::OkStatus();
-  };
-  auto kv_callback_data = ConvertToCKeyValueCallbacks(kv_get, kv_put);
-  auto converted_back_kv_get = ToCppKeyValueGetCallback(
-      kv_callback_data->c_kv_get, &kv_callback_data->kv_get_c_func);
-  auto converted_back_kv_put = ToCppKeyValuePutCallback(
+  auto kv_store = std::make_shared<xla::InMemoryKeyValueStore>();
+
+  auto kv_callback_data = ConvertToCKeyValueCallbacks(kv_store);
+  auto converted_kv_store = ToCppKeyValueStore(
+      kv_callback_data->c_kv_get, &kv_callback_data->kv_get_c_func,
+      kv_callback_data->c_kv_try_get, &kv_callback_data->kv_try_get_c_func,
       kv_callback_data->c_kv_put, &kv_callback_data->kv_put_c_func);
 
-  auto s = converted_back_kv_put("key", "value");
-  TF_EXPECT_OK(s);
+  absl::StatusOr<std::string> v_not_found =
+      converted_kv_store->Get("key", absl::Seconds(1));
+  EXPECT_TRUE(absl::IsNotFound(v_not_found.status())) << v_not_found.status();
 
-  auto v = converted_back_kv_get("key", absl::Seconds(1));
-  TF_EXPECT_OK(v.status());
-  EXPECT_EQ(*v, "value");
+  EXPECT_OK(converted_kv_store->Set("key", "value"));
+
+  EXPECT_THAT(converted_kv_store->Get("key", absl::Seconds(1)),
+              IsOkAndHolds("value"));
+  EXPECT_THAT(converted_kv_store->TryGet("key"), IsOkAndHolds("value"));
+
+  auto [promise, future] = xla::MakePromise<std::string>();
+  std::shared_ptr<tsl::CallOptions> call_options = converted_kv_store->AsyncGet(
+      "key",
+      [promise = std::move(promise).ToShared()](
+          const absl::StatusOr<std::string>& result) { promise->Set(result); });
+  EXPECT_EQ(call_options, nullptr);
+  EXPECT_TRUE(absl::IsUnimplemented(future.Await().status()));
 }
 
 TEST(PjRtCApiHelperTest, ConvertToCLayoutFromStrides) {
   std::vector<int64_t> strides = {4, 8};
-  xla::StatusOr<BufferMemoryLayoutData> layout_data =
+  absl::StatusOr<BufferMemoryLayoutData> layout_data =
       ConvertToBufferMemoryLayoutData(strides);
 
   EXPECT_TRUE(layout_data.ok());
@@ -221,6 +221,37 @@ TEST(PjRtCApiHelperTest, ConvertFromCLayoutToLayoutNoTile) {
   TF_ASSERT_OK_AND_ASSIGN(xla::Layout layout, ConvertToLayout(c_layout.tiled));
 
   EXPECT_EQ(layout.ToString(), "{1,0}");
+}
+
+TEST(PjRtCApiHelperTest, GetXlaPluginCAttributes) {
+  auto result = GetXlaPluginCAttributes();
+  std::unordered_map<std::string, PJRT_NamedValue*> map;
+  for (PJRT_NamedValue& nv : result) {
+    auto [_, did_not_exist_yet] = map.insert({nv.name, &nv});
+    EXPECT_TRUE(did_not_exist_yet);
+  }
+  EXPECT_TRUE(map.find("xla_version") != map.end());
+  PJRT_NamedValue* current = map["stablehlo_current_version"];
+  mlir::vhlo::Version current_version =
+      mlir::vhlo::Version::getCurrentVersion();
+  EXPECT_TRUE(current->int64_array_value[0] == current_version.getMajor());
+  EXPECT_TRUE(current->int64_array_value[1] == current_version.getMinor());
+  EXPECT_TRUE(current->int64_array_value[2] == current_version.getPatch());
+  PJRT_NamedValue* minimum = map["stablehlo_minimum_version"];
+  mlir::vhlo::Version minimum_version =
+      mlir::vhlo::Version::getMinimumVersion();
+  EXPECT_TRUE(minimum->int64_array_value[0] == minimum_version.getMajor());
+  EXPECT_TRUE(minimum->int64_array_value[1] == minimum_version.getMinor());
+  EXPECT_TRUE(minimum->int64_array_value[2] == minimum_version.getPatch());
+}
+
+TEST(PjRtCApiHelperTest, BuildXlaShapeFromCWithNullptrLayout) {
+  int64_t dims[] = {2, 3};
+  TF_ASSERT_OK_AND_ASSIGN(
+      xla::Shape shape,
+      BuildXlaShapeFromC(PJRT_Buffer_Type::PJRT_Buffer_Type_F32, dims, 2,
+                         nullptr));
+  EXPECT_FALSE(shape.has_layout());
 }
 
 }  // namespace

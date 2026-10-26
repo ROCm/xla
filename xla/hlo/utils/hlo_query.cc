@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,40 +16,81 @@ limitations under the License.
 #include "xla/hlo/utils/hlo_query.h"
 
 #include <algorithm>
+#include <cstdint>
 
 #include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/layout.h"
 #include "xla/literal.h"
+#include "xla/service/hlo.pb.h"
+#include "xla/service/pattern_matcher.h"
 #include "xla/shape_util.h"
+#include "xla/util.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace hlo_query {
 
 bool IsCollectiveCommunicationOp(HloOpcode op) {
-  return op == HloOpcode::kAllReduce || op == HloOpcode::kAllGather ||
-         op == HloOpcode::kAllToAll || op == HloOpcode::kCollectivePermute ||
-         op == HloOpcode::kReduceScatter || op == HloOpcode::kAllReduceStart ||
-         op == HloOpcode::kAllGatherStart ||
-         op == HloOpcode::kCollectivePermuteStart;
+  switch (op) {
+    case HloOpcode::kAllReduce:
+    case HloOpcode::kAllGather:
+    case HloOpcode::kAllToAll:
+    case HloOpcode::kRaggedAllToAll:
+    case HloOpcode::kCollectivePermute:
+    case HloOpcode::kCollectiveBroadcast:
+    case HloOpcode::kCollectiveReduce:
+    case HloOpcode::kReduceScatter:
+    case HloOpcode::kAllReduceStart:
+    case HloOpcode::kAllGatherStart:
+    case HloOpcode::kCollectivePermuteStart:
+      return true;
+    default:
+      return false;
+  }
 }
 
-bool IsAsyncCollectiveStartOp(HloOpcode op, bool include_send_recv) {
-  return op == HloOpcode::kAllReduceStart || op == HloOpcode::kAllGatherStart ||
-         op == HloOpcode::kCollectivePermuteStart ||
-         op == HloOpcode::kAsyncStart ||
-         (include_send_recv &&
-          (op == HloOpcode::kSend || op == HloOpcode::kRecv));
+bool IsAsyncCollectiveStartOp(const HloInstruction* instruction,
+                              bool include_send_recv) {
+  HloOpcode op = instruction->opcode();
+  switch (op) {
+    case HloOpcode::kAsyncStart:
+      return IsCollectiveCommunicationOp(instruction->async_wrapped_opcode());
+    case HloOpcode::kAllReduceStart:
+    case HloOpcode::kAllGatherStart:
+    case HloOpcode::kCollectivePermuteStart:
+      return true;
+    case HloOpcode::kSend:
+    case HloOpcode::kRecv:
+      return include_send_recv;
+    default:
+      return false;
+  }
 }
 
-bool IsAsyncCollectiveDoneOp(HloOpcode op, bool include_send_recv) {
-  return op == HloOpcode::kAllReduceDone || op == HloOpcode::kAllGatherDone ||
-         op == HloOpcode::kCollectivePermuteDone ||
-         op == HloOpcode::kAsyncDone ||
-         (include_send_recv &&
-          (op == HloOpcode::kSendDone || op == HloOpcode::kRecvDone));
+bool IsAsyncCollectiveDoneOp(const HloInstruction* instruction,
+                             bool include_send_recv) {
+  HloOpcode op = instruction->opcode();
+  switch (op) {
+    case HloOpcode::kAsyncDone:
+      return IsCollectiveCommunicationOp(instruction->async_wrapped_opcode());
+    case HloOpcode::kAllReduceDone:
+    case HloOpcode::kAllGatherDone:
+    case HloOpcode::kCollectivePermuteDone:
+      return true;
+    case HloOpcode::kSendDone:
+    case HloOpcode::kRecvDone:
+      return include_send_recv;
+    default:
+      return false;
+  }
 }
 
 bool IsConstantR0F32(HloInstruction* instruction, float* out) {
@@ -66,6 +107,20 @@ bool AllOperandsAreParametersOrConstants(const HloInstruction& instruction) {
   for (const auto& operand : instruction.operands()) {
     if (operand->opcode() != HloOpcode::kParameter &&
         operand->opcode() != HloOpcode::kConstant) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool AllOperandsAreParametersOrConstantsWithSingleUser(
+    const HloInstruction& instruction) {
+  for (const auto& operand : instruction.operands()) {
+    if (operand->opcode() != HloOpcode::kParameter &&
+        operand->opcode() != HloOpcode::kConstant) {
+      return false;
+    }
+    if (operand->user_count() > 1) {
       return false;
     }
   }
@@ -145,11 +200,41 @@ bool IsBroadcastOfScalarConstant(const HloInstruction& instr) {
          IsScalarConstant(instr.operand(0));
 }
 
+bool IsBroadcastOfParameter(const HloInstruction& instr) {
+  return instr.opcode() == HloOpcode::kBroadcast &&
+         instr.operand(0)->opcode() == HloOpcode::kParameter;
+}
+
+bool IsEffectiveParameter(const HloInstruction& instr) {
+  return instr.opcode() == HloOpcode::kParameter ||
+         ((instr.opcode() == HloOpcode::kBitcast ||
+           instr.opcode() == HloOpcode::kGetTupleElement) &&
+          IsEffectiveParameter(*instr.operand(0)));
+}
+
+const HloInstruction* StripCastLike(const HloInstruction* instr) {
+  while (instr->opcode() == HloOpcode::kCopy ||
+         instr->opcode() == HloOpcode::kConvert ||
+         instr->opcode() == HloOpcode::kBitcast) {
+    instr = instr->operand(0);
+  }
+  return instr;
+}
+
 HloInstruction* GetFirstInstructionWithOpcode(const HloComputation& computation,
                                               const HloOpcode opcode) {
   auto instructions = computation.instructions();
   auto it = absl::c_find_if(instructions, [&](HloInstruction* instr) {
     return instr->opcode() == opcode;
+  });
+  return it == instructions.end() ? nullptr : *it;
+}
+
+HloInstruction* GetFirstInstructionWithOpcode(
+    const HloComputation& computation, absl::Span<const HloOpcode> opcodes) {
+  auto instructions = computation.instructions();
+  auto it = absl::c_find_if(instructions, [&](HloInstruction* instr) {
+    return absl::c_linear_search(opcodes, instr->opcode());
   });
   return it == instructions.end() ? nullptr : *it;
 }
@@ -217,6 +302,107 @@ bool HasX64TransformedHostTransfer(const HloModule& module) {
     }
   }
   return false;
+}
+
+HloInstruction* GetUniqueGteInstruction(const HloInstruction* operand,
+                                        int64_t index) {
+  HloInstruction* gte = nullptr;
+  for (HloInstruction* instr : operand->users()) {
+    if (!Match(instr, match::GetTupleElement().WithTupleIndex(index))) {
+      continue;
+    }
+    if (instr->operand(0) != operand) {
+      continue;
+    }
+    // If gte is not unique, return nullptr.
+    if (gte != nullptr) {
+      return nullptr;
+    }
+    gte = instr;
+  }
+  return gte;
+}
+
+int64_t CountGteInstructionsWithIndex(const HloComputation* computation,
+                                      int64_t index) {
+  int64_t count = 0;
+  for (const HloInstruction* instr : computation->instructions()) {
+    if (DynCast<HloGetTupleElementInstruction>(instr)) {
+      count += instr->tuple_index() == index;
+    }
+  }
+  return count;
+}
+
+HloComputation* FindComputation(HloModule* module, absl::string_view name) {
+  auto computations = module->computations();
+  auto it = absl::c_find_if(
+      computations, [&](HloComputation* c) { return c->name() == name; });
+  if (it == computations.end()) {
+    return nullptr;
+  }
+  return *it;
+}
+
+HloInstruction* FindInstruction(const HloComputation* computation,
+                                absl::string_view name) {
+  for (HloInstruction* instruction : computation->instructions()) {
+    if (instruction->name() == name) return instruction;
+  }
+  return nullptr;
+}
+
+HloInstruction* FindInstruction(const HloComputation* computation,
+                                HloOpcode opcode) {
+  for (auto* instruction : computation->instructions()) {
+    if (instruction->opcode() == opcode) return instruction;
+  }
+  return nullptr;
+}
+
+bool IsChangeTilingCopyFusion(const HloInstruction* instr) {
+  if (!instr->parent()->IsFusionComputation() ||
+      instr->opcode() != HloOpcode::kFusion ||
+      instr->called_computations().size() != 1 || instr->operand_count() != 1) {
+    return false;
+  }
+  // These copy fusions should only change tiling (and sometimes memory space).
+  const HloInstruction* fusion_root = instr->fused_expression_root();
+  if (!fusion_root->operand(0)->shape().has_layout() ||
+      !fusion_root->shape().has_layout()) {
+    return false;
+  }
+
+  const Layout& operand_layout = fusion_root->operand(0)->shape().layout();
+  const Layout& output_layout = fusion_root->shape().layout();
+  absl::Span<const Tile> operand_tiles = operand_layout.tiles();
+  absl::Span<const Tile> output_tiles = output_layout.tiles();
+  return fusion_root->opcode() == HloOpcode::kCopy &&
+         Layout::Equal().IgnoreTiles().IgnoreMemorySpace()(operand_layout,
+                                                           output_layout) &&
+         operand_tiles != output_tiles;
+}
+
+bool IsStandardAssociativeScan(const HloInstruction* instruction) {
+  auto* scan = DynCast<HloScanInstruction>(instruction);
+  if (scan == nullptr || scan->IsRoot() ||
+      scan->is_associative() != TRI_STATE_TRUE || scan->num_carries() != 1 ||
+      scan->operand_count() != 2 || !scan->shape().IsTuple() ||
+      scan->shape().tuple_shapes().size() != 2 ||
+      !scan->shape().tuple_shapes(0).IsArray()) {
+    return false;
+  }
+
+  for (const HloInstruction* user : scan->users()) {
+    if (user->user_count() == 0 && !user->IsRoot()) {
+      continue;
+    }
+    if (user->opcode() != HloOpcode::kGetTupleElement) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 }  // namespace hlo_query

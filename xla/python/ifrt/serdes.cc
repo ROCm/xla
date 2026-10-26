@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,11 +23,17 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/cord.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "xla/python/ifrt/serdes.pb.h"
-#include "tsl/platform/statusor.h"
+#include "xla/python/ifrt/serdes_default_version_accessor.h"
+#include "xla/python/ifrt/serdes_version.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace ifrt {
@@ -49,19 +55,27 @@ struct Registry {
 };
 
 Registry* registry() {
-  static auto* r = new Registry();
+  static auto* const r = new Registry();
   return r;
 }
 
 }  // namespace
 
 char Serializable::ID = 0;
+char SerializeOptions::ID = 0;
 char DeserializeOptions::ID = 0;
 char SerDes::ID = 0;
 
+SerDesVersion GetRequestedSerDesVersion(const SerializeOptions* options) {
+  if (options == nullptr) {
+    return SerDesDefaultVersionAccessor::Get();
+  }
+  return options->version;
+}
+
 void RegisterSerDes(const void* type_id, std::unique_ptr<SerDes> serdes) {
   Registry* const r = registry();
-  absl::MutexLock l(&r->mu);
+  absl::MutexLock l(r->mu);
 
   CHECK(r->type_id_to_serdes.insert({type_id, serdes.get()}).second)
       << "xla::ifrt::SerDes cannot be registered more than once for the same "
@@ -79,41 +93,58 @@ void RegisterSerDes(const void* type_id, std::unique_ptr<SerDes> serdes) {
   serdes.release();
 }
 
-absl::StatusOr<Serialized> Serialize(Serializable& serializable) {
+absl::Status Serialize(const Serializable& serializable,
+                       std::unique_ptr<SerializeOptions> options,
+                       Serialized& proto) {
   SerDes* serdes;
   {
     Registry* const r = registry();
-    absl::MutexLock l(&r->mu);
+    absl::MutexLock l(r->mu);
     auto it = r->type_id_to_serdes.find(serializable.dynamicClassID());
     if (it == r->type_id_to_serdes.end()) {
       return absl::UnimplementedError(
-          "Serializable has no associated SerDes implementation");
+          "Serialize call failed. Serializable has no associated SerDes "
+          "implementation");
     }
     serdes = it->second;
   }
-  TF_ASSIGN_OR_RETURN(std::string data, serdes->Serialize(serializable));
+  ABSL_ASSIGN_OR_RETURN(absl::Cord data,
+                        serdes->Serialize(serializable, std::move(options)));
 
-  Serialized proto;
+  proto.Clear();
   proto.set_type_name(std::string(serdes->type_name()));
   proto.set_data(std::move(data));
-  return proto;
+  return absl::OkStatus();
 }
 
-absl::StatusOr<std::unique_ptr<Serializable>> Deserialize(
+absl::StatusOr<Serialized> Serialize(
+    const Serializable& serializable,
+    std::unique_ptr<SerializeOptions> options) {
+  Serialized serialized;
+  ABSL_RETURN_IF_ERROR(Serialize(serializable, std::move(options), serialized));
+  return serialized;
+}
+
+namespace serdes_internal {
+
+absl::StatusOr<std::unique_ptr<Serializable>> DeserializeUnchecked(
     const Serialized& serialized, std::unique_ptr<DeserializeOptions> options) {
   SerDes* serdes;
   {
     Registry* const r = registry();
-    absl::MutexLock l(&r->mu);
+    absl::MutexLock l(r->mu);
     auto it = r->name_to_serdes.find(serialized.type_name());
     if (it == r->name_to_serdes.end()) {
-      return absl::UnimplementedError(
-          "Serializable has no associated SerDes implementation");
+      return absl::UnimplementedError(absl::StrCat(
+          "Deserialize call failed. Serializable has no associated SerDes ",
+          "implementation. type_name: ", serialized.type_name()));
     }
     serdes = it->second;
   }
   return serdes->Deserialize(serialized.data(), std::move(options));
 }
+
+}  // namespace serdes_internal
 
 }  // namespace ifrt
 }  // namespace xla

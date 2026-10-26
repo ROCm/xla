@@ -1,4 +1,22 @@
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 # hwloc: Portable Hardware Locality Library
+
+load("@bazel_skylib//rules:expand_template.bzl", "expand_template")
+load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda")
 
 package(
     default_visibility = ["//visibility:public"],
@@ -7,9 +25,6 @@ package(
 licenses(["notice"])
 
 exports_files(["COPYING"])
-
-load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda")
-load("@bazel_skylib//rules:expand_template.bzl", "expand_template")
 
 COMMON_INCLUDE_COPTS = [
     "-I.",
@@ -35,9 +50,12 @@ _INCLUDE_HWLOC_AUTOIGEN_CONFIG_H_COMMON_SUBS = {
     "#undef hwloc_pid_t": "#define hwloc_pid_t pid_t",
     "#undef hwloc_thread_t": "#define hwloc_thread_t pthread_t",
     "#  undef HWLOC_HAVE_STDINT_H": "#  define HWLOC_HAVE_STDINT_H 1",
-    "#undef HWLOC_SYM_TRANSFORM": "#define HWLOC_SYM_TRANSFORM 0",
-    "#undef HWLOC_SYM_PREFIX_CAPS": "#define HWLOC_SYM_PREFIX_CAPS HWLOC_",
-    "#undef HWLOC_SYM_PREFIX": "#define HWLOC_SYM_PREFIX hwloc_",
+    # Prefix bundled APIs (tf_hwloc_*) so they cannot interpose system hwloc
+    # (openxla/xla#39355, tensorflow#125854). Public symbols must stay visible
+    # across DSOs (libplatform_port.so vs libtensorflow_framework.so).
+    "#undef HWLOC_SYM_TRANSFORM": "#define HWLOC_SYM_TRANSFORM 1",
+    "#undef HWLOC_SYM_PREFIX_CAPS": "#define HWLOC_SYM_PREFIX_CAPS TF_",
+    "#undef HWLOC_SYM_PREFIX": "#define HWLOC_SYM_PREFIX tf_",
 }
 
 _INCLUDE_HWLOC_AUTOIGEN_CONFIG_H_LINUX_SUBS = dict(_INCLUDE_HWLOC_AUTOIGEN_CONFIG_H_COMMON_SUBS)
@@ -50,7 +68,8 @@ expand_template(
     name = "include_hwloc_autogen_config_h",
     out = "include/hwloc/autogen/config.h",
     substitutions = select({
-        "@tsl//tsl:linux_x86_64": _INCLUDE_HWLOC_AUTOIGEN_CONFIG_H_LINUX_SUBS,
+        "@xla//xla/tsl:linux_x86_64": _INCLUDE_HWLOC_AUTOIGEN_CONFIG_H_LINUX_SUBS,
+        "@xla//xla/tsl:linux_aarch64": _INCLUDE_HWLOC_AUTOIGEN_CONFIG_H_LINUX_SUBS,
         "//conditions:default": _INCLUDE_HWLOC_AUTOIGEN_CONFIG_H_COMMON_SUBS,
     }),
     template = "include/hwloc/autogen/config.h.in",
@@ -110,7 +129,6 @@ _INCLUDE_PRIVATE_HWLOC_AUTOIGEN_CONFIG_H_COMMON_SUBS = {
     "#undef HAVE_SYS_MMAN_H": "#define HAVE_SYS_MMAN_H 1",
     "#undef HAVE_SYS_PARAM_H": "#define HAVE_SYS_PARAM_H 1",
     "#undef HAVE_SYS_STAT_H": "#define HAVE_SYS_STAT_H 1",
-    "#undef HAVE_SYS_SYSCTL_H": "#define HAVE_SYS_SYSCTL_H 1",
     "#undef HAVE_SYS_TYPES_H": "#define HAVE_SYS_TYPES_H 1",
     "#undef HAVE_SYS_UTSNAME_H": "#define HAVE_SYS_UTSNAME_H 1",
     "#undef HAVE_TIME_H": "#define HAVE_TIME_H 1",
@@ -161,9 +179,9 @@ _INCLUDE_PRIVATE_HWLOC_AUTOIGEN_CONFIG_H_COMMON_SUBS = {
     "#undef HWLOC_HAVE_X86_CPUID": "#define HWLOC_HAVE_X86_CPUID 1",
     "#undef HWLOC_SIZEOF_UNSIGNED_INT": "#define HWLOC_SIZEOF_UNSIGNED_INT 4",
     "#undef HWLOC_SIZEOF_UNSIGNED_LONG": "#define HWLOC_SIZEOF_UNSIGNED_LONG 8",
-    "#undef HWLOC_SYM_PREFIX_CAPS": "#define HWLOC_SYM_PREFIX_CAPS HWLOC_",
-    "#undef HWLOC_SYM_PREFIX": "#define HWLOC_SYM_PREFIX hwloc_",
-    "#undef HWLOC_SYM_TRANSFORM": "#define HWLOC_SYM_TRANSFORM 0",
+    "#undef HWLOC_SYM_PREFIX_CAPS": "#define HWLOC_SYM_PREFIX_CAPS TF_",
+    "#undef HWLOC_SYM_PREFIX": "#define HWLOC_SYM_PREFIX tf_",
+    "#undef HWLOC_SYM_TRANSFORM": "#define HWLOC_SYM_TRANSFORM 1",
     "#undef HWLOC_USE_NCURSES": "#define HWLOC_USE_NCURSES 1",
     "#undef HWLOC_VERSION_GREEK": "#define HWLOC_VERSION_GREEK \"\"",
     "#undef HWLOC_VERSION_MAJOR": "#define HWLOC_VERSION_MAJOR 2",
@@ -259,21 +277,29 @@ cc_library(
         "include/private/private.h",
         "include/private/xml.h",
     ] + select({
-        "@tsl//tsl:linux_x86_64": [
+        "@xla//xla/tsl:linux_x86_64": [
             "hwloc/topology-linux.c",
             "hwloc/topology-x86.c",
             "include/hwloc/linux.h",
             "include/private/cpuid-x86.h",
         ],
-        "@tsl//tsl:linux_aarch64": [
+        "@xla//xla/tsl:linux_aarch64": [
             "hwloc/topology-linux.c",
             "include/hwloc/linux.h",
         ],
-        "@tsl//tsl:linux_ppc64le": [
+        "@xla//xla/tsl:linux_ppc64le": [
             "hwloc/topology-linux.c",
             "include/hwloc/linux.h",
         ],
-        "@tsl//tsl:freebsd": [
+        "@xla//xla/tsl:linux_riscv64": [
+            "hwloc/topology-linux.c",
+            "include/hwloc/linux.h",
+        ],
+        "@xla//xla/tsl:linux_s390x": [
+            "hwloc/topology-linux.c",
+            "include/hwloc/linux.h",
+        ],
+        "@xla//xla/tsl:freebsd": [
             "hwloc/topology-freebsd.c",
             "hwloc/topology-x86.c",
             "include/private/cpuid-x86.h",
@@ -294,7 +320,9 @@ cc_library(
         "include/hwloc/memattrs.h",
         "include/hwloc/rename.h",
     ],
-    copts = COMMON_INCLUDE_COPTS + DISABLE_WARNINGS_COPTS + VAR_SETTINGS_COPTS,
+    copts = COMMON_INCLUDE_COPTS + DISABLE_WARNINGS_COPTS + VAR_SETTINGS_COPTS + [
+        "-fvisibility=hidden",
+    ],
     features = [
         "-parse_headers",
         "-layering_check",

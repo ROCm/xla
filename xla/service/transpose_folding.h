@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,8 +18,11 @@ limitations under the License.
 
 #include <functional>
 
+#include "absl/container/flat_hash_set.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_module.h"
-#include "xla/service/hlo_pass_interface.h"
+#include "xla/hlo/pass/hlo_pass_interface.h"
 
 namespace xla {
 
@@ -34,7 +37,7 @@ class TransposeFolding : public HloModulePass {
   using TransposableConvOperandsFn = std::function<OperandIndices(
       const HloInstruction&, const OperandIndices&)>;
 
-  using CanFoldTransposeOperand = std::function<StatusOr<bool>(
+  using CanFoldTransposeOperand = std::function<absl::StatusOr<bool>(
       const HloInstruction&, int64_t /*operand_idx*/)>;
 
   // Helper function to explicitly not fold transposes.
@@ -62,13 +65,13 @@ class TransposeFolding : public HloModulePass {
           AlwaysFoldTranspose);
   absl::string_view name() const override { return "transpose-folding"; }
 
-  using HloPassInterface::Run;
-  StatusOr<bool> Run(
+  static absl::StatusOr<bool> IsRowColumnTransposeDotOperand(
+      const HloInstruction& dot, int64_t operand_idx);
+
+ protected:
+  absl::StatusOr<bool> RunImpl(
       HloModule* module,
       const absl::flat_hash_set<absl::string_view>& execution_threads) override;
-
-  static StatusOr<bool> IsRowColumnTransposeDotOperand(
-      const HloInstruction& dot, int64_t operand_idx);
 
  private:
   CanFoldTransposeOperand dot_can_fold_transpose_operand_;

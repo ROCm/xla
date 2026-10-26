@@ -1,3 +1,17 @@
+// Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// ==============================================================================
 // RUN: mlir-hlo-opt %s  -mlir-print-debuginfo -mlir-print-local-scope \
 // RUN: | FileCheck %s
 // RUN: mlir-hlo-opt %s  -mlir-print-debuginfo -mlir-print-local-scope \
@@ -24,45 +38,6 @@ func.func @reduce_one_op_all_locs_same(%arg0: tensor<?x?xf32>, %arg1 : tensor<f3
 
   func.return %0: tensor<?xf32>
 }
-
-// The test case is not eligible for pretty-printing reduce-op. The location of
-// reduce-op is different.
-
-// CHECK-LABEL:  func @reduce_one_op_all_locs_not_same_1
-// CHECK-NEXT:     mhlo.reduce(%arg0 init: %arg1)
-// CHECK-SAME:       across dimensions = [1] {foo = "bar"}
-// CHECK-SAME:      : (tensor<?x?xf32>, tensor<f32>) -> tensor<?xf32>
-// CHECK-NEXT:     reducer(%arg[[x:.+]]: tensor<f32> loc("foo"), %arg[[y:.+]]: tensor<f32> loc("foo"))
-// CHECK-NEXT:       mhlo.add %arg[[x]], %arg[[y]] : tensor<f32> loc("foo")
-// CHECK-NEXT:       mhlo.return %{{[0-9]+}} : tensor<f32> loc("foo")
-// CHECK-NEXT:     loc("not_foo")
-
-func.func @reduce_one_op_all_locs_not_same_1(%arg0: tensor<?x?xf32>, %arg1 : tensor<f32>) -> (tensor<?xf32>) {
-  %0 = "mhlo.reduce"(%arg0, %arg1) ({
-  ^bb0(%arg2: tensor<f32> loc("foo"), %arg3: tensor<f32> loc("foo")):
-    %1 = "mhlo.add"(%arg2, %arg3) : (tensor<f32>, tensor<f32>) -> tensor<f32> loc("foo")
-    "mhlo.return"(%1) : (tensor<f32>) -> () loc("foo")
-  }) {dimensions = dense<[1]> : tensor<1xi64>, foo = "bar"} : (tensor<?x?xf32>, tensor<f32>) -> tensor<?xf32> loc("not_foo")
-
-  func.return %0: tensor<?xf32>
-}
-
-// The test case is not eligible for pretty-printing reduce-op. The location of
-// block-arguments are different.
-
-// CHECK-LABEL:  func @reduce_one_op_all_locs_not_same_2
-// CHECK-NOT:     applies
-
-func.func @reduce_one_op_all_locs_not_same_2(%arg0: tensor<?x?xf32>, %arg1 : tensor<f32>) -> (tensor<?xf32>) {
-  %0 = "mhlo.reduce"(%arg0, %arg1) ({
-  ^bb0(%arg2: tensor<f32> loc("foo"), %arg3: tensor<f32> loc("not_foo")):
-    %1 = "mhlo.add"(%arg2, %arg3) : (tensor<f32>, tensor<f32>) -> tensor<f32> loc("foo")
-    "mhlo.return"(%1) : (tensor<f32>) -> () loc("foo")
-  }) {dimensions = dense<[1]> : tensor<1xi64>} : (tensor<?x?xf32>, tensor<f32>) -> tensor<?xf32> loc("foo")
-
-  func.return %0: tensor<?xf32>
-}
-
 
 // The test case is not eligible for pretty-printing reduce-op. More than two
 // block-arguments which are not perfectly forwarded to inner-op.
@@ -167,4 +142,17 @@ func.func @reduce_innerop_type_not_trivially_derived(%arg0: tensor<4x4xf32>, %ar
   }) {dimensions = dense<[0]> : tensor<1xi64>} : (tensor<4x4xf32>, tensor<4xf32>) -> tensor<4xf32>
 
   func.return %0: tensor<4xf32>
+}
+
+
+// The test case makes sure any custom attrs set on the reduce-op are
+// printed/parsed when pretty-printed.
+
+// CHECK-LABEL:  func @pretty_print_with_custom_attr
+// CHECK:          applies mhlo.add across dimensions = [1] {custom_user_attr = 1 : i64}
+
+func.func @pretty_print_with_custom_attr(%arg0: tensor<2x64x13xf32>) -> tensor<2x13xf32> {
+  %0 = mhlo.constant dense<0.000000e+00> : tensor<f32>
+  %1 = mhlo.reduce(%arg0 init: %0) applies mhlo.add across dimensions = [1] {custom_user_attr = 1 : i64} : (tensor<2x64x13xf32>, tensor<f32>) -> tensor<2x13xf32>
+  return %1 : tensor<2x13xf32>
 }

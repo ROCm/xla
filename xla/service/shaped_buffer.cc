@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,37 +15,46 @@ limitations under the License.
 
 #include "xla/service/shaped_buffer.h"
 
-#include <memory>
+#include <ostream>
 #include <string>
 #include <utility>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#include "xla/layout_util.h"
+#include "xla/shape.h"
+#include "xla/shape_tree.h"
 #include "xla/shape_util.h"
-#include "xla/status_macros.h"
-#include "xla/types.h"
-#include "xla/util.h"
-#include "tsl/platform/logging.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/device_address_allocator.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 
-ShapedBuffer::ShapedBuffer(Shape on_device_shape, int device_ordinal)
+ShapedBuffer::ShapedBuffer(Shape on_device_shape, int device_ordinal,
+                           int physical_device_ordinal)
     : on_device_shape_(std::move(on_device_shape)),
       device_ordinal_(device_ordinal),
       buffers_(&on_device_shape_) {
-  on_host_shape_ = ShapeUtil::DeviceShapeToHostShape(on_device_shape_);
+  physical_device_ordinal_ =
+      physical_device_ordinal == -1 ? device_ordinal_ : physical_device_ordinal;
+  if (!ShapeUtil::DeviceShapeIsHostShape(on_device_shape_)) {
+    on_host_shape_ = ShapeUtil::DeviceShapeToHostShape(on_device_shape_);
+  }
 }
 
 ShapedBuffer::ShapedBuffer(Shape on_host_shape, Shape on_device_shape,
-                           int device_ordinal)
-    : ShapedBuffer(on_device_shape, device_ordinal) {}
+                           int device_ordinal, int physical_device_ordinal)
+    : ShapedBuffer(on_device_shape, device_ordinal, physical_device_ordinal) {}
 
-ShapedBuffer::ShapedBuffer(ShapedBuffer&& s)
+ShapedBuffer::ShapedBuffer(ShapedBuffer&& s) noexcept
     : on_host_shape_(std::move(s.on_host_shape_)),
       on_device_shape_(std::move(s.on_device_shape_)),
       device_ordinal_(s.device_ordinal_),
+      physical_device_ordinal_(s.physical_device_ordinal_),
       buffers_(std::move(s.buffers_)) {
   // s.buffers_ has a pointer to s.on_device_shape_. When we move s.buffers_
   // into buffers_, we also need to update this pointer so that buffers_ doesn't
@@ -53,10 +62,11 @@ ShapedBuffer::ShapedBuffer(ShapedBuffer&& s)
   buffers_.replace_shape_ptr(on_device_shape_);
 }
 
-ShapedBuffer& ShapedBuffer::operator=(ShapedBuffer&& s) {
+ShapedBuffer& ShapedBuffer::operator=(ShapedBuffer&& s) noexcept {
   on_device_shape_ = std::move(s.on_device_shape_);
   on_host_shape_ = std::move(s.on_host_shape_);
   device_ordinal_ = s.device_ordinal_;
+  physical_device_ordinal_ = s.physical_device_ordinal_;
   buffers_ = std::move(s.buffers_);
   // buffers_ has a pointer to its on_device_shape_. When we move s.buffers_
   // into buffers_, we also need to update this pointer so that buffers_ doesn't
@@ -67,21 +77,22 @@ ShapedBuffer& ShapedBuffer::operator=(ShapedBuffer&& s) {
 
 ShapedBuffer::~ShapedBuffer() {}
 
-StatusOr<ShapedBuffer> ShapedBuffer::SubShapedBuffer(
+absl::StatusOr<ShapedBuffer> ShapedBuffer::SubShapedBuffer(
     const ShapeIndex& index) const {
-  TF_ASSIGN_OR_RETURN(const Shape* device_sub_shape,
-                      ShapeUtil::TryGetSubshape(on_device_shape(), index));
-  ShapedBuffer sub_shaped_buffer(*device_sub_shape, device_ordinal_);
-  TF_ASSIGN_OR_RETURN(ShapeTree<se::DeviceMemoryBase> sub_buffers,
-                      buffers_.SubShapeTree(index));
+  ABSL_ASSIGN_OR_RETURN(const Shape* device_sub_shape,
+                        ShapeUtil::TryGetSubshape(on_device_shape(), index));
+  ShapedBuffer sub_shaped_buffer(*device_sub_shape, device_ordinal_,
+                                 physical_device_ordinal_);
+  ABSL_ASSIGN_OR_RETURN(ShapeTree<se::DeviceAddressBase> sub_buffers,
+                        buffers_.SubShapeTree(index));
   sub_shaped_buffer.set_buffers(std::move(sub_buffers));
   return std::move(sub_shaped_buffer);
 }
 
 void ShapedBuffer::clear() {
   for (auto& pair : buffers_) {
-    // A default constructed DeviceMemoryBase is a null pointer.
-    pair.second = se::DeviceMemoryBase();
+    // A default constructed DeviceAddressBase is a null pointer.
+    pair.second = se::DeviceAddressBase();
   }
 }
 
@@ -100,7 +111,7 @@ std::string ShapedBuffer::ToString() const {
         } else {
           shape_str = ShapeUtil::HumanStringWithLayout(subshape);
         }
-        const se::DeviceMemoryBase& memory = buffer(index);
+        const se::DeviceAddressBase& memory = buffer(index);
         absl::StrAppendFormat(&s, "  %s%p (%d bytes) : %s\n",
                               std::string(index.size() * 2, ' '),
                               memory.opaque(), memory.size(), shape_str);
@@ -114,29 +125,36 @@ std::ostream& operator<<(std::ostream& out, const ShapedBuffer& buffer) {
 }
 
 ScopedShapedBuffer::ScopedShapedBuffer(Shape on_device_shape,
-                                       se::DeviceMemoryAllocator* allocator,
-                                       int device_ordinal)
-    : ShapedBuffer(std::move(on_device_shape), device_ordinal),
+                                       se::DeviceAddressAllocator* allocator,
+                                       int device_ordinal,
+                                       int physical_device_ordinal)
+    : ShapedBuffer(std::move(on_device_shape), device_ordinal,
+                   physical_device_ordinal),
       allocator_(allocator) {}
 
 ScopedShapedBuffer::ScopedShapedBuffer(Shape on_host_shape,
                                        Shape on_device_shape,
-                                       se::DeviceMemoryAllocator* allocator,
-                                       int device_ordinal)
-    : ScopedShapedBuffer(std::move(on_device_shape), allocator,
-                         device_ordinal) {}
+                                       se::DeviceAddressAllocator* allocator,
+                                       int device_ordinal,
+                                       int physical_device_ordinal)
+    : ScopedShapedBuffer(std::move(on_device_shape), allocator, device_ordinal,
+                         physical_device_ordinal) {}
 
 ScopedShapedBuffer::ScopedShapedBuffer(ShapedBuffer shaped_buffer,
-                                       se::DeviceMemoryAllocator* allocator)
+                                       se::DeviceAddressAllocator* allocator)
     : ShapedBuffer(std::move(shaped_buffer)), allocator_(allocator) {}
 
-ScopedShapedBuffer::ScopedShapedBuffer(ScopedShapedBuffer&& s)
+ScopedShapedBuffer::ScopedShapedBuffer(ScopedShapedBuffer&& s) noexcept
     : ShapedBuffer(static_cast<ShapedBuffer&&>(s)), allocator_(s.allocator_) {
   // Null out s.allocator_ so it doesn't try to free anything in its destructor.
   s.allocator_ = nullptr;
 }
 
-ScopedShapedBuffer& ScopedShapedBuffer::operator=(ScopedShapedBuffer&& s) {
+ScopedShapedBuffer& ScopedShapedBuffer::operator=(
+    ScopedShapedBuffer&& s) noexcept {
+  if (this == &s) {
+    return *this;
+  }
   Deallocate();
 
   *static_cast<ShapedBuffer*>(this) = std::move(static_cast<ShapedBuffer&>(s));
@@ -150,7 +168,7 @@ ScopedShapedBuffer::~ScopedShapedBuffer() { Deallocate(); }
 
 ShapedBuffer ScopedShapedBuffer::release() {
   ShapedBuffer shaped_buffer(static_cast<ShapedBuffer&&>(*this));
-  buffers_ = ShapeTree<se::DeviceMemoryBase>();
+  buffers_ = ShapeTree<se::DeviceAddressBase>();
   return shaped_buffer;
 }
 
@@ -164,10 +182,10 @@ void ScopedShapedBuffer::Deallocate() {
   // has been deallocated.
   absl::flat_hash_set<void*> deallocated_ptrs;
   for (auto& pair : buffers_) {
-    se::DeviceMemoryBase& memory_base = pair.second;
+    se::DeviceAddressBase& memory_base = pair.second;
     if (!memory_base.is_null() &&
         deallocated_ptrs.insert(memory_base.opaque()).second) {
-      TF_CHECK_OK(allocator_->Deallocate(device_ordinal(), memory_base));
+      CHECK_OK(allocator_->Deallocate(device_ordinal(), memory_base));
     }
   }
 }
@@ -177,12 +195,12 @@ ScopedShapedBuffer ScopedShapedBuffer::TakeSubTree(ShapeIndexView index) {
       xla::ShapeUtil::GetSubshape(on_device_shape(), {index});
 
   ScopedShapedBuffer output(sub_on_device_shape, memory_allocator(),
-                            device_ordinal());
+                            device_ordinal(), physical_device_ordinal());
   auto src_it = buffers().find(index);
   auto dst_it = output.buffers().begin();
   while (dst_it != output.buffers().end()) {
     dst_it->second = src_it->second;
-    src_it->second = tensorflow::se::DeviceMemoryBase(nullptr, 0);
+    src_it->second = tensorflow::se::DeviceAddressBase(nullptr, 0);
     ++src_it;
     ++dst_it;
   }

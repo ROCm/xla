@@ -1,0 +1,53 @@
+# Copyright 2026 The OpenXLA Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+diff --git a/cpp/include/raft/util/cudart_utils.hpp b/cpp/include/raft/util/cudart_utils.hpp
+--- a/cpp/include/raft/util/cudart_utils.hpp
++++ b/cpp/include/raft/util/cudart_utils.hpp
+@@ -21,6 +21,7 @@
+ 
+ #include <rmm/cuda_stream_view.hpp>
+ 
++#include <cuda_bf16.h>
+ #include <cuda_fp16.h>
+ #include <cuda_runtime_api.h>
+ 
+@@ -456,4 +457,27 @@ constexpr inline auto upper_bound<half>(
+   return static_cast<half>(__half_constexpr{0x7c00u});
+ }
+ 
++/**
++ * This is a hack to allow constexpr definition of `bfloat16` constants.
++ *
++ * Same reasoning as for `half`: CUDA’s `__nv_bfloat16` has no constexpr constructor.
++ */
++struct __bfloat16_constexpr : __nv_bfloat16 {  // NOLINT
++  constexpr explicit inline __bfloat16_constexpr(uint16_t u) : __nv_bfloat16() { __x = u; }
++};
++
++template <>
++constexpr inline auto lower_bound<__nv_bfloat16>() -> __nv_bfloat16
++{
++  // Negative infinity in bfloat16 (sign=1, exp=all ones, mantissa=0)
++  return static_cast<__nv_bfloat16>(__bfloat16_constexpr{0xff80u});
++}
++
++template <>
++constexpr inline auto upper_bound<__nv_bfloat16>() -> __nv_bfloat16
++{
++  // Positive infinity in bfloat16 (sign=0, exp=all ones, mantissa=0)
++  return static_cast<__nv_bfloat16>(__bfloat16_constexpr{0x7f80u});
++}
++
+ }  // namespace raft

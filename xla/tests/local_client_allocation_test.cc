@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,16 +16,15 @@ limitations under the License.
 #include <memory>
 #include <optional>
 
+#include "absl/status/statusor.h"
+#include "tsl/platform/test.h"
 #include "xla/client/local_client.h"
-#include "xla/client/xla_builder.h"
+#include "xla/hlo/builder/xla_builder.h"
 #include "xla/literal.h"
 #include "xla/service/local_service.h"
 #include "xla/service/shaped_buffer.h"
-#include "xla/statusor.h"
 #include "xla/tests/literal_test_util.h"
 #include "xla/tests/local_client_test_base.h"
-#include "xla/tests/test_macros.h"
-#include "tsl/platform/test.h"
 
 namespace xla {
 namespace {
@@ -35,7 +34,7 @@ class LocalClientAllocationTest : public LocalClientTestBase {
   ErrorSpec error_spec_{0.0001};
 };
 
-XLA_TEST_F(LocalClientAllocationTest, AddVectors) {
+TEST_F(LocalClientAllocationTest, AddVectors) {
   XlaBuilder builder(TestName());
   auto x = ConstantR1<float>(&builder, {0.0f, 1.0f, 2.0f});
   auto y = ConstantR1<float>(&builder, {2.0f, 3.0f, 4.0f});
@@ -68,7 +67,7 @@ XLA_TEST_F(LocalClientAllocationTest, AddVectors) {
   EXPECT_EQ(deallocation_count_before + 1, allocator_->deallocation_count());
 }
 
-XLA_TEST_F(LocalClientAllocationTest, RunOnDevices) {
+TEST_F(LocalClientAllocationTest, RunOnDevices) {
   // Run a computation on every device on the system. Verify that allocation
   // occurs on the proper device.
   XlaBuilder builder(TestName());

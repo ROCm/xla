@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ class MhloDialect;
 
 // Add the interface necessary for encoding and decoding StableHLO dialect
 // components in bytecode.
-void addBytecodeInterface(MhloDialect *dialect);
+void addBytecodeInterface(MhloDialect* dialect);
 }  // namespace mhlo
 }  // namespace mlir
 

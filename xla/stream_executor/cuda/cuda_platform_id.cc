@@ -1,4 +1,4 @@
-/* Copyright 2015 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2015 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,10 +15,12 @@ limitations under the License.
 
 #include "xla/stream_executor/cuda/cuda_platform_id.h"
 
+#include "xla/stream_executor/platform_id.h"
+
 namespace stream_executor {
 namespace cuda {
 
-PLATFORM_DEFINE_ID(kCudaPlatformId);
+PLATFORM_DEFINE_ID(kCudaPlatformId, CUDA);
 
 }  // namespace cuda
 }  // namespace stream_executor

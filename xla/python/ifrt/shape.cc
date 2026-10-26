@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,53 +15,200 @@ limitations under the License.
 
 #include "xla/python/ifrt/shape.h"
 
+#include <cstdint>
 #include <ostream>
-#include <string>
 #include <utility>
+#include <variant>
 
-#include "absl/strings/str_join.h"
-#include "xla/python/ifrt/types.pb.h"
-#include "xla/util.h"
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
+#include "xla/python/ifrt/serdes_version.h"
+#include "xla/python/ifrt/shape.pb.h"
 
 namespace xla {
 namespace ifrt {
 
-StatusOr<Shape> Shape::FromProto(const ShapeProto& proto) {
+namespace {
+
+// Helper type for the visitor.
+template <class... Ts>
+struct overloaded : Ts... {
+  using Ts::operator()...;
+};
+
+// Explicit deduction guide.
+template <class... Ts>
+overloaded(Ts...) -> overloaded<Ts...>;
+
+}  // namespace
+
+absl::StatusOr<Shape> Shape::FromProto(const ShapeProto& proto) {
+  const SerDesVersionNumber version_number(proto.version_number());
+  if (version_number != SerDesVersionNumber(0)) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Unsupported ", version_number, " for Shape deserialization"));
+  }
+
   Shape::Dimensions dims;
   dims.reserve(proto.dims_size());
+  int64_t num_elements = 1;
+  bool overflow = false;
   for (int64_t dim : proto.dims()) {
     if (dim < 0) {
-      return InvalidArgument(
-          "Shape expects non-negative dimension sizes, but got %d", dim);
+      return absl::InvalidArgumentError(absl::StrFormat(
+          "Shape expects non-negative dimension sizes, but got %d", dim));
     }
+    overflow |= __builtin_mul_overflow(num_elements, dim, &num_elements);
     dims.push_back(dim);
+  }
+  if (overflow) {
+    return absl::InvalidArgumentError(
+        "Too large number of elements in a shape");
   }
   return Shape(std::move(dims));
 }
 
-ShapeProto Shape::ToProto() const {
-  ShapeProto proto;
+void Shape::ToProto(ShapeProto& proto, SerDesVersion version) const {
+  // TODO(b/423702568): Change the return type to `absl::StatusOr<...>` for
+  // graceful error handling.
+  CHECK_GE(version.version_number(), SerDesVersionNumber(0))
+      << "Unsupported " << version.version_number()
+      << " for Shape serialization";
+
+  proto.Clear();
+  proto.set_version_number(SerDesVersionNumber(0).value());
+
   proto.mutable_dims()->Reserve(dims().size());
   for (int64_t dim : dims()) {
     proto.mutable_dims()->AddAlreadyReserved(dim);
   }
-  return proto;
 }
 
 int64_t Shape::num_elements() const {
   int64_t count = 1;
-  for (int64_t d : dims_) {
+  for (int64_t d : *dims_) {
     count *= d;
   }
   return count;
 }
 
-std::string Shape::DebugString() const {
-  return absl::StrCat("[", absl::StrJoin(dims_, ","), "]");
+absl::StatusOr<BoundedDynamicShapeTag> BoundedDynamicShapeTag::FromProto(
+    const BoundedDynamicShapeTagProto& proto) {
+  const SerDesVersionNumber version_number(proto.version_number());
+  if (version_number != SerDesVersionNumber(0)) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("Unsupported ", version_number,
+                     " for BoundedDynamicShapeTag deserialization"));
+  }
+
+  BoundedDynamicShapeTag::DynamicDimensions dynamic_dims;
+  dynamic_dims.reserve(proto.is_dynamic_dims_size());
+  for (bool dynamic_dim : proto.is_dynamic_dims()) {
+    dynamic_dims.push_back(dynamic_dim);
+  }
+  return BoundedDynamicShapeTag(std::move(dynamic_dims));
+}
+
+void BoundedDynamicShapeTag::ToProto(BoundedDynamicShapeTagProto& proto,
+                                     SerDesVersion version) const {
+  // TODO(b/423702568): Change the return type to `absl::StatusOr<...>` for
+  // graceful error handling.
+  CHECK_GE(version.version_number(), SerDesVersionNumber(0))
+      << "Unsupported " << version.version_number()
+      << " for BoundedDynamicShapeTag serialization";
+
+  proto.Clear();
+  proto.set_version_number(SerDesVersionNumber(0).value());
+
+  proto.mutable_is_dynamic_dims()->Reserve(dynamic_dims_.size());
+  for (bool dynamic_dim : dynamic_dims_) {
+    proto.mutable_is_dynamic_dims()->AddAlreadyReserved(dynamic_dim);
+  }
+}
+
+absl::StatusOr<DynamicShape> DynamicShape::Create(Shape shape,
+                                                  DynamicShapeTag tag) {
+  ABSL_RETURN_IF_ERROR(std::visit(
+      overloaded{
+          [&](const BoundedDynamicShapeTag& tag) -> absl::Status {
+            if (tag.DynamicDims().size() != shape.dims().size()) {
+              return absl::InvalidArgumentError(
+                  "Shape and tag must have the same number of dimensions.");
+            }
+            return absl::OkStatus();
+          },
+      },
+      tag));
+  return DynamicShape(std::move(shape), std::move(tag));
+}
+
+absl::StatusOr<Shape> DynamicShape::GetPaddedShape() const {
+  return std::visit(
+      overloaded{
+          [this](BoundedDynamicShapeTag tag) { return shape_; },
+      },
+      tag_);
+}
+
+bool DynamicShape::IsDynamicDim(int dimension) const {
+  return std::visit(
+      overloaded{
+          [dimension](BoundedDynamicShapeTag tag) {
+            return tag.DynamicDims().at(dimension);
+          },
+      },
+      tag_);
+}
+
+absl::StatusOr<DynamicShape> DynamicShape::FromProto(
+    const DynamicShapeProto& proto) {
+  const SerDesVersionNumber version_number(proto.version_number());
+  if (version_number != SerDesVersionNumber(0)) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Unsupported ", version_number, " for DynamicShape deserialization"));
+  }
+
+  ABSL_ASSIGN_OR_RETURN(Shape shape, Shape::FromProto(proto.shape()));
+  if (proto.has_bounded_dynamic_shape_tag()) {
+    ABSL_ASSIGN_OR_RETURN(
+        BoundedDynamicShapeTag tag,
+        BoundedDynamicShapeTag::FromProto(proto.bounded_dynamic_shape_tag()));
+    return DynamicShape::Create(std::move(shape), std::move(tag));
+  }
+  return absl::InvalidArgumentError("Only support bounded dynamic shape.");
+}
+
+void DynamicShape::ToProto(DynamicShapeProto& proto,
+                           SerDesVersion version) const {
+  // TODO(b/423702568): Change the return type to `absl::StatusOr<...>` for
+  // graceful error handling.
+  CHECK_GE(version.version_number(), SerDesVersionNumber(0))
+      << "Unsupported " << version.version_number()
+      << " for DynamicShape serialization";
+
+  proto.Clear();
+  proto.set_version_number(SerDesVersionNumber(0).value());
+
+  shape_.ToProto(*proto.mutable_shape(), version);
+  std::visit(
+      overloaded{
+          [&proto, version](BoundedDynamicShapeTag tag) {
+            tag.ToProto(*proto.mutable_bounded_dynamic_shape_tag(), version);
+          },
+      },
+      tag_);
 }
 
 std::ostream& operator<<(std::ostream& os, const Shape& shape) {
-  return os << shape.DebugString();
+  return os << absl::StrCat(shape);
+}
+
+std::ostream& operator<<(std::ostream& os, const DynamicShape& dynamic_shape) {
+  return os << absl::StrCat(dynamic_shape);
 }
 
 }  // namespace ifrt

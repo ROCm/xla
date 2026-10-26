@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,16 +13,21 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "mlir/Dialect/SCF/IR/SCF.h"  // from @llvm-project
+#include "mlir/Dialect/SCF/IR/SCF.h"
 
+#include <cstdint>     // NOLINT
 #include <functional>  // NOLINT
 #include <utility>     // NOLINT
 
-#include "mlir/Dialect/Utils/StaticValueUtils.h"  // from @llvm-project
-#include "mlir/IR/Builders.h"  // from @llvm-project
-#include "mlir/IR/OwningOpRef.h"  // from @llvm-project
-#include "mlir/IR/PatternMatch.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/OwningOpRef.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/Value.h"
+#include "mlir/IR/ValueRange.h"
+#include "mlir/Support/LLVM.h"
 #include "xla/mlir/tools/mlir_bisect/bisect_lib.h"
 
 namespace mlir {
@@ -50,8 +55,8 @@ llvm::SmallVector<std::function<OwningOpRef<ModuleOp>()>> InlineScfWhile(
       auto wrap_region_in_execute = [&,
                                      loc = op.getLoc()](mlir::Region& region) {
         regions
-            .emplace_back(b.create<ExecuteRegionOp>(
-                loc,
+            .emplace_back(ExecuteRegionOp::create(
+                b, loc,
                 region.getBlocks().front().getTerminator()->getOperandTypes(),
                 mlir::ValueRange{}))
             .getRegion()

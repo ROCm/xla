@@ -1,4 +1,4 @@
-/* Copyright 2019 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2019 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,13 +14,21 @@ limitations under the License.
 ==============================================================================*/
 #include "xla/service/xla_debug_info_manager.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/synchronization/mutex.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/service/hlo.pb.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/service/hlo_module_config.h"
 
 namespace xla {
 
@@ -28,9 +36,9 @@ class XlaDebugInfoManagerTestPeer {
  public:
   void RegisterModule(
       std::shared_ptr<const HloModule> hlo_module,
-      std::shared_ptr<const BufferAssignmentProto> buffer_assignment) {
-    return xla_debug_info_manager_.RegisterModule(hlo_module,
-                                                  buffer_assignment);
+      std::optional<BufferAssignmentProto> buffer_assignment_proto) {
+    return xla_debug_info_manager_.RegisterModule(
+        hlo_module, std::move(buffer_assignment_proto));
   }
 
   void UnregisterModule(ModuleIdentifier module_id) {
@@ -49,9 +57,15 @@ class XlaDebugInfoManagerTestPeer {
     return module_ids;
   }
 
+  std::vector<std::unique_ptr<HloProto>> StopTracingAndGetProtos() {
+    std::vector<std::unique_ptr<HloProto>> module_debug_info;
+    xla_debug_info_manager_.StopTracing(&module_debug_info);
+    return module_debug_info;
+  }
+
   absl::flat_hash_set<ModuleIdentifier> GetModuleIds() {
     absl::flat_hash_set<ModuleIdentifier> module_ids;
-    absl::MutexLock lock(&xla_debug_info_manager_.mutex_);
+    absl::MutexLock lock(xla_debug_info_manager_.mutex_);
     for (const auto& it : xla_debug_info_manager_.modules_) {
       module_ids.insert(it.first);
     }
@@ -67,14 +81,13 @@ namespace {
 using ::testing::IsEmpty;
 using ::testing::UnorderedElementsAre;
 
-class XlaDebugInfoManagerTest : public HloTestBase {
+class XlaDebugInfoManagerTest : public HloHardwareIndependentTestBase {
  protected:
   struct DebugMetadata {
     // We allow same id to be registered multiple times. we need unique id to
     // know which program is referenced (such as in UnregisterProgram).
     ModuleIdentifier unique_id;
     std::shared_ptr<HloModule> module;
-    std::shared_ptr<BufferAssignmentProto> buffer_assignment;
   };
 
   // Return unique id of this module.
@@ -82,11 +95,9 @@ class XlaDebugInfoManagerTest : public HloTestBase {
     DebugMetadata debug_info;
     HloModuleConfig config;
     debug_info.module = std::make_shared<HloModule>(module_name, config);
-    debug_info.buffer_assignment = nullptr;
     ModuleIdentifier unique_id = debug_info.module->unique_id();
     debug_info.unique_id = unique_id;
-    xla_debug_info_manager_.RegisterModule(debug_info.module,
-                                           debug_info.buffer_assignment);
+    xla_debug_info_manager_.RegisterModule(debug_info.module, std::nullopt);
     external_references_.push_back(std::move(debug_info));
     return unique_id;
   }
@@ -186,6 +197,49 @@ TEST_F(XlaDebugInfoManagerTest, UnregisterDuringTrace) {
   EXPECT_THAT(GetModuleIds(), UnorderedElementsAre(program0A));
 
   UnregisterProgram(program0A);
+}
+
+TEST_F(XlaDebugInfoManagerTest, RegisterBufferAssignmentProto) {
+  HloModuleConfig config;
+  auto hlo_module_with_proto =
+      std::make_shared<HloModule>("program_with_proto", config);
+  BufferAssignmentProto proto;
+  auto allocation = proto.add_buffer_allocations();
+  allocation->set_index(42);
+  allocation->set_size(1024);
+
+  xla_debug_info_manager_.RegisterModule(hlo_module_with_proto,
+                                         std::move(proto));
+
+  auto hlo_module_without_proto =
+      std::make_shared<HloModule>("program_without_proto", config);
+  xla_debug_info_manager_.RegisterModule(hlo_module_without_proto,
+                                         std::nullopt);
+
+  StartTrace();
+
+  auto protos = xla_debug_info_manager_.StopTracingAndGetProtos();
+  ASSERT_EQ(protos.size(), 2);
+
+  const HloProto* proto_with = nullptr;
+  const HloProto* proto_without = nullptr;
+  for (const auto& p : protos) {
+    if (p->hlo_module().name() == "program_with_proto") {
+      proto_with = p.get();
+    } else if (p->hlo_module().name() == "program_without_proto") {
+      proto_without = p.get();
+    }
+  }
+
+  ASSERT_NE(proto_with, nullptr);
+  ASSERT_NE(proto_without, nullptr);
+
+  EXPECT_TRUE(proto_with->has_buffer_assignment());
+  EXPECT_EQ(proto_with->buffer_assignment().buffer_allocations_size(), 1);
+  EXPECT_EQ(proto_with->buffer_assignment().buffer_allocations(0).index(), 42);
+  EXPECT_EQ(proto_with->buffer_assignment().buffer_allocations(0).size(), 1024);
+
+  EXPECT_FALSE(proto_without->has_buffer_assignment());
 }
 
 }  // namespace

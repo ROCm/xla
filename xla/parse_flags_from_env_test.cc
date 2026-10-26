@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,18 +17,25 @@ limitations under the License.
 
 #include "xla/parse_flags_from_env.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <string>
 #include <vector>
 
+#include "absl/log/check.h"
 #include "absl/strings/str_format.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/subprocess.h"
-#include "tsl/platform/test.h"
-#include "tsl/util/command_line_flags.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/logging.h"
+#include "xla/tsl/platform/macros.h"
+#include "xla/tsl/platform/subprocess.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/tsl/util/command_line_flags.h"
+#include "xla/tsl/util/env_var.h"
 
 namespace xla {
 
@@ -53,12 +60,11 @@ static void TestParseFlagsFromEnv(const char* msg) {
       tsl::Flag("single_quoted", &single_quoted, ""),
       tsl::Flag("double_quoted", &double_quoted, ""),
   };
-  bool parsed_ok = ParseFlagsFromEnvAndDieIfUnknown("TF_XLA_FLAGS", flag_list);
+  ParseFlagsFromEnvAndDieIfUnknown("TF_XLA_FLAGS", flag_list);
   CHECK_EQ(*pargc, 1) << msg;
   const std::vector<char*>& argv_second = *pargv;
   CHECK_NE(argv_second[0], nullptr) << msg;
   CHECK_EQ(argv_second[1], nullptr) << msg;
-  CHECK(parsed_ok) << msg;
   CHECK(simple) << msg;
   CHECK_EQ(with_value, "a_value") << msg;
   CHECK_EQ(embedded_quotes, "single'double\"") << msg;
@@ -156,6 +162,130 @@ TEST(ParseFlagsFromEnv, EnvAndFlag) {
   }
 }
 
+TEST(ParseFlagsFromEnv, ErrorOutOnFlagFailure) {
+  const char* env = "--int_flag=3parsefailure";
+
+  if (env == nullptr) {
+    // Might be set from previous tests.
+    tsl::unsetenv("TF_XLA_FLAGS");
+  } else {
+    tsl::setenv("TF_XLA_FLAGS", env, /*overwrite=*/true);
+  }
+  tsl::SubProcess child;
+  std::vector<std::string> argv;
+  argv.push_back(binary_name);
+  argv.push_back("--recursing");
+  child.SetProgram(binary_name, argv);
+  child.SetChannelAction(tsl::CHAN_STDOUT, tsl::ACTION_PIPE);
+  child.SetChannelAction(tsl::CHAN_STDERR, tsl::ACTION_PIPE);
+  EXPECT_TRUE(child.Start());
+  std::string stdout_str;
+  std::string stderr_str;
+
+  // Expecting failure.
+  int child_status = child.Communicate(nullptr, &stdout_str, &stderr_str);
+  EXPECT_NE(child_status, 0);
+}
+
+TEST(ParseFlagsFromEnv, ErrorOutOnUnknownFlag) {
+  const char* env = "--int_flag=3 --unknown_flag=value";
+
+  if (env == nullptr) {
+    // Might be set from previous tests.
+    tsl::unsetenv("TF_XLA_FLAGS");
+  } else {
+    tsl::setenv("TF_XLA_FLAGS", env, /*overwrite=*/true);
+  }
+  tsl::SubProcess child;
+  std::vector<std::string> argv;
+  argv.push_back(binary_name);
+  argv.push_back("--recursing");
+  child.SetProgram(binary_name, argv);
+  child.SetChannelAction(tsl::CHAN_STDOUT, tsl::ACTION_PIPE);
+  child.SetChannelAction(tsl::CHAN_STDERR, tsl::ACTION_PIPE);
+  EXPECT_TRUE(child.Start());
+  std::string stdout_str;
+  std::string stderr_str;
+
+  // Expecting failure.
+  int child_status = child.Communicate(nullptr, &stdout_str, &stderr_str);
+  EXPECT_NE(child_status, 0);
+}
+
+TEST(ParseFlagsFromEnv, UknownFlagErrorMessage) {
+  const char* env =
+      "--unknown_flag_1=value --int_flag=3 --unknown_flag_2=value "
+      "--float_flag=3.0";
+
+  if (env == nullptr) {
+    // Might be set from previous tests.
+    tsl::unsetenv("TF_XLA_FLAGS");
+  } else {
+    tsl::setenv("TF_XLA_FLAGS", env, /*overwrite=*/true);
+  }
+  tsl::SubProcess child;
+  std::vector<std::string> argv;
+  argv.push_back(binary_name);
+  argv.push_back("--recursing");
+  child.SetProgram(binary_name, argv);
+  child.SetChannelAction(tsl::CHAN_STDOUT, tsl::ACTION_PIPE);
+  child.SetChannelAction(tsl::CHAN_STDERR, tsl::ACTION_PIPE);
+  EXPECT_TRUE(child.Start());
+  std::string stdout_str;
+  std::string stderr_str;
+
+  int child_status = child.Communicate(nullptr, &stdout_str, &stderr_str);
+  EXPECT_NE(child_status, 0);
+
+  EXPECT_THAT(
+      stderr_str,
+      ::testing::EndsWith("Unknown flags in TF_XLA_FLAGS: "
+                          "--unknown_flag_1=value --unknown_flag_2=value\n"));
+}
+
+TEST(EnvVar, ReadStringsFromEnvVar_SpaceTabCommaDelimiters) {
+  // Mix of spaces, tabs, and commas; includes extra whitespace to test
+  // trimming.
+  tsl::setenv("TF_XLA_FLAGS",
+              "  --tf_xla_cpu_global_jit,\t--foo  ,  --bar\t --baz  ",
+              /*overwrite=*/true);
+
+  std::vector<std::string> values;
+  // New behavior: split by any of " ,\t" and skip/trim whitespace.
+  auto s = tsl::ReadStringsFromEnvVar("TF_XLA_FLAGS", "", &values, " ,\t");
+  ASSERT_TRUE(s.ok());
+
+  // Expect tokens are trimmed and properly split.
+  EXPECT_THAT(values, ::testing::ElementsAre("--tf_xla_cpu_global_jit", "--foo",
+                                             "--bar", "--baz"));
+}
+
+TEST(EnvVar, ReadStringsFromEnvVar_DefaultCommaDelimiterBackwardCompat) {
+  // With default delimiter (","), items containing spaces/tabs should not be
+  // split.
+  tsl::setenv("TF_XLA_FLAGS", " --a  --b\t,--c , --d", /*overwrite=*/true);
+
+  std::vector<std::string> values;
+  // Default delimiter is comma, ensure backward compatibility.
+  auto s = tsl::ReadStringsFromEnvVar("TF_XLA_FLAGS", "", &values);
+  ASSERT_TRUE(s.ok());
+
+  // Expect split only on commas, with trimmed parts.
+  EXPECT_THAT(values, ::testing::ElementsAre("--a  --b", "--c", "--d"));
+}
+
+TEST(EnvVar, ReadStringsFromEnvVar_UsesDefaultWhenUnset) {
+  // Unset variable; expect default value to be split with provided delimiters.
+  tsl::unsetenv("TF_XLA_FLAGS");
+
+  std::vector<std::string> values;
+  auto s = tsl::ReadStringsFromEnvVar("TF_XLA_FLAGS", "  --x \t --y, --z  ",
+                                      &values, " ,\t");
+  ASSERT_TRUE(s.ok());
+
+  EXPECT_THAT(values, ::testing::ElementsAre("--x", "--y", "--z"));
+}
+
 }  // namespace xla
 
 int main(int argc, char* argv[]) {
@@ -163,21 +293,16 @@ int main(int argc, char* argv[]) {
   xla::binary_name = argv[0];
   bool recursing = false;
   int32_t int_flag = 1;
+  float float_flag = 1.;
   const std::vector<tsl::Flag> flag_list = {
       tsl::Flag("recursing", &recursing,
                 "Whether the binary is being invoked recursively."),
       tsl::Flag("int_flag", &int_flag, "An integer flag to test with"),
+      tsl::Flag("float_flag", &float_flag, "A float flag to test with"),
   };
   std::string usage = tsl::Flags::Usage(argv[0], flag_list);
-  bool parse_ok =
-      xla::ParseFlagsFromEnvAndDieIfUnknown("TF_XLA_FLAGS", flag_list);
-  if (!parse_ok) {
-    LOG(QFATAL) << "can't parse from environment\n" << usage;
-  }
-  parse_ok = tsl::Flags::Parse(&argc, argv, flag_list);
-  if (!parse_ok) {
-    LOG(QFATAL) << usage;
-  }
+  xla::ParseFlagsFromEnvAndDieIfUnknown("TF_XLA_FLAGS", flag_list);
+  tsl::Flags::Parse(&argc, argv, flag_list);
   if (recursing) {
     printf("%d\n", int_flag);
     exit(0);

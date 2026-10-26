@@ -1,4 +1,4 @@
-/* Copyright 2020 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2020 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,32 +15,52 @@ limitations under the License.
 
 #include "xla/pjrt/distributed/distributed.h"
 
+#include <memory>
 #include <string>
+#include <utility>
 
-#include "grpcpp/grpcpp.h"
+#include "absl/status/statusor.h"
+#include "grpcpp/channel.h"
+#include "grpcpp/create_channel.h"
 #include "xla/pjrt/distributed/client.h"
 #include "xla/pjrt/distributed/service.h"
+#include "xla/tsl/platform/grpc_credentials.h"
 
 namespace xla {
 
-StatusOr<std::unique_ptr<DistributedRuntimeService>>
-GetDistributedRuntimeService(
-    std::string address, const DistributedRuntimeServiceImpl::Options& options,
-    bool use_coordination_service) {
-  auto credentials = ::grpc::InsecureServerCredentials();
-  return DistributedRuntimeService::Get(address, credentials, options,
-                                        use_coordination_service);
+absl::StatusOr<std::unique_ptr<DistributedRuntimeService>>
+GetDistributedRuntimeService(std::string address,
+                             const CoordinationServiceImpl::Options& options) {
+  auto credentials = options.credentials;
+  if (credentials == nullptr) {
+    credentials = tsl::GetServerCredentials(options.verify_secure_credentials);
+  }
+  return DistributedRuntimeService::Get(address, std::move(credentials),
+                                        options);
 }
 
 std::shared_ptr<DistributedRuntimeClient> GetDistributedRuntimeClient(
     std::string address, const DistributedRuntimeClient::Options& options,
-    bool use_coordination_service) {
-  std::shared_ptr<::grpc::ChannelCredentials> creds =
-      ::grpc::InsecureChannelCredentials();
-  std::shared_ptr<::grpc::Channel> channel =
-      ::grpc::CreateChannel(address, creds);
-  return GetDistributedRuntimeClient(channel, options,
-                                     use_coordination_service);
+    bool use_compression) {
+  auto credentials = options.credentials;
+  if (credentials == nullptr) {
+    credentials = tsl::GetClientCredentials(options.verify_secure_credentials);
+  }
+  auto channel = GetDistributedRuntimeClientChannel(
+      address, std::move(credentials), use_compression);
+  return GetDistributedRuntimeClient(channel, options);
+}
+
+std::shared_ptr<::grpc::Channel> GetDistributedRuntimeClientChannel(
+    std::string address, std::shared_ptr<::grpc::ChannelCredentials> creds,
+    bool use_compression) {
+  grpc::ChannelArguments args;
+  if (use_compression) {
+    args.SetCompressionAlgorithm(GRPC_COMPRESS_GZIP);
+  }
+  args.SetMaxReceiveMessageSize(-1);
+  args.SetMaxSendMessageSize(-1);
+  return ::grpc::CreateCustomChannel(address, creds, args);
 }
 
 }  // namespace xla

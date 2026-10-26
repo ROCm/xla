@@ -15,15 +15,13 @@ limitations under the License.
 #ifndef TENSORFLOW_TSL_PROFILER_LIB_PROFILER_SESSION_H_
 #define TENSORFLOW_TSL_PROFILER_LIB_PROFILER_SESSION_H_
 
-#include <functional>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
-#include "tsl/platform/mutex.h"
-#include "tsl/platform/platform.h"
-#include "tsl/platform/status.h"
+#include "absl/status/status.h"
+#include "absl/synchronization/mutex.h"
 #include "tsl/platform/thread_annotations.h"
-#include "tsl/platform/types.h"
 #include "tsl/profiler/protobuf/profiler_options.pb.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
 
@@ -43,7 +41,7 @@ class ProfilerSession {
  public:
   // Creates a ProfilerSession and starts profiling.
   static std::unique_ptr<ProfilerSession> Create(
-    const tensorflow::ProfileOptions& options);
+      const tensorflow::ProfileOptions& options);
 
   static tensorflow::ProfileOptions DefaultOptions() {
     tensorflow::ProfileOptions options;
@@ -60,11 +58,18 @@ class ProfilerSession {
   // Deletes an existing Profiler and enables starting a new one.
   ~ProfilerSession();
 
-  tsl::Status Status() TF_LOCKS_EXCLUDED(mutex_);
+  absl::Status Status() TF_LOCKS_EXCLUDED(mutex_);
 
   // Collects profile data into XSpace.
-  tsl::Status CollectData(tensorflow::profiler::XSpace* space)
+  absl::Status CollectData(tensorflow::profiler::XSpace* space)
       TF_LOCKS_EXCLUDED(mutex_);
+
+  absl::Status Stop() TF_LOCKS_EXCLUDED(mutex_);
+
+  std::vector<tensorflow::profiler::XSpace> SerializeChunks()
+      TF_LOCKS_EXCLUDED(mutex_);
+
+  bool IsContinuousProfilingEnabled() const;
 
  private:
   // Constructs an instance of the class and starts profiling
@@ -76,17 +81,18 @@ class ProfilerSession {
 
 #if !defined(IS_MOBILE_PLATFORM)
   // Collects profile data into XSpace without post-processsing.
-  tsl::Status CollectDataInternal(tensorflow::profiler::XSpace* space);
+  absl::Status CollectDataInternal(tensorflow::profiler::XSpace* space);
 
   profiler::ProfilerLock profiler_lock_ TF_GUARDED_BY(mutex_);
 
   std::unique_ptr<profiler::ProfilerInterface> profilers_ TF_GUARDED_BY(mutex_);
 
-  uint64 start_time_ns_;
+  uint64_t start_time_ns_;
+  uint64_t stop_time_ns_;
   tensorflow::ProfileOptions options_;
 #endif
-  tsl::Status status_ TF_GUARDED_BY(mutex_);
-  mutex mutex_;
+  absl::Status status_ TF_GUARDED_BY(mutex_);
+  absl::Mutex mutex_;
 };
 
 }  // namespace tsl

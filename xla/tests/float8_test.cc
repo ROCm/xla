@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,26 +13,29 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <cmath>
-#include <memory>
-#include <vector>
+#include <gtest/gtest.h>
 
-#include "xla/client/xla_builder.h"
-#include "xla/test.h"
-#include "xla/tests/client_library_test_base.h"
-#include "xla/tests/test_macros.h"
+#include "tsl/platform/ml_dtypes.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/tests/client_library_test_runner_mixin.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/tsl/platform/test.h"
 
 namespace xla {
 namespace {
 
-// Test FP8 floating-point types (F8E5M2, F8E4M3FN)
+// Test FP8 floating-point types
 template <typename T>
-class Float8Test : public ClientLibraryTestBase {};
+class Float8Test : public ClientLibraryTestRunnerMixin<
+                       HloInterpreterReferenceMixin<HloTestBase>> {};
 
-using DataTypes = ::testing::Types<tsl::float8_e5m2, tsl::float8_e4m3fn>;
+using DataTypes = ::testing::Types<tsl::float8_e5m2, tsl::float8_e4m3,
+                                   tsl::float8_e4m3fn, tsl::float8_e3m4>;
 TYPED_TEST_SUITE(Float8Test, DataTypes);
 
-XLA_TYPED_TEST(Float8Test, ScalarOperation) {
+TYPED_TEST(Float8Test, ScalarOperation) {
   XlaBuilder builder(this->TestName());
   auto x = ConstantR0<TypeParam>(&builder, static_cast<TypeParam>(2.0f));
   auto y = ConstantR0<TypeParam>(&builder, static_cast<TypeParam>(1.0f));
@@ -42,7 +45,7 @@ XLA_TYPED_TEST(Float8Test, ScalarOperation) {
       &builder, static_cast<TypeParam>(3.0f), {});
 }
 
-XLA_TYPED_TEST(Float8Test, LogOperation) {
+TYPED_TEST(Float8Test, LogOperation) {
   XlaBuilder builder(this->TestName());
   auto x = ConstantR0<TypeParam>(&builder, static_cast<TypeParam>(4.0f));
   Log(x);
@@ -51,7 +54,7 @@ XLA_TYPED_TEST(Float8Test, LogOperation) {
       &builder, static_cast<TypeParam>(1.387f), {});
 }
 
-XLA_TYPED_TEST(Float8Test, CompareOperation) {
+TYPED_TEST(Float8Test, CompareOperation) {
   XlaBuilder builder(this->TestName());
   auto x = ConstantR1<TypeParam>(&builder, {TypeParam{1.0}, TypeParam{2.0}});
   auto y = ConstantR1<TypeParam>(&builder, {TypeParam{1.0}, TypeParam{3.0}});
@@ -59,7 +62,7 @@ XLA_TYPED_TEST(Float8Test, CompareOperation) {
   this->template ComputeAndCompareR1<bool>(&builder, {true, false}, {});
 }
 
-XLA_TYPED_TEST(Float8Test, DotOperation) {
+TYPED_TEST(Float8Test, DotOperation) {
   XlaBuilder builder(this->TestName());
   auto x = ConstantR2<TypeParam>(&builder, {{TypeParam{0.0}, TypeParam{1.0}},
                                             {TypeParam{2.0}, TypeParam{3.0}}});
@@ -71,7 +74,7 @@ XLA_TYPED_TEST(Float8Test, DotOperation) {
       {{TypeParam{1.0}, TypeParam{0.0}}, {TypeParam{9.0}, TypeParam{4.0}}}, {});
 }
 
-XLA_TYPED_TEST(Float8Test, NegateScalar) {
+TYPED_TEST(Float8Test, NegateScalar) {
   XlaBuilder builder(this->TestName());
   Neg(ConstantR0<TypeParam>(&builder, static_cast<TypeParam>(2.0f)));
 

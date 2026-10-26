@@ -1,4 +1,4 @@
-/* Copyright 2019 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2019 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,13 +18,14 @@ limitations under the License.
 
 #include <string>
 
-#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Value.h"
 #include "llvm/TargetParser/Triple.h"
-#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -48,34 +49,33 @@ enum class TargetIntrinsicID {
 // Enumeration to get target specific device math function.
 enum class TargetDeviceFunctionID {
   kAtan2 = 0,
+  kAtan,
+  kCbrt,
   kCos,
-  kErfcinv,
   kExp,
+  kExp2,
   kExpm1,
   kFmod,
   kHypot,
   kLog,
   kLog1p,
+  kLog2,
   kPow,
-  kRound,
   kRsqrt,
   kSin,
   kSqrt,
   kTan,
   kTanh,
-  kCbrt,
+  kErf,
+  kAcosh,
+  kAcos,
+  kSinh,
+  kAsin,
+  kAsinh,
+  kCosh,
+  kAtanh,
+  kRint,
 };
-
-// HLO opcode -> TargetDeviceFunctionID mapping.
-StatusOr<TargetDeviceFunctionID> GetTargetDeviceFunctionID(HloOpcode);
-
-// Emits IR to call a device function named "callee_name" on the given
-// operand. Returns the IR value that represents the return value.
-llvm::CallInst* EmitDeviceFunctionCall(
-    const std::string& callee_name, absl::Span<llvm::Value* const> operands,
-    absl::Span<const PrimitiveType> input_type, PrimitiveType output_type,
-    const llvm::AttrBuilder& attributes, llvm::IRBuilder<>* b,
-    absl::string_view name = "");
 
 // Emits a call to the specified target intrinsic with the given operands.
 // Overloaded intrinsics (for example, "minnum") must include a type
@@ -83,16 +83,20 @@ llvm::CallInst* EmitDeviceFunctionCall(
 // intrinsics have only a single overloaded type.
 llvm::CallInst* EmitCallToTargetIntrinsic(
     TargetIntrinsicID intrinsic_id, absl::Span<llvm::Value* const> operands,
-    absl::Span<llvm::Type* const> overloaded_types, llvm::IRBuilder<>* b);
+    absl::Span<llvm::Type* const> overloaded_types, llvm::IRBuilderBase* b);
 
 // Annotate the kernel as GPU kernel according to the GPU target.
 void AnnotateFunctionAsGpuKernel(llvm::Module* module, llvm::Function* func,
-                                 llvm::IRBuilder<>* b);
+                                 llvm::IRBuilderBase* b);
 
+// 'output_type' is the type of the math op corresponding to 'func_id' for which
+// we want to obtain the device function name.
 std::string ObtainDeviceFunctionName(TargetDeviceFunctionID func_id,
                                      PrimitiveType output_type,
                                      llvm::Triple target_triple);
 
+bool HasF16Implementation(TargetDeviceFunctionID func_id,
+                          llvm::Triple target_triple);
 }  // namespace gpu
 }  // namespace xla
 

@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,11 +15,14 @@ limitations under the License.
 
 #include "xla/index_util.h"
 
+#include <cstdint>
 #include <initializer_list>
 #include <vector>
 
+#include "absl/types/span.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/test.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -38,7 +41,7 @@ TEST(IndexUtilTest, VectorIndexing) {
   Shape vector_shape = ShapeUtil::MakeShape(F32, {100});
   EXPECT_EQ(42,
             IndexUtil::MultidimensionalIndexToLinearIndex(vector_shape, {42}));
-  std::vector<int64_t> multi_index =
+  auto multi_index =
       IndexUtil::LinearIndexToMultidimensionalIndex(vector_shape, 42);
   EXPECT_EQ(1, multi_index.size());
   EXPECT_EQ(42, multi_index[0]);
@@ -56,8 +59,9 @@ TEST(IndexUtilTest, MatrixIndexingRowMajor) {
                                                                {9, 19}));
   EXPECT_EQ(53, IndexUtil::MultidimensionalIndexToLinearIndex(matrix_shape_01,
                                                               {3, 5}));
-  EXPECT_EQ(std::vector<int64_t>({3, 5}),
-            IndexUtil::LinearIndexToMultidimensionalIndex(matrix_shape_01, 53));
+  EXPECT_THAT(
+      IndexUtil::LinearIndexToMultidimensionalIndex(matrix_shape_01, 53),
+      testing::ElementsAre(3, 5));
 }
 
 TEST(IndexUtilTest, MatrixIndexingColumnMajor) {
@@ -72,8 +76,9 @@ TEST(IndexUtilTest, MatrixIndexingColumnMajor) {
                                                                {9, 19}));
   EXPECT_EQ(65, IndexUtil::MultidimensionalIndexToLinearIndex(matrix_shape_10,
                                                               {3, 5}));
-  EXPECT_EQ(std::vector<int64_t>({3, 5}),
-            IndexUtil::LinearIndexToMultidimensionalIndex(matrix_shape_10, 65));
+  EXPECT_THAT(
+      IndexUtil::LinearIndexToMultidimensionalIndex(matrix_shape_10, 65),
+      testing::ElementsAre(3, 5));
 }
 
 TEST(IndexUtilTest, ThreeDArrayIndexing210) {
@@ -131,12 +136,18 @@ TEST(IndexUtilTest, LinearToMultiToLinear) {
     Shape shape = ShapeUtil::MakeShape(F32, {10, 20, 30, 40, 30, 20, 10});
     SetMinorToMajorLayout(&shape, minor_to_major_order);
     for (auto linear_index : linear_indexes) {
-      std::vector<int64_t> multi_index =
+      auto multi_index =
           IndexUtil::LinearIndexToMultidimensionalIndex(shape, linear_index);
       EXPECT_EQ(linear_index, IndexUtil::MultidimensionalIndexToLinearIndex(
                                   shape, multi_index));
     }
   }
+}
+
+TEST(IndexUtilTest, BumpIndicesScalar) {
+  const Shape shape = ShapeUtil::MakeShape(S32, {});
+  std::vector<int64_t> indices;
+  EXPECT_FALSE(IndexUtil::BumpIndices(shape, absl::MakeSpan(indices)));
 }
 
 TEST(IndexUtilTest, BumpIndices2x2) {

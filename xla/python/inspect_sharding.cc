@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,14 +15,19 @@ limitations under the License.
 
 #include "xla/python/inspect_sharding.h"
 
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
+#include "absl/status/status.h"
+#include "absl/strings/string_view.h"
+#include "xla/hlo/ir/hlo_sharding.h"
 #include "xla/service/custom_call_sharding_helper.h"
-#include "xla/service/spmd/spmd_partitioner_util.h"
+#include "xla/service/spmd/spmd_partitioner.h"
+#include "xla/xla_data.pb.h"
 
 namespace jax {
 
@@ -42,7 +47,8 @@ std::optional<xla::HloSharding> InspectShardingReadArgs(
     JAX_InspectSharding_Callback_Args* args) {
   xla::OpSharding proto;
   if (args->sharding_spec_size > std::numeric_limits<int>::max() ||
-      !proto.ParseFromArray(args->sharding_spec, args->sharding_spec_size)) {
+      !proto.ParseFromString(
+          absl::string_view(args->sharding_spec, args->sharding_spec_size))) {
     InspectShardingSetError(args,
                             "inspect_sharding: error parsing OpShardingProto");
     return std::nullopt;
@@ -50,17 +56,21 @@ std::optional<xla::HloSharding> InspectShardingReadArgs(
   auto result = xla::HloSharding::FromProto(std::move(proto));
   if (!result.ok()) {
     InspectShardingSetError(args, std::string(result.status().message()));
+    return std::nullopt;
   }
-  return std::move(*result);
+
+  xla::HloSharding sharding = std::move(*result);
+  sharding = xla::HloSharding::V3ToV2Sharding(sharding);
+  return sharding;
 }
 
 class InspectShardingCallPartitioner : public xla::CustomCallPartitioner {
  public:
-  xla::Status Partition(xla::spmd::SpmdPartitioningVisitor* partitioner,
-                        HloInstruction* instruction) const override {
+  absl::Status Partition(xla::spmd::SpmdPartitioningVisitor* partitioner,
+                         HloInstruction* instruction) const override {
     const HloInstruction* operand = instruction->operand(0);
     if (!operand->has_sharding()) {
-      return xla::InternalError(
+      return xla::Internal(
           "Inspect sharding called but no sharding is available.");
     }
     std::string sharding_spec =
@@ -71,21 +81,24 @@ class InspectShardingCallPartitioner : public xla::CustomCallPartitioner {
     args.error_txt = nullptr;
     const auto& str = instruction->raw_backend_config_string();
     if (str.size() != sizeof(JAX_InspectSharding_Callback)) {
-      return xla::InternalError("Invalid config string for inspect sharding.");
+      return xla::Internal("Invalid config string for inspect sharding.");
     }
     JAX_InspectSharding_Callback cb;
     memcpy(&cb, str.data(), sizeof(JAX_InspectSharding_Callback));
     cb.call(cb.data, &args);
     if (args.error_txt) {
-      auto result = xla::InternalError("Error calling inspect_sharding: %s",
-                                       args.error_txt);
+      auto result =
+          xla::Internal("Error calling inspect_sharding: %s", args.error_txt);
       args.free_error(&args);
       return result;
     }
-    partitioner->SetPartitionedHlo(
-        instruction,
-        partitioner->GetPartitionedHlo(instruction->mutable_operand(0)));
-    return xla::OkStatus();
+    // InspectSharding is a custom call that is inserted by the SPMD partitioner
+    // to inspect the sharding of the operand. It's an identity op, so we can
+    // just use set the operand PartitionedHlo as the one for the instruction.
+    xla::spmd::PartitionedHlo partitioned_hlo =
+        partitioner->GetPartitionedHlo(instruction->mutable_operand(0));
+    partitioner->SetPartitionedHlo(instruction, std::move(partitioned_hlo));
+    return absl::OkStatus();
   }
   HloSharding PropagateUserSharding(
       const HloInstruction* instruction, const HloInstruction* user,

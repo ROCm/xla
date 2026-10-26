@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,24 +13,29 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
 #include <optional>
+#include <string>
+#include <vector>
 
-#include "xla/client/xla_computation.h"
-#include "xla/execution_options_util.h"
-#include "xla/service/despecializer.h"
-#include "xla/service/float_normalization.h"
-#include "xla/status_macros.h"
-#include "xla/test.h"
-#include "xla/tests/client_library_test_base.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "xla/error_spec.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/transforms/despecializer.h"
+#include "xla/hlo/transforms/simplifiers/float_normalization.h"
 #include "xla/tests/conv_depthwise_common.h"
-#include "xla/tests/hlo_test_base.h"
-#include "xla/tests/test_macros.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/test.h"
 
 namespace xla {
 namespace {
 
 class DepthwiseConvolution2DTest
-    : public HloTestBase,
+    : public HloInterpreterReferenceMixin<HloTestBase>,
       public ::testing::WithParamInterface<
           ::testing::tuple<DepthwiseConvolution2DSpec, bool>> {};
 
@@ -83,26 +88,20 @@ static std::vector<DepthwiseConvolution2DSpec> GetConv2DTestCases() {
   return config_set;
 }
 
-XLA_TEST_P(DepthwiseConvolution2DTest, DoIt) {
+TEST_P(DepthwiseConvolution2DTest, DoIt) {
   const DepthwiseConvolution2DSpec& spec = ::testing::get<0>(GetParam());
   bool use_bfloat16 = ::testing::get<1>(GetParam());
-
-#ifdef XLA_BACKEND_DOES_NOT_SUPPORT_BFLOAT16
-  if (use_bfloat16) {
-    return;
-  }
-#endif
 
   const std::string hlo_text =
       BuildHloTextDepthwiseConvolution2D(spec, use_bfloat16);
 
-  EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{0.01, 0.01},
-                            [](HloModule* module) -> Status {
-                              BFloat16MixedPrecisionRemoval remover;
-                              TF_RETURN_IF_ERROR(remover.Run(module).status());
-                              Despecializer despecializer;
-                              return despecializer.Run(module).status();
-                            }));
+  EXPECT_TRUE(RunAndCompare(
+      hlo_text, ErrorSpec{0.01, 0.01}, [](HloModule* module) -> absl::Status {
+        BFloat16MixedPrecisionRemoval remover;
+        ABSL_RETURN_IF_ERROR(remover.Run(module).status());
+        Despecializer despecializer;
+        return despecializer.Run(module).status();
+      }));
 }
 
 INSTANTIATE_TEST_CASE_P(

@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,16 +14,17 @@ limitations under the License.
 ==============================================================================*/
 
 #include "absl/strings/string_view.h"
-#include "xla/tests/hlo_test_base.h"
-#include "xla/tests/test_macros.h"
-#include "xla/tests/test_utils.h"
+#include "xla/error_spec.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/tsl/platform/test.h"
 
 namespace xla {
 namespace {
 
-class FftTextTest : public HloTestBase {};
+using FftTextTest = HloInterpreterReferenceMixin<HloTestBase>;
 
-XLA_TEST_F(FftTextTest, Fft) {
+TEST_F(FftTextTest, Fft) {
   absl::string_view hlo_string = R"(
   HloModule Fft_module
 

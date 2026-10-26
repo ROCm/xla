@@ -1,4 +1,4 @@
-/*Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/*Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,59 +15,105 @@ limitations under the License.
 #ifndef XLA_SERVICE_GPU_KERNEL_REUSE_CACHE_H_
 #define XLA_SERVICE_GPU_KERNEL_REUSE_CACHE_H_
 
-#include <functional>
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "absl/base/thread_annotations.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/functional/function_ref.h"
+#include "absl/status/status.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/types/span.h"
+#include "xla/codegen/emitters/kernel_arguments.h"
+#include "xla/future.h"
 #include "xla/hlo/ir/hlo_computation.h"
-#include "xla/service/gpu/kernel_arguments.h"
+#include "xla/service/gpu/kernel_reuse_cache.pb.h"
 #include "xla/service/gpu/launch_dimensions.h"
+#include "xla/stream_executor/gpu/tma_metadata.h"
+#include "xla/stream_executor/launch_dim.h"
 
-namespace xla {
-namespace gpu {
+namespace xla::gpu {
 
-// Caches identical Kernels for deduplication.
-// Thread-compatible.
+// Cache for compiled kernels, keyed by fingerprint.
+// This cache supports asynchronous generation of entries through `tsl::Future`.
+// Thread safe.
 class KernelReuseCache {
  public:
   struct Entry {
     std::string kernel_name;
     LaunchDimensions launch_dimensions;
+    std::optional<se::ClusterDim> cluster_dim;
+    int64_t shmem_bytes = 0;
+    // Reference counted so that consumers can share the binary instead of
+    // copying it. Default-initialized to an empty vector so `binary` is
+    // non-null even for default-constructed entries.
+    std::shared_ptr<const std::vector<uint8_t>> binary =
+        std::make_shared<const std::vector<uint8_t>>();
+    stream_executor::gpu::TmaMetadata tma_metadata;
+    bool use_pdl = false;
+  };
+  struct NamedBinary {
+    std::string name;
+    std::vector<uint8_t> binary;
   };
 
-  // Retrieves the cache entry for the given computation, or generates it using
-  // the given generator function and stores it in the cache.
-  std::pair<Entry, bool /*was_cached*/> Get(
-      const HloComputation* fused_computation,
-      absl::Span<const KernelArgument> kernel_arguments,
-      absl::string_view discriminator, const std::function<Entry()>& generator);
+  absl::Status Load(const CompilationCacheProto& proto);
+  // Exporting skips kernels that were loaded but not used during emission.
+  // See comment for hits_ below.
+  CompilationCacheProto Export() const;
 
-  // Like `Get`, but for generator functions that can fail.
-  std::pair<StatusOr<Entry>, bool /*was_cached*/> GetWithStatus(
+  bool IsEmpty() const {
+    absl::MutexLock lock(m_);
+    return cache_.empty();
+  }
+
+  void Clear() {
+    absl::MutexLock lock(m_);
+    cache_.clear();
+    hits_.clear();
+  }
+
+  // Retrieves the cache entry for the given computation, or generates it
+  // asynchronously using the given generator function and stores it in the
+  // cache.
+  std::pair<tsl::Future<Entry>, bool /*was_cached*/> GetWithStatus(
       const HloComputation* fused_computation,
-      absl::Span<const KernelArgument> kernel_arguments,
+      absl::Span<const emitters::KernelArgument> kernel_arguments,
       absl::string_view discriminator,
-      const std::function<StatusOr<Entry>()>& generator);
+      absl::FunctionRef<tsl::Future<Entry>()> generator);
+
+  // Retrieves the cache entry for the given fingerprint, or generates it
+  // asynchronously using the given generator function and stores it in the
+  // cache.
+  //
+  // A non-OK status is returned if the entry is not found and the generator
+  // failed.
+  std::pair<tsl::Future<Entry>, bool /*was_cached*/> GetWithStatus(
+      std::string fingerprint,
+      absl::FunctionRef<tsl::Future<Entry>()> generator);
 
  private:
-  absl::flat_hash_map<std::string /*fingerprint*/, Entry> cache_;
+  mutable absl::Mutex m_;
+  absl::flat_hash_map<std::string /*fingerprint*/, tsl::Future<Entry>> cache_
+      ABSL_GUARDED_BY(m_);
+  // Track which fingerprints are in use. Unused ones can appear from loading a
+  // partially compatible cache file. These should not be exported to avoid
+  // linking the corresponding kernels later.
+  absl::flat_hash_set<std::string> hits_ ABSL_GUARDED_BY(m_);
 };
 
-// Calculates the fingerprint of a (fused_computation, kernel_arguments,
-// discriminator) tuple.
-//
-// If a given fusion is implemented using multiple kernels, then for each
-// kernel we should provide a discriminator, such as "init" and "impl".
-//
-// If the same fingerprint is returned twice, then we can reuse the kernel
-// generated for the first computation.
-std::string GetComputationFingerprint(
-    const HloComputation* fused_computation,
-    absl::Span<const KernelArgument> kernel_arguments,
-    absl::string_view discriminator = "");
+// Add kernels to the cache file. Binaries are taken from binaries_to_cache,
+// all other kernel properties are taken from current_cache.
+// do_append makes an existing file be loaded first.
+absl::Status UpdateDiskKernelCache(absl::string_view path, bool do_append,
+                                   const CompilationCacheProto& current_cache);
 
-}  // namespace gpu
-}  // namespace xla
+}  // namespace xla::gpu
 
 #endif  // XLA_SERVICE_GPU_KERNEL_REUSE_CACHE_H_

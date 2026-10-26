@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,17 +15,24 @@ limitations under the License.
 
 #include "xla/hlo/utils/hlo_matchers.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <cstdint>
+#include <optional>
 #include <ostream>
 #include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace testing {
@@ -228,6 +235,47 @@ void HloShardingMatcher::DescribeTo(std::ostream* os) const {
   }
 }
 
+bool HloFrontendAttributeMatcher::MatchAndExplain(
+    const HloInstruction* instruction,
+    ::testing::MatchResultListener* listener) const {
+  if (std::optional<std::string> value =
+          instruction->get_frontend_attribute(key_)) {
+    if (*value == value_) {
+      return true;
+    }
+    *listener << instruction->ToString() << " has incorrect value for '" << key_
+              << "' frontend attribute (expected: " << value_ << ")";
+    return false;
+  }
+
+  *listener << instruction->ToString() << " has no '" << key_
+            << "' frontend attribute (expected: " << value_ << ")";
+  return false;
+}
+
+void HloFrontendAttributeMatcher::DescribeTo(std::ostream* os) const {
+  *os << key_ << " = \"" << value_ << "\"";
+}
+
+bool HloUsedByMatcher::MatchAndExplain(
+    const HloInstruction* instruction,
+    ::testing::MatchResultListener* listener) const {
+  for (const HloInstruction* user : instruction->users()) {
+    if (used_by_.MatchAndExplain(user, listener)) {
+      return true;
+    }
+  }
+  *listener << instruction->ToString()
+            << " has no users that match expected:\n\t";
+  used_by_.DescribeTo(listener->stream());
+  return false;
+}
+
+void HloUsedByMatcher::DescribeTo(std::ostream* os) const {
+  *os << "used by ";
+  used_by_.DescribeTo(os);
+}
+
 bool HloDotWithContractingDimsMatcher::MatchAndExplain(
     const HloInstruction* instruction,
     ::testing::MatchResultListener* listener) const {
@@ -389,6 +437,71 @@ void HloSourceTargetPairsMatcher::DescribeTo(std::ostream* os) const {
     absl::StrAppend(out, "{", pair.first, ",", pair.second, "}");
   };
   *os << '{' << absl::StrJoin(source_target_pairs_, ",", pair_formatter) << "}";
+}
+bool HloMetadataMatcher::MatchAndExplain(
+    const HloInstruction* instruction,
+    ::testing::MatchResultListener* listener) const {
+  *listener << " (metadata: ";
+  if (instruction->metadata().op_type() != metadata_.op_type()) {
+    *listener << " has wrong metadata (got "
+              << instruction->metadata().op_type() << ", want "
+              << metadata_.op_type() << ")";
+    return false;
+  }
+  *listener << metadata_.op_type() << " ";
+  if (instruction->metadata().op_name() != metadata_.op_name()) {
+    *listener << " has wrong metadata (got "
+              << instruction->metadata().op_name() << ", want "
+              << metadata_.op_name() << ")";
+    return false;
+  }
+  *listener << metadata_.op_name() << " ";
+  if (instruction->metadata().source_file() != metadata_.source_file()) {
+    *listener << " has wrong metadata (got "
+              << instruction->metadata().source_file() << ", want "
+              << metadata_.source_file() << ")";
+    return false;
+  }
+  *listener << metadata_.source_file() << " ";
+  if (instruction->metadata().source_line() != metadata_.source_line()) {
+    *listener << " has wrong metadata (got "
+              << instruction->metadata().source_line() << ", want "
+              << metadata_.source_line() << ")";
+    return false;
+  }
+  *listener << metadata_.source_line();
+  if (instruction->metadata().source_end_line() !=
+      metadata_.source_end_line()) {
+    *listener << " has wrong metadata (got "
+              << instruction->metadata().source_end_line() << ", want "
+              << metadata_.source_end_line() << ")";
+    return false;
+  }
+  *listener << metadata_.source_end_line();
+  if (instruction->metadata().source_column() != metadata_.source_column()) {
+    *listener << " has wrong metadata (got "
+              << instruction->metadata().source_column() << ", want "
+              << metadata_.source_column() << ")";
+    return false;
+  }
+  *listener << metadata_.source_column();
+  if (instruction->metadata().source_end_column() !=
+      metadata_.source_end_column()) {
+    *listener << " has wrong metadata (got "
+              << instruction->metadata().source_end_column() << ", want "
+              << metadata_.source_end_column() << ")";
+    return false;
+  }
+  *listener << metadata_.source_end_column();
+  *listener << ")";
+  return true;
+}
+
+void HloMetadataMatcher::DescribeTo(std::ostream* os) const {
+  *os << " (metadata: " << metadata_.op_type() << " " << metadata_.op_name()
+      << " " << metadata_.source_file() << " " << metadata_.source_line() << " "
+      << metadata_.source_end_line() << " " << metadata_.source_column() << " "
+      << metadata_.source_end_column() << ")";
 }
 }  // namespace testing
 

@@ -1,4 +1,4 @@
-/*Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/*Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,98 +14,219 @@ limitations under the License.
 ==============================================================================*/
 #include "xla/service/gpu/kernel_reuse_cache.h"
 
-#include <functional>
+#include <cstdint>
+#include <limits>
+#include <memory>
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/functional/function_ref.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/random/random.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/types/span.h"
+#include "xla/codegen/emitters/computation_fingerprint.h"
+#include "xla/codegen/emitters/kernel_arguments.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/util.h"
-#include "tsl/platform/logging.h"
+#include "xla/service/gpu/kernel_reuse_cache.pb.h"
+#include "xla/service/gpu/launch_dimensions.h"
+#include "xla/status_macros.h"
+#include "xla/stream_executor/launch_dim.h"
+#include "xla/tsl/concurrency/future.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/file_system.h"
+#include "xla/tsl/platform/logging.h"
+#include "xla/tsl/util/sorted_range.h"
 
-namespace xla {
-namespace gpu {
+namespace xla::gpu {
 namespace {
 
-// Calculates a fingerprint of the kernel arguments, which can be used for
-// checking reusability.
-//
-// For example 2 arguments that are aligned to 16 bytes, aliased and also
-// written by the kernel will be represented as "16aw,16aw".
-//
-// Overlapping arguments are only marked aliased, if at least one of them is
-// written and their buffers are not exactly the same. If 2 arguments'
-// buffers are exactly the same, then they are not marked aliased, but marked
-// as duplicates, for example like this: "16,=0,16w,=2". The example means
-// that the 1st argument is the same as the 0th and the 3rd is the same as
-// the 2nd. These duplicated parameters are passed to the kernel only once.
-std::string GetArgumentFingerprint(
-    absl::Span<const KernelArgument> kernel_arguments) {
-  return absl::StrJoin(
-      kernel_arguments, ",", [](std::string* s, const KernelArgument& arg) {
-        if (arg.first_with_same_slice().has_value()) {
-          absl::StrAppend(s, "=", arg.first_with_same_slice().value());
-          return;
-        }
-        absl::StrAppend(s, arg.alignment());
-        if (arg.aliased()) {
-          absl::StrAppend(s, "a");
-        }
-        if (arg.written()) {
-          absl::StrAppend(s, "w");
-        }
-      });
-}
+// Collisions are expected. Perfoming atomic file write.
+absl::Status SetFileContent(absl::string_view path, absl::string_view content) {
+  tsl::Env* env = tsl::Env::Default();
+  absl::InsecureBitGen gen;
+  std::string tmppath =
+      absl::StrCat(path, ".tmp.",
+                   absl::uniform_int_distribution<int>(
+                       0, std::numeric_limits<int>::max())(gen));
+  if (!env->CreateUniqueFileName(&tmppath, "")) {
+    return absl::InternalError(
+        absl::StrCat("Unable to create tempfile name for :", path));
+  }
+  bool has_atomic_move;
+  ABSL_RETURN_IF_ERROR(env->HasAtomicMove(tmppath, &has_atomic_move));
+  if (!has_atomic_move) {
+    return absl::InternalError(
+        absl::StrCat("Atomic move is not supported for :", path));
+  }
 
+  std::unique_ptr<tsl::WritableFile> file;
+  ABSL_RETURN_IF_ERROR(env->NewWritableFile(tmppath, &file));
+  ABSL_RETURN_IF_ERROR(file->Append(content));
+  ABSL_RETURN_IF_ERROR(file->Close());
+
+  return env->RenameFile(tmppath, std::string(path));
+}
 }  // namespace
 
-std::string GetComputationFingerprint(
-    const HloComputation* fused_computation,
-    absl::Span<const KernelArgument> kernel_arguments,
-    absl::string_view discriminator) {
-  // We have to print constants, because otherwise we would accidentally reuse
-  // kernels which have different builtin constants.
-  //
-  // It is not a problem to recursively print sub-computations, because we don't
-  // have them at this point.
-  auto print_options = HloPrintOptions::Fingerprint()
-                           .set_print_only_essential_constants(false)
-                           .set_print_operand_shape(false);
+constexpr int kCacheCompatibilityVersion = 3;
 
-  return absl::StrCat(discriminator, "(",
-                      GetArgumentFingerprint(kernel_arguments), ")",
-                      fused_computation->ToString(print_options));
+absl::Status KernelReuseCache::Load(const CompilationCacheProto& proto) {
+  if (proto.compatibility_version() != kCacheCompatibilityVersion) {
+    LOG(WARNING) << "Provided CompilationCacheProto contains no longer "
+                    "compatible data and needs to be regenerated.";
+    return absl::OkStatus();
+  }
+  absl::MutexLock lock(m_);
+  for (const auto& [name, entry] : tsl::KeySortedRange(proto.entries())) {
+    std::optional<se::ClusterDim> cluster_dim;
+    if (entry.has_cluster_dim()) {
+      cluster_dim =
+          se::ClusterDim{entry.cluster_dim().x(), entry.cluster_dim().y(),
+                         entry.cluster_dim().z()};
+    }
+    std::shared_ptr<const std::vector<uint8_t>> binary =
+        std::make_shared<const std::vector<uint8_t>>(
+            entry.binary().data(),
+            entry.binary().data() + entry.binary().size());
+    TF_RET_CHECK(
+        cache_
+            .insert(
+                {entry.fingerprint(),
+                 Entry{name,
+                       LaunchDimensions{
+                           entry.launch_dimensions().num_blocks(),
+                           entry.launch_dimensions().num_threads_per_block()},
+                       cluster_dim, entry.shmem_bytes(), std::move(binary)}})
+            .second);
+  }
+
+  return absl::OkStatus();
 }
 
-std::pair<KernelReuseCache::Entry, bool> KernelReuseCache::Get(
-    const HloComputation* fused_computation,
-    absl::Span<const KernelArgument> kernel_arguments,
-    absl::string_view discriminator,
-    const std::function<KernelReuseCache::Entry()>& generator) {
-  auto ret = GetWithStatus(fused_computation, kernel_arguments, discriminator,
-                           [&]() -> StatusOr<Entry> { return generator(); });
-  return {*ret.first, ret.second};
+CompilationCacheProto KernelReuseCache::Export() const {
+  absl::MutexLock lock(m_);
+  CompilationCacheProto proto;
+  proto.set_compatibility_version(kCacheCompatibilityVersion);
+  for (const auto& [fingerprint, future] : tsl::KeySortedRange(cache_)) {
+    const absl::StatusOr<Entry>& cache_entry = future.Await();
+    if (!cache_entry.ok()) {
+      // If a generator failed, the Future will hold an error.
+      // We skip exporting these failed entries. Consumers of GetWithStatus
+      // are responsible for handling potential errors from the Future.
+      continue;
+    }
+    if (!hits_.contains(fingerprint)) {
+      VLOG(5) << "Not exporting unused " << cache_entry->kernel_name;
+      continue;
+    }
+    auto [it, inserted] = proto.mutable_entries()->emplace(
+        cache_entry->kernel_name, CompilationCacheEntryProto{});
+    CHECK(inserted) << cache_entry->kernel_name;
+    CompilationCacheEntryProto& proto_entry = it->second;
+    proto_entry.set_fingerprint(fingerprint);
+    CompilationCacheEntryProto::LaunchDimensionsProto launch_dimensions_proto;
+    launch_dimensions_proto.set_num_blocks(
+        cache_entry->launch_dimensions.num_blocks());
+    launch_dimensions_proto.set_num_threads_per_block(
+        cache_entry->launch_dimensions.num_threads_per_block());
+    *proto_entry.mutable_launch_dimensions() = launch_dimensions_proto;
+    if (cache_entry->cluster_dim.has_value()) {
+      CompilationCacheEntryProto::ClusterDimProto cluster_dim_proto;
+      cluster_dim_proto.set_x(cache_entry->cluster_dim->x);
+      cluster_dim_proto.set_y(cache_entry->cluster_dim->y);
+      cluster_dim_proto.set_z(cache_entry->cluster_dim->z);
+      *proto_entry.mutable_cluster_dim() = cluster_dim_proto;
+    }
+    proto_entry.set_shmem_bytes(cache_entry->shmem_bytes);
+    if (cache_entry->binary != nullptr) {
+      proto_entry.set_binary(absl::string_view(
+          reinterpret_cast<const char*>(cache_entry->binary->data()),
+          cache_entry->binary->size()));
+    }
+  }
+  return proto;
 }
 
-std::pair<StatusOr<KernelReuseCache::Entry>, bool>
+absl::Status UpdateDiskKernelCache(absl::string_view path, const bool do_append,
+                                   const CompilationCacheProto& current_cache) {
+  CompilationCacheProto disk_cache;
+  if (do_append) {
+    ABSL_RETURN_IF_ERROR(tsl::ReadBinaryProto(tsl::Env::Default(),
+                                              std::string(path), &disk_cache));
+    if (disk_cache.compatibility_version() != kCacheCompatibilityVersion) {
+      LOG(WARNING) << "Provided CompilationCacheProto contains no longer "
+                      "compatible data and needs to be regenerated.";
+      disk_cache.Clear();
+    }
+  }
+
+  absl::flat_hash_set<std::string> kernel_fingerprints;
+  for (const auto& [_, entry] : tsl::KeySortedRange(disk_cache.entries())) {
+    kernel_fingerprints.insert(entry.fingerprint());
+  }
+
+  int stored_kernel_count = 0;
+  for (const auto& [name, entry] :
+       tsl::KeySortedRange(current_cache.entries())) {
+    if (kernel_fingerprints.contains(entry.fingerprint())) {
+      continue;
+    }
+    (*disk_cache.mutable_entries())[name] = entry;
+    stored_kernel_count++;
+  }
+
+  disk_cache.set_compatibility_version(kCacheCompatibilityVersion);
+  if (stored_kernel_count) {
+    ABSL_RETURN_IF_ERROR(
+        gpu::SetFileContent(path, disk_cache.SerializeAsString()));
+    VLOG(2) << "Stored " << stored_kernel_count
+            << " kernels in the cache file.";
+  }
+  return absl::OkStatus();
+}
+
+std::pair<tsl::Future<KernelReuseCache::Entry>, bool>
 KernelReuseCache::GetWithStatus(
     const HloComputation* fused_computation,
-    absl::Span<const KernelArgument> kernel_arguments,
+    absl::Span<const emitters::KernelArgument> kernel_arguments,
     absl::string_view discriminator,
-    const std::function<StatusOr<KernelReuseCache::Entry>()>& generator) {
-  std::string fingerprint = GetComputationFingerprint(
+    absl::FunctionRef<tsl::Future<KernelReuseCache::Entry>()> generator) {
+  std::string fingerprint = emitters::GetComputationFingerprint(
       fused_computation, kernel_arguments, discriminator);
   VLOG(4) << "Fingerprint: ";
   XLA_VLOG_LINES(4, fingerprint);
-
-  auto& entry = cache_[fingerprint];
-  if (entry.kernel_name.empty()) {
-    auto ret = generator();
-    if (ret.ok()) entry = *ret;
-    return {ret, false};
-  }
-  return {{entry}, true};
+  return GetWithStatus(std::move(fingerprint), generator);
 }
 
-}  // namespace gpu
-}  // namespace xla
+std::pair<tsl::Future<KernelReuseCache::Entry>, bool>
+KernelReuseCache::GetWithStatus(
+    std::string fingerprint,
+    absl::FunctionRef<tsl::Future<KernelReuseCache::Entry>()> generator) {
+  absl::MutexLock lock(m_);
+  hits_.insert(fingerprint);
+
+  // Probe cache before invoking generator() to avoid unnecessary work if entry
+  // already exists.
+  auto it = cache_.find(fingerprint);
+  bool cached = true;
+  if (it == cache_.end()) {
+    cached = false;
+    it = cache_.insert({std::move(fingerprint), generator()}).first;
+  }
+
+  return {it->second, cached};
+}
+
+}  // namespace xla::gpu

@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,37 +15,44 @@ limitations under the License.
 
 #include "deallocation/utils/util.h"
 
-#include <optional>
-
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
 namespace mlir {
 namespace deallocation {
 
 SmallVector<RegionEdge> getSuccessorRegions(RegionBranchOpInterface op,
-                                            std::optional<unsigned> index) {
+                                            RegionBranchPoint point) {
   SmallVector<RegionEdge> edges;
-  if (index && op->getRegion(*index).empty()) {
-    return edges;
+  auto* parentRegion =
+      point.getTerminatorPredecessorOrNull()
+          ? point.getTerminatorPredecessorOrNull()->getParentRegion()
+          : nullptr;
+
+  if (parentRegion) {
+    if (parentRegion->empty()) {
+      return edges;
+    }
   }
 
   SmallVector<RegionSuccessor> successors;
-  op.getSuccessorRegions(index, successors);
+  op.getSuccessorRegions(point, successors);
 
   for (const auto& successor : successors) {
     auto& edge = edges.emplace_back();
-    edge.predecessorRegionIndex = index;
-    edge.predecessorOp = index ? op->getRegion(*index).front().getTerminator()
-                               : op.getOperation();
+    edge.predecessorRegionPoint = point;
+    edge.predecessorOp = parentRegion ? parentRegion->front().getTerminator()
+                                      : op.getOperation();
     edge.predecessorOperandIndex = edge.predecessorOp->getNumOperands() -
-                                   successor.getSuccessorInputs().size();
+                                   op.getSuccessorInputs(successor).size();
 
-    if (successor.isParent()) {
-      edge.successorRegionIndex = std::nullopt;
+    if (successor.isOperation()) {
+      edge.successorRegionPoint = point.parent();
       edge.successorOpOrRegion = op.getOperation();
       edge.successorValueIndex = 0;
     } else {
-      edge.successorRegionIndex = successor.getSuccessor()->getRegionNumber();
+      edge.successorRegionPoint =
+          RegionBranchPoint(cast<RegionBranchTerminatorOpInterface>(
+              successor.getSuccessor()->front().getTerminator()));
       edge.successorOpOrRegion = successor.getSuccessor();
       edge.successorValueIndex = llvm::isa<scf::ForOp>(op) ? 1 : 0;
     }
@@ -55,18 +62,20 @@ SmallVector<RegionEdge> getSuccessorRegions(RegionBranchOpInterface op,
 }
 
 SmallVector<RegionEdge> getPredecessorRegions(RegionBranchOpInterface op,
-                                              std::optional<unsigned> index) {
+                                              RegionBranchPoint point) {
   SmallVector<RegionEdge> result;
-  auto checkPredecessor = [&](std::optional<unsigned> possiblePredecessor) {
-    for (const auto& successor : getSuccessorRegions(op, possiblePredecessor)) {
-      if (successor.successorRegionIndex == index) {
+  auto checkPredecessor = [&](RegionBranchPoint possiblePredecessorPoint) {
+    for (const auto& successor :
+         getSuccessorRegions(op, possiblePredecessorPoint)) {
+      if (successor.successorRegionPoint == point) {
         result.push_back(successor);
       }
     }
   };
-  checkPredecessor(std::nullopt);
-  for (unsigned i = 0; i < op->getNumRegions(); ++i) {
-    checkPredecessor(i);
+  checkPredecessor(point.parent());
+  for (Region& region : op->getRegions()) {
+    checkPredecessor(RegionBranchPoint(cast<RegionBranchTerminatorOpInterface>(
+        region.front().getTerminator())));
   }
   return result;
 }
@@ -76,25 +85,25 @@ RegionBranchOpInterface moveRegionsToNewOpButKeepOldOp(
   OpBuilder b(op);
   RegionBranchOpInterface newOp;
   if (llvm::isa<scf::ForOp>(op)) {
-    newOp = b.create<scf::ForOp>(op.getLoc(), op->getOperands()[0],
-                                 op->getOperands()[1], op->getOperands()[2],
-                                 op->getOperands().drop_front(3));
+    newOp = scf::ForOp::create(b, op.getLoc(), op->getOperands()[0],
+                               op->getOperands()[1], op->getOperands()[2],
+                               op->getOperands().drop_front(3));
   } else if (llvm::isa<scf::WhileOp>(op)) {
-    newOp = b.create<scf::WhileOp>(
-        op.getLoc(),
+    newOp = scf::WhileOp::create(
+        b, op.getLoc(),
         TypeRange{op->getRegion(0).front().getTerminator()->getOperands()}
             .drop_front(),
         op->getOperands());
   } else if (llvm::isa<scf::IfOp>(op)) {
-    newOp = b.create<scf::IfOp>(
-        op.getLoc(),
+    newOp = scf::IfOp::create(
+        b, op.getLoc(),
         TypeRange{op->getRegion(0).front().getTerminator()->getOperands()},
         op->getOperands()[0], op->getNumRegions() > 1);
   } else if (llvm::isa<scf::ParallelOp>(op)) {
     auto parallel = llvm::cast<scf::ParallelOp>(op);
-    newOp = b.create<scf::ParallelOp>(
-        op.getLoc(), parallel.getLowerBound(), parallel.getUpperBound(),
-        parallel.getStep(), parallel.getInitVals());
+    newOp = scf::ParallelOp::create(b, op.getLoc(), parallel.getLowerBound(),
+                                    parallel.getUpperBound(),
+                                    parallel.getStep(), parallel.getInitVals());
   } else {
     llvm_unreachable("unsupported");
   }

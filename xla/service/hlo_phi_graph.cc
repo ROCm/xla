@@ -1,4 +1,4 @@
-/* Copyright 2020 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2020 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -216,11 +216,10 @@ void PhiGraph::Optimize() {
       while (!worklist.empty()) {
         Node* todo = worklist.front();
         worklist.pop();
-        if (workset.contains(todo)) {
+        if (!workset.insert(todo).second) {
           continue;
         }
         checked_for_closure.insert(todo);
-        workset.insert(todo);
         for (Node* operand : todo->operands) {
           worklist.push(operand);
         }

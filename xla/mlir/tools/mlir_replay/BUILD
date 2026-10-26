@@ -1,6 +1,21 @@
-load("//xla:xla.bzl", "xla_cc_binary")
-load("@tsl//tsl/platform:rules_cc.bzl", "cc_library")
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("//xla:xla.default.bzl", "xla_cc_binary")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
 
 # copybara:uncomment package(default_applicable_licenses = ["//tensorflow:license"])
 
@@ -13,35 +28,31 @@ build_test(
 
 xla_cc_binary(
     name = "mlir_replay",
+    testonly = True,
     srcs = ["mlir_replay.cc"],
     deps = [
         ":mlir_replay_lib",
         "//xla:debug_options_flags",
-        "//xla/mlir/framework/ir:xla_framework",
-        "//xla/mlir/runtime/ir:rt",
+        "//xla/mlir/tools/mlir_interpreter/dialects",
+        "//xla/mlir/tools/mlir_interpreter/framework",
         "//xla/mlir/tools/mlir_replay/public:compiler_trace_proto_cc",
         "//xla/mlir/tools/mlir_replay/public:compiler_trace_proto_cc_impl",
         "//xla/mlir/tools/mlir_replay/public:execution_trace_proto_cc",
         "//xla/mlir/tools/mlir_replay/public:execution_trace_utils",
-        "//xla/mlir/xla_cpu/ir:xla_cpu",
-        "//xla/mlir_hlo:deallocation",
-        "//xla/mlir_hlo:gml_st",
         "//xla/mlir_hlo:hlo_dialect_registration",
-        "//xla/mlir_hlo:lhlo",
-        "//xla/mlir_hlo:lhlo_gpu",
-        "//xla/mlir_hlo:mlir_interpreter_dialects",
-        "//xla/mlir_hlo:mlir_interpreter_framework",
-        "//xla/mlir_hlo:thlo",
         "//xla/service:hlo_proto_cc",
+        "//xla/tsl/util:command_line_flags",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:AllPassesAndDialects",
         "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:RegisterAllDialects",  # buildcleaner: keep
         "@tsl//tsl/platform:env",
         "@tsl//tsl/platform:path",
         "@tsl//tsl/platform:platform_port",
         "@tsl//tsl/platform:status",
-        "@tsl//tsl/util:command_line_flags",
     ],
 )
 
@@ -50,21 +61,22 @@ cc_library(
     srcs = ["mlir_replay_lib.cc"],
     hdrs = ["mlir_replay_lib.h"],
     deps = [
-        "//xla:xla_data_proto_cc",
-        "//xla/mlir/framework/ir:xla_framework",
+        "//xla/mlir/tools/mlir_interpreter/framework",
         "//xla/mlir/tools/mlir_replay/public:execution_trace_proto_cc",
         "//xla/mlir/tools/mlir_replay/public:execution_trace_utils",
-        "//xla/mlir_hlo:mlir_interpreter_framework",
         "//xla/service:hlo_proto_cc",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/random",
         "@com_google_absl//absl/random:bit_gen_ref",
+        "@com_google_absl//absl/random:distributions",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:MlirReduceLib",
+        "@llvm-project//mlir:ParseUtilities",
         "@llvm-project//mlir:Support",
-        "@tsl//tsl/platform:errors",
         "@tsl//tsl/platform:statusor",
     ],
 )

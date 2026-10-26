@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,12 +16,20 @@ limitations under the License.
 #ifndef XLA_TESTS_TEST_UTILS_H_
 #define XLA_TESTS_TEST_UTILS_H_
 
+#include <functional>
 #include <initializer_list>
 #include <memory>
+#include <optional>
 #include <random>
+#include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/types/span.h"
+#include "tsl/platform/protobuf.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/layout_util.h"
@@ -53,11 +61,70 @@ class PseudorandomGenerator {
   std::mt19937 generator_;
 };
 
-// Generates fake data in a literal of the given shape, or returns an error
-// status if the element type is currently unhandled for fake data
-// generation. See below for documentation of pseudo_random and use_large_range.
-StatusOr<Literal> MakeFakeLiteral(const Shape& shape, bool pseudo_random = true,
-                                  bool use_large_range = false);
+// Lambda function type to extract known zeroes bitmask for the given dimension
+// of a DynamicSlice or DynamicUpdateSlice instruction.
+using GetIndexKnownZeroesFn =
+    std::function<std::optional<uint64_t>(const HloInstruction*, int64_t)>;
+
+// Options for generating fake arguments with MakeFakeArguments and
+// MakeDataflowConstrainedArguments.
+struct FakeArgumentsOptions {
+  // Optional random number generator. Passing a generator enables generation
+  // of different random values across sequential calls by reusing the same
+  // engine.
+  std::minstd_rand0* engine = nullptr;
+
+  // If pseudo_random is true, the generated numbers will be generated
+  // deterministically in a pseudo random way unless the values are constrained
+  // to be e.g. init values as above. If pseudo_random is false, the returned
+  // values will be generated in a faster way that yields less interesting data,
+  // e.g. the values may all be just the same value.
+  //
+  // TODO(b/79942829): Make interesting argument generation fast enough that
+  // using pseudo_random does not save any noticeable amount of time so that the
+  // parameter can be removed.
+  bool pseudo_random = true;
+
+  // If use_large_range is false, the generated floating point numbers will be
+  // sampled from a small range of possible values. If use_large_range is true,
+  // the generated floating point numbers will be sampled from a uniform-log
+  // distribution of most possible floats, with a small chance to instead be
+  // sampled from a list of special floating point values (such as 0, inf,
+  // etc.).
+  bool use_large_range = false;
+
+  // If treat_gte_as_data_formatting is true, GetTupleElement instructions are
+  // treated as data formatting operations when tracking parameter constraints,
+  // allowing constraints to propagate through tuple deconstruction.
+  bool treat_gte_as_data_formatting = false;
+
+  // If max_bits_of_precision is set to a number, then floating point & integer
+  // types will be constrained to be represented in that number of bits. Setting
+  // it to 5 for integers would mean it only creates integers between -32 and
+  // 32.
+  std::optional<int64_t> max_bits_of_precision = std::nullopt;
+
+  // If `generate_aligned_ds_indices` is true, the generated indices will be
+  // aligned to the given alignment.
+  bool generate_aligned_ds_indices = false;
+
+  // If `get_index_known_zeroes` is set, the generated indices will have the
+  // given number of zeroes in the given dimension.
+  GetIndexKnownZeroesFn get_index_known_zeroes = nullptr;
+
+  // Restricts generated values for specific parameters to a custom [min, max]
+  // range, while still respecting all graph constraints.
+  //
+  // Keyed by parameter index (e.g. 0 for param 0). For tuple parameters,
+  // each element gets its own sequential index (e.g. if param 1 is a 2-tuple,
+  // its elements are indices 1 and 2).
+  //
+  // Returns an error if the requested range conflicts with what the graph needs
+  // (e.g. requesting negative numbers for an input fed into sqrt).
+  //
+  // Note: Currently supported only in MakeDataflowConstrainedArguments.
+  absl::flat_hash_map<int64_t, std::pair<double, double>> parameter_ranges;
+};
 
 // Generates a vector of arguments containing fake data. The number, shape and
 // layout of the arguments is appropriate for given HLO module.
@@ -73,37 +140,25 @@ StatusOr<Literal> MakeFakeLiteral(const Shape& shape, bool pseudo_random = true,
 //  (3) Keys of key/value sorts should contain no duplicates.
 //
 // These constraints are best-effort only.
-//
-// If pseudo_random is true, the generated numbers will be generated
-// deterministically in a pseudo random way unless the values are constrated to
-// be e.g. init values as above. If pseudo_random is false, the returned values
-// will be generated in a faster way that yields less interesting data, e.g. the
-// values may all be just the same value.
-//
-// If use_large_range is false, the generated floating point numbers will be
-// sampled from a small range of possible values. If use_large_range is true,
-// the generated floating point numbers will be sampled from a uniform-log
-// distribution of most possible floats, with a small chance to instead be
-// sampled from a list of special floating point values (such as 0, inf, etc.).
-//
-// TODO(b/79942829): Make interesting argument generation fast enough that using
-// pseudo_random does not save any noticeable amount of time so that the
-// parameter can be removed.
-StatusOr<std::vector<Literal>> MakeFakeArguments(
-    const HloModule* module, bool pseudo_random = true,
-    bool use_large_range = false, bool treat_gte_as_data_formatting = false);
+// Note: `parameter_ranges` in `options` is not supported and returns an
+// Unimplemented error if provided.
+absl::StatusOr<std::vector<Literal>> MakeFakeArguments(
+    const HloModule* module, const FakeArgumentsOptions& options = {});
 
-// Overload which accepts a random number generator. This enables generation of
-// different random values with sequential calls to MakeFakeArguments by reusing
-// the same generator.
-StatusOr<std::vector<Literal>> MakeFakeArguments(
-    const HloModule* module, std::minstd_rand0* engine,
-    bool use_large_range = false, bool treat_gte_as_data_formatting = false);
+// Generates a vector of arguments containing fake data using reverse constraint
+// propagation. The constraint propagator seeds initial constraints based on HLO
+// op semantics (e.g., `sqrt(x)` implies `x >= 0`) and then propagates these
+// constraints backward through the graph. This allows generating test inputs
+// that are more likely to be valid for the graph.
+// Note: `max_bits_of_precision` in `options` is not supported and returns an
+// Unimplemented error if provided.
+absl::StatusOr<std::vector<Literal>> MakeDataflowConstrainedArguments(
+    const HloModule* module, const FakeArgumentsOptions& options = {});
 
 // Check that a given module satisfies various constraints before trying to
 // execute it.
-Status VerifyHloModule(HloModule* const module, bool layout_sensitive,
-                       bool allow_mixed_precision);
+absl::Status VerifyHloModule(HloModule* module, bool layout_sensitive,
+                             bool allow_mixed_precision);
 
 // Creates a dot op with operands 'lhs' and 'rhs' that contracts dimension 1 of
 // the LHS with dimension 0 of the RHS with no batch dimensions.
@@ -112,8 +167,18 @@ std::unique_ptr<HloDotInstruction> CreateCanonicalDot(const Shape& shape,
                                                       HloInstruction* lhs,
                                                       HloInstruction* rhs);
 
-// Checks whether MLIR lowering is enabled through XLA_FLAGS.
-bool IsMlirLoweringEnabled();
+template <typename MessageType>
+absl::StatusOr<MessageType> ParseTextProto(const std::string& text_proto) {
+  tsl::protobuf::TextFormat::Parser parser;
+  MessageType parsed_proto;
+  tsl::protobuf::io::ArrayInputStream input_stream(
+      text_proto.data(), static_cast<int32_t>(text_proto.size()));
+  if (!parser.Parse(&input_stream, &parsed_proto)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Could not parse text proto: ", text_proto));
+  }
+  return parsed_proto;
+}
 
 }  // namespace xla
 

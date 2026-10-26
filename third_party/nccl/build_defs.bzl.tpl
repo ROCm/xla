@@ -2,42 +2,10 @@
 
 load("@local_config_cuda//cuda:build_defs.bzl", "cuda_default_copts", "cuda_gpu_architectures")
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 
 # CUDA toolkit version as tuple (e.g. '(11, 1)').
 _cuda_version = %{cuda_version}
-_cuda_clang = %{cuda_clang}
-
-def _gen_device_srcs_impl(ctx):
-    ops = ["sum", "prod", "min", "max", "premulsum", "sumpostdiv"]
-    # TF uses CUDA version > 11.0, so enable bf16 type unconditionally.
-    types = ["i8", "u8", "i32", "u32", "i64", "u64", "f16", "bf16", "f32", "f64"]
-    hdr_tail = "****************************************/"
-    defines = "\n\n#define NCCL_OP %d\n#define NCCL_TYPE %d"
-
-    files = []
-    for NCCL_OP, op in enumerate(ops):
-        for NCCL_TYPE, dt in enumerate(types):
-            substitutions = {
-                hdr_tail: hdr_tail + defines % (NCCL_OP, NCCL_TYPE),
-            }
-            for src in ctx.files.srcs:
-                name = "%s_%s_%s" % (op, dt, src.basename)
-                file = ctx.actions.declare_file(name, sibling = src)
-                ctx.actions.expand_template(
-                    output = file,
-                    template = src,
-                    substitutions = substitutions,
-                )
-                files.append(file)
-    return [DefaultInfo(files = depset(files))]
-
-gen_device_srcs = rule(
-    implementation = _gen_device_srcs_impl,
-    attrs = {
-        "srcs": attr.label_list(allow_files = True),
-    },
-)
-"""Adds prefix to each file name in srcs and adds #define NCCL_OP."""
 
 def _rdc_copts():
     """Returns copts for compiling relocatable device code."""
@@ -153,25 +121,25 @@ _device_link = rule(
         "gpu_archs": attr.string_list(),
         "nvlink_args": attr.string_list(),
         "_nvlink": attr.label(
-            default = Label("@local_config_cuda//cuda:cuda/bin/nvlink"),
+            default = Label("%{nvlink_label}"),
             allow_single_file = True,
             executable = True,
             cfg = "host",
         ),
         "_fatbinary": attr.label(
-            default = Label("@local_config_cuda//cuda:cuda/bin/fatbinary"),
+            default = Label("%{fatbinary_label}"),
             allow_single_file = True,
             executable = True,
             cfg = "host",
         ),
         "_bin2c": attr.label(
-            default = Label("@local_config_cuda//cuda:cuda/bin/bin2c"),
+            default = Label("%{bin2c_label}"),
             allow_single_file = True,
             executable = True,
             cfg = "host",
         ),
         "_link_stub": attr.label(
-            default = Label("@local_config_cuda//cuda:cuda/bin/crt/link.stub"),
+            default = Label("%{link_stub_label}"),
             allow_single_file = True,
         ),
     },
@@ -221,7 +189,7 @@ _prune_relocatable_code = rule(
         "input": attr.label(mandatory = True, allow_files = True),
         "gpu_archs": attr.string_list(),
         "_nvprune": attr.label(
-            default = Label("@local_config_cuda//cuda:cuda/bin/nvprune"),
+            default = Label("%{nvprune_label}"),
             allow_single_file = True,
             executable = True,
             cfg = "host",
@@ -344,7 +312,7 @@ def cuda_rdc_library(name, hdrs = None, copts = None, linkstatic = True, **kwarg
 
     # Compile host and device code into library.
     lib = name + "_lib"
-    native.cc_library(
+    cc_library(
         name = lib,
         hdrs = hdrs,
         copts = _rdc_copts() + copts,
@@ -361,15 +329,15 @@ def cuda_rdc_library(name, hdrs = None, copts = None, linkstatic = True, **kwarg
         out = dlink_cc,
         gpu_archs = cuda_gpu_architectures(),
         nvlink_args = select({
-            "@tsl//tsl:linux_x86_64": ["--cpu-arch=X86_64"],
-            "@tsl//tsl:linux_ppc64le": ["--cpu-arch=PPC64LE"],
+            Label("//xla/tsl:linux_x86_64"): ["--cpu-arch=X86_64"],
+            Label("//xla/tsl:linux_ppc64le"): ["--cpu-arch=PPC64LE"],
             "//conditions:default": [],
         }),
     )
 
     # Compile the source file into a library.
     dlink = name + "_dlink"
-    native.cc_library(
+    cc_library(
         name = dlink,
         srcs = [dlink_cc],
         textual_hdrs = [dlink_hdrs],
@@ -404,7 +372,7 @@ def cuda_rdc_library(name, hdrs = None, copts = None, linkstatic = True, **kwarg
     )
 
     # Create cc target from archive.
-    native.cc_library(
+    cc_library(
         name = name,
         srcs = [merged],
         hdrs = hdrs,

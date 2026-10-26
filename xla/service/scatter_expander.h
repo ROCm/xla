@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,14 +16,17 @@ limitations under the License.
 #ifndef XLA_SERVICE_SCATTER_EXPANDER_H_
 #define XLA_SERVICE_SCATTER_EXPANDER_H_
 
-#include "xla/service/op_expander_pass.h"
+#include <utility>
+
+#include "xla/hlo/transforms/expanders/op_expander_pass.h"
+#include "xla/util.h"
 
 namespace xla {
 
 // This pass rewrites scatter operations into (roughly) while loops of
 // dynamic-update-slices.
 //
-// This pass can be used in two ways:
+// This pass can be used in three ways:
 //
 //   - kEliminateAllScatters: For backends that don't support scatter, this pass
 //     can convert every scatter into a loop.
@@ -32,8 +35,8 @@ namespace xla {
 //     pass can strength-reduce "simple" scatters -- specifically, scatters that
 //     can be represented without a loop -- to dynamic-update-slices.
 //
-//   - kEliminateIndeterminisitcScatters: For backends that *do* support
-//     scatter, this pass converts scatters with potentially indeterminisitc
+//   - kEliminateIndeterministicScatters: For backends that *do* support
+//     scatter, this pass converts scatters with potentially indeterministic
 //     behavior, because of non-unique indices or non-associative combiner
 //     functions. There may be false positives, but no false negatives, i.e.
 //     some scatters are converted even when deterministic in practice.
@@ -46,17 +49,24 @@ class ScatterExpander : public OpExpanderPass {
   enum Mode {
     kEliminateAllScatters,
     kEliminateSimpleScatters,
-    kEliminateIndeterminisitcScatters,
+    kEliminateIndeterministicScatters,
   };
 
-  explicit ScatterExpander(Mode m) : mode_(m) {}
+  // extra_filter: optional additional condition an instruction must satisfy
+  // to be expanded (see OpExpanderPass).
+  explicit ScatterExpander(Mode m, HloPredicate extra_filter = nullptr)
+      : OpExpanderPass(std::move(extra_filter)), mode_(m) {}
 
   absl::string_view name() const override { return "scatter_expander"; }
 
  protected:
   bool InstructionMatchesPattern(HloInstruction* inst) override;
 
-  StatusOr<HloInstruction*> ExpandInstruction(HloInstruction* inst) override;
+  absl::StatusOr<HloInstruction*> ExpandInstruction(
+      HloInstruction* inst) override;
+  static absl::StatusOr<std::vector<HloInstruction*>> ScatterLoopBody(
+      HloInstruction* scatter, HloInstruction* induction_var,
+      absl::Span<HloInstruction* const> loop_state);
 
  private:
   Mode mode_;

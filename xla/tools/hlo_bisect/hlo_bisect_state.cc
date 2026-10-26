@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,13 +23,14 @@ limitations under the License.
 
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/status/status_macros.h"
 #include "absl/types/span.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/service/hlo_dce.h"
-#include "xla/tests/test_utils.h"
+#include "xla/hlo/transforms/simplifiers/hlo_dce.h"
+#include "xla/literal_util.h"
 #include "xla/util.h"
 
 namespace xla {
@@ -55,8 +56,8 @@ std::vector<HloInstruction*> GetModifiedInstructionPostOrder(
 // Changes the module by replacing the original root instruction of the entry
 // computation with a new root instruction that is a tuple containing the values
 // in `outputs`.
-Status MorphModuleWithOutputs(HloModule* module,
-                              absl::Span<HloInstruction* const> outputs) {
+absl::Status MorphModuleWithOutputs(HloModule* module,
+                                    absl::Span<HloInstruction* const> outputs) {
   HloComputation* entry_computation = module->entry_computation();
   HloInstruction* new_root = outputs.size() == 1
                                  ? outputs[0]
@@ -68,14 +69,14 @@ Status MorphModuleWithOutputs(HloModule* module,
       module->compute_computation_layout();
 
   HloDCE dce;
-  StatusOr<bool> dce_result = dce.Run(module);
+  absl::StatusOr<bool> dce_result = dce.Run(module);
   return dce_result.status();
 }
 
 // Changes the module by keeping only the provided instructions of the entry
 // computation (should be sorted in the modified instruction post order),
 // inserting a new root instruction to keep all values live.
-Status MorphModuleWithInstructions(
+absl::Status MorphModuleWithInstructions(
     HloModule* module, absl::Span<HloInstruction* const> instructions) {
   ConstHloInstructionSet in_range_instructions(instructions.begin(),
                                                instructions.end());
@@ -94,7 +95,8 @@ Status MorphModuleWithInstructions(
   return MorphModuleWithOutputs(module, outputs);
 }
 
-Status MorphModuleWithInstructions(HloModule* module, size_t num_instructions) {
+absl::Status MorphModuleWithInstructions(HloModule* module,
+                                         size_t num_instructions) {
   std::vector<HloInstruction*> ordered_instructions =
       GetModifiedInstructionPostOrder(module->entry_computation());
   HloInstruction* const* instructions_begin = &ordered_instructions.front();
@@ -104,7 +106,7 @@ Status MorphModuleWithInstructions(HloModule* module, size_t num_instructions) {
 
 // Changes the module by replacing some instructions in the entry computation
 // with literals.
-Status MorphModuleWithLiterals(
+absl::Status MorphModuleWithLiterals(
     HloModule* module, absl::flat_hash_map<std::string, Literal> literal_map) {
   HloComputation* entry_computation = module->entry_computation();
 
@@ -120,14 +122,14 @@ Status MorphModuleWithLiterals(
     if (!instruction->IsDead()) {
       HloInstruction* new_instruction = entry_computation->AddInstruction(
           HloInstruction::CreateConstant(std::move(literal)));
-      Status replace_status =
+      absl::Status replace_status =
           entry_computation->ReplaceInstruction(instruction, new_instruction);
-      TF_RETURN_IF_ERROR(replace_status);
+      ABSL_RETURN_IF_ERROR(replace_status);
     }
   }
 
   xla::HloDCE dce;
-  StatusOr<bool> dce_status = dce.Run(module);
+  absl::StatusOr<bool> dce_status = dce.Run(module);
   return dce_status.status();
 }
 
@@ -144,26 +146,26 @@ bool InstructionNotReplaceableWithConstant(HloInstruction* instruction) {
 
 }  // namespace
 
-StatusOr<bool> HloBisectState::ShouldProcess() {
+absl::StatusOr<bool> HloBisectState::ShouldProcess() {
   // Running the unmodified module should trigger the bug checker.
   return RunModule(*module_);
 }
 
-StatusOr<bool> HloBisectState::TrimEntryComputation() {
+absl::StatusOr<bool> HloBisectState::TrimEntryComputation() {
   bool changed_in_loop = false;
   bool changed = false;
   for (int iter = 0; changed || iter < 2; iter++) {
     if (iter % 2 == 0) {
       VLOG(2) << "Trimming by outputs, iteration " << iter;
-      TF_ASSIGN_OR_RETURN(changed, TrimByOutputs());
+      ABSL_ASSIGN_OR_RETURN(changed, TrimByOutputs());
     } else {
       VLOG(2) << "Trimming by instructions, iteration " << iter;
-      TF_ASSIGN_OR_RETURN(changed, TrimByInstructions());
+      ABSL_ASSIGN_OR_RETURN(changed, TrimByInstructions());
     }
     changed_in_loop |= changed;
   }
   VLOG(2) << "Trimming by replacing instructions with literals";
-  TF_ASSIGN_OR_RETURN(changed, TrimByUsingConstants());
+  ABSL_ASSIGN_OR_RETURN(changed, TrimByUsingConstants());
   VLOG(2) << "Final module: " << module_->ToString();
   return changed || changed_in_loop;
 }
@@ -172,12 +174,12 @@ std::unique_ptr<xla::HloModule>&& HloBisectState::GetResult() {
   return std::move(module_);
 }
 
-StatusOr<bool> HloBisectState::RunModule(const HloModule& module) {
+absl::StatusOr<bool> HloBisectState::RunModule(const HloModule& module) {
   VLOG(3) << "Modified module: " << module.ToString();
 
   // Run the modified module with the bug checker.
-  StatusOr<bool> bug_result = bug_checker_->Run(module);
-  TF_RETURN_IF_ERROR(bug_result.status());
+  absl::StatusOr<bool> bug_result = bug_checker_->Run(module);
+  ABSL_RETURN_IF_ERROR(bug_result.status());
   VLOG(3) << "Bug checker result: " << bug_result.value();
 
   // Update foldable instructions data.
@@ -192,7 +194,7 @@ StatusOr<bool> HloBisectState::RunModule(const HloModule& module) {
   return bug_result;
 }
 
-StatusOr<bool> HloBisectState::TrimByOutputs() {
+absl::StatusOr<bool> HloBisectState::TrimByOutputs() {
   // Only available if the root instruction is a tuple.
   HloInstruction* root_instruction =
       module_->entry_computation()->root_instruction();
@@ -202,11 +204,11 @@ StatusOr<bool> HloBisectState::TrimByOutputs() {
   }
 
   // Run the modified module and return the error state.
-  auto run_modified = [&](int64_t start, int64_t end) -> StatusOr<bool> {
+  auto run_modified = [&](int64_t start, int64_t end) -> absl::StatusOr<bool> {
     std::unique_ptr<HloModule> new_module = module_->Clone(/*suffix=*/"");
     HloInstruction* const* new_operands =
         new_module->entry_computation()->root_instruction()->operands().begin();
-    TF_RETURN_IF_ERROR(MorphModuleWithOutputs(
+    ABSL_RETURN_IF_ERROR(MorphModuleWithOutputs(
         new_module.get(),
         absl::MakeSpan(new_operands + start, end - start + 1)));
     return RunModule(*new_module);
@@ -219,11 +221,11 @@ StatusOr<bool> HloBisectState::TrimByOutputs() {
     int64_t cur = bisect_low + (bisect_high - bisect_low) / 2;
     VLOG(2) << "Number of outputs: " << (cur - bisect_low + 1) << " ["
             << bisect_low << ".." << cur << "]";
-    TF_ASSIGN_OR_RETURN(bool has_bug, run_modified(bisect_low, cur));
+    ABSL_ASSIGN_OR_RETURN(bool has_bug, run_modified(bisect_low, cur));
     if (has_bug) {
       bisect_high = cur;
     } else {
-      TF_ASSIGN_OR_RETURN(has_bug, run_modified(cur + 1, bisect_high));
+      ABSL_ASSIGN_OR_RETURN(has_bug, run_modified(cur + 1, bisect_high));
       if (has_bug) {
         bisect_low = cur + 1;
       } else {
@@ -236,16 +238,16 @@ StatusOr<bool> HloBisectState::TrimByOutputs() {
   bool changed =
       (bisect_high - bisect_low) < (root_instruction->operand_count() - 1);
   if (changed) {
-    TF_RETURN_IF_ERROR(MorphModuleWithOutputs(
+    ABSL_RETURN_IF_ERROR(MorphModuleWithOutputs(
         module_.get(),
         absl::MakeSpan(root_instruction->operands().begin() + bisect_low,
                        bisect_high - bisect_low + 1)));
-    TF_RETURN_IF_ERROR(ExpectModuleIsBuggy());
+    ABSL_RETURN_IF_ERROR(ExpectModuleIsBuggy());
   }
   return changed;
 }
 
-StatusOr<bool> HloBisectState::TrimByInstructions() {
+absl::StatusOr<bool> HloBisectState::TrimByInstructions() {
   HloComputation* computation = module_->entry_computation();
 
   // If the root instruction is a tuple, exclude it from the bisect range.
@@ -260,8 +262,8 @@ StatusOr<bool> HloBisectState::TrimByInstructions() {
     VLOG(2) << "Number of instructions: " << cur << " (of "
             << computation->instruction_count() << ")";
     std::unique_ptr<HloModule> new_module = module_->Clone(/*suffix=*/"");
-    TF_RETURN_IF_ERROR(MorphModuleWithInstructions(new_module.get(), cur));
-    TF_ASSIGN_OR_RETURN(bool has_bug, RunModule(*new_module));
+    ABSL_RETURN_IF_ERROR(MorphModuleWithInstructions(new_module.get(), cur));
+    ABSL_ASSIGN_OR_RETURN(bool has_bug, RunModule(*new_module));
     if (has_bug) {
       bisect_high = cur;
     } else {
@@ -271,7 +273,7 @@ StatusOr<bool> HloBisectState::TrimByInstructions() {
 
   // Sanity check for the bug checker.
   if (bisect_high == computation->num_parameters()) {
-    return InternalError(
+    return Internal(
         "The checker fails on an empty computation! Something is not right. "
         "Can't bisect.");
   }
@@ -279,13 +281,14 @@ StatusOr<bool> HloBisectState::TrimByInstructions() {
   // Update the current module and verify that the bug is present, if changed.
   bool changed = bisect_high < upper_bound;
   if (changed) {
-    TF_RETURN_IF_ERROR(MorphModuleWithInstructions(module_.get(), bisect_high));
-    TF_RETURN_IF_ERROR(ExpectModuleIsBuggy());
+    ABSL_RETURN_IF_ERROR(
+        MorphModuleWithInstructions(module_.get(), bisect_high));
+    ABSL_RETURN_IF_ERROR(ExpectModuleIsBuggy());
   }
   return changed;
 }
 
-StatusOr<bool> HloBisectState::TrimByUsingConstants() {
+absl::StatusOr<bool> HloBisectState::TrimByUsingConstants() {
   // Use random literals for the instructions which do not trigger the bug
   // checker and also didn't get a definitive value from it.
   absl::flat_hash_map<std::string, Literal> literal_map;
@@ -298,8 +301,8 @@ StatusOr<bool> HloBisectState::TrimByUsingConstants() {
       auto it = foldable_instructions_values_.extract(instr->name());
       literal_map.insert(std::move(it));
     } else if (foldable_instructions_.contains(instr->name())) {
-      StatusOr<Literal> literal_status = MakeFakeLiteral(instr->shape());
-      TF_RETURN_IF_ERROR(literal_status.status());
+      absl::StatusOr<Literal> literal_status = MakeFakeLiteral(instr->shape());
+      ABSL_RETURN_IF_ERROR(literal_status.status());
       literal_map[instr->name()] = std::move(literal_status).value();
       ++random_literals_count;
     }
@@ -311,37 +314,36 @@ StatusOr<bool> HloBisectState::TrimByUsingConstants() {
   // It is possible that the random literals will make the bug disappear, in
   // which case the module will not get reduced.
   std::unique_ptr<HloModule> new_module = module_->Clone(/*suffix=*/"");
-  TF_RETURN_IF_ERROR(
+  ABSL_RETURN_IF_ERROR(
       MorphModuleWithLiterals(new_module.get(), std::move(literal_map)));
-  TF_ASSIGN_OR_RETURN(bool has_bug, RunModule(*new_module));
+  ABSL_ASSIGN_OR_RETURN(bool has_bug, RunModule(*new_module));
   if (has_bug) {
     std::swap(module_, new_module);
   }
   return has_bug;
 }
 
-Status HloBisectState::ExpectModuleIsBuggy() {
+absl::Status HloBisectState::ExpectModuleIsBuggy() {
   // Verify that the current module has a bug.
-  TF_ASSIGN_OR_RETURN(bool has_bug, RunModule(*module_));
+  ABSL_ASSIGN_OR_RETURN(bool has_bug, RunModule(*module_));
   if (has_bug) {
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   // Check for the bug checker stability.
   const int retry_count = 5;
   int bug_count = 0;
   for (int i = 0; i < retry_count; i++) {
-    TF_ASSIGN_OR_RETURN(has_bug, bug_checker_->Run(*module_));
+    ABSL_ASSIGN_OR_RETURN(has_bug, bug_checker_->Run(*module_));
     if (has_bug) {
       bug_count++;
     }
   }
   if (bug_count != 0) {
-    return InternalErrorStrCat("The checker is non deterministic! (only ",
-                               bug_count, " failures seen in ",
-                               (retry_count + 1), " runs)");
+    return InternalStrCat("The checker is non deterministic! (only ", bug_count,
+                          " failures seen in ", (retry_count + 1), " runs)");
   }
-  return InternalError("We \"lost\" the bug while bisecting!");
+  return Internal("We \"lost\" the bug while bisecting!");
 }
 
 }  // namespace bisect

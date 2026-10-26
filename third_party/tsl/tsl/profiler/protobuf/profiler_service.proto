@@ -1,9 +1,25 @@
+// Copyright 2026 The TensorFlow Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// ==============================================================================
+
 syntax = "proto3";
 
 package tensorflow;
 
 import "tsl/profiler/protobuf/profiler_options.proto";
 import "tsl/profiler/protobuf/profiler_service_monitor_result.proto";
+import "tsl/profiler/protobuf/xplane.proto";
 
 // The ProfilerService service retrieves performance information about
 // the programs running on connected devices over a period of time.
@@ -16,6 +32,14 @@ service ProfilerService {
   rpc Terminate(TerminateRequest) returns (TerminateResponse) {}
   // Collects profiling data and returns user-friendly metrics.
   rpc Monitor(MonitorRequest) returns (MonitorResponse) {}
+  // Starts a continuous profiling session.
+  rpc StartContinuousProfiling(ProfileRequest)
+      returns (ContinuousProfilingResponse) {}
+  // Stops an ongoing continuous profiling session.
+  rpc StopContinuousProfiling(StopContinuousProfilingRequest)
+      returns (StopContinuousProfilingResponse) {}
+  // Gets a snapshot of an ongoing profiling session.
+  rpc GetSnapshot(GetSnapshotRequest) returns (ProfileResponse) {}
 }
 
 message ToolRequestOptions {
@@ -29,7 +53,7 @@ message ToolRequestOptions {
   bool save_to_repo = 3;
 }
 
-// Next-ID: 9
+// Next-ID: 10
 message ProfileRequest {
   // In future, the caller will be able to customize when profiling starts and
   // stops. For now, it collects `duration_ms` milliseconds worth of data.
@@ -59,6 +83,8 @@ message ProfileRequest {
   // We use it as identifier in part of our output filename.
   string host_name = 7;
 
+  // If true, the response will contain the XSpace in the response.
+  bool emit_xspace = 9;
   // In future, the caller will indicate which TF session is being profiled, and
   // only data relating to that program will be returned. For now, we assume
   // all activity during the profiling period is relevant.
@@ -73,7 +99,7 @@ message ProfileToolData {
   bytes data = 2;
 }
 
-// Next-ID: 8
+// Next-ID: 9
 message ProfileResponse {
   // Data payload for each required tools.
   repeated ProfileToolData tool_data = 6;
@@ -81,6 +107,10 @@ message ProfileResponse {
   // When we write profiling data directly to repository directory, we need a
   // way to figure out whether the captured trace is empty.
   bool empty_trace = 7;
+
+  // The XSpace proto containing the raw profiling data (e.g. pre-analysis).
+  // This field is only populated if ProfileRequest.emit_xspace is true.
+  tensorflow.profiler.XSpace xspace = 8;
 
   reserved 1, 2, 3, 4, 5;
 }
@@ -91,6 +121,19 @@ message TerminateRequest {
 }
 
 message TerminateResponse {}
+
+message GetSnapshotRequest {
+  // Optional. Suffix for the snapshot directory sandboxed inside
+  // repository_root. E.g. "window_001". If empty, defaults to emit_xpace=true
+  // behavior. using the timestamp folder.
+  string snapshot_session_id = 1;
+}
+
+message ContinuousProfilingResponse {}
+
+message StopContinuousProfilingRequest {}
+
+message StopContinuousProfilingResponse {}
 
 // Next-ID: 4
 message MonitorRequest {

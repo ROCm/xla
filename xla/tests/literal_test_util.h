@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,18 +24,18 @@ limitations under the License.
 
 #include "absl/base/attributes.h"
 #include "absl/types/span.h"
+#include "tsl/platform/errors.h"
+#include "tsl/platform/test.h"
 #include "xla/array2d.h"
 #include "xla/array3d.h"
 #include "xla/array4d.h"
 #include "xla/error_spec.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/testlib/test_helpers.h"
 #include "xla/literal.h"
 #include "xla/literal_util.h"
-#include "xla/test.h"
-#include "xla/test_helpers.h"
 #include "xla/types.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/test.h"
 
 namespace xla {
 
@@ -45,11 +45,6 @@ class LiteralTestUtil {
   // Asserts that the given shapes have the same rank, dimension sizes, and
   // primitive types.
   [[nodiscard]] static ::testing::AssertionResult EqualShapes(
-      const Shape& expected, const Shape& actual);
-
-  // Asserts that the provided shapes are equal as defined in AssertEqualShapes
-  // and that they have the same layout.
-  [[nodiscard]] static ::testing::AssertionResult EqualShapesAndLayouts(
       const Shape& expected, const Shape& actual);
 
   [[nodiscard]] static ::testing::AssertionResult Equal(
@@ -145,6 +140,12 @@ class LiteralTestUtil {
   [[nodiscard]] static ::testing::AssertionResult NearOrEqual(
       const LiteralSlice& expected, const LiteralSlice& actual,
       const std::optional<ErrorSpec>& error);
+
+  // Writes the given literal to a file in the test temporary directory.
+  // This is useful for debugging tests. The file is written in both binary and
+  // text formats (.pb and .txt extensions).
+  static void WriteLiteralToTempFile(const LiteralSlice& literal,
+                                     const std::string& name);
 
  private:
   LiteralTestUtil(const LiteralTestUtil&) = delete;

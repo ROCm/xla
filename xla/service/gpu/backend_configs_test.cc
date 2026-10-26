@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,20 +13,27 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <memory>
 
+#include "absl/status/status_matchers.h"
+#include "absl/strings/string_view.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/service/gpu/backend_configs.pb.h"
-#include "xla/tests/hlo_test_base.h"
-#include "tsl/platform/status_matchers.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace gpu {
 namespace {
 
+using ::testing::HasSubstr;
 using ::testing::IsFalse;
-using ::tsl::testing::IsOk;
 
-using BackendConfigsTest = HloTestBase;
+using BackendConfigsTest = HloHardwareIndependentTestBase;
 
 TEST_F(BackendConfigsTest, DefaultCollectiveBackendConfig) {
   constexpr absl::string_view kHloString = R"(
@@ -40,16 +47,105 @@ TEST_F(BackendConfigsTest, DefaultCollectiveBackendConfig) {
   }
   )";
 
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<HloModule> module,
       ParseAndReturnVerifiedModule(kHloString, /*replica_count=*/2));
 
-  const HloInstruction *ags = FindInstruction(module.get(), "agf32-start");
+  const HloInstruction* ags = FindInstruction(module.get(), "agf32-start");
   EXPECT_THAT(ags->has_backend_config(), IsFalse());
-  auto collective_backend_config =
-      ags->backend_config<CollectiveBackendConfig>();
-  EXPECT_THAT(collective_backend_config.status(), IsOk());
-  EXPECT_THAT(collective_backend_config->is_sync(), IsFalse());
+  ASSERT_OK_AND_ASSIGN(GpuBackendConfig gpu_config,
+                       ags->backend_config<GpuBackendConfig>());
+  const auto& collective_backend_config =
+      gpu_config.collective_backend_config();
+  EXPECT_THAT(collective_backend_config.is_sync(), IsFalse());
+}
+
+TEST_F(BackendConfigsTest, DefaultGpuBackendConfigParseOpQueue) {
+  constexpr absl::string_view kHloString = R"(
+  HloModule ModuleWithAsync
+
+  ENTRY entry {
+    p0f32 = f32[4, 4] parameter(0)
+    p1f32 = f32[4, 4] parameter(1)
+
+    ROOT addf32 = f32[4, 4] add(p0f32, p1f32), backend_config={"operation_queue_id":"2"}
+  }
+  )";
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloString));
+
+  HloInstruction* add = module->entry_computation()->root_instruction();
+  EXPECT_TRUE(add->has_backend_config());
+  auto real_gpu_backend_config = add->backend_config<GpuBackendConfig>();
+  EXPECT_THAT(real_gpu_backend_config.status(), absl_testing::IsOk());
+  EXPECT_EQ(real_gpu_backend_config->operation_queue_id(), 2);
+}
+
+TEST_F(BackendConfigsTest, DefaultGpuBackendConfigSetOpQueue) {
+  constexpr absl::string_view kHloString = R"(
+  HloModule ModuleWithAsync
+
+  ENTRY entry {
+    p0f32 = f32[4, 4] parameter(0)
+    p1f32 = f32[4, 4] parameter(1)
+
+    ROOT addf32 = f32[4, 4] add(p0f32, p1f32)
+  }
+  )";
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloString));
+
+  HloInstruction* add = module->entry_computation()->root_instruction();
+  EXPECT_FALSE(add->has_backend_config());
+  GpuBackendConfig gpu_backend_config;
+  gpu_backend_config.set_operation_queue_id(2);
+  EXPECT_THAT(add->set_backend_config(gpu_backend_config),
+              absl_testing::IsOk());
+  EXPECT_THAT(add->raw_backend_config_string(),
+              HasSubstr("{\"operation_queue_id\":\"2\","
+                        "\"force_earliest_schedule\":false"));
+}
+
+TEST_F(BackendConfigsTest, ParseAllReduceIsAsync) {
+  const absl::string_view kModuleStr = R"(
+    HloModule test
+
+    apply_op {
+      x = u32[] parameter(0)
+      y = u32[] parameter(1)
+      ROOT apply_op = u32[] add(x, y)
+    }
+
+    ENTRY test_computation {
+      id = u32[] replica-id()
+      start1 = u32[] all-reduce-start(id), to_apply=apply_op, backend_config={"collective_backend_config": {"is_sync":false}}
+      done1 = u32[] all-reduce-done(start1)
+      start2 = u32[] all-reduce-start(done1), to_apply=apply_op, backend_config={"collective_backend_config": {"is_sync":true}}
+      done2 = u32[] all-reduce-done(start2)
+      start3 = u32[] all-reduce-start(done2), to_apply=apply_op
+      done3 = u32[] all-reduce-done(start3)
+      ROOT done = (u32[], u32[], u32[]) tuple(done1, done2, done3)
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> m,
+                       ParseAndReturnVerifiedModule(kModuleStr));
+  auto start1 =
+      m->entry_computation()->root_instruction()->operand(0)->operand(0);
+  auto start2 =
+      m->entry_computation()->root_instruction()->operand(1)->operand(0);
+  auto start3 =
+      m->entry_computation()->root_instruction()->operand(2)->operand(0);
+  ASSERT_OK_AND_ASSIGN(GpuBackendConfig backend_config,
+                       start1->backend_config<GpuBackendConfig>());
+  EXPECT_FALSE(backend_config.collective_backend_config().is_sync());
+  ASSERT_OK_AND_ASSIGN(backend_config,
+                       start2->backend_config<GpuBackendConfig>());
+  EXPECT_TRUE(backend_config.collective_backend_config().is_sync());
+  ASSERT_OK_AND_ASSIGN(backend_config,
+                       start3->backend_config<GpuBackendConfig>());
+  EXPECT_FALSE(backend_config.collective_backend_config().is_sync());
 }
 
 }  // namespace

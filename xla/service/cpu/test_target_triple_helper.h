@@ -1,4 +1,4 @@
-/* Copyright 2020 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2020 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,12 +17,15 @@ limitations under the License.
 #define XLA_SERVICE_CPU_TEST_TARGET_TRIPLE_HELPER_H_
 
 #if defined(__aarch64__)
-static const char kTargetCpuForHost[] = "aarch64";
+static const char kTargetCpuForHost[] = "";
 static const char kTargetTripleForHost[] = "aarch64-unknown-linux-gnu";
 #elif (defined(__powerpc__) || \
        defined(__ppc__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__))
 static const char kTargetCpuForHost[] = "ppc";
 static const char kTargetTripleForHost[] = "ppc64le-ibm-linux-gnu";
+#elif defined(__riscv) && (__riscv_xlen == 64)
+static const char kTargetCpuForHost[] = "";
+static const char kTargetTripleForHost[] = "riscv64-unknown-linux-gnu";
 #elif defined(__s390x__)
 static const char kTargetCpuForHost[] = "s390x";
 static const char kTargetTripleForHost[] = "systemz-none-linux-gnu";

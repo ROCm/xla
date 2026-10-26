@@ -1,4 +1,4 @@
-/* Copyright 2015 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2015 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,36 +13,442 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-// The StreamExecutor is a single-device abstraction for:
+#ifndef XLA_STREAM_EXECUTOR_STREAM_EXECUTOR_H_
+#define XLA_STREAM_EXECUTOR_STREAM_EXECUTOR_H_
+
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include "absl/functional/function_ref.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/types/span.h"
+#include "tsl/platform/numa.h"
+#include "xla/stream_executor/activate_context.h"
+#include "xla/stream_executor/allocator_stats.h"
+#include "xla/stream_executor/blas.h"
+#include "xla/stream_executor/command_buffer.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/dnn.h"
+#include "xla/stream_executor/event.h"
+#include "xla/stream_executor/event_based_timer.h"
+#include "xla/stream_executor/fft.h"
+#include "xla/stream_executor/gpu/tma_metadata.h"
+#include "xla/stream_executor/kernel.h"
+#include "xla/stream_executor/kernel_spec.h"
+#include "xla/stream_executor/memory_allocation.h"
+#include "xla/stream_executor/memory_allocator.h"
+#include "xla/stream_executor/memory_reservation.h"
+#include "xla/stream_executor/memory_space.h"
+#include "xla/stream_executor/module_spec.h"
+#include "xla/stream_executor/platform.h"
+#include "xla/stream_executor/stream.h"
+#include "xla/stream_executor/tensor_map.h"
+#include "xla/tsl/lib/gtl/int_type.h"
+
+// TODO(ezhulenev): Remove this once transitive dependencies are fixed.
+#include "xla/stream_executor/device_memory.h"
+
+namespace stream_executor {
+
+/// The StreamExecutor is a single-device abstraction for:
 //
 // * Loading/launching data-parallel-kernels
 // * Invoking pre-canned high-performance library routines (like matrix
 //   multiply)
+//
+// Interface which defines the method for interacting with an accelerator device
+// (e.g. GPU, TPU).
+class StreamExecutor {
+ public:
+  // We use ResourceTypeId to distinguish between different resource types.
+  TSL_LIB_GTL_DEFINE_INT_TYPE(ResourceTypeId, int64_t);
 
-#ifndef XLA_STREAM_EXECUTOR_STREAM_EXECUTOR_H_
-#define XLA_STREAM_EXECUTOR_STREAM_EXECUTOR_H_
+  StreamExecutor();
 
-#include "xla/stream_executor/device_description.h"  // IWYU pragma: export
-#include "xla/stream_executor/device_memory.h"  // IWYU pragma: export
-#include "xla/stream_executor/device_options.h"  // IWYU pragma: export
-#include "xla/stream_executor/event.h"  // IWYU pragma: export
-#include "xla/stream_executor/kernel.h"  // IWYU pragma: export
-#include "xla/stream_executor/kernel_spec.h"  // IWYU pragma: export
-#include "xla/stream_executor/launch_dim.h"  // IWYU pragma: export
-#include "xla/stream_executor/multi_platform_manager.h"  // IWYU pragma: export
-#include "xla/stream_executor/platform.h"  // IWYU pragma: export
-#include "xla/stream_executor/stream.h"  // IWYU pragma: export
-#include "xla/stream_executor/stream_executor_pimpl.h"  // IWYU pragma: export
+  virtual ~StreamExecutor();
 
-namespace perftools {
-namespace gputools {
+  // A base class for external resources that can be attached to a
+  // StreamExecutor instance. When a StreamExecutor instance is destroyed, all
+  // attached resources are destroyed as well.
+  class Resource {
+   public:
+    virtual ~Resource() = default;
+  };
 
-// Temporarily pull stream_executor into perftools::gputools while we migrate
-// code to the new namespace.  TODO(b/77980417): Remove this once we've
-// completed the migration.
-using namespace stream_executor;  // NOLINT[build/namespaces]
+  // Returns an ActivateContext that ensures the StreamExecutor's context is
+  // activated for the duration of the returned ActivateContext's scope.
+  virtual std::unique_ptr<ActivateContext> Activate() = 0;
 
-}  // namespace gputools
-}  // namespace perftools
+  // Returns a reference to the platform that created this executor.
+  virtual const Platform* GetPlatform() const = 0;
+
+  // Initializes the device for use.
+  virtual absl::Status Init() = 0;
+
+  // Returns the device ordinal.
+  virtual int device_ordinal() const { return -1; }
+
+  // Returns the NUMA node of the device.
+  virtual int numa_node() const { return tsl::port::kNUMANoAffinity; }
+
+  // Creates and initializes a Stream.
+  virtual absl::StatusOr<std::unique_ptr<Stream>> CreateStream(
+      std::optional<std::variant<StreamPriority, int>> priority) = 0;
+  absl::StatusOr<std::unique_ptr<Stream>> CreateStream() {
+    return CreateStream(std::nullopt);
+  }
+  // Creates an EventBasedTimer for the given stream.
+  virtual absl::StatusOr<std::unique_ptr<EventBasedTimer>>
+  CreateEventBasedTimer(Stream* stream, bool use_delay_kernel) {
+    return absl::UnimplementedError("Not Implemented");
+  }
+
+  // Creates and initializes an Event.
+  virtual absl::StatusOr<std::unique_ptr<Event>> CreateEvent() = 0;
+
+  // Creates a MemoryAllocator for the given type.
+  virtual absl::StatusOr<std::unique_ptr<MemoryAllocator>>
+  CreateMemoryAllocator(MemorySpace memory_space) {
+    return absl::UnimplementedError("Not Implemented");
+  }
+
+  // Reserves device virtual address space without allocating physical memory.
+  // Backends implementing this must also support
+  // CreatePhysicalMemoryAllocation.
+  virtual absl::StatusOr<std::unique_ptr<MemoryReservation>>
+  CreateMemoryReservation(uint64_t size) {
+    return absl::UnimplementedError("Device VA reservation is not supported");
+  }
+
+  // Allocates physical device memory without mapping it to a virtual address.
+  // The returned size may be rounded up to the backend's mapping granularity.
+  virtual absl::StatusOr<std::unique_ptr<MemoryAllocation>>
+  CreatePhysicalMemoryAllocation(uint64_t size) {
+    return absl::UnimplementedError("Physical allocation is not supported");
+  }
+
+  // Obtains metadata about the underlying device.
+  // The value is cached on first use.
+  virtual const DeviceDescription& GetDeviceDescription() const = 0;
+
+  // Synchronously allocates an array on the device of type T with element_count
+  // elements.
+  template <typename T>
+  DeviceAddress<T> AllocateArray(uint64_t element_count,
+                                 int64_t memory_space = 0);
+
+  // Convenience wrapper that allocates space for a single element of type T in
+  // device memory.
+  template <typename T>
+  DeviceAddress<T> AllocateScalar() {
+    return AllocateArray<T>(1);
+  }
+
+  // Loads a kernel from a KernelLoaderSpec.
+  //
+  // Parameters:
+  //   spec: The KernelLoaderSpec is usually generated as a compile-time
+  //    constant into an appropriate namespace.
+  virtual absl::StatusOr<std::unique_ptr<Kernel>> LoadKernel(
+      const KernelLoaderSpec& spec) {
+    return absl::UnimplementedError("Not Implemented");
+  }
+
+  // Releases any state associated with the previously loaded kernel.
+  virtual void UnloadKernel(const Kernel* kernel) {}
+
+  // Updates the dynamic shared memory limit for the given kernel.
+  virtual absl::Status UpdateMaxDynamicSharedMemoryBytes(
+      const Kernel* kernel, int32_t shared_memory_bytes) {
+    return absl::UnimplementedError("Not Implemented");
+  }
+
+  // Unloads the module with handle `module_handle`.
+  virtual bool UnloadModule(ModuleHandle module_handle) { return false; }
+
+  // Loads a module for the platform this StreamExecutor is acting upon.
+  //
+  // `spec` describes the module to be loaded.  On success returns the handle
+  // for the loaded module. Otherwise, returns the error which has occurred.
+  virtual absl::StatusOr<ModuleHandle> LoadModule(
+      const MultiModuleLoaderSpec& spec) {
+    return absl::UnimplementedError("Not Implemented");
+  }
+
+  // Creates a shared constant using the content provided.
+  virtual absl::StatusOr<std::shared_ptr<DeviceAddressBase>>
+  CreateOrShareConstant(Stream* stream, absl::Span<const uint8_t> content) {
+    return absl::UnimplementedError("Not Implemented");
+  }
+
+  // Synchronously allocates size bytes on the underlying platform and returns
+  // a DeviceAddressBase representing that allocation. In the case of failure,
+  // nullptr is returned.
+  virtual DeviceAddressBase Allocate(uint64_t size, int64_t memory_space) = 0;
+  DeviceAddressBase Allocate(uint64_t size) {
+    return Allocate(size, /*memory_space=*/0);
+  }
+  // Deallocates the DeviceAddress previously allocated via this interface.
+  // Deallocation of a nullptr-representative value is permitted.
+  virtual void Deallocate(DeviceAddressBase* mem) = 0;
+
+  // Allocates a region of host memory and registers it with the platform API.
+  // Memory allocated in this manner is required for use in asynchronous memcpy
+  // operations, such as Stream::Memcpy.
+  virtual absl::StatusOr<std::unique_ptr<MemoryAllocation>> HostMemoryAllocate(
+      uint64_t size) = 0;
+
+  // Returns the memory space of the given pointer.
+  virtual absl::StatusOr<MemorySpace> GetPointerMemorySpace(const void* ptr) {
+    return absl::UnimplementedError("Not implemented");
+  }
+
+  // Checks if the given address points to the memory which was allocated with
+  // virtual memory management API.
+  virtual bool IsVmmMemory(const DeviceAddressBase& address) { return false; }
+
+  // Synchronizes all activity occurring in the StreamExecutor's context.
+  virtual bool SynchronizeAllActivity() = 0;
+
+  // Returns a DeviceAddressBase representing the range [base, base + size)
+  // for the given DeviceAddressBase, such that location is contained within the
+  // returned range.
+  virtual absl::StatusOr<DeviceAddressBase> GetMemoryRange(
+      const DeviceAddressBase& location) const {
+    return absl::UnimplementedError("Not implemented for this executor.");
+  }
+
+  virtual absl::StatusOr<uint64_t> GetCollectiveMemoryGranularity() const {
+    return absl::UnimplementedError("Not implemented for this executor.");
+  }
+
+  virtual bool HostMemoryUnregister(void* location) { return false; };
+  virtual bool HostMemoryRegister(void* location, uint64_t size) {
+    return false;
+  };
+  virtual bool IsHostMemoryPinned(const void* ptr, uint64_t size) {
+    if (size == 0) return false;
+    auto start_space = GetPointerMemorySpace(ptr);
+    if (!start_space.ok() || *start_space != MemorySpace::kHost) {
+      return false;
+    }
+    auto end_space =
+        GetPointerMemorySpace(static_cast<const char*>(ptr) + size - 1);
+    return end_space.ok() && *end_space == MemorySpace::kHost;
+  }
+
+  // Blocks the caller while "size" bytes are copied to the given location in
+  // device memory.
+  virtual absl::Status SynchronousMemcpy(DeviceAddressBase* device_dst,
+                                         const void* host_src,
+                                         uint64_t size) = 0;
+  absl::Status SynchronousMemcpyH2D(const void* host_src, int64_t size,
+                                    DeviceAddressBase* device_dst) {
+    return SynchronousMemcpy(device_dst, host_src, size);
+  }
+
+  // Blocks the caller while "size" bytes are copied to the given location
+  // in host memory.
+  virtual absl::Status SynchronousMemcpy(void* host_dst,
+                                         const DeviceAddressBase& device_src,
+                                         uint64_t size) = 0;
+  absl::Status SynchronousMemcpyD2H(const DeviceAddressBase& device_src,
+                                    int64_t size, void* host_dst) {
+    return SynchronousMemcpy(host_dst, device_src, size);
+  }
+
+  // Deallocates stream resources on the underlying platform.
+  virtual void DeallocateStream(Stream* stream) = 0;
+
+  // Enables peer access from this StreamExecutor to memory
+  // allocated by other, such that launched device code, memcopies, etc may
+  // access it directly.
+  virtual absl::Status EnablePeerAccessTo(StreamExecutor* other) = 0;
+
+  // Returns whether it's possible to enable peer access from this
+  // StreamExecutor to memory allocated by another.
+  virtual bool CanEnablePeerAccessTo(StreamExecutor* other) = 0;
+
+  // Same as above, but takes the device ordinal of the other device.
+  virtual bool CanEnablePeerAccessTo(int other_device_ordinal) { return false; }
+
+  // Returns the underlying device memory usage information, if it is available.
+  // If it is not available (false is returned), free/total may not be
+  // initialized.
+  virtual bool DeviceMemoryUsage(int64_t* free, int64_t* total) const {
+    return false;
+  }
+
+  // Retrieves device pointer and size for a symbol. To use
+  // constant memory in CUDA, GetSymbol has to be used. Returns
+  // DeviceAddressBase describing the symbol in memory if symbol is found.
+  //
+  // If ModuleHandle is set then we search for `symbol_name` only within the
+  // module corresponding to `module_handle`.  Otherwise all loaded modules are
+  // searched.
+  virtual absl::StatusOr<DeviceAddressBase> GetSymbol(
+      const std::string& symbol_name, ModuleHandle module_handle) {
+    return absl::UnimplementedError("Not implemented");
+  }
+
+  // Creates a new DeviceDescription object. Ownership is transferred to the
+  // caller.
+  virtual absl::StatusOr<std::unique_ptr<DeviceDescription>>
+  CreateDeviceDescription() const = 0;
+
+  // Returns the interconnect status of the device.
+  virtual absl::StatusOr<std::string> GetInterconnectStatus() const {
+    return absl::UnimplementedError("Not implemented");
+  }
+
+  // Return the platform dependent stream priority value for the given priority.
+  virtual int GetGpuStreamPriority(StreamPriority priority) { return 0; }
+
+  // Gets-or-creates a BlasSupport datatype that can be used to execute BLAS
+  // routines on the current platform.
+  //
+  // Returns null if there was an error initializing the BLAS support for the
+  // underlying platform.
+  virtual blas::BlasSupport* AsBlas() { return nullptr; }
+
+  // Gets or creates a FftSupport datatype that can be used to execute FFT
+  // routines on the current platform.
+  //
+  // Returns null if there was an error initializing the FFT support for the
+  // underlying platform.
+  virtual fft::FftSupport* AsFft() { return nullptr; }
+
+  // Gets-or-creates  a DnnSupport datatype that can be used for neural network
+  // routines on the current platform.
+  //
+  // Returns null if there was an error initializing the DNN support for the
+  // underlying platform.
+  virtual dnn::DnnSupport* AsDnn() { return nullptr; }
+
+  // Creates a new CommandBuffer object.
+  virtual absl::StatusOr<std::unique_ptr<CommandBuffer>> CreateCommandBuffer(
+      CommandBuffer::Mode mode) {
+    return absl::UnimplementedError("Command buffers are not implemented");
+  }
+
+  // Returns allocator statistics.
+  virtual std::optional<AllocatorStats> GetAllocatorStats() {
+    return std::nullopt;
+  }
+
+  // Clears the internal stats except for the `in_use` fields  and sets the
+  // `peak_bytes_in_use` to be equal to the `bytes_in_use`. Returns true if
+  // implemented.
+  virtual bool ClearAllocatorStats() { return false; }
+
+  // Clears the compilation cache from volatile memory. Returns OK if no
+  // compilation cache exists or if clearing the compilation cache is
+  // unsupported. Caches in non-volatile storage are unaffected.
+  virtual absl::Status FlushCompilationCache() { return absl::OkStatus(); }
+
+  // Returns a stream allocated by this executor, or nullptr if not found.
+  virtual Stream* FindAllocatedStream(void* device_stream) { return nullptr; }
+
+  // Returns the memory limit in bytes supported by this executor.
+  virtual int64_t GetMemoryLimitBytes() const = 0;
+
+  // The following methods access an internal log of some subset
+  // of arguments passed to other class methods.
+  // Used for testing/debugging purposes.
+
+  // Creates, allocates, and copies a CUtensorMap object for the given TMA
+  // descriptor. Returns a TensorMap, which is 128 bytes of storage, to be
+  // passed by value to the kernel.
+  // Only implemented on CUDA GPUs.
+  virtual absl::StatusOr<TensorMap> CreateTensorMap(
+      const gpu::TmaDescriptor& tma_desc, void* global_address) {
+    return absl::UnimplementedError("Not Implemented");
+  }
+
+  // Returns a pointer to the resource of the given type, or nullptr if resource
+  // of the given type is not attached to this stream executor.
+  template <typename R>
+  R* GetOrNullResource() {
+    static_assert(std::is_base_of_v<Resource, R>);
+    return static_cast<R*>(GetOrNullResource(GetResourceTypeId<R>()));
+  }
+
+  // Returns a pointer to the resource of the given type, or creates a new
+  // resource of the given type and attaches it to this stream executor.
+  template <typename R>
+  R* GetOrCreateResource(absl::FunctionRef<std::unique_ptr<R>()> create) {
+    static_assert(std::is_base_of_v<Resource, R>);
+    return static_cast<R*>(
+        GetOrCreateResource(GetResourceTypeId<R>(), [&] { return create(); }));
+  }
+
+  // Returns a pointer to the resource of the given type, or creates a new
+  // resource of the given type and attaches it to this stream executor.
+  // Constructor arguments are forwarded to std::make_unique<R>.
+  template <typename R, typename... Args>
+  R* GetOrConstructResource(Args&&... args) {
+    return GetOrCreateResource<R>(
+        [&] { return std::make_unique<R>(std::forward<Args>(args)...); });
+  }
+
+ private:
+  Resource* GetOrNullResource(ResourceTypeId type_id);
+  Resource* GetOrCreateResource(
+      ResourceTypeId type_id,
+      absl::FunctionRef<std::unique_ptr<Resource>()> create);
+
+  template <typename F>
+  static ResourceTypeId GetResourceTypeId() {
+    static const ResourceTypeId id = GetNextResourceTypeId();
+    return id;
+  }
+
+  static ResourceTypeId GetNextResourceTypeId();
+
+  // Forward declaration
+  struct ResourceStorage;
+
+  // RAII container for resources attached to this stream executor
+  std::unique_ptr<ResourceStorage> resources_;
+};
+
+template <typename T>
+inline DeviceAddress<T> StreamExecutor::AllocateArray(uint64_t element_count,
+                                                      int64_t memory_space) {
+  uint64_t bytes = sizeof(T) * element_count;
+  auto memory_limit_bytes = GetMemoryLimitBytes();
+  if (memory_limit_bytes > 0 &&
+      static_cast<int64_t>(bytes) > memory_limit_bytes) {
+    LOG(WARNING) << "Not enough memory to allocate " << bytes << " on device "
+                 << device_ordinal()
+                 << " within provided limit.  limit=" << memory_limit_bytes
+                 << "]";
+    return DeviceAddress<T>();
+  }
+
+  DeviceAddressBase raw_allocation = Allocate(bytes, memory_space);
+  if (raw_allocation.is_null()) {
+    return DeviceAddress<T>();
+  }
+
+  // Raw allocations can report a larger backend allocation size (for example,
+  // CUDA VMM granularity padding). AllocateArray exposes only the logical array
+  // byte range because callers requested exactly `element_count` elements and
+  // should not treat allocator padding as additional array elements.
+  DCHECK_GE(raw_allocation.size(), bytes);
+  DeviceAddressBase logical_allocation(raw_allocation.opaque(), bytes);
+  logical_allocation.SetPayload(raw_allocation.payload());
+  return DeviceAddress<T>(logical_allocation);
+}
+
+}  // namespace stream_executor
 
 #endif  // XLA_STREAM_EXECUTOR_STREAM_EXECUTOR_H_

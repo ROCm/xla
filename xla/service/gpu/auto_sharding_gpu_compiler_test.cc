@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,18 +13,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <memory>
+#include <gtest/gtest.h>
 
-#include "xla/hlo/utils/hlo_matchers.h"
-#include "xla/tests/hlo_test_base.h"
+#include <memory>
+#include <vector>
+
+#include "absl/log/log.h"
+#include "tsl/platform/logging.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_sharding.h"
+#include "xla/service/hlo_module_config.h"
+#include "xla/tests/restricted/hlo_test_base_legacy.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace gpu {
 namespace {
 
-namespace op = xla::testing::opcode_matchers;
-
-class AutoShardingTest : public HloTestBase {
+class AutoShardingTest : public HloTestBaseLegacy {
  protected:
   const char* const dot_hlo_string_ = R"(
 HloModule module
@@ -34,7 +41,7 @@ ENTRY matmul {
   ROOT root = f32[32,128]{1,0} dot(parameter.1, parameter.2), lhs_contracting_dims={1}, rhs_contracting_dims={0}
 })";
   std::unique_ptr<HloModule> CompileMatMul(bool use_autosharding,
-                                       int num_partitions) {
+                                           int num_partitions) {
     HloModuleConfig config;
     config.set_use_spmd_partitioning(true);
     config.set_use_auto_spmd_partitioning(use_autosharding);
@@ -53,18 +60,15 @@ ENTRY matmul {
   }
 };
 
-TEST_F(AutoShardingTest, MatMulWithAutosharding) {
-  auto compiled_module = CompileMatMul(true, 4);
-  auto* instruction = FindInstruction(compiled_module.get(), "param");
-  VLOG(2) << instruction->ToString();
-  EXPECT_THAT(instruction, op::Sharding("{devices=[4,1]0,1,2,3}"));
-}
-
 TEST_F(AutoShardingTest, MatMulWithoutAutosharding) {
   auto compiled_module = CompileMatMul(false, 4);
-  auto* instruction = FindInstruction(compiled_module.get(), "param");
+  auto* instruction =
+      compiled_module->entry_computation()->parameter_instruction(0);
   VLOG(2) << instruction->ToString();
-  EXPECT_THAT(instruction, op::Sharding("{replicated}"));
+  EXPECT_FALSE(instruction->has_sharding());
+  ASSERT_TRUE(compiled_module->has_spmd_parameters_shardings());
+  EXPECT_EQ(compiled_module->spmd_parameters_shardings()[0],
+            HloSharding::Replicate());
 }
 
 }  // namespace

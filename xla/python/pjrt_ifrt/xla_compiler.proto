@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,8 +17,11 @@ syntax = "proto3";
 
 package xla.ifrt;
 
-import "xla/pjrt/compile_options.proto";
+import "xla/pjrt/proto/compile_options.proto";
 
 message XlaCompileOptionsProto {
+  int32 version_number = 3;
+
   xla.CompileOptionsProto compile_options = 1;
+  repeated int32 outputs_bundle_slice_sizes = 2;
 }

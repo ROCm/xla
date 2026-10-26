@@ -1,4 +1,4 @@
-/* Copyright 2020 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2020 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ limitations under the License.
 #include "mlir/Dialect/SparseTensor/IR/SparseTensor.h"
 #include "stablehlo/dialect/ChloOps.h"
 
-void mlir::mhlo::registerAllMhloDialects(mlir::DialectRegistry &registry) {
+void mlir::mhlo::registerAllMhloDialects(mlir::DialectRegistry& registry) {
   registry.insert<mlir::mhlo::MhloDialect>();
   registry.insert<mlir::sparse_tensor::SparseTensorDialect>();
   // Backward compatibility with the old way of registering CHLO dialect

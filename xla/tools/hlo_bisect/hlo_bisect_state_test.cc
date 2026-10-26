@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,13 +21,14 @@ limitations under the License.
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/testlib/pattern_matcher_gmock.h"
 #include "xla/literal.h"
 #include "xla/service/pattern_matcher.h"
-#include "xla/service/pattern_matcher_gmock.h"
-#include "xla/statusor.h"
-#include "xla/tests/hlo_test_base.h"
 
 namespace xla {
 namespace bisect {
@@ -35,7 +36,7 @@ namespace {
 
 namespace m = match;
 
-using HloBisectStateTest = HloTestBase;
+using HloBisectStateTest = HloHardwareIndependentTestBase;
 
 // Simple test bug checker, verifies the presence of the given instructions in
 // the entry computation.
@@ -43,7 +44,7 @@ class TestBugSearch : public BugCheckerInterface {
  public:
   TestBugSearch(std::initializer_list<HloOpcode> opcodes) : opcodes_(opcodes) {}
 
-  StatusOr<bool> Run(const HloModule& module) override {
+  absl::StatusOr<bool> Run(const HloModule& module) override {
     auto has_opcode = [&](HloOpcode opcode) {
       return absl::c_any_of(module.entry_computation()->instructions(),
                             [opcode](const HloInstruction* instr) {
@@ -173,8 +174,8 @@ TEST_F(HloBisectStateTest, TrimByOutputsLostBug) {
   class CustomBugSearch : public TestBugSearch {
    public:
     CustomBugSearch() : TestBugSearch({HloOpcode::kConstant}) {}
-    StatusOr<bool> Run(const HloModule& module) override {
-      TF_ASSIGN_OR_RETURN(bool has_constants, TestBugSearch::Run(module));
+    absl::StatusOr<bool> Run(const HloModule& module) override {
+      ABSL_ASSIGN_OR_RETURN(bool has_constants, TestBugSearch::Run(module));
       int program_size = module.entry_computation()->instruction_count();
       return program_size == 5 && !has_constants;
     }

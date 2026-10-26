@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,50 +13,50 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <memory>
 #include <string>
 #include <tuple>
 #include <utility>
+#include <variant>
 
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#if TENSORFLOW_USE_ROCM
-#include "rocm/rocm_config.h"
-#endif
+#include "tsl/platform/statusor.h"
+#include "tsl/platform/test.h"
 #include "xla/array2d.h"
-#include "xla/client/local_client.h"
-#include "xla/client/xla_builder.h"
-#include "xla/client/xla_computation.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/hlo/testlib/test_helpers.h"
+#include "xla/layout_util.h"
 #include "xla/literal.h"
+#include "xla/literal_util.h"
 #include "xla/reference_util.h"
 #include "xla/shape_util.h"
-#include "xla/statusor.h"
-#include "xla/test_helpers.h"
-#include "xla/tests/client_library_test_base.h"
+#include "xla/tests/client_library_test_runner_mixin.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
 #include "xla/tests/literal_test_util.h"
-#include "xla/tests/test_macros.h"
 #include "xla/tests/test_utils.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/test.h"
 
 namespace xla {
 namespace {
 
-#ifdef XLA_BACKEND_DOES_NOT_SUPPORT_FLOAT16
-using TypesF16F32 = ::testing::Types<float>;
-#else
 using TypesF16F32 = ::testing::Types<Eigen::half, float>;
-#endif
 
-class MatOpsSimpleTest : public ClientLibraryTestBase {};
+using MatOpsSimpleTest =
+    ClientLibraryTestRunnerMixin<HloInterpreterReferenceMixin<HloTestBase>>;
 
 template <typename T>
 class MatOpsSimpleTest_F16F32 : public MatOpsSimpleTest {};
 
 TYPED_TEST_CASE(MatOpsSimpleTest_F16F32, TypesF16F32);
 
-XLA_TYPED_TEST(MatOpsSimpleTest_F16F32, ExpTwoByTwoValues) {
+TYPED_TEST(MatOpsSimpleTest_F16F32, ExpTwoByTwoValues) {
   using T = TypeParam;
   XlaBuilder builder("exp_2x2");
   auto data = ConstantR2FromArray2D<T>(&builder, {
@@ -72,7 +72,7 @@ XLA_TYPED_TEST(MatOpsSimpleTest_F16F32, ExpTwoByTwoValues) {
   this->ComputeAndCompareLiteral(&builder, expected, {}, ErrorSpec(1e-5));
 }
 
-XLA_TYPED_TEST(MatOpsSimpleTest_F16F32, MapTwoByTwo) {
+TYPED_TEST(MatOpsSimpleTest_F16F32, MapTwoByTwo) {
   using T = TypeParam;
   XlaComputation add_half;
   {
@@ -100,7 +100,7 @@ XLA_TYPED_TEST(MatOpsSimpleTest_F16F32, MapTwoByTwo) {
   this->ComputeAndCompareLiteral(&builder, expected, {}, ErrorSpec(1e-5));
 }
 
-XLA_TYPED_TEST(MatOpsSimpleTest_F16F32, MaxTwoByTwoValues) {
+TYPED_TEST(MatOpsSimpleTest_F16F32, MaxTwoByTwoValues) {
   using T = TypeParam;
   XlaBuilder builder("max_2x2");
   auto lhs = ConstantR2FromArray2D<T>(&builder, {
@@ -163,10 +163,8 @@ std::string PrintTestLinspaceMaxParam(
   return absl::StrCat(param.rows, "r", param.cols, "c");
 }
 
-#ifndef XLA_BACKEND_DOES_NOT_SUPPORT_FLOAT16
-XLA_TEST_P(TestLinspaceMaxParametric, TestF16) { TestImpl<Eigen::half>(); }
-#endif
-XLA_TEST_P(TestLinspaceMaxParametric, TestF32) { TestImpl<float>(); }
+TEST_P(TestLinspaceMaxParametric, TestF16) { TestImpl<Eigen::half>(); }
+TEST_P(TestLinspaceMaxParametric, TestF32) { TestImpl<float>(); }
 
 INSTANTIATE_TEST_CASE_P(
     TestLinspaceMax, TestLinspaceMaxParametric,
@@ -179,21 +177,16 @@ INSTANTIATE_TEST_CASE_P(
     PrintTestLinspaceMaxParam);
 
 class MatOpsDotAddTest
-    : public ClientLibraryTestBase,
-      public ::testing::WithParamInterface<std::tuple<bool, bool, bool, bool>> {
+    : public ClientLibraryTestRunnerMixin<
+          HloInterpreterReferenceMixin<HloTestBase>>,
+      public ::testing::WithParamInterface<std::tuple<bool, bool, bool>> {
  public:
   template <typename T>
   void TestImpl() {
     bool row_major = std::get<0>(GetParam());
     bool add_lhs = std::get<1>(GetParam());
     bool transpose = std::get<2>(GetParam());
-#if GOOGLE_CUDA || TF_HIPBLASLT
-    bool use_cublaslt = std::get<3>(GetParam());
-#else
-    bool use_cublaslt = false;
-#endif
-    execution_options_.mutable_debug_options()->set_xla_gpu_enable_cublaslt(
-        use_cublaslt);
+
     Array2D<T> lhs({{1.0f, 2.0f}, {3.0f, 4.0f}});
     Array2D<T> rhs({{10.0f, 11.0f}, {12.0f, 13.0f}});
 
@@ -207,14 +200,10 @@ class MatOpsDotAddTest
     Shape rhs_shape =
         ShapeUtil::MakeShape(prim_type, {rhs.height(), rhs.width()});
 
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto lhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto rhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
+    Literal lhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
+    Literal rhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
 
     XlaBuilder builder(TestName());
     auto lhs_arg = Parameter(&builder, 0, lhs_shape, "lhs");
@@ -241,8 +230,7 @@ class MatOpsDotAddTest
       }
     }
 
-    ComputeAndCompareR2<T>(&builder, expected,
-                           {lhs_handle.get(), rhs_handle.get()},
+    ComputeAndCompareR2<T>(&builder, expected, {&lhs_literal, &rhs_literal},
                            ErrorSpec(1e-6));
   }
 
@@ -287,13 +275,7 @@ class MatOpsDotAddTest
   void TestImplBiasAddEpilogueFusion() {
     bool row_major = std::get<0>(GetParam());
     bool transpose = std::get<2>(GetParam());
-#if GOOGLE_CUDA || TF_HIPBLASLT
-    bool use_cublaslt = std::get<3>(GetParam());
-#else
-    bool use_cublaslt = false;
-#endif
-    execution_options_.mutable_debug_options()->set_xla_gpu_enable_cublaslt(
-        use_cublaslt);
+
     Array2D<T> lhs({{1.0f, 2.0f}, {3.0f, 4.0f}});
     Array2D<T> rhs({{10.0f, 11.0f}, {12.0f, 13.0f}});
     auto minor_to_major = [](bool row_major) -> std::vector<int64_t> {
@@ -303,22 +285,16 @@ class MatOpsDotAddTest
     XlaBuilder builder(TestName());
     auto result = generate_dot_add(builder, lhs, rhs, transpose, 2);
     (void)result;
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto lhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto rhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
+    Literal lhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
+    Literal rhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
 
     auto prim_type = primitive_util::NativeToPrimitiveType<T>();
     Shape bias_shape = ShapeUtil::MakeShape(prim_type, {2});
     std::vector<T> bias_elems(ShapeUtil::ElementsIn(bias_shape));
     iota_int_init_value(bias_elems, 1);
     auto bias_literal = LiteralUtil::CreateR1<T>(bias_elems);
-    TF_ASSERT_OK_AND_ASSIGN(auto bias_handle,
-                            client_->TransferToServer(bias_literal));
     Array2D<T> expected;
 
     if (transpose) {
@@ -327,23 +303,16 @@ class MatOpsDotAddTest
       expected = Array2D<T>({{35.0f, 39.0f}, {79.0f, 87.0f}});
     }
 
-    ComputeAndCompareR2<T>(
-        &builder, expected,
-        {lhs_handle.get(), rhs_handle.get(), bias_handle.get()},
-        ErrorSpec(1e-6));
+    ComputeAndCompareR2<T>(&builder, expected,
+                           {&lhs_literal, &rhs_literal, &bias_literal},
+                           ErrorSpec(1e-6));
   }
 
   template <typename T>
   void TestImplReluActivationEpilogueFusion() {
     bool row_major = std::get<0>(GetParam());
     bool transpose = std::get<2>(GetParam());
-#if GOOGLE_CUDA || TF_HIPBLASLT
-    bool use_cublaslt = std::get<3>(GetParam());
-#else
-    bool use_cublaslt = false;
-#endif
-    execution_options_.mutable_debug_options()->set_xla_gpu_enable_cublaslt(
-        use_cublaslt);
+
     Array2D<T> lhs({{-1.0f, 2.0f}, {3.0f, 4.0f}});
     Array2D<T> rhs({{10.0f, 11.0f}, {-12.0f, 13.0f}});
     auto minor_to_major = [](bool row_major) -> std::vector<int64_t> {
@@ -356,14 +325,10 @@ class MatOpsDotAddTest
     auto constant_zero_bcast = BroadcastInDim(constant_zero, {2, 2}, {});
     result = Max(result, constant_zero_bcast);
 
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto lhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto rhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
+    Literal lhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
+    Literal rhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
 
     Array2D<T> expected;
 
@@ -373,8 +338,7 @@ class MatOpsDotAddTest
       expected = Array2D<T>({{0.0f, 15.0f}, {0.0f, 85.0f}});
     }
 
-    ComputeAndCompareR2<T>(&builder, expected,
-                           {lhs_handle.get(), rhs_handle.get()},
+    ComputeAndCompareR2<T>(&builder, expected, {&lhs_literal, &rhs_literal},
                            ErrorSpec(1e-6));
   }
 
@@ -382,13 +346,7 @@ class MatOpsDotAddTest
   void TestImplBiasAddReluActivationEpilogueFusion() {
     bool row_major = std::get<0>(GetParam());
     bool transpose = std::get<2>(GetParam());
-#if GOOGLE_CUDA || TF_HIPBLASLT
-    bool use_cublaslt = std::get<3>(GetParam());
-#else
-    bool use_cublaslt = false;
-#endif
-    execution_options_.mutable_debug_options()->set_xla_gpu_enable_cublaslt(
-        use_cublaslt);
+
     Array2D<T> lhs({{-1.0f, 2.0f}, {3.0f, 4.0f}});
     Array2D<T> rhs({{10.0f, 11.0f}, {-12.0f, 13.0f}});
     auto minor_to_major = [](bool row_major) -> std::vector<int64_t> {
@@ -401,22 +359,16 @@ class MatOpsDotAddTest
     auto constant_bcast = BroadcastInDim(constant, {2, 2}, {});
     result = Max(result, constant_bcast);
 
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto lhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto rhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
+    Literal lhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
+    Literal rhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
 
     auto prim_type = primitive_util::NativeToPrimitiveType<T>();
     Shape bias_shape = ShapeUtil::MakeShape(prim_type, {2});
     std::vector<T> bias_elems(ShapeUtil::ElementsIn(bias_shape));
     iota_int_init_value(bias_elems, 1);
     auto bias_literal = LiteralUtil::CreateR1<T>(bias_elems);
-    TF_ASSERT_OK_AND_ASSIGN(auto bias_handle,
-                            client_->TransferToServer(bias_literal));
     Array2D<T> expected;
 
     if (transpose) {
@@ -425,41 +377,37 @@ class MatOpsDotAddTest
       expected = Array2D<T>({{0.0f, 17.0f}, {0.0f, 87.0f}});
     }
 
-    ComputeAndCompareR2<T>(
-        &builder, expected,
-        {lhs_handle.get(), rhs_handle.get(), bias_handle.get()},
-        ErrorSpec(1e-6));
+    ComputeAndCompareR2<T>(&builder, expected,
+                           {&lhs_literal, &rhs_literal, &bias_literal},
+                           ErrorSpec(1e-6));
   }
 };
 
-XLA_TEST_P(MatOpsDotAddTest, Dot_Add_2x2_2x2BF16) { TestImpl<bfloat16>(); }
-#ifndef XLA_BACKEND_DOES_NOT_SUPPORT_FLOAT16
-XLA_TEST_P(MatOpsDotAddTest, Dot_Add_2x2_2x2F16) { TestImpl<Eigen::half>(); }
-XLA_TEST_P(MatOpsDotAddTest, Dot_BiasAdd_2x2_2x2F16) {
+TEST_P(MatOpsDotAddTest, Dot_Add_2x2_2x2BF16) { TestImpl<bfloat16>(); }
+TEST_P(MatOpsDotAddTest, Dot_Add_2x2_2x2F16) { TestImpl<Eigen::half>(); }
+TEST_P(MatOpsDotAddTest, Dot_BiasAdd_2x2_2x2F16) {
   TestImplBiasAddEpilogueFusion<Eigen::half>();
 }
-XLA_TEST_P(MatOpsDotAddTest, Dot_ReluActivation_2x2_2x2F16) {
+TEST_P(MatOpsDotAddTest, Dot_ReluActivation_2x2_2x2F16) {
   TestImplReluActivationEpilogueFusion<Eigen::half>();
 }
-XLA_TEST_P(MatOpsDotAddTest, Dot_BiasAddReluActivation_2x2_2x2F16) {
+TEST_P(MatOpsDotAddTest, Dot_BiasAddReluActivation_2x2_2x2F16) {
   TestImplBiasAddReluActivationEpilogueFusion<Eigen::half>();
 }
-#endif
 
-XLA_TEST_P(MatOpsDotAddTest, Dot_Add_2x2_2x2F32) { TestImpl<float>(); }
-XLA_TEST_P(MatOpsDotAddTest, Dot_BiasAdd_2x2_2x2F32) {
+TEST_P(MatOpsDotAddTest, Dot_Add_2x2_2x2F32) { TestImpl<float>(); }
+TEST_P(MatOpsDotAddTest, Dot_BiasAdd_2x2_2x2F32) {
   TestImplBiasAddEpilogueFusion<float>();
 }
-XLA_TEST_P(MatOpsDotAddTest, Dot_ReluActivation_2x2_2x2F32) {
+TEST_P(MatOpsDotAddTest, Dot_ReluActivation_2x2_2x2F32) {
   TestImplReluActivationEpilogueFusion<float>();
 }
-XLA_TEST_P(MatOpsDotAddTest, Dot_BiasAddReluActivation_2x2_2x2F32) {
+TEST_P(MatOpsDotAddTest, Dot_BiasAddReluActivation_2x2_2x2F32) {
   TestImplBiasAddReluActivationEpilogueFusion<float>();
 }
 
 INSTANTIATE_TEST_CASE_P(MatOpsDotAddTestInstances, MatOpsDotAddTest,
                         ::testing::Combine(::testing::Bool(), ::testing::Bool(),
-                                           ::testing::Bool(),
                                            ::testing::Bool()));
 
 }  // namespace

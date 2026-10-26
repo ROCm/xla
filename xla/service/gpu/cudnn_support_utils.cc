@@ -1,4 +1,4 @@
-/* Copyright 2021 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2021 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,22 +15,31 @@ limitations under the License.
 
 #include "xla/service/gpu/cudnn_support_utils.h"
 
-#include <functional>
+#include <cstdint>
 #include <vector>
 
+#include "absl/log/log.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/primitive_util.h"
 #include "xla/service/gpu/cublas_cudnn.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
+#include "xla/stream_executor/cuda/cuda_compute_capability.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/util.h"
 #include "xla/window_util.h"
-#include "tsl/platform/status.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace gpu {
 
-StatusOr<bool> CudnnSupportsOptimizedIntegerConvolution(
+absl::StatusOr<bool> CudnnSupportsOptimizedIntegerConvolution(
     const se::CudaComputeCapability& compute_capability,
     HloCustomCallInstruction& conv, int vector_size) {
-  TF_ASSIGN_OR_RETURN(auto kind, GetCudnnConvKind(&conv));
+  ABSL_ASSIGN_OR_RETURN(auto kind, GetCudnnConvKind(&conv));
   const Shape& input_shape = conv.operand(0)->shape();
   const Shape& kernel_shape = conv.operand(1)->shape();
   const Shape& result_shape = conv.shape().tuple_shapes(0);
@@ -45,8 +54,10 @@ StatusOr<bool> CudnnSupportsOptimizedIntegerConvolution(
 
   // Require cc6.1+ for any vectorized integer convolutions
   // Require cc7.5+ for any IMMA convolutions
-  if ((vector_size == 32 && !compute_capability.IsAtLeast(7, 5)) ||
-      !compute_capability.IsAtLeast(6, 1)) {
+  if ((vector_size == 32 && !compute_capability.SupportsAllFeaturesOf(
+                                se::CudaComputeCapability(7, 5))) ||
+      !compute_capability.SupportsAllFeaturesOf(
+          se::CudaComputeCapability(6, 1))) {
     VLOG(3) << "Compute capability " << compute_capability.ToString()
             << " is not sufficent for int8x" << vector_size
             << " vectorization.";
@@ -119,12 +130,13 @@ StatusOr<bool> CudnnSupportsOptimizedIntegerConvolution(
   return true;
 }
 
-StatusOr<CudnnReorderTransposeConfig> CudnnInferTransposeForFilterReordering(
+absl::StatusOr<CudnnReorderTransposeConfig>
+CudnnInferTransposeForFilterReordering(
     const Shape& shape, const ConvolutionDimensionNumbers& dimension_numbers) {
   // A normal filter should have four dimensions: [O, I, H, W]
   // An already vectorized filter will have five: [O, I/k, H, W, k]; k=4|32
-  if (shape.rank() != 4 && shape.rank() != 5) {
-    return InternalError("Filter shape has unexpected rank.");
+  if (shape.dimensions().size() != 4 && shape.dimensions().size() != 5) {
+    return Internal("Filter shape has unexpected rank.");
   }
 
   // Get convolution dimension numbers.
@@ -134,7 +146,7 @@ StatusOr<CudnnReorderTransposeConfig> CudnnInferTransposeForFilterReordering(
   const int64_t dW = dimension_numbers.kernel_spatial_dimensions().at(1);
   // In case of re-vectorization (rank=5), the missing dimension can be
   // calculated as Σi(i=0..4)-(dO+dI+dH+dW)
-  bool revectorize = shape.rank() == 5;
+  bool revectorize = shape.dimensions().size() == 5;
   const int64_t dZ = revectorize ? 10 - dO - dI - dH - dW : -1;
   const int64_t vsize = revectorize ? shape.dimensions(dZ) : 1;
 
@@ -142,7 +154,7 @@ StatusOr<CudnnReorderTransposeConfig> CudnnInferTransposeForFilterReordering(
   if (shape.dimensions(dO) % 32 != 0 ||
       shape.dimensions(dI) % (32 / vsize) != 0 ||
       (revectorize && vsize != 4 && vsize != 32)) {
-    return InternalError("Filter shape is not vectorizable.");
+    return Internal("Filter shape is not vectorizable.");
   }
 
   // Build the resulting shape: [O, I/32, H, W, 32]
@@ -187,14 +199,14 @@ StatusOr<CudnnReorderTransposeConfig> CudnnInferTransposeForFilterReordering(
   return CudnnReorderTransposeConfig{split_shape, output_shape, permutation};
 }
 
-StatusOr<CudnnReorderTransposeConfig> CudnnInferTransposeForBiasReordering(
-    const Shape& shape) {
+absl::StatusOr<CudnnReorderTransposeConfig>
+CudnnInferTransposeForBiasReordering(const Shape& shape) {
   // Expected bias has one dimension: [O]
-  if (shape.rank() != 1) {
-    return InternalError("Bias shape has unexpected rank.");
+  if (shape.dimensions().size() != 1) {
+    return Internal("Bias shape has unexpected rank.");
   }
   if (shape.dimensions(0) % 32 != 0) {
-    return InternalError("Bias shape is not vectorizable.");
+    return Internal("Bias shape is not vectorizable.");
   }
 
   // Build the transposable shape: [O/32, 4, 2, 4]
@@ -206,5 +218,16 @@ StatusOr<CudnnReorderTransposeConfig> CudnnInferTransposeForBiasReordering(
   return CudnnReorderTransposeConfig{split_shape, shape, permutation};
 }
 
+bool IsWorkspaceAllocationRoot(const HloInstruction& root) {
+  return root.IsRoot() && root.opcode() == HloOpcode::kTuple &&
+         root.operand(root.operand_count() - 1)
+             ->IsCustomCall(kWorkspaceAllocationCustomCallTarget) &&
+         root.operand(root.operand_count() - 1)->operand_count() == 0;
+}
+
+bool IsAmaxRoot(const HloInstruction& root) {
+  return root.IsRoot() && root.opcode() == HloOpcode::kTuple &&
+         root.operand(1)->opcode() == HloOpcode::kReduce;
+}
 }  // namespace gpu
 }  // namespace xla

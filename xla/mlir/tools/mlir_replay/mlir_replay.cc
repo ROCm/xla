@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,35 +13,32 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstring>
 #include <string>
 #include <vector>
 
+#include "absl/log/check.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
-#include "mlir/IR/DialectRegistry.h"  // from @llvm-project
-#include "mlir/IR/MLIRContext.h"  // from @llvm-project
-#include "mlir/InitAllDialects.h"  // from @llvm-project
-#include "xla/debug_options_flags.h"
-#include "xla/mlir/framework/ir/xla_framework.h"
-#include "xla/mlir/runtime/ir/rt_dialect.h"
-#include "xla/mlir/tools/mlir_replay/mlir_replay_lib.h"
-#include "xla/mlir/tools/mlir_replay/public/compiler_trace.pb.h"
-#include "xla/mlir/tools/mlir_replay/public/execution_trace.pb.h"
-#include "xla/mlir/tools/mlir_replay/public/execution_trace_utils.h"
-#include "xla/mlir/xla_cpu/ir/xla_cpu.h"
-#include "xla/mlir_hlo/deallocation/IR/deallocation_ops.h"
-#include "xla/mlir_hlo/gml_st/IR/gml_st_ops.h"
-#include "xla/mlir_hlo/lhlo/IR/lhlo_ops.h"
-#include "xla/mlir_hlo/lhlo_gpu/IR/lhlo_gpu_ops.h"
-#include "xla/mlir_hlo/mhlo/IR/register.h"
-#include "xla/mlir_hlo/thlo/IR/thlo_ops.h"
-#include "xla/mlir_hlo/tools/mlir_interpreter/framework/interpreter_value.h"
-#include "xla/service/hlo.pb.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/raw_ostream.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/InitAllDialects.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/init_main.h"
 #include "tsl/platform/path.h"
 #include "tsl/platform/status.h"
-#include "tsl/util/command_line_flags.h"
+#include "xla/debug_options_flags.h"
+#include "xla/mlir/tools/mlir_interpreter/framework/interpreter_value.h"
+#include "xla/mlir/tools/mlir_replay/mlir_replay_lib.h"
+#include "xla/mlir/tools/mlir_replay/public/compiler_trace.pb.h"
+#include "xla/mlir/tools/mlir_replay/public/execution_trace.pb.h"
+#include "xla/mlir/tools/mlir_replay/public/execution_trace_utils.h"
+#include "xla/mlir_hlo/mhlo/IR/register.h"
+#include "xla/service/hlo.pb.h"
+#include "xla/tsl/util/command_line_flags.h"
 
 struct ReplayOptions {
   std::string hlo_snapshot;
@@ -60,7 +57,7 @@ bool ResultsMatch(const xla::HloSnapshot& snapshot,
                   std::vector<std::string>& failures,
                   const ReplayOptions& opts) {
   auto actual = mlir::interpreter::LiteralToValue(snapshot.result());
-  TF_CHECK_OK(actual.status());
+  CHECK_OK(actual.status());
 
   // We assume this is MHLO, so multiple results will be in a tuple.
   if (first_pass_results.size() != 1) {
@@ -70,8 +67,8 @@ bool ResultsMatch(const xla::HloSnapshot& snapshot,
 
   if (!(*actual == first_pass_results[0])) {
     if (opts.print_values) {
-      failures.push_back("result mismatch: " + actual->toString() +
-                         " != " + first_pass_results[0].toString());
+      failures.push_back("result mismatch: " + actual->ToString() +
+                         " != " + first_pass_results[0].ToString());
     } else {
       failures.push_back("result mismatch");
     }
@@ -82,26 +79,26 @@ bool ResultsMatch(const xla::HloSnapshot& snapshot,
 
 void TestAll(mlir::MLIRContext& context, const ReplayOptions& opts) {
   std::vector<std::string> traces;
-  TF_CHECK_OK(tsl::Env::Default()->GetMatchingPaths(
+  CHECK_OK(tsl::Env::Default()->GetMatchingPaths(
       opts.mlir_compilation_trace_dir + "/*.mlir-trace.pb", &traces));
 
   for (const auto& trace_path : traces) {
     mlir::interpreter::MlirCompilationTrace trace;
-    TF_CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(), trace_path, &trace))
+    CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(), trace_path, &trace))
         << "Failed to load " << trace_path;
 
     std::vector<std::string> snapshots;
     std::string prefix =
         trace_path.substr(0, trace_path.length() - strlen(".mlir-trace.pb"));
-    TF_CHECK_OK(tsl::Env::Default()->GetMatchingPaths(prefix + "*.snapshot.*",
-                                                      &snapshots));
+    CHECK_OK(tsl::Env::Default()->GetMatchingPaths(prefix + "*.snapshot.*",
+                                                   &snapshots));
     CHECK_NE(snapshots.size(), 0)
         << "No snapshots found for module " << trace_path << ".";
 
     std::vector<std::string> failures;
     for (const auto& snapshot_path : snapshots) {
       xla::HloSnapshot snapshot;
-      TF_CHECK_OK(
+      CHECK_OK(
           tsl::ReadBinaryProto(tsl::Env::Default(), snapshot_path, &snapshot));
 
       auto results =
@@ -178,11 +175,6 @@ int main(int argc, char* argv[]) {
   mlir::DialectRegistry registry;
   mlir::registerAllDialects(registry);
   mlir::mhlo::registerAllMhloDialects(registry);
-  registry.insert<mlir::deallocation::DeallocationDialect,
-                  mlir::lmhlo::LmhloDialect, mlir::lmhlo_gpu::LmhloGpuDialect,
-                  mlir::gml_st::GmlStDialect, mlir::thlo::THLODialect,
-                  xla::runtime::RuntimeDialect, mlir::xla_cpu::XlaCpuDialect,
-                  mlir::xla_framework::XLAFrameworkDialect>();
 
   mlir::MLIRContext context(registry);
 
@@ -193,12 +185,12 @@ int main(int argc, char* argv[]) {
 
   xla::HloSnapshot snapshot;
   if (!opts.hlo_snapshot.empty()) {
-    TF_CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(), opts.hlo_snapshot,
-                                     &snapshot));
+    CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(), opts.hlo_snapshot,
+                                  &snapshot));
   }
   mlir::interpreter::MlirCompilationTrace trace;
-  TF_CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(),
-                                   opts.mlir_compilation_trace, &trace));
+  CHECK_OK(tsl::ReadBinaryProto(tsl::Env::Default(),
+                                opts.mlir_compilation_trace, &trace));
 
   llvm::SmallVector<mlir::interpreter::InterpreterValue> previous_results;
   int pass_id = 0;
@@ -214,7 +206,7 @@ int main(int argc, char* argv[]) {
           (!opts.print_changes_only || (*results != previous_results))) {
         llvm::outs() << "Results:\n";
         for (const auto& result : *results) {
-          llvm::outs() << result.toString() << "\n";
+          llvm::outs() << result.ToString() << "\n";
         }
         previous_results = *results;
         llvm::outs() << "\n";
@@ -227,19 +219,19 @@ int main(int argc, char* argv[]) {
     }
 
     if (!opts.execution_trace_dir.empty()) {
-      TF_CHECK_OK(
+      CHECK_OK(
           tsl::Env::Default()->RecursivelyCreateDir(opts.execution_trace_dir));
       std::string filename = tsl::io::JoinPath(
           opts.execution_trace_dir,
           absl::StrFormat("%.4d.%s.mlir", pass_id, state.after_pass()));
-      TF_CHECK_OK(tsl::WriteStringToFile(tsl::Env::Default(), filename,
-                                         execution_trace.ir()));
+      CHECK_OK(tsl::WriteStringToFile(tsl::Env::Default(), filename,
+                                      execution_trace.ir()));
 
       filename = tsl::io::JoinPath(
           opts.execution_trace_dir,
           absl::StrFormat("%.4d.%s.trace.pb", pass_id, state.after_pass()));
-      TF_CHECK_OK(tsl::WriteBinaryProto(tsl::Env::Default(), filename,
-                                        execution_trace));
+      CHECK_OK(tsl::WriteBinaryProto(tsl::Env::Default(), filename,
+                                     execution_trace));
     }
     ++pass_id;
   }

@@ -1,4 +1,4 @@
-/* Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2023 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,18 +13,39 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <string>
+#include <gtest/gtest.h>
 
-#include "xla/tests/hlo_test_base.h"
+#include "absl/strings/string_view.h"
+#include "xla/backends/gpu/tests/hlo_pjrt_gpu_test_base.h"
+#include "xla/error_spec.h"
+#include "xla/stream_executor/cuda/cuda_compute_capability.h"
+#include "xla/stream_executor/device_description.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/xla.pb.h"
 
 namespace xla {
 namespace gpu {
 namespace {
 
-using FloatSupportTest = HloTestBase;
+class FloatSupportTest
+    : public HloInterpreterReferenceMixin<HloPjRtGpuTestBase> {
+ public:
+  const se::GpuComputeCapability& GetGpuComputeCapability() {
+    return device_description().gpu_compute_capability();
+  }
+};
 
-TEST_F(FloatSupportTest, MixedTypeDotIsNotUpcasted) {
-  const std::string kHloText = R"(
+class FloatSupportTestWithCublas : public FloatSupportTest {
+ public:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions debug_options = FloatSupportTest::GetDebugOptionsForTest();
+    debug_options.set_xla_gpu_enable_triton_gemm(false);
+    return debug_options;
+  }
+};
+
+TEST_F(FloatSupportTestWithCublas, MixedTypeDotIsNotUpcasted) {
+  constexpr absl::string_view kHloText = R"(
 ENTRY e {
   p0 = bf16[32,32] parameter(0)
   p1 = bf16[32,32] parameter(1)
@@ -34,6 +55,40 @@ ENTRY e {
 
   MatchOptimizedHlo(kHloText, R"(
 ; CHECK-NOT: convert
+; CHECK: __cublas
+)");
+
+  EXPECT_TRUE(RunAndCompare(kHloText, ErrorSpec{1e-6, 1e-6}));
+}
+
+class FloatSupportTestWithTriton : public FloatSupportTest {
+ public:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions debug_options = FloatSupportTest::GetDebugOptionsForTest();
+    debug_options.set_xla_gpu_enable_triton_gemm(true);
+    debug_options.set_xla_gpu_cublas_fallback(false);
+    return debug_options;
+  }
+};
+
+TEST_F(FloatSupportTestWithTriton, MixedTypeDotWithBF16IsNotUpcasted) {
+  if (GetGpuComputeCapability().IsRocm() ||
+      !GetGpuComputeCapability().cuda_compute_capability()->IsAtLeast(
+          se::CudaComputeCapability::kAmpere)) {
+    GTEST_SKIP() << "Not supported on this GPU architecture";
+  }
+
+  constexpr absl::string_view kHloText = R"(
+ENTRY e {
+  p0 = bf16[32,32] parameter(0)
+  p1 = bf16[32,32] parameter(1)
+  ROOT d = f32[32,32] dot(p0, p1),
+    lhs_contracting_dims={1}, rhs_contracting_dims={0}
+})";
+
+  MatchOptimizedHlo(kHloText, R"(
+; CHECK-NOT: convert
+; CHECK: __triton
 )");
 
   EXPECT_TRUE(RunAndCompare(kHloText, ErrorSpec{1e-6, 1e-6}));

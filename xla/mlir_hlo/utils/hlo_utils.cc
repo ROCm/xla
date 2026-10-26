@@ -1,4 +1,4 @@
-/* Copyright 2019 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2019 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,23 +16,78 @@ limitations under the License.
 #include "utils/hlo_utils.h"
 
 #include <algorithm>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <numeric>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "llvm/Support/ErrorHandling.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/TypeUtilities.h"
+#include "mlir/IR/Value.h"
+#include "mlir/Support/LLVM.h"
 
 namespace mlir {
 namespace hlo {
+namespace {
+APFloat getScalarLimitOfFloatType(FloatType floatTy, ScalarLimit limit) {
+  auto& semantics = floatTy.getFloatSemantics();
+  switch (limit) {
+    case kLowest:
+      return APFloat::getLargest(semantics, /*negative=*/true);
+    case kInfinityLowest:
+      return APFloat::getInf(semantics, /*negative=*/true);
+    case kMax:
+      return APFloat::getLargest(semantics, /*negative=*/false);
+    case kInfinityMax:
+      return APFloat::getInf(semantics, /*negative=*/false);
+  }
+  llvm_unreachable("invalid limit");
+}
+
+// Returns a scalar value for the given integer type.
+//
+// The argument 'scalar' describes which scalar value to return. `integer_value`
+// is used to specify the integer value for kInteger. For any other scalar,
+// integer_value is ignored.
+APInt getScalarLimitOfIntegerType(IntegerType integerTy, ScalarLimit limit) {
+  unsigned width = integerTy.getWidth();
+  bool isBool = (width == 1);
+  switch (limit) {
+    case kLowest:
+    case kInfinityLowest:
+      if (integerTy.isUnsigned() || isBool) {
+        return APInt::getMinValue(width);
+      } else {
+        return APInt::getSignedMinValue(width);
+      }
+
+    case kMax:
+    case kInfinityMax:
+      if (integerTy.isUnsigned() || isBool) {
+        return APInt::getMaxValue(width);
+      } else {
+        return APInt::getSignedMaxValue(width);
+      }
+  }
+  llvm_unreachable("invalid limit");
+}
+}  // namespace
 
 static constexpr size_t kPaddingSize = 64;
 
-DenseIntElementsAttr getBroadcastDimensionsAttr(Builder* b, Value x, Value y,
-                                                bool allowEmpty) {
-  TensorType xType = x.getType().dyn_cast<RankedTensorType>();
-  TensorType yType = y.getType().dyn_cast<RankedTensorType>();
+DenseI64ArrayAttr getBroadcastDimensionsAttr(Builder* b, Value x, Value y,
+                                             bool allowEmpty) {
+  TensorType xType = mlir::dyn_cast<RankedTensorType>(x.getType());
+  TensorType yType = mlir::dyn_cast<RankedTensorType>(y.getType());
   if (!xType || !yType) return {};
   if (allowEmpty && xType == yType) return {};
 
@@ -56,29 +111,27 @@ DenseIntElementsAttr getBroadcastDimensionsAttr(Builder* b, Value x, Value y,
   std::iota(broadcastDimensions.begin(), broadcastDimensions.end(),
             maxRank - minRank);
 
-  RankedTensorType type =
-      RankedTensorType::get({minRank}, b->getIntegerType(64));
-  return DenseIntElementsAttr::get(type, broadcastDimensions);
+  return b->getDenseI64ArrayAttr(broadcastDimensions);
 }
 
 DenseElementsAttr getScalarOfType(Type ty, int64_t rawValue) {
   RankedTensorType scalarTy = RankedTensorType::get({}, ty);
 
-  if (auto floatTy = ty.dyn_cast<FloatType>()) {
+  if (auto floatTy = mlir::dyn_cast<FloatType>(ty)) {
     APFloat value(floatTy.getFloatSemantics(), rawValue);
     return DenseElementsAttr::get(scalarTy, value);
   }
-  if (auto intTy = ty.dyn_cast<IntegerType>()) {
+  if (auto intTy = mlir::dyn_cast<IntegerType>(ty)) {
     APInt value(intTy.getWidth(), static_cast<int64_t>(rawValue),
                 /*isSigned=*/true);
     return DenseElementsAttr::get(scalarTy, value);
   }
-  if (auto complexTy = ty.dyn_cast<ComplexType>()) {
-    if (auto floatTy = complexTy.getElementType().cast<FloatType>()) {
+  if (auto complexTy = mlir::dyn_cast<ComplexType>(ty)) {
+    if (auto floatTy = mlir::cast<FloatType>(complexTy.getElementType())) {
       APFloat real(floatTy.getFloatSemantics(), rawValue);
       APFloat imag = APFloat::getZero(floatTy.getFloatSemantics());
       return DenseElementsAttr::get(scalarTy,
-                                    std::complex<APFloat>(real, imag));
+                                    mlir::Complex<APFloat>(real, imag));
     }
   }
   llvm_unreachable("unsupported type");
@@ -87,76 +140,32 @@ DenseElementsAttr getScalarOfType(Type ty, int64_t rawValue) {
 DenseElementsAttr getScalarNegZeroOfType(Type ty) {
   RankedTensorType scalarTy = RankedTensorType::get({}, ty);
 
-  if (auto floatTy = ty.dyn_cast<FloatType>()) {
+  if (auto floatTy = mlir::dyn_cast<FloatType>(ty)) {
     APFloat negZero =
         APFloat::getZero(floatTy.getFloatSemantics(), /*Negative=*/true);
     return DenseElementsAttr::get(scalarTy, negZero);
   }
-  if (auto intTy = ty.dyn_cast<IntegerType>()) {
+  if (auto intTy = mlir::dyn_cast<IntegerType>(ty)) {
     return DenseElementsAttr::get(scalarTy, APInt::getZero(intTy.getWidth()));
   }
-  if (auto complexTy = ty.dyn_cast<ComplexType>()) {
-    if (auto floatTy = complexTy.getElementType().cast<FloatType>()) {
+  if (auto complexTy = mlir::dyn_cast<ComplexType>(ty)) {
+    if (auto floatTy = mlir::cast<FloatType>(complexTy.getElementType())) {
       APFloat negZero =
           APFloat::getZero(floatTy.getFloatSemantics(), /*Negative=*/true);
       return DenseElementsAttr::get(scalarTy,
-                                    std::complex<APFloat>(negZero, negZero));
+                                    mlir::Complex<APFloat>(negZero, negZero));
     }
   }
   llvm_unreachable("unsupported type");
 }
 
-static APFloat getScalarLimitOfFloatType(FloatType floatTy, ScalarLimit limit) {
-  auto& semantics = floatTy.getFloatSemantics();
-  switch (limit) {
-    case kLowest:
-      return APFloat::getLargest(semantics, /*negative=*/true);
-    case kInfinityLowest:
-      return APFloat::getInf(semantics, /*negative=*/true);
-    case kMax:
-      return APFloat::getLargest(semantics, /*negative=*/false);
-    case kInfinityMax:
-      return APFloat::getInf(semantics, /*negative=*/false);
-  }
-  llvm_unreachable("invalid limit");
-}
-
-// Returns a scalar value for the given integer type.
-//
-// The argument 'scalar' describes which scalar value to return. `integer_value`
-// is used to specify the integer value for kInteger. For any other scalar,
-// integer_value is ignored.
-static APInt getScalarLimitOfIntegerType(IntegerType integerTy,
-                                         ScalarLimit limit) {
-  unsigned width = integerTy.getWidth();
-  bool isBool = (width == 1);
-  switch (limit) {
-    case kLowest:
-    case kInfinityLowest:
-      if (integerTy.isUnsigned() || isBool) {
-        return APInt::getMinValue(width);
-      } else {
-        return APInt::getSignedMinValue(width);
-      }
-
-    case kMax:
-    case kInfinityMax:
-      if (integerTy.isUnsigned() || isBool) {
-        return APInt::getMaxValue(width);
-      } else {
-        return APInt::getSignedMaxValue(width);
-      }
-  }
-  llvm_unreachable("invalid limit");
-}
-
 DenseElementsAttr getScalarLimitOfType(Type ty, ScalarLimit limit) {
   RankedTensorType scalarTy = RankedTensorType::get({}, ty);
-  if (auto floatTy = ty.dyn_cast<FloatType>()) {
+  if (auto floatTy = mlir::dyn_cast<FloatType>(ty)) {
     return DenseElementsAttr::get(scalarTy,
                                   getScalarLimitOfFloatType(floatTy, limit));
   }
-  if (auto integerTy = ty.dyn_cast<IntegerType>()) {
+  if (auto integerTy = mlir::dyn_cast<IntegerType>(ty)) {
     return DenseElementsAttr::get(
         scalarTy, getScalarLimitOfIntegerType(integerTy, limit));
   }
@@ -165,7 +174,7 @@ DenseElementsAttr getScalarLimitOfType(Type ty, ScalarLimit limit) {
 
 std::string lmhloToMhloOpName(llvm::StringRef opName,
                               mlir::MLIRContext* context) {
-  assert(opName.startswith("lmhlo.") && "Expected an LMHLO op");
+  assert(opName.starts_with("lmhlo.") && "Expected an LMHLO op");
 
   if (opName == "lmhlo.dot") {
     return "mhlo.dot_general";
@@ -181,14 +190,14 @@ std::string lmhloToMhloOpName(llvm::StringRef opName,
 }
 
 bool isSequenceStartingWith0(Attribute attr) {
-  DenseIntElementsAttr denseAttr = attr.dyn_cast<DenseIntElementsAttr>();
+  DenseIntElementsAttr denseAttr = mlir::dyn_cast<DenseIntElementsAttr>(attr);
   for (int64_t i = 0, e = denseAttr.getNumElements(); i < e; ++i)
     if (denseAttr.getValues<APInt>()[i].getSExtValue() != i) return false;
   return true;
 }
 
 int64_t getArgumentIndex(mlir::func::FuncOp op, Value value) {
-  BlockArgument arg = value.dyn_cast<BlockArgument>();
+  BlockArgument arg = mlir::dyn_cast<BlockArgument>(value);
   if (!arg || arg.getOwner() != &op.front()) return -1;
   return arg.getArgNumber();
 }
@@ -198,7 +207,7 @@ std::pair<size_t, size_t> computeMemory(const std::vector<Value>& allocs) {
   size_t totalSize = 0;
   size_t allocCounter = 0;
   for (const Value alloc : allocs) {
-    auto shape = alloc.getType().cast<ShapedType>();
+    auto shape = mlir::cast<ShapedType>(alloc.getType());
     size_t shapeBytes = llvm::divideCeil(
         shape.getNumElements() * shape.getElementTypeBitWidth(), 8);
     size_t alignFactor = llvm::divideCeil(shapeBytes, kPaddingSize);
@@ -216,21 +225,21 @@ namespace mlir {
 namespace chlo {
 
 Value getConstantLikeMaxFiniteValue(OpBuilder& b, Location loc, Value val) {
-  auto ty = getElementTypeOrSelf(val.getType()).cast<FloatType>();
+  auto ty = mlir::cast<FloatType>(getElementTypeOrSelf(val.getType()));
   return getConstantLike(
       b, loc, llvm::APFloat::getLargest(ty.getFloatSemantics()), val);
 }
 
 Value getConstantLikeInfValue(OpBuilder& b, Location loc, Value val,
                               bool negative) {
-  auto ty = getElementTypeOrSelf(val.getType()).cast<FloatType>();
+  auto ty = mlir::cast<FloatType>(getElementTypeOrSelf(val.getType()));
   return getConstantLike(
       b, loc, llvm::APFloat::getInf(ty.getFloatSemantics(), negative), val);
 }
 
 Value getConstantLikeSmallestFiniteValue(OpBuilder& b, Location loc,
                                          Value val) {
-  auto ty = getElementTypeOrSelf(val.getType()).cast<FloatType>();
+  auto ty = mlir::cast<FloatType>(getElementTypeOrSelf(val.getType()));
   return getConstantLike(
       b, loc, llvm::APFloat::getSmallest(ty.getFloatSemantics()), val);
 }
@@ -238,7 +247,7 @@ Value getConstantLikeSmallestFiniteValue(OpBuilder& b, Location loc,
 Value getConstantLike(OpBuilder& b, Location loc, const APFloat& constant,
                       Value val) {
   Type ty = getElementTypeOrSelf(val.getType());
-  return b.create<ConstantLikeOp>(loc, b.getFloatAttr(ty, constant), val);
+  return ConstantLikeOp::create(b, loc, b.getFloatAttr(ty, constant), val);
 }
 
 }  // namespace chlo

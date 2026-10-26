@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,24 +15,25 @@ limitations under the License.
 
 #include "xla/hlo/ir/hlo_input_output_alias_config.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <memory>
 #include <string>
 
 #include "absl/algorithm/container.h"
+#include "xla/hlo/analysis/hlo_ordering.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/service/hlo_dce.h"
-#include "xla/service/hlo_memory_scheduler.h"
-#include "xla/service/hlo_ordering.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/testlib/test_helpers.h"
 #include "xla/shape_util.h"
-#include "xla/tests/hlo_test_base.h"
 #include "xla/types.h"
-#include "tsl/lib/core/status_test_util.h"
 
 namespace xla {
 namespace {
-class HloInputOutputAliasConfigTest : public HloTestBase {
+class HloInputOutputAliasConfigTest : public HloHardwareIndependentTestBase {
  protected:
   void expect_aliased(const ShapeIndex& output_index, int64_t param_number,
                       const ShapeIndex& param_index,
@@ -78,13 +79,13 @@ ENTRY main {
   ROOT root = (f32[], f32[]) tuple(%a, %b)
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(module_str));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_str));
 
   HloInputOutputAliasConfig config(
       module->entry_computation()->root_instruction()->shape());
 
-  TF_ASSERT_OK(config.SetUpAlias(
+  ASSERT_OK(config.SetUpAlias(
       /*output_index=*/{0}, /*param_number=*/1,
       /*param_index=*/{}));
 
@@ -109,17 +110,17 @@ ENTRY main {
   ROOT root = (f32[], f32[]) tuple(%gte1, %gte2)
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(module_str));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_str));
 
   HloInputOutputAliasConfig config(
       module->entry_computation()->root_instruction()->shape());
 
-  TF_ASSERT_OK(config.SetUpAlias(
+  ASSERT_OK(config.SetUpAlias(
       /*output_index=*/{0}, /*param_number=*/0,
       /*param_index=*/{0}));
 
-  TF_ASSERT_OK(config.SetUpAlias(
+  ASSERT_OK(config.SetUpAlias(
       /*output_index=*/{1}, /*param_number=*/0,
       /*param_index=*/{1}));
 
@@ -146,17 +147,17 @@ ENTRY main {
   ROOT root = (f32[], f32[]) tuple(%a, %b)
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(module_str));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_str));
 
   HloInputOutputAliasConfig config(
       module->entry_computation()->root_instruction()->shape());
 
-  TF_ASSERT_OK(config.SetUpAlias(
+  ASSERT_OK(config.SetUpAlias(
       /*output_index=*/{0}, /*param_number=*/0,
       /*param_index=*/{}));
 
-  TF_ASSERT_OK(config.SetUpAlias(
+  ASSERT_OK(config.SetUpAlias(
       /*output_index=*/{1}, /*param_number=*/0,
       /*param_index=*/{}));
 
@@ -175,13 +176,13 @@ ENTRY main {
   ROOT root = (f32[], f32[4096]) tuple(%a, %b)
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(module_str));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_str));
 
   HloInputOutputAliasConfig config(
       module->entry_computation()->root_instruction()->shape());
 
-  TF_ASSERT_OK(config.SetUpAlias(
+  ASSERT_OK(config.SetUpAlias(
       /*output_index=*/{1}, /*param_number=*/0,
       /*param_index=*/{}));
 
@@ -200,13 +201,13 @@ ENTRY main {
   ROOT root = (f32[], f32[]) tuple(%a, %b)
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(module_str));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_str));
 
   HloInputOutputAliasConfig config(
       module->entry_computation()->root_instruction()->shape());
 
-  TF_ASSERT_OK(config.SetUpAlias(
+  ASSERT_OK(config.SetUpAlias(
       /*output_index=*/{0}, /*param_number=*/0,
       /*param_index=*/{}));
 
@@ -214,5 +215,96 @@ ENTRY main {
       /*output_index=*/{0}, /*param_number=*/1,
       /*param_index=*/{}));
 }
+
+class HloBufferDonorConfigTest : public HloHardwareIndependentTestBase {};
+
+TEST_F(HloBufferDonorConfigTest, SimpleBufferDonor) {
+  const std::string module_str = R"(
+HloModule TEST
+
+ENTRY main {
+  a = f32[] parameter(0)
+  b = f32[] parameter(1)
+  ROOT root = (f32[], f32[]) tuple(%a, %b)
+}
+)";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_str));
+
+  HloBufferDonorConfig config;
+
+  ASSERT_OK(config.AddBufferDonor(0, {}));
+  EXPECT_TRUE(config.ParameterIsBufferDonor(0, {}));
+  EXPECT_FALSE(config.ParameterIsBufferDonor(1, {}));
+
+  ASSERT_OK(config.AddBufferDonor(1, {}));
+  EXPECT_TRUE(config.ParameterIsBufferDonor(0, {}));
+  EXPECT_TRUE(config.ParameterIsBufferDonor(1, {}));
+
+  ASSERT_OK(config.RemoveBufferDonor(0, {}));
+  EXPECT_FALSE(config.ParameterIsBufferDonor(0, {}));
+  EXPECT_TRUE(config.ParameterIsBufferDonor(1, {}));
+
+  ASSERT_OK(config.Verify(*module));
+  ASSERT_OK(config.AddBufferDonor(2, {}));
+  ASSERT_IS_NOT_OK(config.Verify(*module));
+}
+
+TEST_F(HloBufferDonorConfigTest, SimpleBufferDonorWithTupleInput) {
+  const std::string module_str = R"(
+HloModule TEST
+
+ENTRY main {
+  param = (f32[], f32[]) parameter(0)
+  gte1 = f32[] get-tuple-element(%param), index=0
+  gte2 = f32[] get-tuple-element(%param), index=1
+  ROOT root = (f32[], f32[]) tuple(%gte1, %gte2)
+}
+)";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_str));
+
+  HloBufferDonorConfig config;
+
+  ASSERT_OK(config.AddBufferDonor(0, {0}));
+  EXPECT_TRUE(config.ParameterIsBufferDonor(0, {0}));
+  EXPECT_FALSE(config.ParameterIsBufferDonor(0, {1}));
+  EXPECT_FALSE(config.ParameterIsBufferDonor(0, {}));
+  EXPECT_FALSE(config.ParameterIsBufferDonor(1, {}));
+
+  ASSERT_OK(config.AddBufferDonor(0, {1}));
+  EXPECT_TRUE(config.ParameterIsBufferDonor(0, {0}));
+  EXPECT_TRUE(config.ParameterIsBufferDonor(0, {1}));
+  EXPECT_FALSE(config.ParameterIsBufferDonor(0, {}));
+  EXPECT_FALSE(config.ParameterIsBufferDonor(1, {}));
+
+  ASSERT_OK(config.Verify(*module));
+  ASSERT_OK(config.AddBufferDonor(0, {2}));
+  ASSERT_IS_NOT_OK(config.Verify(*module));
+}
+
+TEST_F(HloBufferDonorConfigTest, BufferDonorInputOutputAliasOverlap) {
+  const std::string module_str = R"(
+HloModule TEST
+
+ENTRY main {
+  param = (f32[], f32[]) parameter(0)
+  gte1 = f32[] get-tuple-element(%param), index=0
+  gte2 = f32[] get-tuple-element(%param), index=1
+  ROOT root = (f32[], f32[]) tuple(%gte1, %gte2)
+}
+)";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_str));
+
+  HloBufferDonorConfig config;
+
+  ASSERT_OK(config.AddBufferDonor(0, {0}));
+  ASSERT_OK(config.Verify(*module));
+
+  ASSERT_OK(module->input_output_alias_config().SetUpAlias({0}, 0, {0}));
+  ASSERT_IS_NOT_OK(config.Verify(*module));
+}
+
 }  // namespace
 }  // namespace xla

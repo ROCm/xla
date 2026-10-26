@@ -1,4 +1,4 @@
-/* Copyright 2018 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2018 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,14 +15,24 @@ limitations under the License.
 
 #include "xla/service/hlo_domain_verifier.h"
 
+#include <memory>
 #include <set>
+#include <string>
 
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_computation.h"
+#include "xla/hlo/ir/hlo_domain_metadata.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/hlo_domain_map.h"
-#include "xla/service/hlo_graph_dumper.h"
-#include "xla/types.h"
+#include "xla/status_macros.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -31,19 +41,20 @@ class HloDomainVerifier::RunContext {
   RunContext(HloModule* module, HloDomainVerifier* verifier)
       : module_(module), verifier_(verifier) {}
 
-  Status Run(const absl::flat_hash_set<absl::string_view>& execution_threads);
+  absl::Status Run(
+      const absl::flat_hash_set<absl::string_view>& execution_threads);
 
  private:
   // If the verifier caller passed an empty vector for kinds, we collect all the
   // available domain types.
-  Status PopulateDomainKinds(
+  absl::Status PopulateDomainKinds(
       const absl::flat_hash_set<absl::string_view>& execution_threads);
 
   HloModule* module_;
   HloDomainVerifier* verifier_;
 };
 
-Status HloDomainVerifier::RunContext::PopulateDomainKinds(
+absl::Status HloDomainVerifier::RunContext::PopulateDomainKinds(
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   if (verifier_->kinds_.empty()) {
     // The caller specified no domain kinds, collect all the ones available.
@@ -62,37 +73,37 @@ Status HloDomainVerifier::RunContext::PopulateDomainKinds(
     verifier_->kinds_.insert(verifier_->kinds_.end(), kinds.begin(),
                              kinds.end());
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status HloDomainVerifier::RunContext::Run(
+absl::Status HloDomainVerifier::RunContext::Run(
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   VLOG(4) << "Running HLO Domain Verifier";
-  TF_RETURN_IF_ERROR(PopulateDomainKinds(execution_threads));
+  ABSL_RETURN_IF_ERROR(PopulateDomainKinds(execution_threads));
   for (HloComputation* computation : module_->computations(execution_threads)) {
     for (auto& kind : verifier_->kinds_) {
       // First create the domain instruction sets. A domain instruction set is
       // the set of instructions whose edges never cross a kDomain instruction.
-      TF_ASSIGN_OR_RETURN(std::unique_ptr<HloDomainMap> domain_map,
-                          HloDomainMap::Create(computation, kind));
+      ABSL_ASSIGN_OR_RETURN(std::unique_ptr<HloDomainMap> domain_map,
+                            HloDomainMap::Create(computation, kind));
       // Verify every domain populated within the map.
       for (auto& domain : domain_map->GetDomains()) {
-        TF_RETURN_IF_ERROR(VerifyDomain(*domain).status());
+        ABSL_RETURN_IF_ERROR(VerifyDomain(*domain).status());
       }
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-StatusOr<bool> HloDomainVerifier::Run(
+absl::StatusOr<bool> HloDomainVerifier::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   RunContext run_context(module, this);
-  TF_RETURN_IF_ERROR(run_context.Run(execution_threads));
+  ABSL_RETURN_IF_ERROR(run_context.Run(execution_threads));
   return false;
 }
 
-StatusOr<const DomainMetadata*> HloDomainVerifier::VerifyDomain(
+absl::StatusOr<const DomainMetadata*> HloDomainVerifier::VerifyDomain(
     const DomainMetadata::Domain& domain) {
   const DomainMetadata* ref_metadata = nullptr;
   VLOG(4) << "Reach set:";

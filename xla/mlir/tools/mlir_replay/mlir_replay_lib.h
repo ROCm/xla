@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,17 +19,18 @@ limitations under the License.
 #include <string>
 #include <vector>
 
-#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "absl/status/statusor.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/Support/LLVM.h"
+#include "xla/mlir/tools/mlir_interpreter/framework/interpreter_value.h"
 #include "xla/mlir/tools/mlir_replay/public/execution_trace.pb.h"
-#include "xla/mlir_hlo/tools/mlir_interpreter/framework/interpreter_value.h"
 #include "xla/service/hlo.pb.h"
-#include "tsl/platform/statusor.h"
 
 namespace mlir {
 namespace interpreter {
 
 // Runs the given IR on the inputs from `snapshot` and returns the result.
-tsl::StatusOr<SmallVector<InterpreterValue>> Run(
+absl::StatusOr<SmallVector<InterpreterValue>> Run(
     MLIRContext& context, const std::string& mlir_ir,
     const xla::HloSnapshot& snapshot, ExecutionTrace* trace,
     const std::vector<std::string>& entry);

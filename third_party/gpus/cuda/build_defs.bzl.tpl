@@ -1,3 +1,5 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 # Macros for building CUDA code.
 def if_cuda(if_true, if_false = []):
     """Shorthand for select()'ing on whether we're building with CUDA.
@@ -11,7 +13,7 @@ def if_cuda(if_true, if_false = []):
     })
 
 def if_cuda_clang(if_true, if_false = []):
-   """Shorthand for select()'ing on wheteher we're building with cuda-clang.
+   """Shorthand for select()'ing on whether we're building with cuda-clang.
 
     Returns a select statement which evaluates to if_true if we're building
     with cuda-clang.  Otherwise, the select statement evaluates to if_false.
@@ -31,7 +33,7 @@ def if_cuda_exec(if_true, if_false = []):
     return if_cuda(if_true, if_false)
 
 def cuda_compiler(if_cuda_clang, if_nvcc, neither = []):
-    """Shorthand for select()'ing on wheteher we're building with cuda-clang or nvcc.
+    """Shorthand for select()'ing on whether we're building with cuda-clang or nvcc.
 
      Returns a select statement which evaluates to if_cuda_clang if we're building
      with cuda-clang, if_nvcc if we're building with NVCC.
@@ -45,12 +47,10 @@ def cuda_compiler(if_cuda_clang, if_nvcc, neither = []):
             "//conditions:default": neither
         })
     else:
-        return select({
-            "//conditions:default": neither
-        })
+        return neither
 
 def if_cuda_clang_opt(if_true, if_false = []):
-   """Shorthand for select()'ing on wheteher we're building with cuda-clang
+   """Shorthand for select()'ing on whether we're building with cuda-clang
    in opt mode.
 
     Returns a select statement which evaluates to if_true if we're building
@@ -91,8 +91,40 @@ def if_cuda_is_configured(x, no_cuda = []):
     --config=cuda. Used to allow non-CUDA code to depend on CUDA libraries.
     """
     if %{cuda_is_configured}:
-      return select({"//conditions:default": x})
-    return select({"//conditions:default": no_cuda})
+      return x
+    return no_cuda
+
+def is_cuda_configured():
+    """
+    Returns True if CUDA is configured. False otherwise.
+    """
+    return %{cuda_is_configured}
+
+def if_cuda_newer_than(wanted_ver, if_true, if_false = []):
+    """Tests if CUDA was enabled during the configured process and if the
+    configured version is at least `wanted_ver`. `wanted_ver` needs
+    to be provided as a string in the format `<major>_<minor>`.
+    Example: `11_0`
+    """
+
+    wanted_major = int(wanted_ver.split('_')[0])
+    wanted_minor = int(wanted_ver.split('_')[1])
+
+    # Strip "64_" which appears in the CUDA version on Windows.
+    configured_version = "%{cuda_version}".rsplit("_", 1)[-1]
+    configured_version_parts = configured_version.split('.')
+
+    # On Windows, the major and minor versions are concatenated without a period and the minor only contains one digit.
+    if len(configured_version_parts) == 1:
+        configured_version_parts = [configured_version[0:-1], configured_version[-1:]]
+
+    configured_major = int(configured_version_parts[0])
+    configured_minor = int(configured_version_parts[1])
+
+    if %{cuda_is_configured} and (wanted_major, wanted_minor) <= (configured_major, configured_minor):
+      return if_true
+    return if_false
+
 
 def cuda_header_library(
         name,
@@ -107,7 +139,7 @@ def cuda_header_library(
     target without virtual includes. This works around the fact that bazel can't
     mix 'includes' and 'include_prefix' in the same target."""
 
-    native.cc_library(
+    cc_library(
         name = name + "_virtual",
         hdrs = hdrs,
         include_prefix = include_prefix,
@@ -116,16 +148,32 @@ def cuda_header_library(
         visibility = ["//visibility:private"],
     )
 
-    native.cc_library(
+    cc_library(
         name = name,
         textual_hdrs = hdrs,
         deps = deps + [":%s_virtual" % name],
         **kwargs
     )
 
-def cuda_library(copts = [], **kwargs):
+def cuda_library(copts = [], tags = [], deps = [], **kwargs):
     """Wrapper over cc_library which adds default CUDA options."""
-    native.cc_library(copts = cuda_default_copts() + copts, **kwargs)
+    # A hacky way to to remove "register" specifier from old glibc-2.17 headers
+    # which we still build against. Otherwise nvcc compiler would fail with
+    # "use of the "register" storage class specifier is not allowed" error.
+    # This can and should be removed once we migrate on glibc-2.27 or newer.
+    local_defines = kwargs.pop("local_defines", []) + ["register="]
+    cc_library(
+        copts = cuda_default_copts() + copts,
+        tags = tags + [
+            "gpu",
+            "cuda-only",
+        ],
+        deps = deps + if_cuda_is_configured([
+            "@local_config_cuda//cuda:implicit_cuda_headers_dependency",
+        ]),
+        local_defines = local_defines,
+        **kwargs
+    )
 
 def cuda_cc_test(copts = [], **kwargs):
     """Wrapper over cc_test which adds default CUDA options."""
@@ -149,3 +197,15 @@ enable_cuda_flag = rule(
     build_setting = config.bool(flag = True),
     attrs = {"enable_override": attr.bool()},
 )
+
+def if_version_equal_or_greater_than(
+        lib_version,
+        dist_version,
+        if_true,
+        if_false = []):
+    if tuple([int(x) for x in lib_version.split(".")]) >= tuple([
+        int(x)
+        for x in dist_version.split(".")
+    ]):
+        return if_true
+    return if_false

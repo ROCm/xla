@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,15 +41,17 @@ import os
 import subprocess
 import re
 import sys
-import pipes
+import shlex
 
 # Template values set by cuda_autoconf.
 CPU_COMPILER = ('%{cpu_compiler}')
-GCC_HOST_COMPILER_PATH = ('%{gcc_host_compiler_path}')
+HOST_COMPILER_PATH = ('%{host_compiler_path}')
 
 NVCC_PATH = '%{nvcc_path}'
-PREFIX_DIR = os.path.dirname(GCC_HOST_COMPILER_PATH)
+PREFIX_DIR = os.path.dirname(HOST_COMPILER_PATH)
 NVCC_VERSION = '%{cuda_version}'
+TMPDIR= '%{tmpdir}'
+
 
 def Log(s):
   print('gpus/crosstool: {0}'.format(s))
@@ -106,8 +108,6 @@ def GetHostCompilerOptions(argv):
     opts += ' -iquote ' + ' -iquote '.join(sum(args.iquote, []))
   if args.g:
     opts += ' -g' + ' -g'.join(sum(args.g, []))
-  if args.fno_canonical_system_headers:
-    opts += ' -fno-canonical-system-headers'
   if args.no_canonical_prefixes:
     opts += ' -no-canonical-prefixes'
   if args.sysroot:
@@ -221,7 +221,7 @@ def InvokeNvcc(argv, log=False):
   # Unfortunately, there are other options that have -c prefix too.
   # So allowing only those look like C/C++ files.
   src_files = [f for f in src_files if
-               re.search('\.cpp$|\.cc$|\.c$|\.cxx$|\.C$', f)]
+               re.search(r'\.cpp$|\.cc$|\.c$|\.cxx$|\.C$', f)]
   srcs = ' '.join(src_files)
   out = ' -o ' + out_file[0]
 
@@ -253,13 +253,22 @@ def InvokeNvcc(argv, log=False):
   # Force C++17 dialect (note, everything in just one string!)
   nvccopts += ' --std c++17 '
   nvccopts += fatbin_options
+  # The option `-allow-unsupported-compiler` is required for the combination of
+  # NVCC+clang compilers. 
+  # The following message appears if this option is not provided:
+  # unsupported clang version! clang version must be less than 16 and greater
+  # than 3.2 . The nvcc flag '-allow-unsupported-compiler' can be used
+  # to override this version check; however, using an unsupported host compiler
+  # may cause compilation failure or incorrect run time execution.
+  # Use at your own risk.
+  nvccopts += ' -allow-unsupported-compiler --expt-extended-lambda --expt-relaxed-constexpr '
 
   if depfiles:
     # Generate the dependency file
     depfile = depfiles[0]
     cmd = (NVCC_PATH + ' ' + nvccopts +
            ' --compiler-options "' + host_compiler_options + '"' +
-           ' --compiler-bindir=' + GCC_HOST_COMPILER_PATH +
+           ' --compiler-bindir=' + HOST_COMPILER_PATH +
            ' -I .' +
            ' -x cu ' + opt + includes + ' ' + srcs + ' -M -o ' + depfile)
     if log: Log(cmd)
@@ -269,7 +278,7 @@ def InvokeNvcc(argv, log=False):
 
   cmd = (NVCC_PATH + ' ' + nvccopts +
          ' --compiler-options "' + host_compiler_options + ' -fPIC"' +
-         ' --compiler-bindir=' + GCC_HOST_COMPILER_PATH +
+         ' --compiler-bindir=' + HOST_COMPILER_PATH +
          ' -I .' +
          ' -x cu ' + opt + includes + ' -c ' + srcs + out)
 
@@ -288,7 +297,7 @@ def main():
 
   if args.x and args.x[0] == 'cuda':
     if args.cuda_log: Log('-x cuda')
-    leftover = [pipes.quote(s) for s in leftover]
+    leftover = [shlex.quote(s) for s in leftover]
     if args.cuda_log: Log('using nvcc')
     return InvokeNvcc(leftover, log=args.cuda_log)
 

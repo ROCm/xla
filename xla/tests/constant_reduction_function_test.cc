@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,20 +18,17 @@ limitations under the License.
 
 #include <optional>
 #include <string>
-#include <vector>
 
-#include "xla/test.h"
-#include "xla/tests/hlo_test_base.h"
-#include "xla/tests/literal_test_util.h"
-#include "xla/tests/test_macros.h"
-#include "xla/types.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
 
 namespace xla {
 namespace {
 
 using std::nullopt;
 
-class ConstantReductionFunctionTest : public HloTestBase {};
+using ConstantReductionFunctionTest = HloInterpreterReferenceMixin<HloTestBase>;
 
 TEST_F(ConstantReductionFunctionTest, Bool) {
   const std::string& hlo_string = R"(

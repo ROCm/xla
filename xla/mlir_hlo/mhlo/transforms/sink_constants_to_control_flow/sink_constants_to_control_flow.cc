@@ -1,4 +1,4 @@
-/* Copyright 2020 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2020 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -12,8 +12,6 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
-
-#include <memory>
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/Casting.h"
@@ -80,13 +78,6 @@ class SinkConstantsToControlFlowPass
 };
 
 }  // anonymous namespace
-
-// TODO(hinsu): Rename this pass and move to a different file along with the
-// generalization to make all ops isolated from above.
-std::unique_ptr<OperationPass<func::FuncOp>>
-createSinkConstantsToControlFlowPass() {
-  return std::make_unique<SinkConstantsToControlFlowPass>();
-}
 
 }  // namespace mhlo
 }  // namespace mlir

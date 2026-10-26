@@ -1,4 +1,4 @@
-/* Copyright 2022 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2022 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,12 +24,20 @@ limitations under the License.
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "xla/comparison_util.h"
+#include "xla/hlo/analysis/while_loop_analysis.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/service/while_loop_analysis.h"
 #include "xla/shape_util.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 
@@ -129,12 +137,15 @@ std::optional<MovableCluster> FindMovableClusterAtBodyRoot(
       }
     }
   }
+  if (cluster.collective_permute == nullptr) {
+    return std::nullopt;
+  }
   return cluster;
 }
 
 absl::flat_hash_set<int64_t> FindIndicesUnusedAfterLoop(HloInstruction* loop) {
   absl::flat_hash_set<int64_t> indices;
-  int64_t count = loop->shape().tuple_shapes_size();
+  int64_t count = loop->shape().tuple_shapes().size();
   for (int64_t i = 0; i < count; ++i) {
     indices.insert(i);
   }
@@ -148,8 +159,8 @@ absl::flat_hash_set<int64_t> FindIndicesUnusedAfterLoop(HloInstruction* loop) {
   return indices;
 }
 
-StatusOr<bool> MoveCollectivePermutes(HloComputation* computation,
-                                      HloInstruction* loop) {
+absl::StatusOr<bool> MoveCollectivePermutes(HloComputation* computation,
+                                            HloInstruction* loop) {
   HloComputation* body = loop->while_body();
   HloInstruction* root = body->root_instruction();
   if (root->opcode() != HloOpcode::kTuple ||
@@ -192,7 +203,7 @@ StatusOr<bool> MoveCollectivePermutes(HloComputation* computation,
     }
   }
   HloInstruction* ind_var = input_gtes[induction_var_idx];
-  if (ind_var == nullptr || ind_var->shape().rank() > 0) {
+  if (ind_var == nullptr || ind_var->shape().dimensions().size() > 0) {
     VLOG(2) << "Skip " << loop->name() << ", non-scalar induction var";
     return false;
   }
@@ -283,11 +294,11 @@ StatusOr<bool> MoveCollectivePermutes(HloComputation* computation,
         HloInstruction::CreateTernary(new_input->shape(), HloOpcode::kSelect,
                                       is_first_iter, input, new_input));
     for (HloInstruction* user : original_input_users) {
-      TF_RETURN_IF_ERROR(input->ReplaceUseWith(user, new_input));
+      ABSL_RETURN_IF_ERROR(input->ReplaceUseWith(user, new_input));
     }
-    TF_RETURN_IF_ERROR(root->ReplaceOperandWith(cluster->root_tuple_index,
-                                                cp->mutable_operand(0)));
-    TF_RETURN_IF_ERROR(body->RemoveInstructionAndUnusedOperands(
+    ABSL_RETURN_IF_ERROR(root->ReplaceOperandWith(cluster->root_tuple_index,
+                                                  cp->mutable_operand(0)));
+    ABSL_RETURN_IF_ERROR(body->RemoveInstructionAndUnusedOperands(
         cluster->reverse_order_instructions[0]));
     VLOG(2) << "Moved " << loop->name() << " index " << i;
     changed = true;
@@ -295,7 +306,7 @@ StatusOr<bool> MoveCollectivePermutes(HloComputation* computation,
   return changed;
 }
 
-StatusOr<bool> CollectivePermuteMotion::Run(
+absl::StatusOr<bool> CollectivePermuteMotion::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   bool changed = false;
@@ -303,8 +314,8 @@ StatusOr<bool> CollectivePermuteMotion::Run(
        module->MakeNonfusionComputations(execution_threads)) {
     for (HloInstruction* instr : computation->MakeInstructionPostOrder()) {
       if (instr->opcode() == HloOpcode::kWhile) {
-        TF_ASSIGN_OR_RETURN(bool moved,
-                            MoveCollectivePermutes(computation, instr));
+        ABSL_ASSIGN_OR_RETURN(bool moved,
+                              MoveCollectivePermutes(computation, instr));
         changed |= moved;
       }
     }

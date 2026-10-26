@@ -1,14 +1,29 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 # Description:
 #   Host-platform specific StreamExecutor support code.
 
-load("//xla:xla.bzl", "xla_cc_test")
-load("@tsl//tsl:tsl.bzl", "set_external_visibility")
-load("@tsl//tsl/platform:rules_cc.bzl", "cc_library")
+load("//xla:xla.default.bzl", "xla_cc_test")
 load("//xla/stream_executor:build_defs.bzl", "stream_executor_friends")
+load("//xla/tsl:tsl.bzl", "internal_visibility")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
-    default_visibility = set_external_visibility([":friends"]),
+    default_visibility = internal_visibility([":friends"]),
     licenses = ["notice"],
 )
 
@@ -25,9 +40,7 @@ cc_library(
     hdrs = [
         "host_platform_id.h",
     ],
-    deps = [
-        "//xla/stream_executor:platform",
-    ],
+    deps = ["//xla/stream_executor:platform_id"],
 )
 
 cc_library(
@@ -40,17 +53,30 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
-        ":host_gpu_executor",
+        ":host_executor",
         ":host_platform_id",
+        "//xla/stream_executor:device_description",
         "//xla/stream_executor:executor_cache",
-        "//xla/stream_executor:multi_platform_manager",
-        "//xla/stream_executor:stream_executor_headers",
-        "//xla/stream_executor/platform",
-        "@com_google_absl//absl/memory",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:platform_manager",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor/platform:initialize",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
-        "@tsl//tsl/platform:errors",
     ],
-    alwayslink = True,  # Registers itself with the MultiPlatformManager.
+    alwayslink = True,  # Registers itself with the PlatformManager.
+)
+
+cc_library(
+    name = "host_event",
+    hdrs = ["host_event.h"],
+    deps = [
+        "//xla/stream_executor:event",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/synchronization",
+    ],
 )
 
 cc_library(
@@ -62,39 +88,68 @@ cc_library(
         "host_stream.h",
     ],
     deps = [
-        "//xla/stream_executor:kernel",
+        ":host_event",
+        "//xla/stream_executor:device_address",
+        "//xla/stream_executor:event",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_common",
+        "//xla/stream_executor:stream_executor_h",
         "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/synchronization",
-        "@tsl//tsl/platform:denormal",
-        "@tsl//tsl/platform:env",
-        "@tsl//tsl/platform:setround",
     ],
 )
 
-# TODO(22689637): Rename this target.
 cc_library(
-    name = "host_gpu_executor",
+    name = "host_stream_factory",
     srcs = [
-        "host_gpu_executor.cc",
+        "host_stream_factory.cc",
     ],
     hdrs = [
-        "host_gpu_executor.h",
+        "host_stream_factory.h",
     ],
     deps = [
-        ":host_platform_id",
         ":host_stream",
-        "//xla/stream_executor",
-        "//xla/stream_executor:kernel",
-        "//xla/stream_executor:stream_executor_internal",
-        "//xla/stream_executor:stream_executor_pimpl",  # fixdeps: keep
-        "@com_google_absl//absl/functional:any_invocable",
-        "@com_google_absl//absl/strings",
+        "//xla/stream_executor:stream_executor_h",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/synchronization",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:platform_port",
-        "@tsl//tsl/platform/profile_utils:profile_utils_cpu_utils",
     ],
-    alwayslink = True,
+)
+
+cc_library(
+    name = "host_executor",
+    srcs = [
+        "host_executor.cc",
+    ],
+    hdrs = [
+        "host_executor.h",
+    ],
+    deps = [
+        ":host_event",
+        ":host_stream",
+        ":host_stream_factory",
+        "//xla/stream_executor:device_address",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor:event",
+        "//xla/stream_executor:generic_memory_allocation",
+        "//xla/stream_executor:generic_memory_allocator",
+        "//xla/stream_executor:kernel",
+        "//xla/stream_executor:kernel_spec",
+        "//xla/stream_executor:memory_allocation",
+        "//xla/stream_executor:memory_allocator",
+        "//xla/stream_executor:memory_space",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_executor_common",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/tsl/platform/profile_utils:profile_utils_cpu_utils",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@tsl//tsl/platform:platform_port",
+    ],
 )
 
 xla_cc_test(
@@ -102,13 +157,33 @@ xla_cc_test(
     srcs = ["host_stream_test.cc"],
     deps = [
         ":host_platform",
-        "//xla/stream_executor",
-        "//xla/stream_executor:multi_platform_manager",
+        "//xla/stream_executor:device_address",
+        "//xla/stream_executor:event",
         "//xla/stream_executor:platform",
+        "//xla/stream_executor:platform_manager",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/tsl/lib/core:status_test_util",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/synchronization",
-        "@tsl//tsl/lib/core:status_test_util",
-        "@tsl//tsl/platform:errors",
-        "@tsl//tsl/platform:test",
-        "@tsl//tsl/platform:test_main",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+xla_cc_test(
+    name = "host_stream_factory_test",
+    srcs = ["host_stream_factory_test.cc"],
+    deps = [
+        ":host_platform",
+        ":host_stream",
+        ":host_stream_factory",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:platform_manager",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_googletest//:gtest_main",
     ],
 )

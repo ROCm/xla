@@ -1,4 +1,4 @@
-/* Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2017 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,23 +15,25 @@ limitations under the License.
 
 #include "xla/service/cpu/conv_canonicalization.h"
 
-#include <vector>
+#include <cstdint>
 
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
-#include "xla/service/cpu/target_machine_features_fake.h"
-#include "xla/test.h"
-#include "xla/test_helpers.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/testlib/test_helpers.h"
+#include "xla/literal_util.h"
+#include "xla/service/cpu/target_machine_features_stub.h"
 #include "xla/util.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla {
 namespace cpu {
 
 using ::testing::ElementsAre;
 
-class ConvCanonicalizationTest : public HloTestBase {
+class ConvCanonicalizationTest : public HloHardwareIndependentTestBase {
  public:
   ConvCanonicalizationTest() {
     for (int i = 0; i < 2; ++i) {
@@ -83,14 +85,14 @@ TEST_F(ConvCanonicalizationTest, NonCanonicalToCanonical) {
   builder.AddInstruction(HloInstruction::CreateConvolve(
       ShapeUtil::MakeShape(
           F32, {kOutputFeatureCount, kBatchSize, output_size, output_size}),
-      input, kernel, /*feature_group_count=*/1, /*batch_group_count=*/1,
+      {input, kernel}, /*feature_group_count=*/1, /*batch_group_count=*/1,
       conv_window_, dnums, DefaultPrecisionConfig(2)));
 
   auto module = CreateNewVerifiedModule();
   HloComputation* entry_computation =
       module->AddEntryComputation(builder.Build());
 
-  cpu::TargetMachineFeaturesWithFakeAlignmentLogic target_machine_features(
+  cpu::TargetMachineFeaturesStub target_machine_features(
       [](int64_t shape_size) {
         return cpu::TargetMachineFeatures::kEigenExpectedTensorAlignment;
       });
@@ -146,13 +148,13 @@ TEST_F(ConvCanonicalizationTest, CanonicalStaysTheSame) {
   builder.AddInstruction(HloInstruction::CreateConvolve(
       ShapeUtil::MakeShape(
           F32, {kBatchSize, output_size, output_size, kOutputFeatureCount}),
-      input, kernel, /*feature_group_count=*/1, /*batch_group_count=*/1,
+      {input, kernel}, /*feature_group_count=*/1, /*batch_group_count=*/1,
       conv_window_, dnums, DefaultPrecisionConfig(2)));
 
   auto module = CreateNewVerifiedModule();
   module->AddEntryComputation(builder.Build());
 
-  cpu::TargetMachineFeaturesWithFakeAlignmentLogic target_machine_features(
+  cpu::TargetMachineFeaturesStub target_machine_features(
       [](int64_t shape_size) {
         return cpu::TargetMachineFeatures::kEigenExpectedTensorAlignment;
       });
