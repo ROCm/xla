@@ -206,12 +206,12 @@ jobs:
           if-no-files-found: warn
 
   # Call sanitizers workflow as a separate job.
-  # Only on the daily cron (not the 2-hourly one), on manual dispatch, on the
-  # "nightly-pipeline" label, or on PRs to rocm-dev-infra touching the workflows.
+  # Only on the daily cron (not the 2-hourly one), on the "nightly-pipeline"
+  # label, or on PRs to rocm-dev-infra touching the workflows. Deliberately
+  # not on workflow_dispatch: a manual run of this pipeline skips sanitizers.
   sanitizers:
     if: >-
       github.event.schedule == '47 3 * * *' ||
-      github.event_name == 'workflow_dispatch' ||
       github.event.label.name == 'nightly-pipeline' ||
       (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'rocm-dev-infra')
     uses: ./.github/workflows/rocm_xla_ci_sanitizers.yml
