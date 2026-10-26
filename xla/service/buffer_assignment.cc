@@ -1310,8 +1310,9 @@ absl::Status BufferAssignment::CombineTempAllocations(
       combined_allocations.push_back(std::move(temp_allocation));
       continue;
     }
-    if (combined_it->second->size() + temp_allocation.size() >=
-        multiheap_size_constraint_per_heap_) {
+    if (no_packing(color) ||
+        combined_it->second->size() + temp_allocation.size() >=
+            multiheap_size_constraint_per_heap_) {
       // We cannot put more into the current combined_it. So, appoint a new
       // combined_it.
       VLOG(1) << "Due to size constraint, reset temp allocation for color "
@@ -3215,6 +3216,20 @@ absl::Status BufferAssigner::AssignBuffersWithSequentialOrdering(
   // algorithms.
   auto get_heap_algorithm = [&](int64_t alignment, LogicalBuffer::Color color)
       -> std::unique_ptr<HeapAlgorithm<HloValue>> {
+    if (assignment->no_packing(color)) {
+      using HeapType = GlobalDecreasingSizeBestFitHeap<HloValue>;
+      auto algorithms = std::make_unique<
+          std::vector<std::unique_ptr<HeapAlgorithm<HloValue>>>>();
+      for (auto strategy : {HeapType::kSpatial, HeapType::kTemporal}) {
+        algorithms->push_back(
+            std::make_unique<ConstrainedGlobalDecreasingSizeBestFitHeap>(
+                assignment->multiheap_size_constraint_per_heap(), alignment,
+                strategy, /*buffer_interval_compare=*/nullptr,
+                /*offset_zero_only=*/true));
+      }
+      return std::make_unique<ChooseBestHeapAlgorithm<HloValue>>(
+          std::move(algorithms));
+    }
     uint64_t page_size = assignment->module().config().page_size_kib() * 1024;
     if (page_size > 0 && (color == LogicalBuffer::Color(0) ||
                           color == LogicalBuffer::Color(1))) {
@@ -3660,6 +3675,7 @@ BufferAssigner::CreateAssignment(
       module, std::move(hlo_ordering), std::move(buffer_size),
       std::move(color_alignment), std::move(alias_analysis),
       std::move(hlo_live_range)));
+  assignment->no_packing_colors_ = opts_.no_packing_colors;
 
   ABSL_RETURN_IF_ERROR(
       opts_.colorer(&assignment->alias_analysis(), assignment->hlo_ordering()));

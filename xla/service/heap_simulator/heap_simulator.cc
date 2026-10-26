@@ -3028,7 +3028,12 @@ int64_t ConstrainedGlobalDecreasingSizeBestFitHeap::AllocateBuffersInSingleHeap(
     }
     BufferInterval buffer_interval = *it;
     Chunk chunk_candidate = FindChunkCandidate(buffer_interval);
-    if (chunk_candidate.chunk_end() <= size_limit_per_heap_ ||
+    // Every committed buffer sits at offset 0, so the candidate is at offset 0
+    // exactly when no buffer of this heap is live at the same time.
+    const bool fits = offset_zero_only_
+                          ? chunk_candidate.offset == 0
+                          : chunk_candidate.chunk_end() <= size_limit_per_heap_;
+    if (fits ||
         // Commit the chunk as long as the heap is empty. We do this because
         // we want the size constraint to be soft, meaning that results are
         // successfully generated even if there are some buffer sizes larger
@@ -3151,7 +3156,7 @@ bool ConstrainedGlobalDecreasingSizeBestFitHeap::RequiresAllocation(
     // Trivial allocations (size 0) are handled at call sites.
     return false;
   }
-  if (buffer_interval.size > size_limit_per_heap_) {
+  if (!offset_zero_only_ && buffer_interval.size > size_limit_per_heap_) {
     LOG(WARNING) << "Alloc buffer size " << buffer_interval.size
                  << " larger than the per-heap size limit "
                  << size_limit_per_heap_;

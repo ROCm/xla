@@ -369,6 +369,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_memory_fraction_policy("");
   opts.set_xla_gpu_experimental_enable_nccl_symmetric_buffers(false);
   opts.set_xla_gpu_experimental_nccl_window_symmetric(false);
+  opts.set_xla_gpu_experimental_collective_allocation_no_packing(false);
   opts.set_xla_gpu_experimental_vmm_disabled(false);
   opts.set_xla_gpu_experimental_emit_collective_reduce(false);
   opts.set_xla_gpu_enable_nccl_comm_splitting(true);
@@ -2462,6 +2463,15 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_experimental_nccl_window_symmetric(),
       "Registers NCCL windows with NCCL_WIN_COLL_SYMMETRIC instead of "
       "NCCL_WIN_DEFAULT."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_collective_allocation_no_packing",
+      bool_setter_for(
+          &DebugOptions::
+              set_xla_gpu_experimental_collective_allocation_no_packing),
+      debug_options->xla_gpu_experimental_collective_allocation_no_packing(),
+      "Never packs buffers in the collective memory space: every buffer starts "
+      "its allocation (and so its symmetric memory window), while buffers with "
+      "non-overlapping live ranges still share an allocation."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_experimental_emit_collective_reduce",
       bool_setter_for(
