@@ -15,20 +15,13 @@ limitations under the License.
 
 #include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
 
-#include <unistd.h>
-
-#include <cstddef>
 #include <string>
 
-#include "absl/base/const_init.h"
-#include "absl/container/flat_hash_map.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
-#include "absl/synchronization/mutex.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/rocm_config.h"
-#include "xla/stream_executor/rocm/rocm_status.h"
 #include "xla/tsl/util/env_var.h"
 
 namespace stream_executor::gpu {
@@ -80,87 +73,24 @@ bool ExportableHandlesEnabled() {
   return enabled;
 }
 
-// Exports a minimal allocation on `device` to find out whether POSIX file
-// descriptor handles actually work here, and returns the handle type to use
-// from now on. A probe is cheaper than discovering the answer on the first
-// real allocation, and keeps the decision out of the hot path.
-hipMemAllocationHandleType ProbeHandleType(hipDevice_t device) {
-  if (!ExportableHandlesEnabled()) {
-    return hipMemHandleTypeNone;
-  }
-
-  hipMemAllocationProp props = {};
-  props.type = hipMemAllocationTypePinned;
-  props.location.type = hipMemLocationTypeDevice;
-  props.location.id = device;
-  props.requestedHandleTypes = hipMemHandleTypePosixFileDescriptor;
-
-  size_t granularity = 0;
-  hipError_t result = hipMemGetAllocationGranularity(
-      &granularity, &props, hipMemAllocationGranularityMinimum);
-  if (result != hipSuccess || granularity == 0) {
-    LOG(WARNING) << "Device " << device
-                 << " reports no VMM allocation granularity ("
-                 << ToString(result)
-                 << "); falling back to non-exportable handles.";
-    return hipMemHandleTypeNone;
-  }
-
-  hipMemGenericAllocationHandle_t handle = nullptr;
-  result = hipMemCreate(&handle, granularity, &props, 0ULL);
-  if (result != hipSuccess) {
-    // Allocating says nothing about export support, so a failure here is about
-    // memory, not capability. Keep the exportable handle type rather than
-    // disabling exportable handles for the lifetime of the process because the
-    // device happened to be full at startup.
-    LOG(WARNING) << "Could not allocate the VMM handle type probe on device "
-                 << device << ": " << ToString(result)
-                 << "; assuming exportable handles are supported.";
-    return hipMemHandleTypePosixFileDescriptor;
-  }
-
-  int fd = -1;
-  hipError_t export_result = hipMemExportToShareableHandle(
-      &fd, handle, hipMemHandleTypePosixFileDescriptor, 0ULL);
-  if (export_result == hipSuccess) {
-    close(fd);
-  } else {
-    LOG(WARNING) << "Device " << device
-                 << " cannot export VMM allocations as POSIX file "
-                    "descriptors: "
-                 << ToString(export_result)
-                 << "; falling back to non-exportable handles.";
-  }
-
-  hipError_t release_result = hipMemRelease(handle);
-  if (release_result != hipSuccess) {
-    LOG(ERROR) << "Failed to release the VMM handle type probe allocation on "
-                  "device "
-               << device << ": " << ToString(release_result);
-  }
-  return export_result == hipSuccess ? hipMemHandleTypePosixFileDescriptor
-                                     : hipMemHandleTypeNone;
-}
-
 }  // namespace
 
-hipMemAllocationHandleType RocmVmmHandleType(hipDevice_t device) {
-  static absl::Mutex mu(absl::kConstInit);
-  static auto& cache =
-      *new absl::flat_hash_map<int, hipMemAllocationHandleType>();
-
-  absl::MutexLock lock(&mu);
-  if (auto it = cache.find(device); it != cache.end()) {
-    return it->second;
-  }
-
-  hipMemAllocationHandleType handle_type = ProbeHandleType(device);
-  LOG(INFO) << "ROCm VMM allocations on device " << device << " will request "
-            << (handle_type == hipMemHandleTypePosixFileDescriptor
-                    ? "POSIX file descriptor handles (exportable)"
-                    : "no handles (non-exportable)")
-            << ".";
-  cache.emplace(device, handle_type);
+hipMemAllocationHandleType RocmVmmHandleType() {
+  // Resolved once: the answer depends only on the ROCm version this was built
+  // against and on the environment, neither of which changes while the process
+  // runs. MakeRocmVmmAllocationProps() is on the allocation path, so the
+  // environment must not be re-read per allocation.
+  static const hipMemAllocationHandleType handle_type = [] {
+    hipMemAllocationHandleType type = ExportableHandlesEnabled()
+                                          ? hipMemHandleTypePosixFileDescriptor
+                                          : hipMemHandleTypeNone;
+    LOG(INFO) << "ROCm VMM allocations will request "
+              << (type == hipMemHandleTypePosixFileDescriptor
+                      ? "POSIX file descriptor handles (exportable)"
+                      : "no handles (non-exportable)")
+              << ".";
+    return type;
+  }();
   return handle_type;
 }
 
@@ -169,7 +99,7 @@ hipMemAllocationProp MakeRocmVmmAllocationProps(hipDevice_t device) {
   props.type = hipMemAllocationTypePinned;
   props.location.type = hipMemLocationTypeDevice;
   props.location.id = device;
-  props.requestedHandleTypes = RocmVmmHandleType(device);
+  props.requestedHandleTypes = RocmVmmHandleType();
   return props;
 }
 

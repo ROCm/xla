@@ -15,10 +15,10 @@ limitations under the License.
 
 // Covers the XLA_ROCM_VMM_EXPORTABLE_HANDLES=0 escape hatch.
 //
-// RocmVmmHandleType() caches its answer for the lifetime of the process, so
-// the environment variable can only be observed by a binary that sets it
-// before the first query. That is why this lives in its own test target
-// instead of alongside rocm_vmm_handle_type_test.cc.
+// RocmVmmHandleType() resolves its answer once for the lifetime of the
+// process, so the environment variable can only be observed by a binary that
+// sets it before the first query. That is why this lives in its own test
+// target instead of alongside rocm_vmm_handle_type_test.cc.
 
 #include <unistd.h>
 
@@ -67,7 +67,7 @@ class RocmVmmHandleTypeDisabledTest : public ::testing::Test {
 TEST_F(RocmVmmHandleTypeDisabledTest, FallsBackToNonExportableHandles) {
   std::unique_ptr<ActivateContext> activation = executor_->Activate();
 
-  EXPECT_EQ(RocmVmmHandleType(device_), hipMemHandleTypeNone);
+  EXPECT_EQ(RocmVmmHandleType(), hipMemHandleTypeNone);
   EXPECT_EQ(MakeRocmVmmAllocationProps(device_).requestedHandleTypes,
             hipMemHandleTypeNone);
 }
@@ -94,7 +94,7 @@ TEST_F(RocmVmmHandleTypeDisabledTest, AllocationIsNotExportable) {
 }  // namespace stream_executor::gpu
 
 int main(int argc, char** argv) {
-  // Must happen before any RocmVmmHandleType() call caches the probe result.
+  // Must happen before any RocmVmmHandleType() call resolves the answer.
   setenv("XLA_ROCM_VMM_EXPORTABLE_HANDLES", "0", /*overwrite=*/1);
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
