@@ -19,6 +19,11 @@ permissions:
   contents: read
   issues: write
 
+env:
+  # Repository and workflow being monitored: our own nightly pipeline.
+  MONITORED_REPO: ROCm/xla
+  MONITORED_WORKFLOW: rocm_xla_ci_nightly.yml
+
 on:
   schedule:
     # Run every hour to check failed runs from last 2 hours
@@ -47,10 +52,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Monitor openxla/xla repository for failed ROCm CI runs
-          # Always monitor openxla/xla (the upstream repository)
-          MONITORED_REPO="openxla/xla"
-          echo "Monitoring repository: $MONITORED_REPO"
+          echo "Monitoring $MONITORED_WORKFLOW in $MONITORED_REPO"
 
           # Get current time from GitHub API (no dependency on runner's clock)
           GITHUB_TIME=$(gh api /rate_limit | jq -r '.resources.core.reset' | xargs -I {} date -u -d '@{}' '+%Y-%m-%dT%H:%M:%SZ')
@@ -60,16 +62,17 @@ jobs:
           CUTOFF_TIME=$(date -u -d "$GITHUB_TIME - 2 hours" '+%Y-%m-%dT%H:%M:%SZ')
           echo "Checking for failed runs after: $CUTOFF_TIME"
 
-          # Get failed ROCm CI workflow runs from the last 2 hours
-          # Using created filter to ensure we get recent runs
+          # Get completed nightly runs from the last 2 hours.
+          # No conclusion filter: the jax-upstream job is continue-on-error, so
+          # a run whose JAX leg failed still has conclusion "success".
           # Using --paginate to get ALL runs, not just first page
           gh api --paginate \
             -H "Accept: application/vnd.github+json" \
-            "/repos/${MONITORED_REPO}/actions/workflows/rocm_ci.yml/runs?status=completed&conclusion=failure&created=>${CUTOFF_TIME}&per_page=100" \
+            "/repos/${MONITORED_REPO}/actions/workflows/${MONITORED_WORKFLOW}/runs?status=completed&created=>${CUTOFF_TIME}&per_page=100" \
             | jq -r '.workflow_runs[] | .id' \
             > run_ids.txt
 
-          echo "Found $(wc -l < run_ids.txt) failed runs from last 2 hours in ${MONITORED_REPO}"
+          echo "Found $(wc -l < run_ids.txt) completed runs from last 2 hours in ${MONITORED_REPO}"
           cat run_ids.txt
 
       - name: Download BEP artifacts
@@ -78,11 +81,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Always monitor openxla/xla (the upstream repository)
-          MONITORED_REPO="openxla/xla"
-
           if [ ! -s run_ids.txt ]; then
-            echo "No failed runs to check, exiting early"
+            echo "No runs to check, exiting early"
             exit 0
           fi
 
@@ -134,7 +134,7 @@ jobs:
             done
 
             if [ "$FOUND_INFRA_ERROR" = true ]; then
-              echo "https://github.com/openxla/xla/actions/runs/${RUN_ID}" >> failed_runs.txt
+              echo "https://github.com/${MONITORED_REPO}/actions/runs/${RUN_ID}" >> failed_runs.txt
               HAS_INFRA_ERRORS=true
             fi
           done
@@ -155,8 +155,6 @@ jobs:
           # Only report runs that DON'T have BEP files (failed before Bazel ran)
           echo "Checking for non-Bazel infrastructure errors..."
 
-          MONITORED_REPO="openxla/xla"
-
           if [ -s run_ids.txt ]; then
             while read -r RUN_ID; do
               # Check if this run has BEP files
@@ -172,7 +170,7 @@ jobs:
 
                 # No BEP files = failed before Bazel = non-Bazel infra error
                 echo "Non-Bazel infrastructure error: run $RUN_ID (no BEP files)"
-                echo "https://github.com/openxla/xla/actions/runs/${RUN_ID}" >> failed_runs.txt
+                echo "https://github.com/${MONITORED_REPO}/actions/runs/${RUN_ID}" >> failed_runs.txt
               fi
             done < run_ids.txt
           fi
