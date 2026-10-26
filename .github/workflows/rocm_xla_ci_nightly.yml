@@ -103,8 +103,8 @@ jobs:
       matrix:
         mode:
           - name: "therock_release"
-            distro_url: "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.1.0.tar.gz"
-            distro_hash: "a95c72f0052168f2262365dff71c2259331721ad0a65da7957dc7d96ccb77021"
+            distro_url: "https://rocm.devreleases.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-10.0.0.dev0%2Bc247febed686e713051e4cf7bcce437a8dcbfad9.tar.gz"
+            distro_hash: "1c5beccd46d06ae9b68602b955eae9f4ddf5b0dbb561e521c8040a1c87b1c555"
             runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
             rbe_config: "rocm_rbe"
           - name: "therock_nightly"
@@ -113,8 +113,8 @@ jobs:
             runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
             rbe_config: "rocm_rbe"
           - name: "therock_release_bb"
-            distro_url: "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.1.0.tar.gz"
-            distro_hash: "a95c72f0052168f2262365dff71c2259331721ad0a65da7957dc7d96ccb77021"
+            distro_url: "https://rocm.devreleases.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-10.0.0.dev0%2Bc247febed686e713051e4cf7bcce437a8dcbfad9.tar.gz"
+            distro_hash: "1c5beccd46d06ae9b68602b955eae9f4ddf5b0dbb561e521c8040a1c87b1c555"
             runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
             rbe_config: "rocm_rbe_dev"
     container:
