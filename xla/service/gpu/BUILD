@@ -2744,6 +2744,7 @@ cc_library(
         "//xla/backends/gpu/transforms:conv_rewriter",
         "//xla/backends/gpu/transforms:cudnn_fused_conv_rewriter",
         "//xla/backends/gpu/transforms:triangular_solve_rewriter",
+        "//xla/backends/gpu/transforms:triton_conv_eligibility",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/pass:hlo_pass",
         "//xla/hlo/pass:hlo_pass_pipeline",

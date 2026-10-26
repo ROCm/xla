@@ -31,6 +31,7 @@ limitations under the License.
 #include "xla/backends/gpu/transforms/conv_rewriter.h"
 #include "xla/backends/gpu/transforms/cudnn_fused_conv_rewriter.h"
 #include "xla/backends/gpu/transforms/triangular_solve_rewriter.h"
+#include "xla/backends/gpu/transforms/triton_conv_eligibility.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
@@ -113,6 +114,12 @@ absl::Status AMDGPUCompiler::OptimizeHloConvolutionCanonicalization(
   // Convert unsupported bf16 convolutions to f32.
   ConvBfloat16Support conv_bf16_support(*gpu_version.rocm_compute_capability());
   pipeline.AddPass<FloatNormalization>(&conv_bf16_support);
+
+  if (hlo_module->config()
+          .debug_options()
+          .xla_gpu_experimental_enable_triton_conv_fusion()) {
+    pipeline.AddPass<TritonConvEligibility>(gpu_version);
+  }
 
   if (!hlo_module->config()
            .debug_options()
