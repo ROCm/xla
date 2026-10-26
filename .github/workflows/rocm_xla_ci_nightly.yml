@@ -21,7 +21,11 @@ permissions:
 on:
   workflow_dispatch:
   schedule:
-    # Run every 24 hours at 3:47 AM UTC
+    # Main XLA UT + JAX run: every 2 hours at :47 (even hours UTC)
+    - cron: '47 */2 * * *'
+    # Daily run at 03:47 UTC. The hour is odd, so it never coincides with the
+    # even-hour entry above (two matching entries would start two runs).
+    # This is the only schedule that also triggers the sanitizers job.
     - cron: '47 3 * * *'
   pull_request_target:
     types: [labeled]
@@ -188,15 +192,22 @@ jobs:
             -- \
             //xla/...
 
-  # Call sanitizers workflow as a separate job
+  # Call sanitizers workflow as a separate job.
+  # Only on the daily cron (not the 2-hourly one), on manual dispatch, on the
+  # "nightly-pipeline" label, or on PRs to rocm-dev-infra touching the workflows.
   sanitizers:
+    if: >-
+      github.event.schedule == '47 3 * * *' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'nightly-pipeline' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'rocm-dev-infra')
     uses: ./.github/workflows/rocm_xla_ci_sanitizers.yml
     with:
       repository: openxla/xla
       ref: main
       run_sanitizers: true
 
-  # Call JAX upstream workflow as a separate job
+  # Call JAX upstream workflow as a separate job (runs on every trigger, i.e. every 2 hours)
   jax-upstream:
     uses: ./.github/workflows/rocm_xla_ci_jax.yml
     with:
