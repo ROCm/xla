@@ -127,5 +127,55 @@ ENTRY main {
       ConfigWithFlag(/*enable=*/true), ErrorSpec(/*aabs=*/0.0, /*arel=*/0.0)));
 }
 
+// First iteration peeled out of the loop, as CollectivePipeliner's forward
+// pipelining leaves a scan: the init is DUS(broadcast(0), f(0), 0), which the
+// simplifier turns into a pad, and the loop runs iterations 1..3. The pass must
+// keep the peeled slice and only drop the zero padding.
+TEST_F(DusAccumulatorZeroInitEliminationExecutionTest, PeeledFirstIteration) {
+  constexpr absl::string_view kHlo = R"(
+HloModule peeled_scan
+
+body {
+  p = (s32[], bf16[4,8], bf16[8]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  acc = bf16[4,8] get-tuple-element(p), index=1
+  x = bf16[8] get-tuple-element(p), index=2
+  it_bf16 = bf16[] convert(it)
+  b = bf16[8] broadcast(it_bf16), dimensions={}
+  y = bf16[8] add(x, b)
+  update = bf16[1,8] reshape(y)
+  z = s32[] constant(0)
+  dus = bf16[4,8] dynamic-update-slice(acc, update, it, z)
+  one = s32[] constant(1)
+  next = s32[] add(it, one)
+  ROOT out = (s32[], bf16[4,8], bf16[8]) tuple(next, dus, x)
+}
+
+cond {
+  p = (s32[], bf16[4,8], bf16[8]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  limit = s32[] constant(4)
+  ROOT cmp = pred[] compare(it, limit), direction=LT
+}
+
+ENTRY main {
+  x = bf16[8] parameter(0)
+  z = s32[] constant(0)
+  c0 = bf16[] constant(0)
+  zero_init = bf16[4,8] broadcast(c0), dimensions={}
+  y0 = bf16[8] negate(x)
+  update0 = bf16[1,8] reshape(y0)
+  peeled = bf16[4,8] dynamic-update-slice(zero_init, update0, z, z)
+  init_it = s32[] constant(1)
+  init_tuple = (s32[], bf16[4,8], bf16[8]) tuple(init_it, peeled, x)
+  w = (s32[], bf16[4,8], bf16[8]) while(init_tuple), condition=cond, body=body
+  ROOT result = bf16[4,8] get-tuple-element(w), index=1
+}
+)";
+  EXPECT_TRUE(RunAndCompareTwoModules(
+      kHlo, kHlo, ConfigWithFlag(/*enable=*/false),
+      ConfigWithFlag(/*enable=*/true), ErrorSpec(/*aabs=*/0.0, /*arel=*/0.0)));
+}
+
 }  // namespace
 }  // namespace xla::gpu
