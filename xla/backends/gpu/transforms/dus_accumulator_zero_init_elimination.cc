@@ -15,7 +15,9 @@ limitations under the License.
 
 #include "xla/backends/gpu/transforms/dus_accumulator_zero_init_elimination.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <vector>
 
@@ -25,11 +27,14 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "xla/hlo/analysis/while_loop_analysis.h"
+#include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/utils/hlo_query.h"
+#include "xla/literal_util.h"
 #include "xla/service/constant_value.h"
 #include "xla/service/value_range.h"
 #include "xla/shape.h"
@@ -76,6 +81,17 @@ bool IsInitReplaceable(const HloInstruction* init) {
   return false;
 }
 
+// A slice of the accumulator that is written before the loop: the first
+// iteration, peeled out of the loop by CollectivePipeliner's forward
+// pipelining, writes DUS(broadcast(0), x, k), which the algebraic simplifier
+// turns into pad(x, 0). Its elements [start, start + size) along `dim` hold real
+// data; only the padding is a dead zero-initialization.
+struct PeeledSlice {
+  int64_t dim;
+  int64_t start;
+  int64_t size;
+};
+
 // Holds the subset of while-loop facts this pass needs. We don't reuse
 // while_loop_unroller's WhileLoopConfig because we want a mutable while_instr
 // and don't need the `init` field.
@@ -83,6 +99,13 @@ struct CandidateLoop {
   HloInstruction* while_instr;
   int64_t trip_count;
   int64_t induction_var_idx;
+  // Induction variable value in the first iteration and its per-iteration
+  // increment (positive).
+  int64_t iv_init = 0;
+  int64_t iv_step = 1;
+  // Set while analyzing a slot whose init is a peeled slice; the loop's writes
+  // then only need to cover the rest of the buffer.
+  std::optional<PeeledSlice> peeled;
 };
 
 absl::StatusOr<bool> AllUsersKillBuffer(const HloInstruction* buffer,
@@ -96,10 +119,38 @@ absl::StatusOr<bool> UserKillsBuffer(const HloInstruction* user,
 // TODO: the annotation can outlive the IR shape it was derived from —
 // upstream IV-rewriting passes should refresh or drop it.
 Range LoopIterationRange(const CandidateLoop& cfg) {
-  return Range{ConstantValue::GetSigned(0, /*bitwidth=*/64),
-               ConstantValue::GetSigned(cfg.trip_count - 1, /*bitwidth=*/64),
-               ConstantValue::GetSigned(1, /*bitwidth=*/64),
-               /*is_linear=*/true};
+  return Range{
+      ConstantValue::GetSigned(cfg.iv_init, /*bitwidth=*/64),
+      ConstantValue::GetSigned(
+          cfg.iv_init + (cfg.trip_count - 1) * cfg.iv_step, /*bitwidth=*/64),
+      ConstantValue::GetSigned(cfg.iv_step, /*bitwidth=*/64),
+      /*is_linear=*/true};
+}
+
+// Follows an index to the instruction that computes it: from a fused
+// parameter to the fusion's operand, and from a get-tuple-element of a
+// multi-output fusion to the fused root's tuple operand. Fusion often puts the
+// index computation of a reverse scan (length - 1 - i) into a multi-output
+// fusion with the dynamic-slices that use it, and RecursivelyIdentifyRange only
+// sees through get-tuple-element given a dataflow analysis.
+const HloInstruction* SkipFusionBoundaries(const HloInstruction* idx) {
+  while (true) {
+    if (idx->opcode() == HloOpcode::kParameter &&
+        idx->parent()->IsFusionComputation()) {
+      idx = idx->parent()->FusionInstruction()->operand(
+          idx->parameter_number());
+      continue;
+    }
+    if (idx->opcode() == HloOpcode::kGetTupleElement &&
+        idx->operand(0)->opcode() == HloOpcode::kFusion &&
+        idx->operand(0)->fused_expression_root()->opcode() ==
+            HloOpcode::kTuple) {
+      idx = idx->operand(0)->fused_expression_root()->operand(
+          idx->tuple_index());
+      continue;
+    }
+    return idx;
+  }
 }
 
 // RecursivelyIdentifyRange handles the recursion into fused parameters, so
@@ -107,6 +158,7 @@ Range LoopIterationRange(const CandidateLoop& cfg) {
 // IsBounded()/IsStepKnown() before using the returned range.
 Range ResolveIndexRangeAsFunctionOfIv(const HloInstruction* idx,
                                       const CandidateLoop& cfg) {
+  idx = SkipFusionBoundaries(idx);
   Range loop_range = LoopIterationRange(cfg);
   absl::flat_hash_map<const HloInstruction*, Range> predefined;
   HloInstruction* body_param =
@@ -168,10 +220,25 @@ bool IsKillingDus(const HloInstruction* dus, const HloInstruction* operand,
   if (slice_size <= 0 || slice_size > dim_size) {
     return false;
   }
-  // Left edge, right edge, and no interior gaps.
-  return dyn_dim_range.min().GetSignedValue() <= 0 &&
-         dyn_dim_range.max()->GetSignedValue() >= dim_size - slice_size &&
-         slice_size >= dyn_dim_range.step()->GetSignedValue();
+  // No interior gaps between consecutive iterations' slices.
+  if (slice_size < std::abs(dyn_dim_range.step()->GetSignedValue())) {
+    return false;
+  }
+  // DUS clamps its start into [0, dim_size - slice_size]; clamping only
+  // shrinks gaps, so the loop writes exactly [lo, hi + slice_size).
+  auto clamp = [&](int64_t v) {
+    return std::clamp<int64_t>(v, 0, dim_size - slice_size);
+  };
+  const int64_t lo = clamp(dyn_dim_range.min().GetSignedValue());
+  const int64_t hi = clamp(dyn_dim_range.max()->GetSignedValue()) + slice_size;
+  if (!cfg.peeled.has_value() || cfg.peeled->dim != dyn_dim) {
+    return lo == 0 && hi >= dim_size;  // left edge and right edge
+  }
+  // The loop's interval and the peeled slice must together cover the dim.
+  const int64_t p_lo = cfg.peeled->start;
+  const int64_t p_hi = cfg.peeled->start + cfg.peeled->size;
+  return std::min(lo, p_lo) == 0 && std::max(hi, p_hi) >= dim_size &&
+         lo <= p_hi && p_lo <= hi;
 }
 
 // TODO: scatter killing-write support; needs reasoning over scatter index
@@ -320,8 +387,7 @@ std::optional<CandidateLoop> ClassifyCandidateWhile(HloInstruction* while_op) {
     return std::nullopt;
   }
   if (!loop_cfg->has_known_init_step() ||
-      loop_cfg->known_init_step().init() != 0 ||
-      loop_cfg->known_init_step().step() != 1) {
+      loop_cfg->known_init_step().step() <= 0) {
     return std::nullopt;
   }
   if (while_op->operand(0)->opcode() != HloOpcode::kTuple) {
@@ -339,7 +405,95 @@ std::optional<CandidateLoop> ClassifyCandidateWhile(HloInstruction* while_op) {
   }
   return CandidateLoop{/*while_instr=*/while_op,
                        /*trip_count=*/trip_count,
-                       /*induction_var_idx=*/iv_tuple_idx};
+                       /*induction_var_idx=*/iv_tuple_idx,
+                       /*iv_init=*/loop_cfg->known_init_step().init(),
+                       /*iv_step=*/loop_cfg->known_init_step().step()};
+}
+
+// Returns the pad producing a peeled-slice init: either `init` itself or the
+// root of a loop fusion `init`. The pad must pad exactly one dimension, at its
+// edges only; the padding value is irrelevant (the dead-input check makes the
+// loop overwrite every padded element). In a fusion, the padding value must be
+// computed inside it: a fused parameter would be left without users once the
+// pad is gone.
+HloInstruction* PeeledInitPad(HloInstruction* init) {
+  if (init->opcode() != HloOpcode::kFusion) {
+    return init->opcode() == HloOpcode::kPad ? init : nullptr;
+  }
+  if (init->fusion_kind() != HloInstruction::FusionKind::kLoop) {
+    return nullptr;
+  }
+  HloInstruction* pad = init->fused_expression_root();
+  if (pad->opcode() != HloOpcode::kPad ||
+      pad->operand(1)->opcode() == HloOpcode::kParameter) {
+    return nullptr;
+  }
+  return pad;
+}
+
+std::optional<PeeledSlice> MatchPeeledSlice(const HloInstruction* pad) {
+  std::optional<PeeledSlice> peeled;
+  const PaddingConfig& config = pad->padding_config();
+  for (int64_t d = 0; d < config.dimensions_size(); ++d) {
+    const PaddingConfig::PaddingConfigDimension& pd = config.dimensions(d);
+    if (pd.interior_padding() != 0 || pd.edge_padding_low() < 0 ||
+        pd.edge_padding_high() < 0) {
+      return std::nullopt;
+    }
+    if (pd.edge_padding_low() == 0 && pd.edge_padding_high() == 0) {
+      continue;
+    }
+    if (peeled.has_value()) {
+      return std::nullopt;  // padded along more than one dim
+    }
+    peeled = PeeledSlice{d, pd.edge_padding_low(),
+                         pad->operand(0)->shape().dimensions(d)};
+  }
+  return peeled;
+}
+
+// Rewrites a peeled-slice init into DUS(AllocateBuffer, x, start), which only
+// writes the peeled slice. For a fusion init the pad root of a clone of the
+// fusion becomes a DUS into a new AllocateBuffer operand, an in-place DUS
+// fusion.
+absl::StatusOr<HloInstruction*> RewritePeeledInit(HloInstruction* init,
+                                                  HloInstruction* pad,
+                                                  const PeeledSlice& peeled) {
+  HloComputation* parent = init->parent();
+  HloInstruction* alloc =
+      parent->AddInstruction(HloInstruction::CreateCustomCall(
+          init->shape(), /*operands=*/{}, "AllocateBuffer"));
+  alloc->set_metadata(init->metadata());
+  alloc->set_frontend_attributes(init->frontend_attributes());
+
+  HloComputation* dus_comp = parent;
+  HloInstruction* buffer = alloc;
+  HloInstruction* fusion = nullptr;
+  if (init->opcode() == HloOpcode::kFusion) {
+    fusion = parent->AddInstruction(init->Clone("peeled_init"));
+    buffer = Cast<HloFusionInstruction>(fusion)->AddFusionOperand(alloc);
+    dus_comp = fusion->fused_instructions_computation();
+    pad = dus_comp->root_instruction();
+  }
+  std::vector<HloInstruction*> start_indices;
+  for (int64_t d = 0; d < pad->shape().dimensions().size(); ++d) {
+    start_indices.push_back(dus_comp->AddInstruction(
+        HloInstruction::CreateConstant(LiteralUtil::CreateR0<int32_t>(
+            d == peeled.dim ? static_cast<int32_t>(peeled.start) : 0))));
+  }
+  HloInstruction* dus =
+      dus_comp->AddInstruction(HloInstruction::CreateDynamicUpdateSlice(
+          pad->shape(), buffer, pad->mutable_operand(0), start_indices));
+  dus->set_metadata(pad->metadata());
+  if (fusion == nullptr) {
+    return dus;
+  }
+  dus_comp->set_root_instruction(dus);
+  // PeeledInitPad guarantees the padding value is not a fused parameter, and
+  // the pad's data operand is still used by the DUS, so this removes no
+  // parameter.
+  ABSL_RETURN_IF_ERROR(dus_comp->RemoveInstructionAndUnusedOperands(pad));
+  return fusion;
 }
 
 }  // namespace
@@ -377,15 +531,37 @@ absl::StatusOr<bool> DusAccumulatorZeroInitElimination::RunImpl(
       }
 
       HloInstruction* init = init_tuple->mutable_operand(slot);
-      if (!IsInitReplaceable(init)) {
-        continue;
-      }
       // Init must feed only this while and not carry its own sharding.
       if (init->has_sharding() || init->user_count() != 1) {
         continue;
       }
       const Shape& alloc_shape = init->shape();
-      if (alloc_shape.dimensions().empty() ||
+      if (!alloc_shape.IsArray() || alloc_shape.dimensions().empty()) {
+        continue;
+      }
+
+      // Peeled form: the init is a pad of the first iteration's slice.
+      if (HloInstruction* pad = PeeledInitPad(init)) {
+        std::optional<PeeledSlice> peeled = MatchPeeledSlice(pad);
+        if (!peeled.has_value()) {
+          continue;
+        }
+        CandidateLoop slot_cfg = cfg;
+        slot_cfg.peeled = peeled;
+        ABSL_ASSIGN_OR_RETURN(bool dead, SlotIsDeadInput(slot, slot_cfg));
+        if (!dead) {
+          continue;
+        }
+        ABSL_ASSIGN_OR_RETURN(HloInstruction * new_init,
+                              RewritePeeledInit(init, pad, *peeled));
+        ABSL_RETURN_IF_ERROR(init_tuple->ReplaceOperandWith(slot, new_init));
+        ABSL_RETURN_IF_ERROR(
+            while_op->parent()->RemoveInstructionAndUnusedOperands(init));
+        changed = true;
+        continue;
+      }
+
+      if (!IsInitReplaceable(init) ||
           alloc_shape.dimensions(0) != cfg.trip_count) {
         continue;
       }

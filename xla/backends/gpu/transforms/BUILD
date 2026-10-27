@@ -418,6 +418,7 @@ cc_library(
     srcs = ["dus_accumulator_zero_init_elimination.cc"],
     hdrs = ["dus_accumulator_zero_init_elimination.h"],
     deps = [
+        "//xla:literal_util",
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla:xla_proto_cc",
@@ -443,6 +444,7 @@ xla_cc_test(
         "//xla/hlo/ir:hlo",
         "//xla/hlo/testlib:hlo_hardware_independent_test_base",
         "//xla/hlo/utils:hlo_query",
+        "//xla/service:hlo_module_config",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest",
