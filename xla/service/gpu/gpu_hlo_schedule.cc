@@ -49,10 +49,12 @@ limitations under the License.
 #include "xla/backends/gpu/transforms/collectives/collective_ops_utils.h"
 #include "xla/backends/gpu/transforms/pgle_accuracy_checker.h"
 #include "xla/backends/gpu/transforms/scheduling_instruction_annotator.h"
+#include "xla/hlo/analysis/hlo_reachability.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_input_output_alias_config.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_instruction_utils.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/ir/hlo_print_options.h"
@@ -110,6 +112,236 @@ absl::StatusOr<bool> UsesMultipleCollectiveDomains(const HloModule& module) {
     }
   }
   return false;
+}
+
+using CollectiveInComputation =
+    absl::flat_hash_map<const HloComputation*, bool>;
+
+// A collective schedule unit occupies the device from `start` through `end`.
+// Synchronous collectives and calls into computations containing collectives
+// have identical start and end instructions.
+struct CollectiveScheduleUnit {
+  HloInstruction* start;
+  HloInstruction* end;
+};
+
+bool CallsComputationWithCollective(
+    const HloInstruction& instruction,
+    const CollectiveInComputation& collective_in_computation) {
+  return absl::c_any_of(
+      instruction.called_computations(),
+      [&](const HloComputation* called_computation) {
+        auto it = collective_in_computation.find(called_computation);
+        return it != collective_in_computation.end() && it->second;
+      });
+}
+
+bool IsCollectiveAsyncStart(
+    const HloInstruction& instruction,
+    const CollectiveInComputation& collective_in_computation) {
+  if (hlo_query::IsAsyncCollectiveStartOp(
+          &instruction, /*include_send_recv=*/false)) {
+    return true;
+  }
+  // Collective groups and custom collectives use generic async wrappers.
+  return instruction.opcode() == HloOpcode::kAsyncStart &&
+         (IsCustomCollectiveOp(&instruction) ||
+          CallsComputationWithCollective(instruction,
+                                         collective_in_computation));
+}
+
+bool IsCollectiveAsyncDone(
+    const HloInstruction& instruction,
+    const CollectiveInComputation& collective_in_computation) {
+  if (hlo_query::IsAsyncCollectiveDoneOp(
+          &instruction, /*include_send_recv=*/false)) {
+    return true;
+  }
+  if (instruction.opcode() != HloOpcode::kAsyncDone) {
+    return false;
+  }
+  const HloInstruction* start =
+      hlo_instruction_utils::async::FindAsyncStart(&instruction);
+  return start != nullptr &&
+         IsCollectiveAsyncStart(*start, collective_in_computation);
+}
+
+bool IsDirectCollective(
+    const HloInstruction& instruction,
+    const CollectiveInComputation& collective_in_computation) {
+  return hlo_query::IsCollectiveCommunicationOp(instruction.opcode()) ||
+         IsCollectiveAsyncStart(instruction, collective_in_computation) ||
+         IsCollectiveAsyncDone(instruction, collective_in_computation);
+}
+
+CollectiveInComputation FindComputationsWithCollectives(
+    const HloModule& module,
+    const absl::flat_hash_set<absl::string_view>& execution_threads) {
+  CollectiveInComputation collective_in_computation;
+  // MakeComputationPostOrder visits callees before callers.
+  for (const HloComputation* computation :
+       module.MakeComputationPostOrder(execution_threads)) {
+    bool contains_collective = false;
+    for (const HloInstruction* instruction :
+         computation->MakeInstructionPostOrder()) {
+      if (IsDirectCollective(*instruction, collective_in_computation) ||
+          CallsComputationWithCollective(*instruction,
+                                         collective_in_computation)) {
+        contains_collective = true;
+        break;
+      }
+    }
+    collective_in_computation[computation] = contains_collective;
+  }
+  return collective_in_computation;
+}
+
+absl::StatusOr<std::vector<CollectiveScheduleUnit>>
+GetCollectiveScheduleUnits(
+    HloComputation* computation,
+    const CollectiveInComputation& collective_in_computation) {
+  std::vector<CollectiveScheduleUnit> units;
+  for (HloInstruction* instruction :
+       computation->MakeInstructionPostOrder()) {
+    if (IsCollectiveAsyncDone(*instruction, collective_in_computation)) {
+      HloInstruction* start =
+          hlo_instruction_utils::async::FindAsyncStart(instruction);
+      if (start == nullptr ||
+          !IsCollectiveAsyncStart(*start, collective_in_computation)) {
+        return absl::InternalError(absl::StrCat(
+            "Collective async done has no corresponding collective start: ",
+            instruction->name()));
+      }
+      units.push_back({start, instruction});
+      continue;
+    }
+    // A start is represented by its corresponding done instruction.
+    if (IsCollectiveAsyncStart(*instruction, collective_in_computation)) {
+      continue;
+    }
+    // Async conversion normally represents every collective as a pair. Keep
+    // supporting canonical synchronous collectives and control-flow calls as
+    // single-instruction barriers.
+    if (hlo_query::IsCollectiveCommunicationOp(instruction->opcode()) ||
+        CallsComputationWithCollective(*instruction,
+                                       collective_in_computation)) {
+      units.push_back({instruction, instruction});
+    }
+  }
+  return units;
+}
+
+absl::Status LinearizeCollectivesInComputation(
+    HloComputation* computation,
+    const CollectiveInComputation& collective_in_computation) {
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<CollectiveScheduleUnit> units,
+      GetCollectiveScheduleUnits(computation, collective_in_computation));
+  if (units.size() < 2) {
+    return absl::OkStatus();
+  }
+
+  std::unique_ptr<HloReachabilityMap> reachability =
+      HloReachabilityMap::Build(computation);
+  const int64_t unit_count = units.size();
+  std::vector<std::vector<int64_t>> successors(unit_count);
+  std::vector<int64_t> indegree(unit_count, 0);
+  std::vector<std::vector<bool>> has_edge(
+      unit_count, std::vector<bool>(unit_count, false));
+  auto add_order = [&](int64_t before, int64_t after) {
+    if (!has_edge[before][after]) {
+      has_edge[before][after] = true;
+      successors[before].push_back(after);
+      ++indegree[after];
+    }
+  };
+
+  // Choose a total order compatible with all existing data and control
+  // dependencies. Unit A cannot precede B when B.start already reaches A.end.
+  for (int64_t i = 0; i < unit_count; ++i) {
+    for (int64_t j = i + 1; j < unit_count; ++j) {
+      bool i_before_j_impossible =
+          reachability->IsReachable(units[j].start, units[i].end);
+      bool j_before_i_impossible =
+          reachability->IsReachable(units[i].start, units[j].end);
+      if (i_before_j_impossible && j_before_i_impossible) {
+        return absl::FailedPreconditionError(absl::StrCat(
+            "Collective operations require overlapping execution in ",
+            computation->name(), ": ", units[i].start->name(), "...",
+            units[i].end->name(), " and ", units[j].start->name(), "...",
+            units[j].end->name()));
+      }
+      if (i_before_j_impossible) {
+        add_order(j, i);
+      } else if (j_before_i_impossible) {
+        add_order(i, j);
+      }
+    }
+  }
+
+  // Stable Kahn sort: preserve instruction postorder whenever dependencies do
+  // not require a different order.
+  std::vector<int64_t> ordered_units;
+  ordered_units.reserve(unit_count);
+  std::vector<bool> emitted(unit_count, false);
+  for (int64_t position = 0; position < unit_count; ++position) {
+    int64_t next = -1;
+    for (int64_t i = 0; i < unit_count; ++i) {
+      if (!emitted[i] && indegree[i] == 0) {
+        next = i;
+        break;
+      }
+    }
+    if (next < 0) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "Collective operations cannot be serialized in computation ",
+          computation->name()));
+    }
+    emitted[next] = true;
+    ordered_units.push_back(next);
+    for (int64_t successor : successors[next]) {
+      --indegree[successor];
+    }
+  }
+
+  // The completion of every unit gates the start of the next one. This keeps
+  // collective execution ordered while allowing arbitrary compute between the
+  // start and done of each asynchronous collective.
+  for (int64_t i = 1; i < unit_count; ++i) {
+    HloInstruction* before = units[ordered_units[i - 1]].end;
+    HloInstruction* after = units[ordered_units[i]].start;
+    if (reachability->IsReachable(before, after)) {
+      continue;
+    }
+    if (reachability->IsReachable(after, before)) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "Adding collective order would create a cycle in ",
+          computation->name(), ": ", before->name(), " -> ", after->name()));
+    }
+    ABSL_RETURN_IF_ERROR(before->AddControlDependencyTo(after));
+    reachability->UpdateReachabilityThroughInstruction(after);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status EnforceCollectiveScheduleOrderingImpl(HloModule* module) {
+  const absl::flat_hash_set<absl::string_view> execution_threads = {
+      HloInstruction::kMainExecutionThread,
+      HloInstruction::kParallelExecutionThread};
+  CollectiveInComputation collective_in_computation =
+      FindComputationsWithCollectives(*module, execution_threads);
+  for (HloComputation* computation :
+       module->MakeComputationPostOrder(execution_threads)) {
+    if (computation->IsFusionComputation()) {
+      continue;
+    }
+    ABSL_RETURN_IF_ERROR(LinearizeCollectivesInComputation(
+        computation, collective_in_computation));
+  }
+  if (module->has_schedule()) {
+    ABSL_RETURN_IF_ERROR(module->schedule().Update(execution_threads));
+  }
+  return absl::OkStatus();
 }
 
 bool ShouldScheduleAsEarlyAsPossible(const HloInstruction& instr) {
@@ -859,6 +1091,10 @@ absl::StatusOr<HloSchedule> ScheduleGpuModuleWithMemoryScheduler(
 
 }  // end namespace
 
+absl::Status EnforceCollectiveScheduleOrdering(HloModule* module) {
+  return EnforceCollectiveScheduleOrderingImpl(module);
+}
+
 bool IsLHSEnabled(const HloModule& module, absl::string_view fingerprint,
                   const se::DeviceDescription& gpu_device_info) {
   const auto& debug_options = module.config().debug_options();
@@ -999,6 +1235,11 @@ absl::StatusOr<ScheduleMetadata> ScheduleGpuModule(
   // We need to run it anyway because LHS relies on it.
   // See `xla::LatencyHidingScheduler::Run`.
   ABSL_RETURN_IF_ERROR(RunP2PSchedulePreparation(module));
+  // NCCL and RCCL require one device-side execution order across
+  // communicators. Encode that order in the HLO graph so both the memory
+  // scheduler and LHS preserve it. Pipelined send/recv operations are handled
+  // separately by P2PSchedulePreparation.
+  ABSL_RETURN_IF_ERROR(EnforceCollectiveScheduleOrdering(module));
   int64_t peak_memory_bytes;
   ABSL_ASSIGN_OR_RETURN(
       HloSchedule schedule,

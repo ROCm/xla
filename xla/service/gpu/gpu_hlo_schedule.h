@@ -67,6 +67,11 @@ uint64_t GetSchedulerMemoryLimit(const HloModule& module,
 bool IsLHSEnabled(const HloModule& module, absl::string_view fingerprint,
                   const se::DeviceDescription& gpu_device_info);
 
+// Adds control dependencies that establish one device-side execution order for
+// collectives. If the module is already scheduled, updates the schedule to
+// respect the new dependencies.
+absl::Status EnforceCollectiveScheduleOrdering(HloModule* module);
+
 // Determines the schedule of HLO instructions for a module run on the GPU.
 absl::StatusOr<ScheduleMetadata> ScheduleGpuModule(
     HloModule* module, int64_t pointer_size,

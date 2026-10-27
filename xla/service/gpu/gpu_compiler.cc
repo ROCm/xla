@@ -3278,8 +3278,14 @@ absl::Status GpuCompiler::RunPostSchedulingPipelines(
     AddHloVerifier(&main_pipeline,
                    HloVerifierOpts{}.VerifyInstructionNameUnchanged());
   }
-  return main_pipeline.Run(module, {HloInstruction::kMainExecutionThread})
-      .status();
+  ABSL_RETURN_IF_ERROR(
+      main_pipeline.Run(module, {HloInstruction::kMainExecutionThread})
+          .status());
+  // Rematerialization can clone synchronous collectives after scheduling. The
+  // clone inherits HLO dependencies, but its insertion point can reopen a
+  // collective window. Reapply the device ordering invariant and repair the
+  // existing schedule before thunk emission.
+  return EnforceCollectiveScheduleOrdering(module);
 }
 
 absl::Status GpuCompiler::LoadAutotuneResultsFromFile(

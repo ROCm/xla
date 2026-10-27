@@ -40,6 +40,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/ir/hlo_schedule.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/utils/hlo_query.h"
 #include "xla/service/device_assignment.h"
 #include "xla/service/gpu/alias_info.h"
 #include "xla/service/gpu/backend_configs.pb.h"
@@ -66,6 +67,17 @@ int GetIndexByName(absl::Span<HloInstruction* const> instruction_sequence,
                            return instruction->name() == hlo_name;
                          }) -
          instruction_sequence.begin();
+}
+
+void ExpectSerialized(absl::Span<HloInstruction* const> instruction_sequence,
+                      absl::string_view start_a, absl::string_view done_a,
+                      absl::string_view start_b, absl::string_view done_b) {
+  EXPECT_TRUE(GetIndexByName(instruction_sequence, done_a) <
+                  GetIndexByName(instruction_sequence, start_b) ||
+              GetIndexByName(instruction_sequence, done_b) <
+                  GetIndexByName(instruction_sequence, start_a))
+      << start_a << "..." << done_a << " overlaps " << start_b << "..."
+      << done_b;
 }
 
 // TODO(b/346918304): Separate relevant tests from gpu_hlo_schedule_test.cc
@@ -116,6 +128,264 @@ class GpuLatencyHidingSchedulerBaseTest
 
   mlir::MLIRContext mlir_context_;
 };
+
+TEST_F(GpuLatencyHidingSchedulerBaseTest,
+       CollectivesHaveOneInFlightWindowAcrossSchedulers) {
+  constexpr absl::string_view kHloModule = R"(
+HloModule test
+
+add {
+  x = f32[] parameter(0)
+  y = f32[] parameter(1)
+  ROOT sum = f32[] add(x, y)
+}
+
+ENTRY main {
+  p0 = f32[32] parameter(0)
+  p1 = f32[32] parameter(1)
+  p2 = f32[32] parameter(2)
+
+  ar0-start = f32[32] all-reduce-start(p0), to_apply=add
+  ar0-done = f32[32] all-reduce-done(ar0-start)
+
+  ag-start = (f32[32], f32[32]) all-gather-start(p1), dimensions={0},
+    backend_config="{\"collective_backend_config\":{\"is_sync\":true}}"
+  ag-done = f32[32] all-gather-done(ag-start)
+
+  ar1-start = f32[32] all-reduce-start(p2), to_apply=add
+  ar1-done = f32[32] all-reduce-done(ar1-start)
+
+  ROOT result = (f32[32], f32[32], f32[32]) tuple(
+    ar0-done, ag-done, ar1-done)
+})";
+
+  for (bool enable_lhs : {false, true}) {
+    SCOPED_TRACE(enable_lhs ? "LHS enabled" : "LHS disabled");
+    HloModuleConfig config = GetModuleConfig(/*fdo_profile=*/"");
+    config.mutable_debug_options()
+        .set_xla_gpu_enable_latency_hiding_scheduler(enable_lhs);
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                         ParseAndReturnVerifiedModule(kHloModule, config));
+    ASSERT_OK(ScheduleModule(module.get(), /*num_parallel_resources=*/3)
+                  .status());
+    ASSERT_OK(module->schedule().Verify());
+
+    int64_t in_flight = 0;
+    int64_t max_in_flight = 0;
+    for (const HloInstruction* instruction :
+         module->schedule()
+             .sequence(module->entry_computation())
+             .instructions()) {
+      if (hlo_query::IsAsyncCollectiveStartOp(
+              instruction, /*include_send_recv=*/false)) {
+        ++in_flight;
+        max_in_flight = std::max(max_in_flight, in_flight);
+      } else if (hlo_query::IsAsyncCollectiveDoneOp(
+                     instruction, /*include_send_recv=*/false)) {
+        --in_flight;
+      }
+    }
+    EXPECT_EQ(in_flight, 0);
+    EXPECT_EQ(max_in_flight, 1);
+  }
+}
+
+TEST_F(GpuLatencyHidingSchedulerBaseTest,
+       RepairsExistingScheduleAfterCollectiveInsertion) {
+  constexpr absl::string_view kHloModule = R"(
+HloModule test, is_scheduled=true
+
+add {
+  x = f32[] parameter(0)
+  y = f32[] parameter(1)
+  ROOT sum = f32[] add(x, y)
+}
+
+ENTRY main {
+  p0 = f32[32] parameter(0)
+  p1 = f32[32] parameter(1)
+  ar-start = f32[32] all-reduce-start(p0), to_apply=add
+  ag-start = (f32[32], f32[32]) all-gather-start(p1), dimensions={0},
+    backend_config="{\"collective_backend_config\":{\"is_sync\":true}}"
+  ag-done = f32[32] all-gather-done(ag-start)
+  ar-done = f32[32] all-reduce-done(ar-start)
+  ROOT result = (f32[32], f32[32]) tuple(ar-done, ag-done)
+})";
+
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      ParseAndReturnVerifiedModule(kHloModule, HloModuleConfig{}));
+  ASSERT_OK(EnforceCollectiveScheduleOrdering(module.get()));
+  ASSERT_OK(module->schedule().Verify());
+
+  absl::Span<HloInstruction* const> sequence =
+      module->schedule()
+          .sequence(module->entry_computation())
+          .instructions();
+  ExpectSerialized(sequence, "ar-start", "ar-done", "ag-start", "ag-done");
+}
+
+TEST_F(GpuLatencyHidingSchedulerBaseTest,
+       FindsCollectiveStartThroughAsyncIntermediaries) {
+  constexpr absl::string_view kHloModule = R"(
+HloModule test, is_scheduled=true
+
+add {
+  x = f32[] parameter(0)
+  y = f32[] parameter(1)
+  ROOT sum = f32[] add(x, y)
+}
+
+ENTRY main {
+  p0 = f32[32] parameter(0)
+  p1 = f32[32] parameter(1)
+  ag-start = (f32[32], f32[32]) all-gather-start(p0), dimensions={0}
+  ag-done = f32[32] all-gather-done(ag-start)
+  ar-start = f32[32] all-reduce-start(p1), to_apply=add
+  ar-done = f32[32] all-reduce-done(ar-start)
+  ROOT result = (f32[32], f32[32]) tuple(ag-done, ar-done)
+})";
+
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      ParseAndReturnVerifiedModule(kHloModule, HloModuleConfig{}));
+  HloComputation* computation = module->entry_computation();
+  HloInstruction* start = FindInstruction(module.get(), "ag-start");
+  HloInstruction* done = FindInstruction(module.get(), "ag-done");
+  ASSERT_NE(start, nullptr);
+  ASSERT_NE(done, nullptr);
+
+  HloInstruction* barrier =
+      computation->AddInstruction(HloInstruction::CreateUnary(
+          start->shape(), HloOpcode::kOptimizationBarrier, start));
+  HloInstruction* tuple =
+      computation->AddInstruction(HloInstruction::CreateTuple({barrier}));
+  HloInstruction* gte =
+      computation->AddInstruction(HloInstruction::CreateGetTupleElement(
+          barrier->shape(), tuple, 0));
+  ASSERT_OK(done->ReplaceOperandWith(0, gte));
+
+  ASSERT_OK(EnforceCollectiveScheduleOrdering(module.get()));
+  ASSERT_OK(module->schedule().Verify());
+  absl::Span<HloInstruction* const> sequence =
+      module->schedule().sequence(computation).instructions();
+  ExpectSerialized(sequence, "ag-start", "ag-done", "ar-start", "ar-done");
+}
+
+TEST_F(GpuLatencyHidingSchedulerBaseTest,
+       CollectiveCallingInstructionsAreOutsideAsyncWindows) {
+  constexpr absl::string_view kHloModule = R"(
+HloModule test
+
+add {
+  x = f32[] parameter(0)
+  y = f32[] parameter(1)
+  ROOT sum = f32[] add(x, y)
+}
+
+collective_call {
+  p = f32[32] parameter(0)
+  ar-start = f32[32] all-reduce-start(p), to_apply=add
+  ROOT ar-done = f32[32] all-reduce-done(ar-start)
+}
+
+while_condition {
+  p = f32[32] parameter(0)
+  ROOT keep-going = pred[] constant(false)
+}
+
+while_body {
+  p = f32[32] parameter(0)
+  ar-start = f32[32] all-reduce-start(p), to_apply=add
+  ROOT ar-done = f32[32] all-reduce-done(ar-start)
+}
+
+true_branch {
+  p = f32[32] parameter(0)
+  ar-start = f32[32] all-reduce-start(p), to_apply=add
+  ROOT ar-done = f32[32] all-reduce-done(ar-start)
+}
+
+false_branch {
+  p = f32[32] parameter(0)
+  ar-start = f32[32] all-reduce-start(p), to_apply=add
+  ROOT ar-done = f32[32] all-reduce-done(ar-start)
+}
+
+ENTRY main {
+  p0 = f32[32] parameter(0)
+  p1 = f32[32] parameter(1)
+  p2 = f32[32] parameter(2)
+  selector = pred[] parameter(3)
+
+  outer-start = f32[32] all-reduce-start(p0), to_apply=add
+  nested-call = f32[32] call(p1), to_apply=collective_call
+  nested-while = f32[32] while(p1), condition=while_condition,
+    body=while_body
+  nested-conditional = f32[32] conditional(selector, p1, p2),
+    true_computation=true_branch, false_computation=false_branch
+  outer-done = f32[32] all-reduce-done(outer-start)
+
+  ROOT result = (f32[32], f32[32], f32[32], f32[32]) tuple(
+    outer-done, nested-call, nested-while, nested-conditional)
+})";
+
+  for (bool enable_lhs : {false, true}) {
+    SCOPED_TRACE(enable_lhs ? "LHS enabled" : "LHS disabled");
+    HloModuleConfig config = GetModuleConfig(/*fdo_profile=*/"");
+    config.mutable_debug_options()
+        .set_xla_gpu_enable_latency_hiding_scheduler(enable_lhs);
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                         ParseAndReturnVerifiedModule(kHloModule, config));
+    ASSERT_OK(ScheduleModule(module.get()).status());
+    ASSERT_OK(module->schedule().Verify());
+
+    absl::Span<HloInstruction* const> sequence =
+        module->schedule()
+            .sequence(module->entry_computation())
+            .instructions();
+    int start = GetIndexByName(sequence, "outer-start");
+    int done = GetIndexByName(sequence, "outer-done");
+    for (absl::string_view name :
+         {"nested-call", "nested-while", "nested-conditional"}) {
+      int barrier = GetIndexByName(sequence, name);
+      EXPECT_FALSE(start < barrier && barrier < done)
+          << name << " was scheduled inside outer-start...outer-done";
+    }
+  }
+}
+
+TEST_F(GpuLatencyHidingSchedulerBaseTest,
+       SendRecvAreExcludedFromCollectiveOrdering) {
+  constexpr absl::string_view kHloModule = R"(
+HloModule test
+
+ENTRY main {
+  data = f32[32] parameter(0)
+  tok = token[] after-all()
+  recv = (f32[32], u32[], token[]) recv(tok), channel_id=1,
+    frontend_attributes={_xla_send_recv_source_target_pairs="{{0,1}}"}
+  send = (f32[32], u32[], token[]) send(data, tok), channel_id=1,
+    frontend_attributes={_xla_send_recv_source_target_pairs="{{0,1}}"}
+  recv-done = (f32[32], token[]) recv-done(recv), channel_id=1
+  send-done = token[] send-done(send), channel_id=1
+  ROOT result = ((f32[32], token[]), token[]) tuple(recv-done, send-done)
+})";
+
+  HloModuleConfig config = GetModuleConfig(/*fdo_profile=*/"");
+  config.mutable_debug_options()
+      .set_xla_gpu_enable_latency_hiding_scheduler(false);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHloModule, config));
+  ASSERT_OK(ScheduleModule(module.get()).status());
+  ASSERT_OK(module->schedule().Verify());
+
+  for (absl::string_view name : {"recv", "send", "recv-done", "send-done"}) {
+    HloInstruction* instruction = FindInstruction(module.get(), name);
+    ASSERT_NE(instruction, nullptr);
+    EXPECT_TRUE(instruction->control_predecessors().empty());
+  }
+}
 
 TEST_F(GpuLatencyHidingSchedulerBaseTest,
        GPUProfileStatisticsAggregatorDoesNotCountMissingNoops) {
@@ -370,7 +640,7 @@ TEST_F(GpuLatencyHidingSchedulerBaseTest,
 }
 
 TEST_F(GpuLatencyHidingSchedulerBaseTest,
-       MultipleParallelResourceShouldOverlapCollectives) {
+       CollectivesRemainSerializedWithMultipleResources) {
   absl::string_view kFdoProfile = R"pb(
     costs { name: "add_0" cost_us: 100000.0 }
     costs { name: "ar_0" cost_us: 10.0 }
@@ -408,20 +678,9 @@ TEST_F(GpuLatencyHidingSchedulerBaseTest,
   const HloSchedule& schedule = module->schedule();
   std::vector<HloInstruction*> instruction_sequence =
       schedule.sequence(module->entry_computation()).instructions();
-  // Since we allow 2 collectives in-flight, we should expect this pattern:
-  // ar(rs)-start -> rs(ar)-start -> add -> ar(rs)-done -> rs(ar)-done
-  EXPECT_TRUE(GetIndexByName(instruction_sequence, "ar_0") <
-                  GetIndexByName(instruction_sequence, "rs_1") &&
-              GetIndexByName(instruction_sequence, "rs_0") <
-                  GetIndexByName(instruction_sequence, "ar_1"));
-  EXPECT_TRUE(GetIndexByName(instruction_sequence, "add_0") >
-                  GetIndexByName(instruction_sequence, "ar_0") &&
-              GetIndexByName(instruction_sequence, "add_0") >
-                  GetIndexByName(instruction_sequence, "rs_0") &&
-              GetIndexByName(instruction_sequence, "add_0") <
-                  GetIndexByName(instruction_sequence, "ar_1") &&
-              GetIndexByName(instruction_sequence, "add_0") <
-                  GetIndexByName(instruction_sequence, "rs_1"));
+  // Device-side collective ordering is a correctness constraint independent
+  // of the LHS resource capacity.
+  ExpectSerialized(instruction_sequence, "ar_0", "ar_1", "rs_0", "rs_1");
 }
 
 TEST_F(GpuLatencyHidingSchedulerBaseTest,
@@ -693,25 +952,10 @@ TEST_F(GpuLatencyHidingSchedulerBaseTest,
   std::vector<HloInstruction*> main_instructions =
       schedule.sequence(main_computation).instructions();
 
-  // Expect the ar to overlap with p2p communication for recv and
-  // collective-permute. Note the send is scheduled last as it is not explored
-  // from the computations root. We expect this schedule:
-  //   - send_start
-  //   - send_done
-  //   - ar_start
-  //   - recv_start
-  //   - recv_done
-  //   - recv_data
-  //   - cp_start
-  //   - cp_done
-  //   - ar_done
-  //   - tuple
+  // Send and recv stay outside the collective ordering. Collective-permute is
+  // still a collective and must not overlap the all-reduce.
   EXPECT_LT(GetIndexByName(main_instructions, "send_start"),
             GetIndexByName(main_instructions, "send_done"));
-  EXPECT_LT(GetIndexByName(main_instructions, "send_done"),
-            GetIndexByName(main_instructions, "ar_start"));
-  EXPECT_LT(GetIndexByName(main_instructions, "ar_start"),
-            GetIndexByName(main_instructions, "recv_start"));
   EXPECT_LT(GetIndexByName(main_instructions, "recv_start"),
             GetIndexByName(main_instructions, "recv_done"));
   EXPECT_LT(GetIndexByName(main_instructions, "recv_done"),
@@ -720,8 +964,8 @@ TEST_F(GpuLatencyHidingSchedulerBaseTest,
             GetIndexByName(main_instructions, "cp_start"));
   EXPECT_LT(GetIndexByName(main_instructions, "cp_start"),
             GetIndexByName(main_instructions, "cp_done"));
-  EXPECT_LT(GetIndexByName(main_instructions, "cp_done"),
-            GetIndexByName(main_instructions, "ar_done"));
+  ExpectSerialized(main_instructions, "cp_start", "cp_done", "ar_start",
+                   "ar_done");
   EXPECT_LT(GetIndexByName(main_instructions, "ar_done"),
             GetIndexByName(main_instructions, "tuple"));
 }
@@ -966,20 +1210,12 @@ ENTRY main {
   std::vector<HloInstruction*> main_instructions =
       schedule.sequence(main_computation).instructions();
 
-  EXPECT_LT(GetIndexByName(main_instructions, "all-reduce-start"),
-            GetIndexByName(main_instructions, "cp_done"));
-  EXPECT_LT(GetIndexByName(main_instructions, "all-reduce-start"),
-            GetIndexByName(main_instructions, "ag_done"));
-
-  EXPECT_LT(GetIndexByName(main_instructions, "cp_start"),
-            GetIndexByName(main_instructions, "all-reduce-done"));
-  EXPECT_LT(GetIndexByName(main_instructions, "cp_start"),
-            GetIndexByName(main_instructions, "ag_done"));
-
-  EXPECT_LT(GetIndexByName(main_instructions, "ag_start"),
-            GetIndexByName(main_instructions, "cp_done"));
-  EXPECT_LT(GetIndexByName(main_instructions, "all-reduce-start"),
-            GetIndexByName(main_instructions, "all-reduce-done"));
+  ExpectSerialized(main_instructions, "all-reduce-start", "all-reduce-done",
+                   "cp_start", "cp_done");
+  ExpectSerialized(main_instructions, "all-reduce-start", "all-reduce-done",
+                   "ag_start", "ag_done");
+  ExpectSerialized(main_instructions, "cp_start", "cp_done", "ag_start",
+                   "ag_done");
 }
 
 TEST_F(GpuLatencyHidingSchedulerBaseTest, ScheduleDynamicSliceIfMemcpy) {
@@ -1410,7 +1646,7 @@ ENTRY main {
 }
 
 TEST_F(GpuLatencyHidingSchedulerBaseTest,
-       CollectiveDomainsOverlapWithOneSharedDevice) {
+       CollectiveDomainsSerializeWithOneSharedDevice) {
   absl::string_view kFdoProfile = R"pb(
     costs { name: "add" cost_us: 100000.0 }
   )pb";
@@ -1478,12 +1714,10 @@ ENTRY main {
       GetIndexByName(instruction_sequence, "native-done");
   const int add_index = GetIndexByName(instruction_sequence, "add");
 
-  // Every native subgroup shares at most one global device with the group's
-  // collective-permute, so the two communication domains can overlap.
-  EXPECT_TRUE((group_start_index < native_start_index &&
-               native_start_index < group_done_index) ||
-              (native_start_index < group_start_index &&
-               group_start_index < native_done_index));
+  // Separate communication domains still share the device launch-order
+  // contract, so their collective windows cannot overlap.
+  EXPECT_TRUE(group_done_index < native_start_index ||
+              native_done_index < group_start_index);
   EXPECT_TRUE(
       (group_start_index < add_index && add_index < group_done_index) ||
       (native_start_index < add_index && add_index < native_done_index));
@@ -2095,7 +2329,7 @@ TEST_F(GpuLatencyHidingSchedulerBaseTest, ParallelThreadsShouldBeScheduled) {
 }
 
 TEST_F(GpuLatencyHidingSchedulerBaseTest,
-       MultipleParallelAsyncsExtendedOverAllComputes) {
+       MultipleParallelAsyncCollectivesRemainSerialized) {
   absl::string_view kHloModule = R"(
 HloModule m
 
@@ -2141,44 +2375,9 @@ ENTRY main {
   const HloSchedule& schedule = module->schedule();
   std::vector<HloInstruction*> instruction_sequence =
       schedule.sequence(module->entry_computation()).instructions();
-  // With a lot of parallel resources and default latency estimator,
-  // LHS will try to extend all asyncs as much as possible.
-  // We expect all computes to be wrapped within all async start-done
-  // intervals.
-  EXPECT_TRUE(GetIndexByName(instruction_sequence, "add_2") >
-                  GetIndexByName(instruction_sequence, "ar_0") &&
-              GetIndexByName(instruction_sequence, "add_3") >
-                  GetIndexByName(instruction_sequence, "ar_0") &&
-              GetIndexByName(instruction_sequence, "add_2") <
-                  GetIndexByName(instruction_sequence, "ar_1") &&
-              GetIndexByName(instruction_sequence, "add_3") <
-                  GetIndexByName(instruction_sequence, "ar_1"));
-
-  EXPECT_TRUE(GetIndexByName(instruction_sequence, "add_0") >
-                  GetIndexByName(instruction_sequence, "ar_0") &&
-              GetIndexByName(instruction_sequence, "add_0") >
-                  GetIndexByName(instruction_sequence, "rs_0") &&
-              GetIndexByName(instruction_sequence, "add_0") <
-                  GetIndexByName(instruction_sequence, "ar_1") &&
-              GetIndexByName(instruction_sequence, "add_0") <
-                  GetIndexByName(instruction_sequence, "rs_1"));
-
-  EXPECT_TRUE(GetIndexByName(instruction_sequence, "div_0") >
-                  GetIndexByName(instruction_sequence, "ar_0") &&
-              GetIndexByName(instruction_sequence, "div_0") >
-                  GetIndexByName(instruction_sequence, "rs_0") &&
-              GetIndexByName(instruction_sequence, "div_0") <
-                  GetIndexByName(instruction_sequence, "ar_1") &&
-              GetIndexByName(instruction_sequence, "div_0") <
-                  GetIndexByName(instruction_sequence, "rs_1"));
-  EXPECT_TRUE(GetIndexByName(instruction_sequence, "mul_0") >
-                  GetIndexByName(instruction_sequence, "ar_0") &&
-              GetIndexByName(instruction_sequence, "mul_0") >
-                  GetIndexByName(instruction_sequence, "rs_0") &&
-              GetIndexByName(instruction_sequence, "mul_0") <
-                  GetIndexByName(instruction_sequence, "ar_1") &&
-              GetIndexByName(instruction_sequence, "mul_0") <
-                  GetIndexByName(instruction_sequence, "rs_1"));
+  ExpectSerialized(instruction_sequence, "ar_0", "ar_1", "ar_2", "ar_3");
+  ExpectSerialized(instruction_sequence, "ar_0", "ar_1", "rs_0", "rs_1");
+  ExpectSerialized(instruction_sequence, "ar_2", "ar_3", "rs_0", "rs_1");
 }
 
 TEST_F(GpuLatencyHidingSchedulerBaseTest, DelayMoveToHostAsyncStart) {
@@ -2364,11 +2563,9 @@ ENTRY main {
   auto schedule = module->schedule();
   std::vector<HloInstruction*> instruction_sequence =
       schedule.sequence(module->entry_computation()).instructions();
-  // Index of call-done should be larger than ar_0
-  // since it's treated as native collective and cannot overlap with
-  // native collectives.
-  EXPECT_TRUE(GetIndexByName(instruction_sequence, "call-done") <
-              GetIndexByName(instruction_sequence, "ar_0"));
+  // A collective-stream custom async op follows the same global ordering.
+  ExpectSerialized(instruction_sequence, "call-start", "call-done", "ar_0",
+                   "ar_1");
 }
 
 TEST_F(GpuLatencyHidingSchedulerBaseTest,
