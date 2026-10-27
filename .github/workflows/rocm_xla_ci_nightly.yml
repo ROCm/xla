@@ -27,8 +27,8 @@ on:
         type: boolean
         default: false
   schedule:
-    # Main XLA UT + JAX run: every 2 hours at :47 (even hours UTC)
-    - cron: '47 */2 * * *'
+    # Main XLA UT + JAX run: every 6 hours at :47 (even hours UTC)
+    - cron: '47 */6 * * *'
     # Daily run at 03:47 UTC. The hour is odd, so it never coincides with the
     # even-hour entry above (two matching entries would start two runs).
     # This is the only schedule that also triggers the sanitizers job.
