@@ -15,12 +15,16 @@ limitations under the License.
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 #include "Eigen/Core"
 #include "absl/status/status.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/include/hipcub/backend/rocprim/device/device_radix_sort.hpp"
-#include "rocm/include/hipcub/backend/rocprim/device/device_segmented_radix_sort.hpp"
+#include "rocm/include/rocprim/device/device_segmented_radix_sort.hpp"
+#include "rocm/include/rocprim/iterator/counting_iterator.hpp"
+#include "rocm/include/rocprim/iterator/transform_iterator.hpp"
+#include "rocm/include/rocprim/rocprim_version.hpp"
 #include "rocm/include/rocprim/thread/radix_key_codec.hpp"
 #include "rocm/include/rocprim/type_traits.hpp"
 #include "tsl/platform/bfloat16.h"
@@ -58,6 +62,78 @@ namespace stream_executor {
 namespace rocm {
 namespace {
 
+// Start offset of segment `i` of a batch of equally sized segments. The
+// segment offsets are computed on the fly on the device, so no offsets array
+// has to be copied from the host before each sort.
+struct SegmentOffset {
+  unsigned int segment_size;
+  __host__ __device__ unsigned int operator()(unsigned int i) const {
+    return i * segment_size;
+  }
+};
+
+using SegmentOffsetIterator =
+    rocprim::transform_iterator<rocprim::counting_iterator<unsigned int>,
+                                SegmentOffset, unsigned int>;
+
+SegmentOffsetIterator SegmentBegins(unsigned int segment_size) {
+  return SegmentOffsetIterator(rocprim::counting_iterator<unsigned int>(0),
+                               SegmentOffset{segment_size});
+}
+
+SegmentOffsetIterator SegmentEnds(unsigned int segment_size) {
+  return SegmentOffsetIterator(rocprim::counting_iterator<unsigned int>(1),
+                               SegmentOffset{segment_size});
+}
+
+// rocPRIM's segmented radix sort partitions the segments by size once there
+// are at least `partitioning_threshold` of them (a few to a few thousand,
+// depending on the architecture): a kernel classifies the segments, and the
+// segment counts are copied back to the host with a blocking
+// hipMemcpyWithStream so that it can size the launches of the per-class
+// kernels. That copy waits for all the work queued before the sort on the
+// stream, so the host loses its lead over the GPU at every batched sort. XLA's
+// batched sorts have segments of equal size, which all fall in the same class,
+// so partitioning gains nothing. This config keeps rocPRIM's tuned parameters
+// for the target, but never partitions; the unpartitioned kernel still sorts
+// short segments with warp sort.
+//
+// rocPRIM picks the parameters for a config type with `get_config`, which it
+// calls unqualified, so the overload below (found by argument-dependent lookup
+// on the config type) takes precedence over the generic one. Older rocPRIM
+// versions select configs differently and keep the default config, with the
+// host synchronization.
+struct UnpartitionedSegmentedRadixSortConfig {};
+
+#if ROCPRIM_VERSION >= 400600
+using SegmentedSortConfig = UnpartitionedSegmentedRadixSortConfig;
+
+template <class Selector>
+constexpr typename Selector::param_type get_config(
+    UnpartitionedSegmentedRadixSortConfig, rocprim::detail::target t) {
+  typename Selector::param_type params =
+      rocprim::detail::default_select_config<Selector>(t);
+  params.warp_sort_config.partitioning_threshold =
+      std::numeric_limits<unsigned int>::max();
+  return params;
+}
+
+// Resolves `get_config` the way rocPRIM does (unqualified, from its detail
+// namespace), so the build fails if rocPRIM stops picking the overload above.
+constexpr unsigned int SelectedPartitioningThreshold() {
+  using rocprim::detail::get_config;
+  return get_config<rocprim::detail::segmented_radix_sort_config_selector<
+      float, rocprim::empty_type>>(SegmentedSortConfig{},
+                                   rocprim::detail::target{})
+      .warp_sort_config.partitioning_threshold;
+}
+static_assert(SelectedPartitioningThreshold() ==
+                  std::numeric_limits<unsigned int>::max(),
+              "rocPRIM does not use UnpartitionedSegmentedRadixSortConfig");
+#else
+using SegmentedSortConfig = rocprim::default_config;
+#endif
+
 template <typename KeyT>
 absl::Status CubSortKeysImpl(void* d_temp_storage, size_t& temp_bytes,
                              const void* d_keys_in, void* d_keys_out,
@@ -85,22 +161,19 @@ absl::Status CubSortKeysImpl(void* d_temp_storage, size_t& temp_bytes,
     return CubSortKeysImpl<KeyT>(d_temp_storage, temp_bytes, d_keys_in,
                                  d_keys_out, num_items, descending, stream);
   }
-  void* d_offsets = static_cast<char*>(d_temp_storage) + temp_bytes;
-  int* start_offsets =
-      d_temp_storage != nullptr ? static_cast<int*>(d_offsets) : nullptr;
-  int* end_offsets = start_offsets != nullptr ? start_offsets + 1 : nullptr;
+  const unsigned int segment_size = num_items / batch_size;
   auto err =
       descending
-          ? hipcub::DeviceSegmentedRadixSort::SortKeysDescending<KeyT>(
+          ? rocprim::segmented_radix_sort_keys_desc<SegmentedSortConfig>(
                 d_temp_storage, temp_bytes, static_cast<const KeyT*>(d_keys_in),
                 static_cast<KeyT*>(d_keys_out), num_items, batch_size,
-                start_offsets, end_offsets, /*begin_bit=*/0,
-                /*end_bit=*/sizeof(KeyT) * 8, stream)
-          : hipcub::DeviceSegmentedRadixSort::SortKeys<KeyT>(
+                SegmentBegins(segment_size), SegmentEnds(segment_size),
+                /*begin_bit=*/0, /*end_bit=*/sizeof(KeyT) * 8, stream)
+          : rocprim::segmented_radix_sort_keys<SegmentedSortConfig>(
                 d_temp_storage, temp_bytes, static_cast<const KeyT*>(d_keys_in),
                 static_cast<KeyT*>(d_keys_out), num_items, batch_size,
-                start_offsets, end_offsets, /*begin_bit=*/0,
-                /*end_bit=*/sizeof(KeyT) * 8, stream);
+                SegmentBegins(segment_size), SegmentEnds(segment_size),
+                /*begin_bit=*/0, /*end_bit=*/sizeof(KeyT) * 8, stream);
   return stream_executor::gpu::ToStatus(err);
 }
 
@@ -138,26 +211,23 @@ absl::Status CubSortPairsImpl(void* d_temp_storage, size_t& temp_bytes,
                                         d_keys_out, d_values_in, d_values_out,
                                         num_items, descending, stream);
   }
-  void* d_offsets = static_cast<char*>(d_temp_storage) + temp_bytes;
-  int* start_offsets =
-      d_temp_storage != nullptr ? static_cast<int*>(d_offsets) : nullptr;
-  int* end_offsets = start_offsets != nullptr ? start_offsets + 1 : nullptr;
+  const unsigned int segment_size = num_items / batch_size;
   auto err =
       descending
-          ? hipcub::DeviceSegmentedRadixSort::SortPairsDescending<KeyT, ValT>(
+          ? rocprim::segmented_radix_sort_pairs_desc<SegmentedSortConfig>(
                 d_temp_storage, temp_bytes, static_cast<const KeyT*>(d_keys_in),
                 static_cast<KeyT*>(d_keys_out),
                 static_cast<const ValT*>(d_values_in),
                 static_cast<ValT*>(d_values_out), num_items, batch_size,
-                start_offsets, end_offsets, /*begin_bit=*/0,
-                /*end_bit=*/sizeof(KeyT) * 8, stream)
-          : hipcub::DeviceSegmentedRadixSort::SortPairs<KeyT, ValT>(
+                SegmentBegins(segment_size), SegmentEnds(segment_size),
+                /*begin_bit=*/0, /*end_bit=*/sizeof(KeyT) * 8, stream)
+          : rocprim::segmented_radix_sort_pairs<SegmentedSortConfig>(
                 d_temp_storage, temp_bytes, static_cast<const KeyT*>(d_keys_in),
                 static_cast<KeyT*>(d_keys_out),
                 static_cast<const ValT*>(d_values_in),
                 static_cast<ValT*>(d_values_out), num_items, batch_size,
-                start_offsets, end_offsets, /*begin_bit=*/0,
-                /*end_bit=*/sizeof(KeyT) * 8, stream);
+                SegmentBegins(segment_size), SegmentEnds(segment_size),
+                /*begin_bit=*/0, /*end_bit=*/sizeof(KeyT) * 8, stream);
   return stream_executor::gpu::ToStatus(err);
 }
 
