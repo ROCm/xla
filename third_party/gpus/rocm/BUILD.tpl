@@ -585,3 +585,16 @@ platform(
         "OSFamily": "Linux",
     },
 )
+
+platform(
+    name = "linux_x64_bb",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+        "@bazel_tools//tools/cpp:clang",
+    ],
+    exec_properties = {
+        "Pool": "%{rocm_rbe_pool}",
+        "OSFamily": "Linux",
+    },
+)
