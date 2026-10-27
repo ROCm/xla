@@ -3343,6 +3343,124 @@ ENTRY entry {
       std::move(optimized_module), ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
 }
 
+class RoutedConvTritonEmitterTest : public TritonEmitterTest {
+ public:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions debug_options = TritonEmitterTest::GetDebugOptionsForTest();
+    debug_options.set_xla_gpu_experimental_enable_triton_conv_fusion(true);
+    return debug_options;
+  }
+};
+
+TEST_F(RoutedConvTritonEmitterTest, RoutedConvolutionIsEmittedByTriton) {
+  constexpr absl::string_view kHlo = R"(
+ENTRY entry {
+  p0 = f32[1,16,16,32] parameter(0)
+  p1 = f32[3,3,32,16] parameter(1)
+  ROOT conv = f32[1,14,14,16] convolution(p0, p1),
+    window={size=3x3}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest}
+})";
+
+  ASSERT_OK_AND_ASSIGN(auto optimized_module, GetOptimizedModule(kHlo));
+  const HloInstruction* root =
+      optimized_module->entry_computation()->root_instruction();
+  ASSERT_OK_AND_ASSIGN(GpuBackendConfig gpu_config,
+                       root->backend_config<GpuBackendConfig>());
+  const FusionBackendConfig& fusion_backend_config =
+      gpu_config.fusion_backend_config();
+  ASSERT_EQ(fusion_backend_config.kind(), "__triton");
+  ASSERT_TRUE(fusion_backend_config.has_block_level_fusion_config());
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      std::move(optimized_module), ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_F(RoutedConvTritonEmitterTest, RoutedPaddedStridedConvolutionIsCorrect) {
+  constexpr absl::string_view kHlo = R"(
+ENTRY entry {
+  p0 = f32[1,32,32,64] parameter(0)
+  p1 = f32[3,3,64,128] parameter(1)
+  ROOT conv = f32[1,16,16,128] convolution(p0, p1),
+    window={size=3x3 stride=2x2 pad=1_1x1_1}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest}
+})";
+
+  ASSERT_OK_AND_ASSIGN(auto optimized_module, GetOptimizedModule(kHlo));
+  const HloInstruction* root =
+      optimized_module->entry_computation()->root_instruction();
+  ASSERT_OK_AND_ASSIGN(GpuBackendConfig gpu_config,
+                       root->backend_config<GpuBackendConfig>());
+  const FusionBackendConfig& fusion_backend_config =
+      gpu_config.fusion_backend_config();
+  ASSERT_EQ(fusion_backend_config.kind(), "__triton");
+  ASSERT_TRUE(fusion_backend_config.has_block_level_fusion_config());
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      std::move(optimized_module), ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_F(RoutedConvTritonEmitterTest,
+       OnlyTheEligibleConvolutionIsRoutedToTriton) {
+  constexpr absl::string_view kHlo = R"(
+ENTRY entry {
+  p0 = f32[1,16,16,32] parameter(0)
+  p1 = f32[3,3,32,16] parameter(1)
+  p2 = f32[3,3,16,16] parameter(2)
+  good = f32[1,14,14,16] convolution(p0, p1),
+    window={size=3x3}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest}
+  bad = f32[1,14,14,16] convolution(p0, p2),
+    window={size=3x3}, dim_labels=b01f_01io->b01f, feature_group_count=2,
+    operand_precision={highest,highest}
+  ROOT sum = f32[1,14,14,16] add(good, bad)
+})";
+
+  ASSERT_OK_AND_ASSIGN(auto optimized_module, GetOptimizedModule(kHlo));
+  const HloInstruction* root =
+      optimized_module->entry_computation()->root_instruction();
+  ASSERT_EQ(root->opcode(), HloOpcode::kFusion);
+  ASSERT_EQ(root->operand_count(), 2);
+
+  const HloInstruction* triton_fusion = nullptr;
+  const HloInstruction* loop_fusion = nullptr;
+  for (const HloInstruction* operand : root->operands()) {
+    ASSERT_EQ(operand->opcode(), HloOpcode::kFusion);
+    if (operand->fusion_kind() == HloInstruction::FusionKind::kCustom) {
+      triton_fusion = operand;
+    } else {
+      loop_fusion = operand;
+    }
+  }
+  ASSERT_NE(triton_fusion, nullptr);
+  ASSERT_NE(loop_fusion, nullptr);
+  ASSERT_EQ(loop_fusion->fusion_kind(), HloInstruction::FusionKind::kLoop);
+
+  const HloInstruction* bad_conv = loop_fusion->fused_expression_root();
+  ASSERT_EQ(bad_conv->opcode(), HloOpcode::kConvolution);
+  ASSERT_EQ(bad_conv->feature_group_count(), 2);
+  ASSERT_EQ(Cast<HloConvolutionInstruction>(bad_conv)->convolution_kind(),
+            CONVOLUTION_KIND_UNSET);
+  ASSERT_OK_AND_ASSIGN(GpuBackendConfig loop_config,
+                       loop_fusion->backend_config<GpuBackendConfig>());
+  ASSERT_TRUE(loop_config.has_native_emitter_backend_config());
+  ASSERT_FALSE(loop_config.has_fusion_backend_config());
+
+  const HloInstruction* good_conv = triton_fusion->fused_expression_root();
+  ASSERT_EQ(good_conv->opcode(), HloOpcode::kConvolution);
+  ASSERT_EQ(good_conv->feature_group_count(), 1);
+  ASSERT_EQ(Cast<HloConvolutionInstruction>(good_conv)->convolution_kind(),
+            CONVOLUTION_KIND_FPROP);
+  ASSERT_OK_AND_ASSIGN(GpuBackendConfig triton_config,
+                       triton_fusion->backend_config<GpuBackendConfig>());
+  ASSERT_EQ(triton_config.fusion_backend_config().kind(), "__triton");
+  ASSERT_TRUE(
+      triton_config.fusion_backend_config().has_block_level_fusion_config());
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      std::move(optimized_module), ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
 }  // namespace
 }  // namespace gpu
 }  // namespace xla
