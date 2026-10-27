@@ -46,6 +46,11 @@ bazel_dep(name = "rules_ml_toolchain")
 archive_override(
     module_name = "rules_ml_toolchain",
     integrity = "sha256-QJY+S8Ji36mkMUb2EBQK8AaLAjrOjzxQ8XBae1DeCDA=",
+    patch_strip = 1,
+    patches = [
+        "//third_party/rules_ml_toolchain:hipcc_wrapper_debug_flag.patch",
+        "//third_party/rules_ml_toolchain:rocm_global_symbol_version.patch",
+    ],
     strip_prefix = "rules_ml_toolchain-cad1047facbac4fb3c1124da68bf2cb36c7eb9ac",
     urls = ["https://github.com/google-ml-infra/rules_ml_toolchain/archive/cad1047facbac4fb3c1124da68bf2cb36c7eb9ac.tar.gz"],
 )

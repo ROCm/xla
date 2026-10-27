@@ -50,6 +50,10 @@ def workspace():
     # Details: https://github.com/google-ml-infra/rules_ml_toolchain
     tf_http_archive(
         name = "rules_ml_toolchain",
+        patch_file = [
+            "//third_party/rules_ml_toolchain:hipcc_wrapper_debug_flag.patch",
+            "//third_party/rules_ml_toolchain:rocm_global_symbol_version.patch",
+        ],
         sha256 = "40963e4bc262dfa9a43146f610140af0068b023ace8f3c50f1705a7b50de0830",
         strip_prefix = "rules_ml_toolchain-cad1047facbac4fb3c1124da68bf2cb36c7eb9ac",
         urls = tf_mirror_urls(
