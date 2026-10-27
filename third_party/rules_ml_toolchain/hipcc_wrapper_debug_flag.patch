@@ -1,0 +1,18 @@
+[ROCm] Fix passing debug flag -g option correctly to hermetic clang using
+the hipcc wrapper.
+
+Backport of upstream rules_ml_toolchain commit
+09925f69ffb6e1e765a246073ace69bfb33fbb57 (PR #329).
+Drop this patch once rules_ml_toolchain is bumped past that commit.
+
+--- a/cc/impls/linux_x86_64_linux_x86_64_rocm/wrappers/hipcc_wrapper
++++ b/cc/impls/linux_x86_64_linux_x86_64_rocm/wrappers/hipcc_wrapper
+@@ -233,7 +233,7 @@
+         if args.sysroot[0] != "/":
+             gpu_compiler_options.extend(["--sysroot", args.sysroot[0]])
+     if args.g:
+-        gpu_compiler_options.append("-g" + "".join(sum(args.g, [])))
++        gpu_compiler_options.append("-g" + " -g".join(set(sum(args.g, []))))
+     if args.no_canonical_prefixes:
+         gpu_compiler_options.append("-no-canonical-prefixes")
+ 
