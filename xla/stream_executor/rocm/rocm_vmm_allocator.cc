@@ -50,14 +50,15 @@ static hipMemAccessDesc GetVmmAccessDescriptor(int device) {
 // the padded size, and the allocation handle.
 static absl::StatusOr<
     std::tuple<void*, uint64_t, hipMemGenericAllocationHandle_t>>
-VmmAllocate(StreamExecutor* executor, uint64_t size) {
+VmmAllocate(StreamExecutor* executor, uint64_t size,
+            const RocmVmmOptions& options) {
   std::unique_ptr<ActivateContext> activation = executor->Activate();
 
   hipDevice_t device;
   ABSL_RETURN_IF_ERROR(
       ToStatus(hipDeviceGet(&device, executor->device_ordinal())));
 
-  hipMemAllocationProp properties = MakeRocmVmmAllocationProps(device);
+  hipMemAllocationProp properties = MakeRocmVmmAllocationProps(device, options);
   size_t granularity = 0;
   ABSL_RETURN_IF_ERROR(ToStatus(hipMemGetAllocationGranularity(
       &granularity, &properties, hipMemAllocationGranularityRecommended)));
@@ -177,8 +178,9 @@ class RocmVmmMemoryAllocation final : public MemoryAllocation {
 
 }  // namespace
 
-RocmVmmAllocator::RocmVmmAllocator(StreamExecutor* executor)
-    : executor_(executor) {}
+RocmVmmAllocator::RocmVmmAllocator(StreamExecutor* executor,
+                                   const RocmVmmOptions& options)
+    : executor_(executor), options_(options) {}
 
 absl::StatusOr<std::unique_ptr<MemoryAllocation>> RocmVmmAllocator::Allocate(
     uint64_t size) {
@@ -187,7 +189,7 @@ absl::StatusOr<std::unique_ptr<MemoryAllocation>> RocmVmmAllocator::Allocate(
                                                      nullptr);
   }
 
-  ABSL_ASSIGN_OR_RETURN(auto result, VmmAllocate(executor_, size));
+  ABSL_ASSIGN_OR_RETURN(auto result, VmmAllocate(executor_, size, options_));
   auto [ptr, padded_size, handle] = result;
 
   return std::make_unique<RocmVmmMemoryAllocation>(executor_, ptr, size,

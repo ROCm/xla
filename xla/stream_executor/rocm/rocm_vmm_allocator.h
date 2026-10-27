@@ -22,6 +22,7 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/memory_allocator.h"
+#include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
 #include "xla/stream_executor/stream_executor.h"
 
 namespace stream_executor::gpu {
@@ -31,13 +32,17 @@ namespace stream_executor::gpu {
 // and accessible from the device and its peers.
 class RocmVmmAllocator : public MemoryAllocator {
  public:
-  explicit RocmVmmAllocator(StreamExecutor* executor);
+  // `options` decides the handle type the allocations request; see
+  // RocmVmmOptions.
+  explicit RocmVmmAllocator(StreamExecutor* executor,
+                            const RocmVmmOptions& options = {});
 
   absl::StatusOr<std::unique_ptr<MemoryAllocation>> Allocate(
       uint64_t size) final;
 
  private:
   StreamExecutor* executor_;
+  RocmVmmOptions options_;
 };
 
 }  // namespace stream_executor::gpu

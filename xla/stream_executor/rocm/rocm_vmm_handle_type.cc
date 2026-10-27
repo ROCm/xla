@@ -15,91 +15,42 @@ limitations under the License.
 
 #include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
 
-#include <string>
-
 #include "absl/log/log.h"
-#include "absl/status/status.h"
-#include "absl/strings/string_view.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/rocm_config.h"
-#include "xla/tsl/util/env_var.h"
 
 namespace stream_executor::gpu {
 
-namespace {
-
-constexpr absl::string_view kExportableHandlesEnvVar =
-    "XLA_ROCM_VMM_EXPORTABLE_HANDLES";
-
+hipMemAllocationHandleType RocmVmmHandleType(const RocmVmmOptions& options) {
 // Exportable VMM handles are only usable from ROCm 10.0 onwards; earlier
-// releases cannot be relied on to export and import them correctly. Encoded
-// the way rocm_config.h encodes TF_ROCM_VERSION (10000 * major + 100 * minor +
-// patch).
-constexpr int kMinRocmVersionForExportableHandles = 100000;  // ROCm 10.0.0
-
-// Returns whether VMM allocations should request exportable handles.
-//
-// kExportableHandlesEnvVar unset: gated on the ROCm version.
-// Set to false: request non-exportable handles.
-// Set to true: request exportable handles whatever the ROCm version.
-bool ExportableHandlesEnabled() {
-  std::string env_value;
-  absl::Status status = tsl::ReadStringFromEnvVar(
-      kExportableHandlesEnvVar, /*default_val=*/"", &env_value);
-  if (status.ok() && env_value.empty()) {
-    if (TF_ROCM_VERSION < kMinRocmVersionForExportableHandles) {
-      LOG(INFO) << "Exportable VMM handles require ROCm 10.0 or newer; "
-                   "requesting non-exportable handles.";
-      return false;
-    }
-    return true;
+// releases cannot be relied on to export and import them correctly.
+// rocm_config.h encodes TF_ROCM_VERSION as 10000 * major + 100 * minor +
+// patch, so ROCm 10.0.0 is 100000.
+#if TF_ROCM_VERSION >= 100000
+  if (options.enable_posix_fd_handle) {
+    return hipMemHandleTypePosixFileDescriptor;
   }
-
-  bool enabled = true;
-  status = tsl::ReadBoolFromEnvVar(kExportableHandlesEnvVar,
-                                   /*default_val=*/true, &enabled);
-  if (!status.ok()) {
-    LOG(WARNING) << status.message()
-                 << "; requesting exportable VMM handle types.";
-    enabled = true;
+#else
+  if (options.enable_posix_fd_handle) {
+    // Logged once rather than per allocation. A caller that asked for
+    // exportable handles and silently did not get them has no way to tell,
+    // and the consequence only surfaces much later, where the memory is
+    // registered.
+    LOG_FIRST_N(WARNING, 1)
+        << "Exportable ROCm VMM handles require ROCm 10.0 or newer; VMM "
+           "allocations will request no handles (non-exportable).";
   }
-  if (enabled && TF_ROCM_VERSION < kMinRocmVersionForExportableHandles) {
-    LOG(WARNING) << kExportableHandlesEnvVar
-                 << " requests exportable VMM handles on ROCm older than 10.0. "
-                    "This is only safe on a runtime carrying a backport of the "
-                    "fix; otherwise an exported handle may resolve to memory "
-                    "that has already been freed.";
-  }
-  return enabled;
+#endif
+  return hipMemHandleTypeNone;
 }
 
-}  // namespace
-
-hipMemAllocationHandleType RocmVmmHandleType() {
-  // Resolved once: the answer depends only on the ROCm version this was built
-  // against and on the environment, neither of which changes while the process
-  // runs. MakeRocmVmmAllocationProps() is on the allocation path, so the
-  // environment must not be re-read per allocation.
-  static const hipMemAllocationHandleType handle_type = [] {
-    hipMemAllocationHandleType type = ExportableHandlesEnabled()
-                                          ? hipMemHandleTypePosixFileDescriptor
-                                          : hipMemHandleTypeNone;
-    LOG(INFO) << "ROCm VMM allocations will request "
-              << (type == hipMemHandleTypePosixFileDescriptor
-                      ? "POSIX file descriptor handles (exportable)"
-                      : "no handles (non-exportable)")
-              << ".";
-    return type;
-  }();
-  return handle_type;
-}
-
-hipMemAllocationProp MakeRocmVmmAllocationProps(hipDevice_t device) {
+hipMemAllocationProp MakeRocmVmmAllocationProps(hipDevice_t device,
+                                                const RocmVmmOptions& options) {
   hipMemAllocationProp props = {};
   props.type = hipMemAllocationTypePinned;
   props.location.type = hipMemLocationTypeDevice;
   props.location.id = device;
-  props.requestedHandleTypes = RocmVmmHandleType();
+  props.requestedHandleTypes = RocmVmmHandleType(options);
   return props;
 }
 

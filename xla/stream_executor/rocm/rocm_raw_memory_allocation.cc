@@ -33,14 +33,15 @@ limitations under the License.
 namespace stream_executor::gpu {
 
 absl::StatusOr<std::unique_ptr<RocmRawMemoryAllocation>>
-RocmRawMemoryAllocation::Create(StreamExecutor* executor, uint64_t size) {
+RocmRawMemoryAllocation::Create(StreamExecutor* executor, uint64_t size,
+                                const RocmVmmOptions& options) {
   std::unique_ptr<ActivateContext> activation = executor->Activate();
 
   hipDevice_t device;
   ABSL_RETURN_IF_ERROR(
       ToStatus(hipDeviceGet(&device, executor->device_ordinal())));
 
-  hipMemAllocationProp props = MakeRocmVmmAllocationProps(device);
+  hipMemAllocationProp props = MakeRocmVmmAllocationProps(device, options);
 
   size_t granularity = 0;
   ABSL_RETURN_IF_ERROR(ToStatus(hipMemGetAllocationGranularity(

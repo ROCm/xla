@@ -1689,10 +1689,7 @@ cc_library(
         "rocm-only",
     ],
     deps = [
-        "//xla/tsl/util:env_var",
-        "@com_google_absl//absl/log",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/log",  # buildcleaner: keep
         "@local_config_rocm//rocm:hip",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocm_config",
         "@local_config_rocm//rocm:rocm_headers",
@@ -1730,35 +1727,6 @@ xla_cc_test(
         "@com_google_googletest//:gtest_main",
         "@local_config_rocm//rocm:hip",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocm_config",
-        "@local_config_rocm//rocm:rocm_headers",
-    ],
-)
-
-# Separate binary: RocmVmmHandleType() caches its probe for the lifetime of the
-# process, so XLA_ROCM_VMM_EXPORTABLE_HANDLES can only be exercised by a test
-# binary that sets it before any other test touches the VMM path.
-xla_cc_test(
-    name = "rocm_vmm_handle_type_disabled_test",
-    srcs = ["rocm_vmm_handle_type_disabled_test.cc"],
-    tags = [
-        "gpu",
-        "rocm-only",
-    ],
-    deps = [
-        ":amdhipblaslt_plugin",
-        ":rocm_platform",
-        ":rocm_raw_memory_allocation",
-        ":rocm_status",
-        ":rocm_vmm_handle_type",
-        "//xla/stream_executor:activate_context",
-        "//xla/stream_executor:platform",
-        "//xla/stream_executor:platform_manager",
-        "//xla/stream_executor:stream_executor_h",
-        "//xla/tsl/platform:statusor",
-        "//xla/tsl/platform:test",
-        "@com_google_absl//absl/status:status_matchers",  # build_cleaner: keep
-        "@com_google_googletest//:gtest",
-        "@local_config_rocm//rocm:hip",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocm_headers",
     ],
 )
