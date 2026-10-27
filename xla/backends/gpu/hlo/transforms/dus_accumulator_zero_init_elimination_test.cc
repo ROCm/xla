@@ -30,6 +30,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/hlo/utils/hlo_query.h"
+#include "xla/service/hlo_module_config.h"
 
 namespace xla::gpu {
 namespace {
@@ -41,6 +42,14 @@ class DusAccumulatorZeroInitEliminationTest
     auto opts = module->config().debug_options();
     opts.set_xla_gpu_enable_dus_accumulator_zero_init_elimination(value);
     module->mutable_config().set_debug_options(opts);
+  }
+
+  HloModuleConfig ConfigWithFlag() const {
+    HloModuleConfig config = GetModuleConfigForTest();
+    DebugOptions opts = config.debug_options();
+    opts.set_xla_gpu_enable_dus_accumulator_zero_init_elimination(true);
+    config.set_debug_options(opts);
+    return config;
   }
 
   int64_t CountAllocateBuffers(HloModule* module) {
@@ -658,6 +667,365 @@ ENTRY e {
 }
 )";
   ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(kHlo));
+  EnableFlag(module.get());
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       DusAccumulatorZeroInitElimination().Run(module.get()));
+  EXPECT_FALSE(changed);
+  EXPECT_EQ(CountAllocateBuffers(module.get()), 0);
+}
+
+// Peeled first iteration: CollectivePipeliner's forward pipelining moves
+// iteration 0 out of the loop, so the stack init is DUS(broadcast(0), x0, 0),
+// simplified to pad(x0, 0), and the loop runs iterations 1..3. Only the peeled
+// slice must be written before the loop.
+struct PeeledCase {
+  absl::string_view name;
+  bool expected_changed;
+  absl::string_view padding = "0_3x0_0";
+  absl::string_view x0_shape = "bf16[1,8]";
+  absl::string_view iv_init = "1";
+  absl::string_view trip = "3";
+  absl::string_view body_idx = "  idx = s32[] add(it, z)";
+
+  constexpr PeeledCase(absl::string_view name, bool expected_changed)
+      : name(name), expected_changed(expected_changed) {}
+  constexpr PeeledCase WithPadding(absl::string_view val) const {
+    PeeledCase c = *this;
+    c.padding = val;
+    return c;
+  }
+  constexpr PeeledCase WithX0Shape(absl::string_view val) const {
+    PeeledCase c = *this;
+    c.x0_shape = val;
+    return c;
+  }
+  constexpr PeeledCase WithLoop(absl::string_view init,
+                                absl::string_view trip) const {
+    PeeledCase c = *this;
+    c.iv_init = init;
+    c.trip = trip;
+    return c;
+  }
+  constexpr PeeledCase WithBodyIdx(absl::string_view val) const {
+    PeeledCase c = *this;
+    c.body_idx = val;
+    return c;
+  }
+};
+
+std::string MakePeeledHlo(const PeeledCase& c) {
+  return absl::StrReplaceAll(
+      R"(
+HloModule m
+
+body {
+  p = (s32[], bf16[4,8]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  acc = bf16[4,8] get-tuple-element(p), index=1
+  update = bf16[1,8] constant({ {1,1,1,1,1,1,1,1} })
+  z = s32[] constant(0)
+$BODY_IDX
+  dus = bf16[4,8] dynamic-update-slice(acc, update, idx, z)
+  one = s32[] constant(1)
+  next = s32[] add(it, one)
+  ROOT out = (s32[], bf16[4,8]) tuple(next, dus)
+}
+
+cond {
+  p = (s32[], bf16[4,8]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  limit = s32[] constant(4)
+  ROOT lt = pred[] compare(it, limit), direction=LT
+}
+
+ENTRY e {
+  iv0 = s32[] constant($IV_INIT)
+  x0 = $X0_SHAPE parameter(0)
+  c0 = bf16[] constant(0)
+  peeled_init = bf16[4,8] pad(x0, c0), padding=$PADDING
+  init = (s32[], bf16[4,8]) tuple(iv0, peeled_init)
+  w = (s32[], bf16[4,8]) while(init), condition=cond, body=body,
+      backend_config={"known_trip_count":{"n":"$TRIP"},
+                      "known_init_step":{"init":"$IV_INIT","step":"1"},
+                      "known_induction_variable":{"tuple_index":"0"}}
+  ROOT r = bf16[4,8] get-tuple-element(w), index=1
+}
+)",
+      {{"$PADDING", c.padding},
+       {"$X0_SHAPE", c.x0_shape},
+       {"$IV_INIT", c.iv_init},
+       {"$TRIP", c.trip},
+       {"$BODY_IDX", c.body_idx}});
+}
+
+const PeeledCase kPeeledCases[] = {
+    PeeledCase("PeeledFirstSlice", true),
+    // Reverse scan: iteration i writes slot 3 - i, so the peeled iteration 0
+    // wrote slot 3 and the loop (i = 1..3) writes slots 2..0.
+    PeeledCase("ReversePeeledLastSlice", true)
+        .WithPadding("3_0x0_0")
+        .WithBodyIdx(R"(  three = s32[] constant(3)
+  idx = s32[] subtract(three, it))"),
+    // Double-buffer style: two iterations peeled, loop covers slots 2..3.
+    PeeledCase("TwoPeeledSlices", true)
+        .WithPadding("0_2x0_0")
+        .WithX0Shape("bf16[2,8]")
+        .WithLoop("2", "2"),
+    // The loop covers slots 2..3 but the peeled slice is only slot 0: slot 1
+    // keeps the padding, so the init is live.
+    PeeledCase("GapBetweenPeeledAndLoopSkipped", false).WithLoop("2", "2"),
+    // Peeled slice and loop both miss slot 3.
+    PeeledCase("RightEdgeUncoveredSkipped", false)
+        .WithBodyIdx(R"(  m1 = s32[] constant(-1)
+  idx = s32[] add(it, m1))"),
+    // Padding along the non-stacked dim: the loop never writes the padded
+    // columns of the peeled row.
+    PeeledCase("PadAlongTwoDimsSkipped", false)
+        .WithPadding("0_3x0_4")
+        .WithX0Shape("bf16[1,4]"),
+};
+
+class DusPeeledParam : public DusAccumulatorZeroInitEliminationTest,
+                       public ::testing::WithParamInterface<PeeledCase> {};
+
+TEST_P(DusPeeledParam, PeeledInit) {
+  const PeeledCase& c = GetParam();
+  SCOPED_TRACE(c.name);
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(MakePeeledHlo(c)));
+  EnableFlag(module.get());
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       DusAccumulatorZeroInitElimination().Run(module.get()));
+  EXPECT_EQ(changed, c.expected_changed);
+  EXPECT_EQ(CountAllocateBuffers(module.get()), c.expected_changed ? 1 : 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(DusAccumulatorZeroInitEliminationTest, DusPeeledParam,
+                         ::testing::ValuesIn(kPeeledCases),
+                         [](const ::testing::TestParamInfo<PeeledCase>& info) {
+                           return std::string(info.param.name);
+                         });
+
+// The raw peeled pad becomes a DUS of the peeled slice into an AllocateBuffer.
+TEST_F(DusAccumulatorZeroInitEliminationTest, PeeledPadBecomesDusOfAlloc) {
+  const HloModuleConfig config = ConfigWithFlag();
+  RunAndFilecheckHloRewrite(MakePeeledHlo(PeeledCase("Raw", true)),
+                            DusAccumulatorZeroInitElimination(), R"(
+// CHECK-DAG:  %[[X0:.*]] = bf16[1,8]{1,0} parameter(0)
+// CHECK-DAG:  %[[ALLOC:.*]] = bf16[4,8]{1,0} custom-call(), custom_call_target="AllocateBuffer"
+// CHECK:      %[[DUS:.*]] = bf16[4,8]{1,0} dynamic-update-slice(%[[ALLOC]], %[[X0]], %{{.*}}, %{{.*}})
+// CHECK:      tuple(%{{.*}}, %[[DUS]])
+)",
+                            [](HloModule* module) {
+                              EXPECT_EQ(hlo_query::GetFirstInstructionWithOpcode(
+                                            *module->entry_computation(),
+                                            HloOpcode::kPad),
+                                        nullptr);
+                            },
+                            &config);
+}
+
+// Post-fusion form, as in the layer scans of a train step: the peeled
+// iteration's pad is the root of a loop fusion that also computes the slice.
+// The fusion's pad root becomes an in-place DUS into a new AllocateBuffer
+// operand.
+TEST_F(DusAccumulatorZeroInitEliminationTest, PeeledPadFusionBecomesDusFusion) {
+  constexpr absl::string_view kHlo = R"(
+HloModule m
+
+fused_pad {
+  p0 = bf16[8] parameter(0)
+  neg = bf16[8] negate(p0)
+  b = bf16[1,8] bitcast(neg)
+  c0 = bf16[] constant(0)
+  ROOT pad = bf16[4,8] pad(b, c0), padding=0_3x0_0
+}
+
+fused_dus {
+  acc = bf16[4,8] parameter(0)
+  upd = bf16[1,8] parameter(1)
+  idx = s32[] parameter(2)
+  z = s32[] constant(0)
+  ROOT dus = bf16[4,8] dynamic-update-slice(acc, upd, idx, z)
+}
+
+body {
+  p = (s32[], bf16[4,8]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  acc = bf16[4,8] get-tuple-element(p), index=1
+  update = bf16[1,8] constant({ {1,1,1,1,1,1,1,1} })
+  dus = bf16[4,8] fusion(acc, update, it), kind=kLoop, calls=fused_dus
+  one = s32[] constant(1)
+  next = s32[] add(it, one)
+  ROOT out = (s32[], bf16[4,8]) tuple(next, dus)
+}
+
+cond {
+  p = (s32[], bf16[4,8]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  limit = s32[] constant(4)
+  ROOT lt = pred[] compare(it, limit), direction=LT
+}
+
+ENTRY e {
+  iv0 = s32[] constant(1)
+  x0 = bf16[8] parameter(0)
+  peeled_init = bf16[4,8] fusion(x0), kind=kLoop, calls=fused_pad
+  init = (s32[], bf16[4,8]) tuple(iv0, peeled_init)
+  w = (s32[], bf16[4,8]) while(init), condition=cond, body=body,
+      backend_config={"known_trip_count":{"n":"3"},
+                      "known_init_step":{"init":"1","step":"1"},
+                      "known_induction_variable":{"tuple_index":"0"}}
+  ROOT r = bf16[4,8] get-tuple-element(w), index=1
+}
+)";
+  const HloModuleConfig config = ConfigWithFlag();
+  RunAndFilecheckHloRewrite(kHlo, DusAccumulatorZeroInitElimination(), R"(
+// CHECK:      %[[FUSED:.*]] ({{.*}}: bf16[8], {{.*}}: bf16[4,8]) -> bf16[4,8] {
+// CHECK-DAG:    %[[B:.*]] = bf16[1,8]{1,0} bitcast(
+// CHECK-DAG:    %[[BUF:.*]] = bf16[4,8]{1,0} parameter(1)
+// CHECK:        ROOT %{{.*}} = bf16[4,8]{1,0} dynamic-update-slice(%[[BUF]], %[[B]], %{{.*}}, %{{.*}})
+// CHECK:      ENTRY
+// CHECK-DAG:    %[[X0:.*]] = bf16[8]{0} parameter(0)
+// CHECK-DAG:    %[[ALLOC:.*]] = bf16[4,8]{1,0} custom-call(), custom_call_target="AllocateBuffer"
+// CHECK:        %[[INIT:.*]] = bf16[4,8]{1,0} fusion(%[[X0]], %[[ALLOC]]), kind=kLoop, calls=%[[FUSED]]
+// CHECK:        tuple(%{{.*}}, %[[INIT]])
+)",
+                            /*after_pass_checks=*/nullptr, &config);
+}
+
+// Reverse scan after fusion: the body computes its slot, 3 - i, in a
+// multi-output fusion together with a dynamic-slice that also uses it, and the
+// DUS fusion takes the index through a get-tuple-element of that fusion.
+TEST_F(DusAccumulatorZeroInitEliminationTest,
+       PeeledReverseScanIndexFromMultiOutputFusion) {
+  constexpr absl::string_view kHlo = R"(
+HloModule m
+
+fused_idx {
+  table = f32[4,1] parameter(0)
+  it = s32[] parameter(1)
+  three = s32[] constant(3)
+  idx = s32[] subtract(three, it)
+  z = s32[] constant(0)
+  ds = f32[1,1] dynamic-slice(table, idx, z), dynamic_slice_sizes={1,1}
+  ROOT t = (f32[1,1], s32[]) tuple(ds, idx)
+}
+
+fused_dus {
+  acc = bf16[4,8] parameter(0)
+  idx = s32[] parameter(1)
+  upd = bf16[1,8] parameter(2)
+  z = s32[] constant(0)
+  ROOT dus = bf16[4,8] dynamic-update-slice(acc, upd, idx, z)
+}
+
+body {
+  p = (s32[], bf16[4,8], f32[4,1]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  acc = bf16[4,8] get-tuple-element(p), index=1
+  table = f32[4,1] get-tuple-element(p), index=2
+  mof = (f32[1,1], s32[]) fusion(table, it), kind=kLoop, calls=fused_idx
+  idx = s32[] get-tuple-element(mof), index=1
+  update = bf16[1,8] constant({ {1,1,1,1,1,1,1,1} })
+  dus = bf16[4,8] fusion(acc, idx, update), kind=kLoop, calls=fused_dus
+  one = s32[] constant(1)
+  next = s32[] add(it, one)
+  ROOT out = (s32[], bf16[4,8], f32[4,1]) tuple(next, dus, table)
+}
+
+cond {
+  p = (s32[], bf16[4,8], f32[4,1]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  limit = s32[] constant(4)
+  ROOT lt = pred[] compare(it, limit), direction=LT
+}
+
+ENTRY e {
+  iv0 = s32[] constant(1)
+  x0 = bf16[1,8] parameter(0)
+  table = f32[4,1] parameter(1)
+  c0 = bf16[] constant(0)
+  peeled_init = bf16[4,8] pad(x0, c0), padding=3_0x0_0
+  init = (s32[], bf16[4,8], f32[4,1]) tuple(iv0, peeled_init, table)
+  w = (s32[], bf16[4,8], f32[4,1]) while(init), condition=cond, body=body,
+      backend_config={"known_trip_count":{"n":"3"},
+                      "known_init_step":{"init":"1","step":"1"},
+                      "known_induction_variable":{"tuple_index":"0"}}
+  ROOT r = bf16[4,8] get-tuple-element(w), index=1
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(kHlo));
+  EnableFlag(module.get());
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       DusAccumulatorZeroInitElimination().Run(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_EQ(CountAllocateBuffers(module.get()), 1);
+}
+
+// A fused pad whose padding value is a fusion parameter is left alone:
+// dropping the pad would leave that parameter without users.
+TEST_F(DusAccumulatorZeroInitEliminationTest,
+       PeeledPadFusionWithParameterPadValueSkipped) {
+  constexpr absl::string_view kHlo = R"(
+HloModule m
+
+fused_pad {
+  p0 = bf16[1,8] parameter(0)
+  pv = bf16[] parameter(1)
+  ROOT pad = bf16[4,8] pad(p0, pv), padding=0_3x0_0
+}
+
+body {
+  p = (s32[], bf16[4,8]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  acc = bf16[4,8] get-tuple-element(p), index=1
+  update = bf16[1,8] constant({ {1,1,1,1,1,1,1,1} })
+  z = s32[] constant(0)
+  dus = bf16[4,8] dynamic-update-slice(acc, update, it, z)
+  one = s32[] constant(1)
+  next = s32[] add(it, one)
+  ROOT out = (s32[], bf16[4,8]) tuple(next, dus)
+}
+
+cond {
+  p = (s32[], bf16[4,8]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  limit = s32[] constant(4)
+  ROOT lt = pred[] compare(it, limit), direction=LT
+}
+
+ENTRY e {
+  iv0 = s32[] constant(1)
+  x0 = bf16[1,8] parameter(0)
+  pv = bf16[] parameter(1)
+  peeled_init = bf16[4,8] fusion(x0, pv), kind=kLoop, calls=fused_pad
+  init = (s32[], bf16[4,8]) tuple(iv0, peeled_init)
+  w = (s32[], bf16[4,8]) while(init), condition=cond, body=body,
+      backend_config={"known_trip_count":{"n":"3"},
+                      "known_init_step":{"init":"1","step":"1"},
+                      "known_induction_variable":{"tuple_index":"0"}}
+  ROOT r = bf16[4,8] get-tuple-element(w), index=1
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(kHlo));
+  EnableFlag(module.get());
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       DusAccumulatorZeroInitElimination().Run(module.get()));
+  EXPECT_FALSE(changed);
+  EXPECT_EQ(CountAllocateBuffers(module.get()), 0);
+}
+
+// The body reads the stack (an add of the accumulator), so the peeled pad's
+// zeros are observable and must stay.
+TEST_F(DusAccumulatorZeroInitEliminationTest, PeeledInitReadInBodySkipped) {
+  PeeledCase c("ReadInBody", false);
+  std::string hlo = MakePeeledHlo(c);
+  hlo = absl::StrReplaceAll(
+      hlo, {{"  dus = bf16[4,8] dynamic-update-slice(acc, update, idx, z)",
+             "  dus0 = bf16[4,8] dynamic-update-slice(acc, update, idx, z)\n"
+             "  dus = bf16[4,8] add(dus0, acc)"}});
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
   EnableFlag(module.get());
   ASSERT_OK_AND_ASSIGN(bool changed,
                        DusAccumulatorZeroInitElimination().Run(module.get()));
