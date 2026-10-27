@@ -1707,6 +1707,7 @@ cc_library(
         "//xla/backends/gpu/transforms:priority_fusion",
         "//xla/backends/gpu/transforms:ragged_dot_fusion_rewriter",
         "//xla/backends/gpu/transforms:sort_iota_fusion",
+        "//xla/backends/gpu/transforms:triton_conv_fusion_rewriter",
         "//xla/backends/gpu/transforms:variadic_op_splitter",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/pass:hlo_pass",
