@@ -21,8 +21,10 @@ limitations under the License.
 
 #include "absl/status/statusor.h"
 #include "rocm/include/rccl/rccl.h"
+#include "xla/backends/gpu/collectives/cancellation_token.h"
 #include "xla/core/collectives/symmetric_memory.h"
 #include "xla/stream_executor/device_address.h"
+#include "xla/tsl/concurrency/executor.h"
 
 namespace xla::gpu {
 
@@ -33,8 +35,14 @@ class RcclSymmetricMemory final : public SymmetricMemory {
  public:
   ~RcclSymmetricMemory() final;
 
+  // Registers `addr` with NCCL_WIN_COLL_SYMMETRIC. Must be called on
+  // `executor` if it is not null, which then also runs the deregistration; on a
+  // non-blocking communicator, `cancel` (if not null) aborts the polling. Both
+  // are owned by the communicator and must outlive the returned object.
   static absl::StatusOr<std::unique_ptr<RcclSymmetricMemory>> Create(
-      ncclComm_t comm, stream_executor::DeviceAddressBase addr);
+      ncclComm_t comm, stream_executor::DeviceAddressBase addr,
+      tsl::Executor* executor = nullptr,
+      const CancellationToken* cancel = nullptr);
 
   stream_executor::DeviceAddressBase addr() const final;
 
@@ -49,11 +57,14 @@ class RcclSymmetricMemory final : public SymmetricMemory {
 
  private:
   RcclSymmetricMemory(ncclComm_t comm, ncclWindow_t win,
-                      stream_executor::DeviceAddressBase addr);
+                      stream_executor::DeviceAddressBase addr,
+                      tsl::Executor* executor, const CancellationToken* cancel);
 
   ncclComm_t comm_;
   ncclWindow_t win_;
   stream_executor::DeviceAddressBase addr_;
+  tsl::Executor* executor_;
+  const CancellationToken* cancel_;
 };
 
 }  // namespace xla::gpu
