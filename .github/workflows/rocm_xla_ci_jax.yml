@@ -80,7 +80,7 @@ jobs:
   jax-upstream:
     needs: rocm-config
     name: JAX Upstream Linux x86 AMD Instinct GPU
-    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-4
+    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-1-testv2
     timeout-minutes: 220
     # Remove this once the JAX CI is stable.
     continue-on-error: true
