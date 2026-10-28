@@ -392,35 +392,10 @@ CollectiveOpTypes GetEnabledCollectiveOpTypes(const DebugOptions& option) {
   return enabled;
 }
 
-// Keep in sync with command_buffer_conversion_pass.cc. Async wrappers and
-// collective groups are matched through the wrapped instructions.
+// Collective groups are matched through the collectives they wrap.
 bool IsCommandBufferCollective(const HloInstruction* instruction,
                                const CollectiveOpTypes& enabled) {
-  auto is_enabled = [&](DebugOptions::CollectiveOpType type) {
-    return !enabled.has_value() || enabled->contains(type);
-  };
   switch (instruction->opcode()) {
-    case HloOpcode::kAllGather:
-    case HloOpcode::kAllGatherStart:
-    case HloOpcode::kAllGatherDone:
-      return is_enabled(DebugOptions::ALLGATHER);
-    case HloOpcode::kAllReduce:
-    case HloOpcode::kAllReduceStart:
-    case HloOpcode::kAllReduceDone:
-    case HloOpcode::kCollectiveReduce:
-      return is_enabled(DebugOptions::ALLREDUCE);
-    case HloOpcode::kAllToAll:
-      return is_enabled(DebugOptions::ALLTOALL);
-    case HloOpcode::kCollectiveBroadcast:
-      return is_enabled(DebugOptions::COLLECTIVEBROADCAST);
-    case HloOpcode::kCollectivePermute:
-    case HloOpcode::kCollectivePermuteStart:
-    case HloOpcode::kCollectivePermuteDone:
-      return is_enabled(DebugOptions::COLLECTIVEPERMUTE);
-    case HloOpcode::kRaggedAllToAll:
-      return is_enabled(DebugOptions::RAGGEDALLTOALL);
-    case HloOpcode::kReduceScatter:
-      return is_enabled(DebugOptions::REDUCESCATTER);
     // The filter has no type for send and recv.
     case HloOpcode::kRecv:
     case HloOpcode::kRecvDone:
@@ -428,8 +403,11 @@ bool IsCommandBufferCollective(const HloInstruction* instruction,
     case HloOpcode::kSendDone:
       return true;
     default:
-      return false;
+      break;
   }
+  std::optional<DebugOptions::CollectiveOpType> type =
+      GetCollectiveOpType(instruction);
+  return type.has_value() && (!enabled.has_value() || enabled->contains(*type));
 }
 
 bool IsCommandBufferCollectiveValue(const HloAliasAnalysis& alias_analysis,
@@ -453,6 +431,9 @@ std::optional<BufferAssigner::MustNotLiveOut> CreateMustNotLiveOut(
   // Only the VA remapping modes keep the temp allocation at a stable address.
   const DebugOptions::CommandBufferUpdateMode update_mode =
       option.xla_gpu_command_buffer_update_mode();
+  // TODO(magaonka-amd): Account for ragged all-to-all, which the command
+  // buffer conversion pass records as COLLECTIVES_KERNEL when it uses the
+  // symmetric memory kernel.
   if ((update_mode != DebugOptions::SKIP_TEMP &&
        update_mode != DebugOptions::SKIP_PROFILED) ||
       !absl::c_linear_search(option.xla_gpu_enable_command_buffer(),
