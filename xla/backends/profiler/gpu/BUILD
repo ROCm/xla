@@ -555,6 +555,27 @@ xla_cc_test(
 )
 
 cc_library(
+    name = "rocm_device_map",
+    srcs = ["rocm_device_map.cc"],
+    hdrs = ["rocm_device_map.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ] + if_google([
+        "manual",
+    ]),
+    deps = [
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@local_config_rocm//rocm:rocm_headers",
+    ],
+)
+
+cc_library(
     name = "rocm_collector",
     srcs = ["rocm_collector.cc"],
     hdrs = ["rocm_collector.h"],
@@ -669,6 +690,25 @@ xla_cc_test(
         "@com_google_googletest//:gtest_main",
         "//xla/tsl/profiler/utils:xplane_utils",
         "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
+    ],
+)
+
+xla_cc_test(
+    name = "rocm_device_map_test",
+    size = "small",
+    srcs = ["rocm_device_map_test.cc"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ] + if_google([
+        "manual",
+    ]),
+    deps = [
+        ":rocm_device_map",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+        "@local_config_rocm//rocm:rocm_headers",
     ],
 )
 
