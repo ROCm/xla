@@ -971,7 +971,7 @@ absl::StatusOr<std::shared_ptr<LockableGpuClique::Lock>> AcquireClique(
   //
   // TODO(mwhittaker): Make some of these flags.
   GpuCollectives::Config config;
-  config.split_share = true;
+  config.split_share = GetDebugOptionsFromFlags().xla_gpu_nccl_split_share();
   config.max_nchannels = max_nchannels;
   config.blocking_communicators =
       GetDebugOptionsFromFlags().xla_gpu_nccl_blocking_communicators();

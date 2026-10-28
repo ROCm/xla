@@ -1312,6 +1312,14 @@ message DebugOptions {
   // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/types.html#c.blocking
   optional bool xla_gpu_nccl_blocking_communicators = 390;
 
+  // If true (default), communicators split from a parent share its resources
+  // (ncclConfig_t.splitShare): where the parent already has a connection to the
+  // same peer on the same channel, the child reuses it. Collectives of a parent
+  // and a split child that run at once (on different communication streams)
+  // then drive the same connections and can deadlock. False gives every split
+  // communicator its own resources.
+  optional bool xla_gpu_nccl_split_share = 565;
+
   // Specify the maximum number of channels(SMs) NCCL
   // will use for collective operations.
   optional int64 xla_gpu_nccl_collective_max_nchannels = 273;
@@ -1994,7 +2002,7 @@ message DebugOptions {
   // still share an allocation.
   optional bool xla_gpu_experimental_collective_allocation_no_packing = 564;
 
-  // Next id: 565
+  // Next id: 566
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
