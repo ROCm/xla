@@ -15,7 +15,6 @@ limitations under the License.
 
 #include "xla/stream_executor/rocm/rocm_device_address_vmm_allocator.h"
 
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -118,18 +117,13 @@ absl::Status RocmDeviceAddressVmmAllocator::InitializeDeviceState(
   int ordinal = state.executor->device_ordinal();
 
   // Query allocation granularity for this device.
-  size_t granularity = 0;
   {
     std::unique_ptr<ActivateContext> activation = state.executor->Activate();
-    hipDevice_t hip_device;
-    ABSL_RETURN_IF_ERROR(
-        ToStatus(hipDeviceGet(&hip_device, ordinal), "hipDeviceGet"));
-    hipMemAllocationProp alloc_props =
-        MakeRocmVmmAllocationProps(hip_device, vmm_options_);
-    ABSL_RETURN_IF_ERROR(ToStatus(hipMemGetAllocationGranularity(
-        &granularity, &alloc_props, hipMemAllocationGranularityRecommended)));
+    ABSL_ASSIGN_OR_RETURN(
+        RocmVmmAllocationParams params,
+        GetRocmVmmAllocationParams(state.executor, vmm_options_));
+    state.allocation_granularity = static_cast<uint64_t>(params.granularity);
   }
-  state.allocation_granularity = static_cast<uint64_t>(granularity);
 
   // Allocate coherent host memory for the per-device timeline counter.
   // hipStreamWriteValue64 writes to this location; the CPU polls it to

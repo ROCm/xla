@@ -41,15 +41,9 @@ RocmMemoryReservation::Create(StreamExecutor* executor, uint64_t size,
                               const RocmVmmOptions& options) {
   std::unique_ptr<ActivateContext> activation = executor->Activate();
 
-  hipDevice_t device;
-  ABSL_RETURN_IF_ERROR(
-      ToStatus(hipDeviceGet(&device, executor->device_ordinal())));
-
-  hipMemAllocationProp props = MakeRocmVmmAllocationProps(device, options);
-
-  size_t granularity = 0;
-  ABSL_RETURN_IF_ERROR(ToStatus(hipMemGetAllocationGranularity(
-      &granularity, &props, hipMemAllocationGranularityRecommended)));
+  ABSL_ASSIGN_OR_RETURN(RocmVmmAllocationParams params,
+                        GetRocmVmmAllocationParams(executor, options));
+  size_t granularity = params.granularity;
 
   uint64_t padded_size = xla::RoundUpTo<uint64_t>(size, granularity);
 

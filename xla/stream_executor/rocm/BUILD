@@ -1689,7 +1689,11 @@ cc_library(
         "rocm-only",
     ],
     deps = [
+        ":rocm_status",
+        "//xla/stream_executor:stream_executor_h",
         "@com_google_absl//absl/log",  # buildcleaner: keep
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
         "@local_config_rocm//rocm:hip",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocm_config",
         "@local_config_rocm//rocm:rocm_headers",

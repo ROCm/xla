@@ -16,7 +16,11 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_ROCM_ROCM_VMM_HANDLE_TYPE_H_
 #define XLA_STREAM_EXECUTOR_ROCM_ROCM_VMM_HANDLE_TYPE_H_
 
+#include <cstddef>
+
+#include "absl/status/statusor.h"
 #include "rocm/include/hip/hip_runtime.h"
+#include "xla/stream_executor/stream_executor.h"
 
 namespace stream_executor::gpu {
 
@@ -47,16 +51,29 @@ struct RocmVmmOptions {
 // answer is the same for every device.
 hipMemAllocationHandleType RocmVmmHandleType(const RocmVmmOptions& options);
 
-// Returns allocation properties for a pinned device allocation on `device`,
-// requesting the handle type returned by RocmVmmHandleType(options).
+// What a ROCm VMM site needs before it can allocate or reserve.
+struct RocmVmmAllocationParams {
+  // Properties for a pinned device allocation, requesting the handle type
+  // returned by RocmVmmHandleType().
+  hipMemAllocationProp prop;
+
+  // Recommended allocation granularity for `prop`. Allocation sizes and
+  // reservation alignments must be multiples of it.
+  size_t granularity = 0;
+};
+
+// Returns the allocation properties for `executor`'s device under `options`,
+// together with the granularity the driver recommends for them.
 //
-// Every ROCm VMM site must build its properties through this function, so that
-// the handle type is applied in one place rather than restated at each
-// hipMemCreate(). hipMemGetAllocationGranularity() takes the same properties,
-// so a site that queries granularity with different properties than the site
-// that allocates would pad and align inconsistently.
-hipMemAllocationProp MakeRocmVmmAllocationProps(hipDevice_t device,
-                                                const RocmVmmOptions& options);
+// hipMemGetAllocationGranularity() takes the same properties
+// hipMemCreate() does, so a site that queried granularity with different
+// properties than it allocated with would pad and align inconsistently. The
+// handle type is likewise applied in one place rather than restated at each
+// hipMemCreate().
+//
+// The caller must have activated `executor`'s context.
+absl::StatusOr<RocmVmmAllocationParams> GetRocmVmmAllocationParams(
+    StreamExecutor* executor, const RocmVmmOptions& options);
 
 }  // namespace stream_executor::gpu
 

@@ -15,9 +15,15 @@ limitations under the License.
 
 #include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
 
+#include <cstddef>
+
 #include "absl/log/log.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/rocm_config.h"
+#include "xla/stream_executor/rocm/rocm_status.h"
+#include "xla/stream_executor/stream_executor.h"
 
 namespace stream_executor::gpu {
 
@@ -44,14 +50,23 @@ hipMemAllocationHandleType RocmVmmHandleType(const RocmVmmOptions& options) {
   return hipMemHandleTypeNone;
 }
 
-hipMemAllocationProp MakeRocmVmmAllocationProps(hipDevice_t device,
-                                                const RocmVmmOptions& options) {
-  hipMemAllocationProp props = {};
-  props.type = hipMemAllocationTypePinned;
-  props.location.type = hipMemLocationTypeDevice;
-  props.location.id = device;
-  props.requestedHandleTypes = RocmVmmHandleType(options);
-  return props;
+absl::StatusOr<RocmVmmAllocationParams> GetRocmVmmAllocationParams(
+    StreamExecutor* executor, const RocmVmmOptions& options) {
+  hipDevice_t device;
+  ABSL_RETURN_IF_ERROR(ToStatus(
+      hipDeviceGet(&device, executor->device_ordinal()), "hipDeviceGet"));
+
+  RocmVmmAllocationParams params;
+  params.prop.type = hipMemAllocationTypePinned;
+  params.prop.location.type = hipMemLocationTypeDevice;
+  params.prop.location.id = device;
+  params.prop.requestedHandleTypes = RocmVmmHandleType(options);
+
+  ABSL_RETURN_IF_ERROR(ToStatus(
+      hipMemGetAllocationGranularity(&params.granularity, &params.prop,
+                                     hipMemAllocationGranularityRecommended),
+      "hipMemGetAllocationGranularity"));
+  return params;
 }
 
 }  // namespace stream_executor::gpu

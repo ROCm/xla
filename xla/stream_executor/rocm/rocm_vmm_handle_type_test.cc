@@ -117,29 +117,35 @@ TEST_F(RocmVmmHandleTypeTest, ExportableHandlesRequestedOnSupportedRocm) {
 // handles never gets them.
 TEST_F(RocmVmmHandleTypeTest, NonExportableOptionIsHonored) {
   EXPECT_EQ(RocmVmmHandleType(kNonExportable), hipMemHandleTypeNone);
-  EXPECT_EQ(
-      MakeRocmVmmAllocationProps(device_, kNonExportable).requestedHandleTypes,
-      hipMemHandleTypeNone);
+
+  std::unique_ptr<ActivateContext> activation = executor_->Activate();
+  ASSERT_OK_AND_ASSIGN(RocmVmmAllocationParams params,
+                       GetRocmVmmAllocationParams(executor_, kNonExportable));
+  EXPECT_EQ(params.prop.requestedHandleTypes, hipMemHandleTypeNone);
 }
 
 TEST_F(RocmVmmHandleTypeTest, RequestedHandleTypeMatchesHandleType) {
-  hipMemAllocationProp props = MakeRocmVmmAllocationProps(device_, kExportable);
+  std::unique_ptr<ActivateContext> activation = executor_->Activate();
+  ASSERT_OK_AND_ASSIGN(RocmVmmAllocationParams params,
+                       GetRocmVmmAllocationParams(executor_, kExportable));
 
-  EXPECT_EQ(props.requestedHandleTypes, RocmVmmHandleType(kExportable));
-  EXPECT_EQ(props.type, hipMemAllocationTypePinned);
-  EXPECT_EQ(props.location.type, hipMemLocationTypeDevice);
-  EXPECT_EQ(props.location.id, device_);
+  EXPECT_EQ(params.prop.requestedHandleTypes, RocmVmmHandleType(kExportable));
+  EXPECT_EQ(params.prop.type, hipMemAllocationTypePinned);
+  EXPECT_EQ(params.prop.location.type, hipMemLocationTypeDevice);
+  EXPECT_EQ(params.prop.location.id, device_);
+  EXPECT_GT(params.granularity, 0u);
 }
 
 // The handle type for given options never changes; allocation sites and
 // granularity queries would otherwise drift apart.
 TEST_F(RocmVmmHandleTypeTest, HandleTypeIsStableAcrossCalls) {
+  std::unique_ptr<ActivateContext> activation = executor_->Activate();
   hipMemAllocationHandleType first = RocmVmmHandleType(kExportable);
   for (int i = 0; i < 4; ++i) {
     EXPECT_EQ(RocmVmmHandleType(kExportable), first);
-    EXPECT_EQ(
-        MakeRocmVmmAllocationProps(device_, kExportable).requestedHandleTypes,
-        first);
+    ASSERT_OK_AND_ASSIGN(RocmVmmAllocationParams params,
+                         GetRocmVmmAllocationParams(executor_, kExportable));
+    EXPECT_EQ(params.prop.requestedHandleTypes, first);
   }
 }
 
@@ -247,24 +253,22 @@ TEST_F(RocmVmmHandleTypeTest, CollectiveAllocationIsExportable) {
   EXPECT_EQ(hipMemRelease(handle), hipSuccess);
 }
 
-// MakeRocmVmmAllocationProps() exists so that the site querying granularity
+// GetRocmVmmAllocationParams() exists so that the site querying granularity
 // and the site allocating cannot disagree. Checking that a one-byte request is
-// padded to exactly the granularity reported for the same properties pins that
-// down: if a caller reverted to hand-built properties with a different handle
-// type and the driver reported a different granularity, this would fail.
+// padded to exactly the granularity it reports pins that down: a site that
+// went back to hand-built properties with a different handle type, and got a
+// different granularity from the driver, would fail here.
 TEST_F(RocmVmmHandleTypeTest, PaddingMatchesGranularityForRequestedHandles) {
   std::unique_ptr<ActivateContext> activation = executor_->Activate();
 
-  hipMemAllocationProp props = MakeRocmVmmAllocationProps(device_, kExportable);
-  size_t granularity = 0;
-  ASSERT_OK(ToStatus(hipMemGetAllocationGranularity(
-      &granularity, &props, hipMemAllocationGranularityRecommended)));
-  ASSERT_GT(granularity, 0u);
+  ASSERT_OK_AND_ASSIGN(RocmVmmAllocationParams params,
+                       GetRocmVmmAllocationParams(executor_, kExportable));
+  ASSERT_GT(params.granularity, 0u);
 
   ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<RocmRawMemoryAllocation> allocation,
       RocmRawMemoryAllocation::Create(executor_, /*size=*/1, kExportable));
-  EXPECT_EQ(allocation->address().size(), granularity);
+  EXPECT_EQ(allocation->address().size(), params.granularity);
 }
 
 }  // namespace

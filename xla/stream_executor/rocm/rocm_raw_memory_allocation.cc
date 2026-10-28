@@ -15,7 +15,6 @@ limitations under the License.
 
 #include "xla/stream_executor/rocm/rocm_raw_memory_allocation.h"
 
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 
@@ -37,21 +36,14 @@ RocmRawMemoryAllocation::Create(StreamExecutor* executor, uint64_t size,
                                 const RocmVmmOptions& options) {
   std::unique_ptr<ActivateContext> activation = executor->Activate();
 
-  hipDevice_t device;
-  ABSL_RETURN_IF_ERROR(
-      ToStatus(hipDeviceGet(&device, executor->device_ordinal())));
+  ABSL_ASSIGN_OR_RETURN(RocmVmmAllocationParams params,
+                        GetRocmVmmAllocationParams(executor, options));
 
-  hipMemAllocationProp props = MakeRocmVmmAllocationProps(device, options);
-
-  size_t granularity = 0;
-  ABSL_RETURN_IF_ERROR(ToStatus(hipMemGetAllocationGranularity(
-      &granularity, &props, hipMemAllocationGranularityRecommended)));
-
-  uint64_t padded_size = xla::RoundUpTo<uint64_t>(size, granularity);
+  uint64_t padded_size = xla::RoundUpTo<uint64_t>(size, params.granularity);
 
   hipMemGenericAllocationHandle_t handle;
   ABSL_RETURN_IF_ERROR(
-      ToStatus(hipMemCreate(&handle, padded_size, &props, 0ULL)));
+      ToStatus(hipMemCreate(&handle, padded_size, &params.prop, 0ULL)));
 
   return std::unique_ptr<RocmRawMemoryAllocation>(
       new RocmRawMemoryAllocation(executor, handle, padded_size));

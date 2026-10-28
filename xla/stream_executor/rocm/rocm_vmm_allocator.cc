@@ -54,20 +54,15 @@ VmmAllocate(StreamExecutor* executor, uint64_t size,
             const RocmVmmOptions& options) {
   std::unique_ptr<ActivateContext> activation = executor->Activate();
 
-  hipDevice_t device;
-  ABSL_RETURN_IF_ERROR(
-      ToStatus(hipDeviceGet(&device, executor->device_ordinal())));
-
-  hipMemAllocationProp properties = MakeRocmVmmAllocationProps(device, options);
-  size_t granularity = 0;
-  ABSL_RETURN_IF_ERROR(ToStatus(hipMemGetAllocationGranularity(
-      &granularity, &properties, hipMemAllocationGranularityRecommended)));
+  ABSL_ASSIGN_OR_RETURN(RocmVmmAllocationParams params,
+                        GetRocmVmmAllocationParams(executor, options));
+  size_t granularity = params.granularity;
 
   uint64_t padded_size = xla::RoundUpTo<uint64_t>(size, granularity);
   hipMemGenericAllocationHandle_t handle;
 
   ABSL_RETURN_IF_ERROR(
-      ToStatus(hipMemCreate(&handle, padded_size, &properties, 0ULL)));
+      ToStatus(hipMemCreate(&handle, padded_size, &params.prop, 0ULL)));
 
   hipDeviceptr_t ptr = nullptr;
   absl::Status status = ToStatus(
