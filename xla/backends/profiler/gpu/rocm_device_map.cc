@@ -74,9 +74,13 @@ std::optional<PciAddress> ParsePciBusId(absl::string_view bus_id) {
   return pci;
 }
 
+PciAddress PciAddressFromLocation(uint32_t domain, uint32_t location_id) {
+  return {domain, (location_id >> 8) & 0xff, (location_id >> 3) & 0x1f,
+          location_id & 0x7};
+}
+
 PciAddress PciAddressOf(const rocprofiler_agent_v0_t& agent) {
-  return {agent.domain, (agent.location_id >> 8) & 0xff,
-          (agent.location_id >> 3) & 0x1f, agent.location_id & 0x7};
+  return PciAddressFromLocation(agent.domain, agent.location_id);
 }
 
 HipDeviceMap BuildHipDeviceMap(
@@ -101,6 +105,34 @@ HipDeviceMap BuildHipDeviceMap(
                  << " match no single GPU agent by PCI address.";
   }
   return map;
+}
+
+bool HasGpuPartitions(absl::Span<const rocprofiler_agent_v0_t> agents) {
+  std::vector<PciAddress> devices;
+  for (const rocprofiler_agent_v0_t& agent : agents) {
+    if (agent.type != ROCPROFILER_AGENT_TYPE_GPU) continue;
+    PciAddress device = PciAddressOf(agent);
+    device.function = 0;  // Partitions of one GPU differ only here.
+    if (absl::c_linear_search(devices, device)) return true;
+    devices.push_back(device);
+  }
+  return false;
+}
+
+PeerCopyGpus ResolvePeerCopyGpus(uint64_t record_src_agent,
+                                 uint64_t record_dst_agent,
+                                 std::optional<uint64_t> src_owner,
+                                 std::optional<uint64_t> dst_owner) {
+  // The source issued the copy.
+  if (src_owner == record_src_agent && dst_owner == record_dst_agent) {
+    return {record_src_agent, record_dst_agent, true};
+  }
+  // The destination, or a third GPU, issued the copy.
+  if (src_owner == record_dst_agent && dst_owner.has_value() &&
+      *dst_owner != record_dst_agent) {
+    return {record_dst_agent, dst_owner, true};
+  }
+  return {record_dst_agent, std::nullopt, false};
 }
 
 }  // namespace profiler

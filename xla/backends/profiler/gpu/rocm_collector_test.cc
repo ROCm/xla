@@ -15,20 +15,20 @@ limitations under the License.
 
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 
-#include <gtest/gtest.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <utility>
 
+#include <gtest/gtest.h>
 #include "absl/container/flat_hash_set.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "tsl/profiler/protobuf/xplane.pb.h"
+#include "rocprofiler-sdk/agent.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/profiler/utils/xplane_utils.h"
+#include "tsl/profiler/protobuf/xplane.pb.h"
 
 namespace xla {
 namespace profiler {
@@ -507,6 +507,88 @@ TEST(RocmCollectorTest, PlaceholderAgentGetsNoDeviceCapabilities) {
   ASSERT_NE(placeholder_plane, nullptr);
   EXPECT_GT(gpu_plane->stats_size(), 0);
   EXPECT_EQ(placeholder_plane->stats_size(), 0);
+}
+
+// nullptr if `event` has no stat named `name`.
+const tensorflow::profiler::XStat* FindStat(
+    const tensorflow::profiler::XPlane& plane,
+    const tensorflow::profiler::XEvent& event, absl::string_view name) {
+  for (const auto& stat : event.stats()) {
+    if (plane.stat_metadata().at(stat.metadata_id()).name() == name) {
+      return &stat;
+    }
+  }
+  return nullptr;
+}
+
+// RocmTracer types a copy between two GPUs MemcpyP2P and puts it on the source
+// GPU, with `destination` naming the other.
+TEST(RocmCollectorTest, PeerCopyExportsOnItsSourcePlane) {
+  RocmTraceCollectorImpl collector(Options(/*num_gpus=*/2),
+                                   /*start_walltime_ns=*/1000,
+                                   /*start_gputime_ns=*/2000);
+  constexpr uint32_t kCorrelationId = 1;
+
+  RocmTracerEvent api_event;
+  api_event.type = RocmTracerEventType::MemcpyOther;
+  api_event.source = RocmTracerEventSource::ApiCallback;
+  api_event.domain = RocmTracerEventDomain::HIP_API;
+  api_event.name = "hipMemcpyPeerAsync";
+  api_event.correlation_id = kCorrelationId;
+  api_event.thread_id = 1;
+  api_event.start_time_ns = 2500;
+  api_event.end_time_ns = 2600;
+  collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
+
+  RocmTracerEvent activity_event;
+  activity_event.type = RocmTracerEventType::MemcpyP2P;
+  activity_event.source = RocmTracerEventSource::Activity;
+  activity_event.domain = RocmTracerEventDomain::HIP_OPS;
+  activity_event.name = "MemcpyP2P";
+  activity_event.correlation_id = kCorrelationId;
+  activity_event.start_time_ns = 3000;
+  activity_event.end_time_ns = 4000;
+  activity_event.device_id = 0;
+  activity_event.stream_id = 1;
+  activity_event.memcpy_info.num_bytes = 64 << 20;
+  activity_event.memcpy_info.destination = 1;
+  collector.AddEvent(std::move(activity_event), /*is_auxiliary=*/false);
+
+  collector.Flush();
+  XSpace space;
+  collector.Export(&space);
+
+  EXPECT_EQ(NumEvents(space, "/device:GPU:1"), 0);
+  ASSERT_EQ(NumEvents(space, "/device:GPU:0"), 1);
+  const auto& gpu_plane =
+      *tsl::profiler::FindPlaneWithName(space, "/device:GPU:0");
+  const auto& copy = gpu_plane.lines(0).events(0);
+  EXPECT_EQ(gpu_plane.event_metadata().at(copy.metadata_id()).name(),
+            "MemcpyP2P");
+  const auto* details = FindStat(gpu_plane, copy, "memcpy_details");
+  ASSERT_NE(details, nullptr);
+  const std::string& details_text =
+      gpu_plane.stat_metadata().at(details->ref_value()).name();
+  EXPECT_TRUE(absl::StrContains(details_text, "size:67108864")) << details_text;
+  EXPECT_TRUE(absl::StrContains(details_text, "dest:1")) << details_text;
+
+  // The host API row takes its device number from the copy row.
+  int num_api_rows = 0;
+  for (const auto& plane : space.planes()) {
+    for (const auto& line : plane.lines()) {
+      for (const auto& event : line.events()) {
+        if (plane.event_metadata().at(event.metadata_id()).name() !=
+            "hipMemcpyPeerAsync") {
+          continue;
+        }
+        ++num_api_rows;
+        const auto* device_id = FindStat(plane, event, "device_id");
+        ASSERT_NE(device_id, nullptr);
+        EXPECT_EQ(device_id->uint64_value(), 0);
+      }
+    }
+  }
+  EXPECT_EQ(num_api_rows, 1);
 }
 
 }  // namespace

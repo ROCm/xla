@@ -15,12 +15,14 @@ limitations under the License.
 
 #include "xla/backends/profiler/gpu/rocm_tracer.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -55,8 +57,10 @@ namespace {
 
 using ::testing::AllOf;
 using ::testing::Each;
+using ::testing::FieldsAre;
 using ::testing::IsEmpty;
 using ::testing::Not;
+using ::testing::Optional;
 using ::testing::Pair;
 using tsl::profiler::XSpace;
 
@@ -1002,6 +1006,154 @@ TEST(RocmTracerTest, RowsAreNumberedByHipDevice) {
         << "copy from HIP device " << k;
   }
   ASSERT_EQ(hipHostFree(host), hipSuccess);
+  ASSERT_EQ(hipSetDevice(0), hipSuccess);
+}
+
+TEST(RocmTracerTest, AgentOwningAddressFindsEachHipDevicesAgent) {
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  const HipDeviceMap& devices = tracer.EnsureHipDeviceMap();
+  int device_count = 0;
+  ASSERT_EQ(hipGetDeviceCount(&device_count), hipSuccess);
+  constexpr size_t kBytes = 1 << 20;
+
+  for (int k = 0; k < device_count; ++k) {
+    ASSERT_EQ(hipSetDevice(k), hipSuccess);
+    void* buffer = nullptr;
+    ASSERT_EQ(hipMalloc(&buffer, kBytes), hipSuccess);
+    const uint64_t address = reinterpret_cast<uint64_t>(buffer);
+    const uint64_t agent = devices.gpu_agents[k].id.handle;
+    EXPECT_THAT(tracer.AgentOwningAddress(address), Optional(agent))
+        << "HIP device " << k;
+    // An address inside the allocation; the owner now comes from the cache.
+    EXPECT_THAT(tracer.AgentOwningAddress(address + 4096), Optional(agent))
+        << "HIP device " << k;
+    ASSERT_EQ(hipFree(buffer), hipSuccess);
+  }
+  ASSERT_EQ(hipSetDevice(0), hipSuccess);
+
+  void* host = nullptr;
+  ASSERT_EQ(hipHostMalloc(&host, kBytes, hipHostMallocDefault), hipSuccess);
+  EXPECT_EQ(tracer.AgentOwningAddress(reinterpret_cast<uint64_t>(host)),
+            std::nullopt);
+  ASSERT_EQ(hipHostFree(host), hipSuccess);
+}
+
+// As on CUDA, a peer copy's row goes on the GPU the data comes from, with dest
+// the GPU it goes to, whichever GPU issued the copy.
+TEST(RocmTracerTest, PeerCopyRowGoesOnTheSourceGpu) {
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  // GpuTracer::DoStart() builds the map; this test calls Enable() directly.
+  tracer.EnsureHipDeviceMap();
+  int device_count = 0;
+  ASSERT_EQ(hipGetDeviceCount(&device_count), hipSuccess);
+  if (device_count < 2) GTEST_SKIP() << "Needs 2 HIP devices";
+  for (int a = 0; a < std::min(device_count, 3); ++a) {
+    ASSERT_EQ(hipSetDevice(a), hipSuccess);
+    for (int b = 0; b < std::min(device_count, 3); ++b) {
+      if (a == b) continue;
+      int can_access = 0;
+      ASSERT_EQ(hipDeviceCanAccessPeer(&can_access, a, b), hipSuccess);
+      if (!can_access) GTEST_SKIP() << a << " can't access " << b;
+      const hipError_t status = hipDeviceEnablePeerAccess(b, 0);
+      if (status == hipErrorPeerAccessAlreadyEnabled) {
+        (void)hipGetLastError();
+      } else {
+        ASSERT_EQ(status, hipSuccess) << a << " -> " << b;
+      }
+    }
+  }
+
+  struct Case {
+    std::string name;
+    int from;
+    int to;
+    int issuer;
+    bool free_before_disable = false;
+    // Two identical copies in one launch, which share a correlation id.
+    bool graph = false;
+  };
+  std::vector<Case> cases = {
+      {"0->1 issued on 1", 0, 1, 1},
+      {"0->1 issued on 0", 0, 1, 0},
+      {"1->0 issued on 0", 1, 0, 0},
+      {"0->1 issued on 1, freed before Disable()", 0, 1, 1,
+       /*free_before_disable=*/true},
+      {"graph of two 0->1 copies, launched on 1", 0, 1, 1,
+       /*free_before_disable=*/false, /*graph=*/true},
+  };
+  if (device_count >= 3) cases.push_back({"1->2 issued on 0", 1, 2, 0});
+
+  // Larger than ROC_P2P_SDMA_SIZE, so HIP copies with a DMA engine, which the
+  // SDK records.
+  constexpr size_t kBytes = 64 << 20;
+  for (const Case& c : cases) {
+    void* src = nullptr;
+    void* dst = nullptr;
+    ASSERT_EQ(hipSetDevice(c.from), hipSuccess);
+    ASSERT_EQ(hipMalloc(&src, kBytes), hipSuccess);
+    ASSERT_EQ(hipSetDevice(c.to), hipSuccess);
+    ASSERT_EQ(hipMalloc(&dst, kBytes), hipSuccess);
+    ASSERT_EQ(hipSetDevice(c.issuer), hipSuccess);
+    hipStream_t stream = nullptr;
+    ASSERT_EQ(hipStreamCreate(&stream), hipSuccess);
+    hipGraph_t graph = nullptr;
+    hipGraphExec_t graph_exec = nullptr;
+    if (c.graph) {
+      ASSERT_EQ(hipStreamBeginCapture(stream, hipStreamCaptureModeGlobal),
+                hipSuccess);
+      for (int i = 0; i < 2; ++i) {
+        ASSERT_EQ(hipMemcpyAsync(dst, src, kBytes, hipMemcpyDefault, stream),
+                  hipSuccess);
+      }
+      ASSERT_EQ(hipStreamEndCapture(stream, &graph), hipSuccess);
+      ASSERT_EQ(hipGraphInstantiate(&graph_exec, graph, nullptr, nullptr, 0),
+                hipSuccess);
+    }
+    auto collector = std::make_unique<MarkerCapturingCollector>();
+    ASSERT_OK(tracer.Enable(collector.get()));
+
+    // EXPECT, not ASSERT, until Disable(): returning early would leave the
+    // tracer enabled with a dangling collector.
+    if (c.graph) {
+      EXPECT_EQ(hipGraphLaunch(graph_exec, stream), hipSuccess);
+    } else {
+      EXPECT_EQ(hipMemcpyPeerAsync(dst, c.to, src, c.from, kBytes, stream),
+                hipSuccess);
+    }
+    EXPECT_EQ(hipStreamSynchronize(stream), hipSuccess);
+    if (c.free_before_disable) {
+      EXPECT_EQ(hipFree(src), hipSuccess);
+      EXPECT_EQ(hipFree(dst), hipSuccess);
+    }
+    // Lets the records reach the buffer before Disable() flushes it.
+    absl::SleepFor(absl::Milliseconds(100));
+    tracer.Disable();
+    if (c.graph) {
+      ASSERT_EQ(hipGraphExecDestroy(graph_exec), hipSuccess);
+      ASSERT_EQ(hipGraphDestroy(graph), hipSuccess);
+    }
+    ASSERT_EQ(hipStreamDestroy(stream), hipSuccess);
+    if (!c.free_before_disable) {
+      ASSERT_EQ(hipFree(src), hipSuccess);
+      ASSERT_EQ(hipFree(dst), hipSuccess);
+    }
+
+    // (type, device_id, destination) of each copy row.
+    std::vector<std::tuple<std::string, uint32_t, uint32_t>> copies;
+    for (const RocmTracerEvent& event : collector->TakeEvents()) {
+      if (event.source != RocmTracerEventSource::Activity ||
+          event.type == RocmTracerEventType::Kernel) {
+        continue;
+      }
+      copies.push_back({GetRocmTracerEventTypeName(event.type), event.device_id,
+                        event.memcpy_info.destination});
+    }
+    const uint32_t from = c.from;
+    const uint32_t to = c.to;
+    EXPECT_THAT(copies,
+                AllOf(Not(IsEmpty()), Each(FieldsAre("MemcpyP2P", from, to))))
+        << c.name;
+  }
   ASSERT_EQ(hipSetDevice(0), hipSuccess);
 }
 

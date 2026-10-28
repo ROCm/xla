@@ -635,6 +635,7 @@ cc_library(
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
         "@local_config_rocm//rocm:hip_runtime",  # buildcleaner: keep
+        "@local_config_rocm//rocm:hsa_runtime",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocm_headers",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocprofiler_sdk",  # buildcleaner: keep
         "@tsl//tsl/platform:abi",
@@ -704,6 +705,7 @@ xla_cc_test(
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest_main",
+        "@local_config_rocm//rocm:rocm_headers",
         "//xla/tsl/profiler/utils:xplane_utils",
         "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
     ],
