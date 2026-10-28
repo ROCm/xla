@@ -46,7 +46,7 @@ jobs:
 
   execute-xla-ut:
     needs: rocm-config
-    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-1-testv2
+    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-1v2v2
     strategy:
       fail-fast: false
       matrix:

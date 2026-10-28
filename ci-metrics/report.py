@@ -459,7 +459,7 @@ def render(m, logs, since, until, base=None):
         f"DO jobs = every ROCm job on DO in the collected workflows; NV jobs = jobs of the two NV presubmit lanes, "
         f"by the hour they were created. NV's busiest 8 hours are <code>{', '.join(f'{h:02d}' for h in nv_peak)}</code>, "
         f"{shared} of them DO peak hours.</p>")
-    pools = [("JAX", "amd-do-linux.jax.gpu.gfx950.1"), ("XLA", "amd-do-linux-xla-gpu-gfx950-dpx-1")]
+    pools = [("JAX", "amd-do-linux.jax.gpu.gfx950.1"), ("XLA", "amd-do-linux-xla-gpu-gfx950-dpx-1v2")]
     comp = collections.defaultdict(list)
     for rec, j in m["do_jobs"]:
         if j["conclusion"] not in SIGNAL or not j["completed_at"]:
@@ -927,7 +927,7 @@ def ask_section(cov, base):
 
 
 POOL_NOW = {"JAX single-GPU pool": "amd-do-linux.jax.gpu.gfx950.1",
-            "XLA single-GPU pool": "amd-do-linux-xla-gpu-gfx950-dpx-1"}
+            "XLA single-GPU pool": "amd-do-linux-xla-gpu-gfx950-dpx-1v2"}
 
 
 def changes_section(m, cov, base):
