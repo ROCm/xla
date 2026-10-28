@@ -18,9 +18,12 @@ limitations under the License.
 
 #include <atomic>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <tuple>
 
 #include "absl/base/call_once.h"
+#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
@@ -69,6 +72,12 @@ class RocmTracer {
     return map->gpu_agents;
   }
   RocmTraceCollector* collector() { return collector_; }
+
+  // The SDK GPU agent that owns the allocation containing `address`, or
+  // nullopt if HSA doesn't know the address, a CPU agent owns it, or no single
+  // SDK GPU agent has the owner's PCI address. Calls HSA, so never call it on
+  // the SDK buffer thread.
+  std::optional<uint64_t> AgentOwningAddress(uint64_t address);
 
   int toolInit(rocprofiler_client_finalize_t finalize_func, void* tool_data);
   static void toolFinalize(void* tool_data);
@@ -120,6 +129,10 @@ class RocmTracer {
   // The HIP device number of an agent, or kInvalidDeviceId.
   uint32_t HipDeviceOf(uint64_t agent_handle) const;
   rocprofiler_agent_type_t AgentType(uint64_t agent_handle) const;
+  // MEMORY_COPY callback. On ENTER of a peer copy, which runs on the issuing
+  // thread while the copy's buffers are alive, stores the owners of its
+  // addresses for MemcpyEvent().
+  void MemoryCopyCallback(const rocprofiler_callback_tracing_record_t& record);
 
   // Set once by EnsureHipDeviceMap() and never freed, because the SDK's buffer
   // thread reads it, possibly during exit.
@@ -127,6 +140,26 @@ class RocmTracer {
   std::atomic<const HipDeviceMap*> hip_device_map_{nullptr};
   RocmTraceCollector* collector_{nullptr};
   absl::Mutex collector_mutex_;
+
+  // Never held during an HSA call, or together with another lock.
+  absl::Mutex peer_owners_mutex_;
+  // Key: HSA agent handle. Value: the only SDK GPU agent at its PCI address.
+  absl::flat_hash_map<uint64_t, std::optional<uint64_t>>
+      sdk_gpu_agent_of_hsa_agent_ ABSL_GUARDED_BY(peer_owners_mutex_);
+  struct PeerCopyOwners {
+    std::optional<uint64_t> src_owner;
+    std::optional<uint64_t> dst_owner;
+    // Identical copies in one launch share a key.
+    int count = 0;
+  };
+  // Key: {correlation id, source address, destination address}.
+  using PeerCopyKey = std::tuple<uint64_t, uint64_t, uint64_t>;
+  absl::flat_hash_map<PeerCopyKey, PeerCopyOwners> peer_owners_
+      ABSL_GUARDED_BY(peer_owners_mutex_);
+  // Peer copies placed without trusted owners in this session.
+  std::atomic<uint64_t> peer_copy_fallbacks_{0};
+  // Set once by InitProfiling(): the MEMORY_COPY callback looks up owners.
+  bool peer_owner_lookup_{false};
 
   bool api_tracing_enabled_{false};
   bool activity_tracing_enabled_{false};

@@ -40,6 +40,8 @@ limitations under the License.
 #include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
 #include "rocm/include/hip/hip_runtime_api.h"
+#include "rocm/include/hsa/hsa.h"
+#include "rocm/include/hsa/hsa_ext_amd.h"
 #include "rocm/include/rocprofiler-sdk/agent.h"
 #include "rocm/include/rocprofiler-sdk/buffer.h"
 #include "rocm/include/rocprofiler-sdk/buffer_tracing.h"
@@ -85,6 +87,10 @@ thread_local absl::InlinedVector<uint64_t, 4> tls_stream_stack = {0};
 // callback reads the current label on EVERY HIP call. Dies with the thread,
 // so no per-thread bookkeeping outlives it.
 thread_local std::vector<RoctxFrame> tls_roctx_stack;
+
+// Peer copies issued but not yet seen in the buffer. Past this, more peer
+// copies are placed without their owners.
+constexpr size_t kMaxPendingPeerCopies = 65536;
 
 // The PCI address of each device HIP numbers, i.e. each GPU that
 // HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES leave visible; nullopt where
@@ -215,6 +221,50 @@ rocprofiler_agent_type_t RocmTracer::AgentType(uint64_t agent_handle) const {
   return it == agents_.end() ? ROCPROFILER_AGENT_TYPE_NONE : it->second.type;
 }
 
+std::optional<uint64_t> RocmTracer::AgentOwningAddress(uint64_t address) {
+  hsa_amd_pointer_info_t info{};
+  info.size = sizeof(info);  // HSA fills only what fits.
+  if (hsa_amd_pointer_info(reinterpret_cast<const void*>(address), &info,
+                           nullptr, nullptr, nullptr) != HSA_STATUS_SUCCESS ||
+      info.type == HSA_EXT_POINTER_TYPE_UNKNOWN) {
+    return std::nullopt;
+  }
+  {
+    absl::MutexLock lock(peer_owners_mutex_);
+    auto it = sdk_gpu_agent_of_hsa_agent_.find(info.agentOwner.handle);
+    if (it != sdk_gpu_agent_of_hsa_agent_.end()) return it->second;
+  }
+  uint32_t domain = 0;
+  uint32_t location_id = 0;
+  if (hsa_agent_get_info(
+          info.agentOwner,
+          static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_DOMAIN),
+          &domain) != HSA_STATUS_SUCCESS ||
+      hsa_agent_get_info(
+          info.agentOwner,
+          static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_BDFID),
+          &location_id) != HSA_STATUS_SUCCESS) {
+    return std::nullopt;
+  }
+  // Match by PCI address, as the HIP device map does.
+  const PciAddress pci = PciAddressFromLocation(domain, location_id);
+  std::optional<uint64_t> owner;
+  int matches = 0;
+  for (const auto& [handle, agent] : agents_) {
+    if (agent.type == ROCPROFILER_AGENT_TYPE_GPU &&
+        PciAddressOf(agent) == pci) {
+      owner = handle;
+      ++matches;
+    }
+  }
+  if (matches != 1) owner = std::nullopt;
+  // HSA agents are fixed for the life of the process, so the cache is never
+  // cleared.
+  absl::MutexLock lock(peer_owners_mutex_);
+  sdk_gpu_agent_of_hsa_agent_.emplace(info.agentOwner.handle, owner);
+  return owner;
+}
+
 absl::Status RocmTracer::Enable(RocmTraceCollector* collector) {
   absl::MutexLock lock(collector_mutex_);
   if (collector_ != nullptr) {
@@ -236,6 +286,7 @@ absl::Status RocmTracer::Enable(RocmTraceCollector* collector) {
   // point is now stale and will be dropped at pop rather than emitted into
   // the new session. See roctx_generation_ in rocm_tracer.h.
   roctx_generation_.fetch_add(1, std::memory_order_relaxed);
+  peer_copy_fallbacks_.store(0, std::memory_order_relaxed);
 
   collector_ = collector;
 
@@ -338,11 +389,37 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
   const bool dst_is_gpu = AgentType(dst) == ROCPROFILER_AGENT_TYPE_GPU;
   uint32_t destination;
   if (src_is_gpu && dst_is_gpu && src != dst) {
-    // Peer copy, placed by the SDK label as before.
-    // TODO(rocm-profiler): put it on the source GPU, as CUDA does.
-    trace_event->device_id = HipDeviceOf(
-        trace_event->type == RocmTracerEventType::MemcpyD2H ? src : dst);
-    destination = HipDeviceOf(dst);
+    // Peer copy. As on CUDA, the row goes on the GPU the data comes from, which
+    // the owners of its addresses show, looked up when it was issued.
+    std::optional<uint64_t> src_owner;
+    std::optional<uint64_t> dst_owner;
+    {
+      absl::MutexLock lock(peer_owners_mutex_);
+      auto it = peer_owners_.find(PeerCopyKey{rec.correlation_id.internal,
+                                              rec.src_address.value,
+                                              rec.dst_address.value});
+      if (it != peer_owners_.end()) {
+        src_owner = it->second.src_owner;
+        dst_owner = it->second.dst_owner;
+        if (--it->second.count == 0) peer_owners_.erase(it);
+      }
+    }
+    const PeerCopyGpus gpus =
+        ResolvePeerCopyGpus(src, dst, src_owner, dst_owner);
+    trace_event->type = RocmTracerEventType::MemcpyP2P;
+    trace_event->name = "MemcpyP2P";
+    trace_event->device_id = HipDeviceOf(gpus.source_agent);
+    destination = gpus.destination_agent.has_value()
+                      ? HipDeviceOf(*gpus.destination_agent)
+                      : RocmTracerEvent::kInvalidDeviceId;
+    if (!gpus.from_pointer_owners) {
+      peer_copy_fallbacks_.fetch_add(1, std::memory_order_relaxed);
+      VLOG(2) << "Peer copy " << rec.correlation_id.internal
+              << " placed without its owners: record agents " << src << ", "
+              << dst << "; owners "
+              << (src_owner ? absl::StrCat(*src_owner) : "unknown") << ", "
+              << (dst_owner ? absl::StrCat(*dst_owner) : "unknown");
+    }
   } else if (src_is_gpu || dst_is_gpu) {
     // The copy touches one GPU. As on CUDA, the row and dest both name it.
     trace_event->device_id = HipDeviceOf(dst_is_gpu ? dst : src);
@@ -379,6 +456,33 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
           << " stream: " << trace_event->stream_id << " src_id "
           << trace_event->device_id << " dst_id "
           << trace_event->memcpy_info.destination;
+}
+
+void RocmTracer::MemoryCopyCallback(
+    const rocprofiler_callback_tracing_record_t& record) {
+  if (record.phase != ROCPROFILER_CALLBACK_PHASE_ENTER) return;
+  const auto& data =
+      *static_cast<const rocprofiler_callback_tracing_memory_copy_data_t*>(
+          record.payload);
+  const uint64_t src = data.src_agent_id.handle;
+  const uint64_t dst = data.dst_agent_id.handle;
+  if (src == dst || AgentType(src) != ROCPROFILER_AGENT_TYPE_GPU ||
+      AgentType(dst) != ROCPROFILER_AGENT_TYPE_GPU) {
+    return;
+  }
+  const std::optional<uint64_t> src_owner =
+      AgentOwningAddress(data.src_address.value);
+  const std::optional<uint64_t> dst_owner =
+      AgentOwningAddress(data.dst_address.value);
+  absl::MutexLock lock(peer_owners_mutex_);
+  const PeerCopyKey key{record.correlation_id.internal, data.src_address.value,
+                        data.dst_address.value};
+  if (auto it = peer_owners_.find(key); it != peer_owners_.end()) {
+    // Same launch, so the same live buffers and owners.
+    ++it->second.count;
+  } else if (peer_owners_.size() < kMaxPendingPeerCopies) {
+    peer_owners_.emplace(key, PeerCopyOwners{src_owner, dst_owner, 1});
+  }
 }
 
 void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
@@ -673,7 +777,8 @@ absl::Status RocmTracer::InitProfiling(void* tool_data) {
   name_info_ = GetCallbackTracingNames();
 
   // Every agent, by handle. EnsureHipDeviceMap() numbers the GPUs among them.
-  for (const auto& agent : GetAllAgents()) {
+  const std::vector<rocprofiler_agent_v0_t> all_agents = GetAllAgents();
+  for (const auto& agent : all_agents) {
     const PciAddress pci = PciAddressOf(agent);
     VLOG(1) << "agent handle = " << agent.id.handle
             << ", node = " << agent.node_id
@@ -822,6 +927,31 @@ absl::Status RocmTracer::InitProfiling(void* tool_data) {
                  << marker_status.message();
   }
 
+  // Peer copies: look up the owners of a copy's addresses when it is issued,
+  // while its buffers are alive. Not on partitioned GPUs: partitions may share
+  // a memory pool, and HSA may then report any of them as an owner. Without
+  // owners, a peer row goes on one of the copy's GPUs with an unknown
+  // destination, so if configuring fails, log and continue, as for markers.
+  if (HasGpuPartitions(all_agents)) {
+    LOG(INFO) << "GPU partitions found: peer copies are placed without the "
+                 "owners of their addresses.";
+  } else {
+    absl::Status copy_status = RocprofilerStatusToAbslStatus(
+        rocprofiler_configure_callback_tracing_service(
+            context_, ROCPROFILER_CALLBACK_TRACING_MEMORY_COPY, nullptr, 0,
+            [](rocprofiler_callback_tracing_record_t record,
+               rocprofiler_user_data_t*, void*) {
+              RocmTracer::GetRocmTracerSingleton().MemoryCopyCallback(record);
+            },
+            nullptr));
+    if (!copy_status.ok()) {
+      LOG(WARNING) << "Peer copies are placed without the owners of their "
+                      "addresses. Reason: "
+                   << copy_status.message();
+    }
+    peer_owner_lookup_ = copy_status.ok();
+  }
+
   auto client_thread = rocprofiler_callback_thread_t{};
   ABSL_RETURN_IF_ERROR(RocprofilerStatusToAbslStatus(
       rocprofiler_create_callback_thread(&client_thread)));
@@ -872,6 +1002,22 @@ void RocmTracer::Disable() {
   status = rocprofiler_flush_buffer(buffer_);
   if (status != ROCPROFILER_STATUS_SUCCESS) {
     LOG(WARNING) << "rocprofiler_flush_buffer failed with error " << status;
+  }
+  {
+    // Left by copies whose records didn't arrive: a hand-off that failed after
+    // ENTER, or a copy still in flight.
+    absl::MutexLock lock(peer_owners_mutex_);
+    peer_owners_.clear();
+  }
+  // Without the lookup, InitProfiling() has already logged why.
+  if (const uint64_t fallbacks =
+          peer_copy_fallbacks_.load(std::memory_order_relaxed);
+      peer_owner_lookup_ && fallbacks != 0) {
+    LOG(WARNING) << "Peer copies placed without the owners of their "
+                    "addresses: "
+                 << fallbacks
+                 << ". Each is on one of its two GPUs, with an unknown "
+                    "destination.";
   }
   absl::MutexLock lock(collector_mutex_);
   collector_->Flush();
