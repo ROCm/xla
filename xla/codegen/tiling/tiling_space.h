@@ -265,6 +265,7 @@ class TilingSpace {
       absl::Span<const HloInstructionAdaptor> roots);
 
   void ProcessDotLike(const HloInstruction& hlo);
+  void ProcessConvolution(const HloInstruction& hlo);
   void ProcessReduce(const HloInstruction& hlo);
   void ProcessReduceScatter(const HloInstruction& hlo);
   // Marks the scan dimension as sequential; fails if it cannot be located.
