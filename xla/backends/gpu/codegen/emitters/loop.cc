@@ -32,18 +32,25 @@ limitations under the License.
 #include "xla/codegen/emitters/computation_partitioner.h"
 #include "xla/codegen/emitters/ir/xla_ops.h"
 #include "xla/codegen/emitters/loop_kernel_emitter.h"
+#include "xla/comparison_util.h"
 #include "xla/hlo/analysis/indexing_analysis.h"
 #include "xla/hlo/analysis/indexing_map.h"
+#include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/utils/hlo_traversal.h"
+#include "xla/layout_util.h"
 #include "xla/runtime/work_dimensions.h"
 #include "xla/service/buffer_assignment.h"
 #include "xla/service/gpu/gpu_constants.h"
 #include "xla/service/gpu/hlo_fusion_analysis.h"
 #include "xla/service/gpu/launch_dimensions.h"
 #include "xla/shape.h"
+#include "xla/shape_util.h"
 #include "xla/tsl/platform/statusor.h"
+#include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -115,6 +122,64 @@ LaunchDimensions LoopFusion::launch_dimensions() const {
   return dims;
 }
 
+std::optional<emitters::DynamicRowExtent> LoopFusion::FindDynamicRowExtent(
+    const HloFusionAnalysis& analysis) {
+  if (analysis.fusion_roots().size() != 1) {
+    return std::nullopt;
+  }
+  const HloInstruction& root = analysis.fusion_root(0).instruction();
+  const HloModule* module = root.GetModule();
+  if (module == nullptr || !module->config()
+                                .debug_options()
+                                .xla_gpu_experimental_dynamic_row_extent()) {
+    return std::nullopt;
+  }
+  if (root.opcode() != HloOpcode::kSelect) {
+    return std::nullopt;
+  }
+  const HloInstruction* predicate = root.operand(0);
+  if (predicate->opcode() != HloOpcode::kCompare) {
+    return std::nullopt;
+  }
+  const HloInstruction* iota = nullptr;
+  const HloInstruction* bound = nullptr;
+  switch (predicate->comparison_direction()) {
+    case ComparisonDirection::kLt:
+      iota = predicate->operand(0);
+      bound = predicate->operand(1);
+      break;
+    case ComparisonDirection::kGt:
+      iota = predicate->operand(1);
+      bound = predicate->operand(0);
+      break;
+    default:
+      return std::nullopt;
+  }
+  if (iota->opcode() != HloOpcode::kIota ||
+      bound->opcode() != HloOpcode::kBroadcast ||
+      !bound->dimensions().empty()) {
+    return std::nullopt;
+  }
+  const HloInstruction* extent = bound->operand(0);
+  if (extent->opcode() != HloOpcode::kParameter ||
+      !ShapeUtil::IsScalar(extent->shape()) ||
+      !ShapeUtil::ElementIsIntegral(extent->shape())) {
+    return std::nullopt;
+  }
+  const HloInstruction* fill = root.operand(2);
+  if (fill->opcode() != HloOpcode::kBroadcast || !fill->dimensions().empty() ||
+      fill->operand(0)->opcode() != HloOpcode::kConstant) {
+    return std::nullopt;
+  }
+  const int64_t dimension = Cast<HloIotaInstruction>(iota)->iota_dimension();
+  const Shape& shape = root.shape();
+  if (!shape.has_layout() ||
+      LayoutUtil::Major(shape.layout(), 0) != dimension) {
+    return std::nullopt;
+  }
+  return emitters::DynamicRowExtent{dimension, extent->parameter_number()};
+}
+
 WorkDimensions LoopFusion::GetWorkDimensions() const {
   WorkDimensions work_dimensions = launch_dimensions().AsWorkDimensions();
   work_dimensions.work_tile_size.dimensions.push_back(unroll_factor_);
@@ -128,7 +193,7 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> LoopFusion::CreateMLIRModule(
   emitters::LoopFusionKernelEmitter emitter(
       mlir_context, fusion, analysis_.fusion_spec(), buffer_assignment,
       GetDefaultBufferAlignment(), GetWorkDimensions(), entry_function_name,
-      BackendKind::kGpu);
+      BackendKind::kGpu, dynamic_row_extent_);
 
   ABSL_ASSIGN_OR_RETURN(auto kernel_definition, emitter.EmitKernelDefinition());
   return std::move(kernel_definition).TakeSource().TakeModule();

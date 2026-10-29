@@ -1992,7 +1992,19 @@ message DebugOptions {
   // (ScanRewriterTriton).
   optional bool xla_gpu_experimental_enable_triton_scan = 562;
 
-  // Next id: 565
+
+  // Experimental prototype for MoE buffers with a runtime row extent. When
+  // true, a loop fusion whose root is the masked pattern
+  // `select(compare(iota, broadcast(n), LT), value, broadcast(fill))` along
+  // the leading dimension is emitted with a guard that makes every thread
+  // whose rows are >= n exit before issuing any load, compute or store. The
+  // launch grid stays static (derived from the capacity). Rows >= n of the
+  // fusion output are left unspecified instead of being written with `fill`,
+  // i.e. the output has the semantics of a bounded shape `[<=N, ...]`, not of
+  // the masked form. Only enable for modules that never read those rows.
+  optional bool xla_gpu_experimental_dynamic_row_extent = 565;
+
+  // Next id: 566
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

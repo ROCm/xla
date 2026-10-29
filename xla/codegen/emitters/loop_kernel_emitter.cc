@@ -29,6 +29,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -76,7 +77,8 @@ LoopFusionKernelEmitter::LoopFusionKernelEmitter(
     const HloFusionSpec& fusion_spec, const BufferAssignment* buffer_assignment,
     KernelArguments::BufferAlignment buffer_alignment,
     WorkDimensions work_dimensions, absl::string_view entry_function_name,
-    BackendKind backend_kind)
+    BackendKind backend_kind,
+    std::optional<DynamicRowExtent> dynamic_row_extent)
     : mlir_context_(mlir_context),
       fusion_(fusion),
       fusion_spec_(fusion_spec),
@@ -84,7 +86,8 @@ LoopFusionKernelEmitter::LoopFusionKernelEmitter(
       buffer_alignment_(std::move(buffer_alignment)),
       work_dimensions_(std::move(work_dimensions)),
       entry_function_name_(entry_function_name),
-      backend_kind_(backend_kind) {}
+      backend_kind_(backend_kind),
+      dynamic_row_extent_(dynamic_row_extent) {}
 
 absl::StatusOr<LoopFusionKernelEmitter::KernelDefinition>
 LoopFusionKernelEmitter::EmitKernelDefinition() {
@@ -208,8 +211,46 @@ absl::Status LoopFusionKernelEmitter::EmitEntryFunction(
     work_dims.insert(work_dims.end(), workgroup_ids.begin(),
                      workgroup_ids.end());
 
-    auto loop_results = emitters::EmitXlaLoopOp(
-        nested_b, mlir::ValueRange(work_dims), outputs, indexing, body_builder);
+    mlir::ValueRange loop_results;
+    if (dynamic_row_extent_.has_value()) {
+      // Guard the whole per-work-item loop on the runtime extent. The output
+      // index of the work item's first element (all loop symbols at zero) is
+      // the smallest index it touches along any dimension that is major in
+      // the linear order, so comparing that row against the extent is enough:
+      // a work item either starts inside the extent and runs its loop, or
+      // starts at or beyond it and leaves its outputs untouched.
+      mlir::Value zero = nested_b.create<mlir::arith::ConstantIndexOp>(0);
+      llvm::SmallVector<mlir::Value> zero_symbols(indexing.GetSymbolCount(),
+                                                  zero);
+      llvm::SmallVector<mlir::Value, 3> first_indices = emitters::ApplyIndexing(
+          indexing, mlir::ValueRange(work_dims), zero_symbols, nested_b);
+      mlir::Value row = first_indices[dynamic_row_extent_->dimension];
+      mlir::Value extent_arg =
+          entry_function.getArgument(dynamic_row_extent_->parameter_index);
+      mlir::Value extent = nested_b.create<mlir::tensor::ExtractOp>(
+          extent_arg, mlir::ValueRange{});
+      extent = nested_b.create<mlir::arith::IndexCastOp>(
+          nested_b.getIndexType(), extent);
+      mlir::Value live = nested_b.create<mlir::arith::CmpIOp>(
+          mlir::arith::CmpIPredicate::slt, row, extent);
+      auto guard = nested_b.create<mlir::scf::IfOp>(outputs.getTypes(), live,
+                                                    /*withElseRegion=*/true);
+      {
+        mlir::OpBuilder::InsertionGuard insertion_guard(nested_b);
+        nested_b.setInsertionPointToStart(guard.thenBlock());
+        mlir::ValueRange then_results =
+            emitters::EmitXlaLoopOp(nested_b, mlir::ValueRange(work_dims),
+                                    outputs, indexing, body_builder);
+        nested_b.create<mlir::scf::YieldOp>(then_results);
+        nested_b.setInsertionPointToStart(guard.elseBlock());
+        nested_b.create<mlir::scf::YieldOp>(outputs);
+      }
+      loop_results = guard.getResults();
+    } else {
+      loop_results =
+          emitters::EmitXlaLoopOp(nested_b, mlir::ValueRange(work_dims),
+                                  outputs, indexing, body_builder);
+    }
     auto terminator = nested_b.create<mlir::scf::InParallelOp>();
     nested_b.setInsertionPointToStart(terminator.getBody());
     for (auto [result, output] : llvm::zip(loop_results, outputs)) {

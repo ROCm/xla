@@ -455,6 +455,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_operand_bytes_threshold_for_windowed_einsum(-1);
 
   opts.set_xla_gpu_experimental_enable_fusion_block_level_rewriter(false);
+  opts.set_xla_gpu_experimental_dynamic_row_extent(false);
 
   opts.set_xla_gpu_default_to_alg_dot_bf16_bf16_f32(false);
   opts.set_xla_gpu_enable_libnvptxcompiler(
@@ -3015,6 +3016,16 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_experimental_enable_fusion_block_level_rewriter(),
       "Enabling this flag will attempt to redirect every fusion possible to "
       "the Triton emitter"));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_dynamic_row_extent",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_experimental_dynamic_row_extent),
+      debug_options->xla_gpu_experimental_dynamic_row_extent(),
+      "Experimental. Emit loop fusions rooted at "
+      "select(iota < broadcast(n), value, broadcast(fill)) with a per-thread "
+      "early exit for rows >= n under a static launch grid. Rows >= n of the "
+      "output are left unspecified (bounded-shape semantics) instead of being "
+      "filled; only use when nothing reads those rows."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_enable_libnvptxcompiler",
       [debug_options](bool enabled) {

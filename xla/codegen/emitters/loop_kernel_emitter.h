@@ -16,6 +16,8 @@ limitations under the License.
 #ifndef XLA_CODEGEN_EMITTERS_LOOP_KERNEL_EMITTER_H_
 #define XLA_CODEGEN_EMITTERS_LOOP_KERNEL_EMITTER_H_
 
+#include <cstdint>
+#include <optional>
 #include <string>
 
 #include "absl/status/status.h"
@@ -37,17 +39,27 @@ limitations under the License.
 
 namespace xla::emitters {
 
+// A runtime extent along one output dimension of a loop fusion, read from a
+// scalar integer fusion parameter when the kernel starts. A work item whose
+// first output element lies at or beyond the extent along `dimension` skips
+// the whole fusion body: no loads, no compute, no stores. Output elements at
+// or beyond the extent are left unspecified. The launch grid is not changed.
+struct DynamicRowExtent {
+  int64_t dimension;
+  int64_t parameter_index;
+};
+
 // Generic loop fusion.
 class LoopFusionKernelEmitter final : public KernelEmitter<MlirKernelSource> {
  public:
-  LoopFusionKernelEmitter(mlir::MLIRContext& mlir_context,
-                          const HloFusionInstruction& fusion,
-                          const HloFusionSpec& fusion_spec,
-                          const BufferAssignment* buffer_assignment,
-                          KernelArguments::BufferAlignment buffer_alignment,
-                          WorkDimensions work_dimensions,
-                          absl::string_view entry_function_name,
-                          BackendKind backend_kind);
+  LoopFusionKernelEmitter(
+      mlir::MLIRContext& mlir_context, const HloFusionInstruction& fusion,
+      const HloFusionSpec& fusion_spec,
+      const BufferAssignment* buffer_assignment,
+      KernelArguments::BufferAlignment buffer_alignment,
+      WorkDimensions work_dimensions, absl::string_view entry_function_name,
+      BackendKind backend_kind,
+      std::optional<DynamicRowExtent> dynamic_row_extent = std::nullopt);
 
   absl::string_view name() const final { return "loop_fusion_kernel_emitter"; }
   absl::StatusOr<KernelDefinition> EmitKernelDefinition() override;
@@ -78,6 +90,7 @@ class LoopFusionKernelEmitter final : public KernelEmitter<MlirKernelSource> {
   WorkDimensions work_dimensions_;
   std::string entry_function_name_;
   BackendKind backend_kind_;
+  std::optional<DynamicRowExtent> dynamic_row_extent_;
 };
 
 }  // namespace xla::emitters
