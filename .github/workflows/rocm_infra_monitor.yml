@@ -23,6 +23,8 @@ env:
   # Repository and workflow being monitored: our own nightly pipeline.
   MONITORED_REPO: ROCm/xla
   MONITORED_WORKFLOW: rocm_xla_ci_nightly.yml
+  # This workflow, used to find out when we last looked.
+  SELF_WORKFLOW: rocm_infra_monitor.yml
   # Steps whose name contains this marker are known-red and not reported.
   # The pipeline already tags each test step with its mode - "[single_gpu]",
   # "[multi_gpu]", "[rocm_cpu]" - so the mode tag is the marker.
@@ -31,12 +33,18 @@ env:
 
 on:
   schedule:
-    # Run every hour to check failed runs from last 2 hours
+    # Run every hour; each run checks everything that finished since the
+    # previous successful run of this workflow, so nothing is missed or
+    # reported twice.
     - cron: '0 * * * *'
   workflow_dispatch:
   pull_request:
     paths:
       - '.github/workflows/rocm_infra_monitor.yml'
+      - 'build_tools/rocm/get_last_pipeline_run.sh'
+      - 'build_tools/rocm/get_monitoring_window.sh'
+      - 'build_tools/rocm/get_runs_since.sh'
+      - 'build_tools/rocm/collect_run_failures.sh'
       - 'build_tools/rocm/create_infra_error_issue.sh'
 
 jobs:
@@ -50,89 +58,45 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'rocm-dev-infra' }}
           persist-credentials: false
 
-      - name: Fetch recent ROCm CI workflow runs
-        id: fetch_runs
+      - name: Determine monitoring window
+        id: window
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CUTOFF=$(build_tools/rocm/get_monitoring_window.sh \
+            "${GITHUB_REPOSITORY}" "${SELF_WORKFLOW}" "${GITHUB_RUN_ID}")
+          echo "Reporting runs that finished after: $CUTOFF"
+          echo "cutoff=$CUTOFF" >> "$GITHUB_OUTPUT"
+
+      - name: List runs finished since then
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "Monitoring $MONITORED_WORKFLOW in $MONITORED_REPO"
-
-          # Get current time from GitHub API (no dependency on runner's clock)
-          GITHUB_TIME=$(gh api /rate_limit | jq -r '.resources.core.reset' | xargs -I {} date -u -d '@{}' '+%Y-%m-%dT%H:%M:%SZ')
-          echo "GitHub API time: $GITHUB_TIME"
-
-          # Calculate cutoff: 2 hours before GitHub's current time
-          CUTOFF_TIME=$(date -u -d "$GITHUB_TIME - 2 hours" '+%Y-%m-%dT%H:%M:%SZ')
-          echo "Checking for failed runs after: $CUTOFF_TIME"
-
-          # Get completed nightly runs from the last 2 hours.
-          # No conclusion filter: the jax-upstream job is continue-on-error, so
-          # a run whose JAX leg failed still has conclusion "success".
-          # Using --paginate to get ALL runs, not just first page
-          gh api --paginate \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/${MONITORED_REPO}/actions/workflows/${MONITORED_WORKFLOW}/runs?status=completed&created=>${CUTOFF_TIME}&per_page=100" \
-            | jq -r '.workflow_runs[] | .id' \
+          build_tools/rocm/get_runs_since.sh \
+            "${MONITORED_REPO}" "${MONITORED_WORKFLOW}" "${{ steps.window.outputs.cutoff }}" \
             > run_ids.txt
-
-          echo "Found $(wc -l < run_ids.txt) completed runs from last 2 hours in ${MONITORED_REPO}"
+          echo "Found $(wc -l < run_ids.txt) runs to check"
           cat run_ids.txt
 
       - name: Collect failures
-        id: collect
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # The nightly pipeline is expected to be green, so every failure is
-          # reported - no attempt is made to tell infrastructure failures apart
-          # from build or test failures.
           rm -f failed_runs.txt
           touch failed_runs.txt
-
-          if [ ! -s run_ids.txt ]; then
-            echo "No completed runs to check"
-            exit 0
-          fi
 
           while read -r RUN_ID; do
             [ -z "$RUN_ID" ] && continue
 
-            RUN_URL="https://github.com/${MONITORED_REPO}/actions/runs/${RUN_ID}"
             echo "Checking run ${RUN_ID}"
+            FAILURES=$(build_tools/rocm/collect_run_failures.sh "${MONITORED_REPO}" "${RUN_ID}")
 
-            gh api --paginate \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/${MONITORED_REPO}/actions/runs/${RUN_ID}/jobs?per_page=100" \
-              > "jobs-${RUN_ID}.json"
-
-            # Failed steps, except the known-red ones (empty marker: report all).
-            FAILURES=$(jq -r --arg marker "$IGNORED_STEP_MARKER" '
-              .jobs[]
-              | . as $job
-              | ($job.steps // [])[]
-              | select(.conclusion == "failure")
-              | select($marker == "" or ((.name | contains($marker)) | not))
-              | "  - \($job.name) / \(.name)"
-            ' "jobs-${RUN_ID}.json" | sort -u)
-
-            # Jobs that failed without any failed step (startup failure, runner
-            # lost, cancellation) - these have no step to look at, so report the
-            # job itself.
-            JOB_FAILURES=$(jq -r '
-              .jobs[]
-              | select(.conclusion == "failure" or .conclusion == "startup_failure")
-              | select([(.steps // [])[] | select(.conclusion == "failure")] | length == 0)
-              | "  - \(.name) / job \(.conclusion) with no failed step"
-            ' "jobs-${RUN_ID}.json" | sort -u)
-
-            ALL_FAILURES=$(printf '%s\n%s\n' "$FAILURES" "$JOB_FAILURES" | grep -v '^$' || true)
-
-            if [ -n "$ALL_FAILURES" ]; then
-              echo "  -> failures found:"
-              echo "$ALL_FAILURES"
+            if [ -n "$FAILURES" ]; then
+              echo "$FAILURES"
               {
-                echo "${RUN_URL}"
-                echo "$ALL_FAILURES"
+                echo "https://github.com/${MONITORED_REPO}/actions/runs/${RUN_ID}"
+                echo "$FAILURES"
                 echo ""
               } >> failed_runs.txt
             else
