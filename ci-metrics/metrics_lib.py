@@ -48,6 +48,22 @@ PRESUBMIT_LANES = {
                "OpenXLA NV/CUDA"),
 }
 
+def xla_family(name):
+    """openxla/xla runs its own tests and the JAX integration tests in one workflow."""
+    return "jax" if name.startswith("JAX") else "xla"
+
+
+def _split_lane(key, fam):
+    repo, wf, pred, label = PRESUBMIT_LANES[key]
+    return (repo, wf, lambda j, p=pred, f=fam: p(j) and xla_family(j["name"]) == f,
+            f"{label} ({fam.upper()} jobs)")
+
+
+# Sub-lanes of the two openxla/xla lanes: the signal each job family would give
+# on its own. Reported alongside the full lanes, never instead of them; the full
+# lane's time to signal is the max of its two sub-lanes, not their sum.
+SPLIT_LANES = {f"{k}:{f}": _split_lane(k, f) for k in ("xla_rocm", "xla_nv") for f in ("xla", "jax")}
+
 NIGHTLY_WORKFLOWS = ("wheel_tests_continuous.yml", "wheel_tests_nightly_release.yml")
 
 
@@ -72,9 +88,9 @@ def log_category(rec, job):
     if wf == "bazel_cuda_presubmit.yml" and n.startswith("Test /"):
         return "jax_nv"
     if wf == "rocm_ci.yml" and is_do(job):
-        return "xla_rocm:" + ("jax" if n.startswith("JAX") else "xla")
+        return "xla_rocm:" + xla_family(n)
     if wf == "ci.yml" and PRESUBMIT_LANES["xla_nv"][2](job):
-        return "xla_nv:" + ("jax" if n.startswith("JAX") else "xla")
+        return "xla_nv:" + xla_family(n)
     return None
 
 

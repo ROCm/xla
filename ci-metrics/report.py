@@ -9,6 +9,10 @@ Full pipeline (all steps resumable; ~1.5h wall, bounded by the 5000/h API budget
   python3 sample_logs.py    --data $D                        # test counts, critical path
   python3 report.py         --data $D --since $S --until $U --html OUT.html [--baseline BASE.json]
 
+report.py writes OUT.md next to OUT.html (--md overrides the path, --no-md skips
+it); the Markdown is converted from the rendered HTML, so both hold the same
+numbers and prose.
+
 --baseline adds a "Changes since" section from an earlier report's figures:
   {"label": "...", "jax_rocm_tests": N, "xla_rocm_tests": N, "do_nodes": N, "do_gpus": N,
    "queue": {"JAX single-GPU pool": [old_label, p50, p90], ...}, "note": "html"}
@@ -23,8 +27,13 @@ import os
 import re
 import statistics
 
-from metrics_lib import (CDT, NIGHTLY_WORKFLOWS, PHASES, PRESUBMIT_LANES, carried_over, is_do, job_phases, load,
-                         nightly_kind, test_step_seconds, ts)
+from html_md import to_markdown
+from metrics_lib import (CDT, NIGHTLY_WORKFLOWS, PHASES, PRESUBMIT_LANES, SPLIT_LANES, carried_over, is_do,
+                         job_phases, load, nightly_kind, test_step_seconds, ts)
+
+# The full lanes plus the openxla/xla job-family sub-lanes. Only the phase
+# tables read the sub-lanes; every other section indexes m["commits"] by name.
+ALL_LANES = {**PRESUBMIT_LANES, **SPLIT_LANES}
 
 SIGNAL = ("success", "failure", "timed_out")
 
@@ -82,11 +91,11 @@ def build(data_dir):
         return "peak" if h in peak else "nominal" if h in nominal else "mid"
 
     # Presubmit commits.
-    commits = {k: [] for k in PRESUBMIT_LANES}
+    commits = {k: [] for k in ALL_LANES}
     unsignalled = collections.Counter()
-    approval = {k: [] for k in PRESUBMIT_LANES}
-    lane_jobs_all = {k: [] for k in PRESUBMIT_LANES}
-    for key, (repo, wf, pred, _) in PRESUBMIT_LANES.items():
+    approval = {k: [] for k in ALL_LANES}
+    lane_jobs_all = {k: [] for k in ALL_LANES}
+    for key, (repo, wf, pred, _) in ALL_LANES.items():
         groups = collections.defaultdict(list)
         for rec in recs + earlier:
             if rec["repo"] == repo and rec["workflow"] == wf and rec["run"]["event"] == "pull_request":
@@ -366,10 +375,14 @@ def render(m, logs, since, until, base=None):
         "ROCm, so both lanes are measured over the same clock time.</p>")
     phase_head = ["Line item"] + [lbl for _, lbl in PHASES] + ["Total", "n"]
 
-    def phase_rows(sel):
+    LANE_ROWS = [("JAX", "jax_rocm", "ROCm"), ("JAX", "jax_nv", "NV"),
+                 ("OPENXLA", "xla_rocm", "ROCm"), ("OPENXLA", "xla_nv", "NV")]
+    SPLIT_ROWS = [("OPENXLA XLA jobs", "xla_rocm:xla", "ROCm"), ("OPENXLA JAX jobs", "xla_rocm:jax", "ROCm"),
+                  ("OPENXLA XLA jobs", "xla_nv:xla", "NV"), ("OPENXLA JAX jobs", "xla_nv:jax", "NV")]
+
+    def phase_rows(sel, lanes=LANE_ROWS):
         rows = []
-        for fw, key, lane in [("JAX", "jax_rocm", "ROCm"), ("JAX", "jax_nv", "NV"),
-                              ("OPENXLA", "xla_rocm", "ROCm"), ("OPENXLA", "xla_nv", "NV")]:
+        for fw, key, lane in lanes:
             for b, lbl in [("peak", "peak times"), ("nominal", "nominal times")]:
                 cs = [c for c in commits[key] if c["band"] == b]
                 chosen = sel(cs)
@@ -402,6 +415,17 @@ def render(m, logs, since, until, base=None):
     add("<h3>Slowest 10% of commits (at or above p90, mean of each phase)</h3>")
     add(table(phase_head, phase_rows(slowest)))
     add(phase_notes(m))
+
+    add("<h3>OpenXLA split by job family <span class='scope'>XLA jobs vs JAX jobs</span></h3>")
+    add("<p class='sub'>The openxla/xla presubmit runs its own tests and the JAX integration tests in the same "
+        "workflow, so the OPENXLA rows above are whichever family finishes last. These rows re-run the same "
+        "measurement over one family at a time: the signal that family would give on its own, from the SHA's "
+        "first trigger to the last job of that family finishing. A full lane's total is the <em>max</em> of its "
+        "two sub-lanes, not their sum, and each sub-lane picks its own p40-p60 and p90 commits.</p>")
+    add("<p class='meta'>Typical commit (p40 to p60):</p>")
+    add(table(phase_head, phase_rows(middle, SPLIT_ROWS)))
+    add("<p class='meta'>Slowest 10% (at or above p90):</p>")
+    add(table(phase_head, phase_rows(slowest, SPLIT_ROWS)))
 
     # --- ROCm vs NV ---------------------------------------------------------
     add("<h2>ROCm versus the NVIDIA reference lane</h2>")
@@ -955,6 +979,8 @@ def main():
     ap.add_argument("--html", required=True)
     ap.add_argument("--since", required=True)
     ap.add_argument("--until", required=True)
+    ap.add_argument("--md", help="also write the same report as Markdown (defaults to --html with a .md suffix)")
+    ap.add_argument("--no-md", action="store_true", help="write only the HTML")
     ap.add_argument("--baseline", help="JSON with an earlier report's figures; enables 'Changes since'")
     a = ap.parse_args()
     m = build(a.data)
@@ -962,9 +988,15 @@ def main():
     since = dt.datetime.fromisoformat(a.since)
     until = dt.datetime.fromisoformat(a.until)
     base = json.load(open(a.baseline)) if a.baseline else None
+    doc = render(m, logs, since, until, base)
     with open(a.html, "w") as f:
-        f.write(render(m, logs, since, until, base))
+        f.write(doc)
     print(f"wrote {a.html}")
+    if not a.no_md:
+        md_path = a.md or re.sub(r"\.html?$", "", a.html) + ".md"
+        with open(md_path, "w") as f:
+            f.write(to_markdown(doc))
+        print(f"wrote {md_path}")
     for k, cs in m["commits"].items():
         print(k, "commits", len(cs), "unsignalled", m["unsignalled"][k])
 

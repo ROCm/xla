@@ -30,6 +30,12 @@ python3 sample_logs.py    --data $D
 python3 report.py         --data $D --since $S --until $U --html report.html
 ```
 
+`report.py` writes `report.md` alongside `report.html`, converted from the same
+rendered HTML so both hold identical numbers and prose. Use `--md PATH` to put it
+elsewhere, or `--no-md` to skip it. In Markdown the green "ROCm wins" highlight
+becomes a bold value with a `▲`, the dominant phase of a row becomes bold, and
+a not-measured figure becomes italic.
+
 `report.py` only reads the data directory (plus a few cached API lookups for
 fork-PR numbers), so you can re-run it as often as you like while editing.
 
@@ -44,12 +50,20 @@ For this nightly previous day to current timestamp is used as time window
 | `sample_logs.py` | Downloads a random sample of job logs and parses bazel's `Executed X out of Y tests` and `Elapsed time / Critical Path` lines. | `logs.jsonl` |
 | `metrics_lib.py` | Shared definitions: which jobs form each lane, how a step maps to a phase, the time zone. Every CI naming convention lives here. | - |
 | `report.py` | Computes all statistics (`build()`) and renders the HTML (`render()`). | `pr_lookup.json` (cache) |
+| `html_md.py` | Converts the rendered HTML to Markdown, so there is one renderer and one set of numbers. | - |
 
 ## How the numbers are defined
 
 - **Lanes.** One per repo and vendor, in `PRESUBMIT_LANES`:
   Presubmit means `pull_request` runs only; one commit
   is one PR head SHA.
+- **Job-family sub-lanes.** `openxla/xla` runs its own tests and the JAX
+  integration tests in one workflow, so each OpenXLA lane is also measured one
+  family at a time (`SPLIT_LANES`, keyed `xla_rocm:xla`, `xla_rocm:jax` and the
+  NV equivalents). The "OpenXLA split by job family" tables under the phase
+  breakdown show the signal each family would give on its own; a full lane's
+  time to signal is the *max* of its two sub-lanes, not their sum, and each
+  sub-lane picks its own p40-p60 and p90 commits.
 - **Time to signal.** From the SHA's first trigger to the last lane job
   finishing, in the run that completed a full signal earliest (every lane job
   succeeded, failed or timed out; cancelled runs never count). For fork
@@ -76,6 +90,9 @@ For this nightly previous day to current timestamp is used as time window
   name the DO single-GPU pools.
 - **Time zone.** `CDT` in `metrics_lib.py` is fixed at UTC-5. Change it to UTC-6
   for winter windows.
+- **New HTML construct in the report.** `html_md.py` handles only the tags
+  `report.py` emits; anything else degrades to its text. Add it there if a new
+  section needs it in the Markdown.
 - **Hand-written text.** Some sections are not computed: the "pending" rows under
   Infrastructure, "Executor queue by pool", "The ask", and the notes about bazel
   strategies. Review them before sharing a report.
