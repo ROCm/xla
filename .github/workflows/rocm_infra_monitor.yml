@@ -31,7 +31,9 @@ env:
 
 on:
   schedule:
-    # Run every hour to check failed runs from last 2 hours
+    # Run every hour; each run checks everything that finished since the
+    # previous successful run of this workflow, so nothing is missed or
+    # reported twice.
     - cron: '0 * * * *'
   workflow_dispatch:
   pull_request:
@@ -50,32 +52,72 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'rocm-dev-infra' }}
           persist-credentials: false
 
-      - name: Fetch recent ROCm CI workflow runs
+      - name: Fetch ROCm CI runs finished since the last monitor run
         id: fetch_runs
         env:
           GH_TOKEN: ${{ github.token }}
+          # This workflow, used to find out when we last looked.
+          SELF_WORKFLOW: rocm_infra_monitor.yml
+          # Window used when there is no previous successful monitor run.
+          FALLBACK_HOURS: 2
+          # Never look back further than this, so that a long monitor outage
+          # does not dump days' worth of failures into the issue at once.
+          MAX_LOOKBACK_HOURS: 168
+          # How long before the cutoff a run may have been created and still be
+          # relevant: the "created" filter is the only date filter the API
+          # offers, but a nightly run can take many hours, so it may have been
+          # created well before it finished inside our window.
+          CREATION_BUFFER_HOURS: 48
         run: |
           echo "Monitoring $MONITORED_WORKFLOW in $MONITORED_REPO"
 
-          # Get current time from GitHub API (no dependency on runner's clock)
-          GITHUB_TIME=$(gh api /rate_limit | jq -r '.resources.core.reset' | xargs -I {} date -u -d '@{}' '+%Y-%m-%dT%H:%M:%SZ')
-          echo "GitHub API time: $GITHUB_TIME"
+          # Current server time, taken from the API response headers (no
+          # dependency on the runner's clock). Note that rate_limit.reset is
+          # *not* the current time - it is up to an hour in the future.
+          NOW=$(gh api /rate_limit --include --silent 2>/dev/null \
+            | grep -i '^date:' | head -1 | cut -d' ' -f2- | tr -d '\r')
+          NOW=$(date -u -d "$NOW" '+%Y-%m-%dT%H:%M:%SZ')
+          echo "GitHub server time: $NOW"
 
-          # Calculate cutoff: 2 hours before GitHub's current time
-          CUTOFF_TIME=$(date -u -d "$GITHUB_TIME - 2 hours" '+%Y-%m-%dT%H:%M:%SZ')
-          echo "Checking for failed runs after: $CUTOFF_TIME"
+          # Cutoff: when this monitor last ran successfully on schedule. Using
+          # the run's creation time (not its end) means a nightly that finished
+          # while the previous monitor run was in flight is still picked up.
+          LAST_MONITOR_RUN=$(gh api \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/${SELF_WORKFLOW}/runs?status=success&event=schedule&per_page=50" \
+            --jq "[.workflow_runs[] | select(.id != ${GITHUB_RUN_ID})] | map(.created_at) | max // empty")
 
-          # Get completed nightly runs from the last 2 hours.
+          if [ -n "$LAST_MONITOR_RUN" ]; then
+            CUTOFF_TIME="$LAST_MONITOR_RUN"
+            echo "Last successful monitor run: $CUTOFF_TIME"
+          else
+            CUTOFF_TIME=$(date -u -d "$NOW - ${FALLBACK_HOURS} hours" '+%Y-%m-%dT%H:%M:%SZ')
+            echo "No previous successful monitor run, falling back to ${FALLBACK_HOURS}h"
+          fi
+
+          EARLIEST_TIME=$(date -u -d "$NOW - ${MAX_LOOKBACK_HOURS} hours" '+%Y-%m-%dT%H:%M:%SZ')
+          if [[ "$CUTOFF_TIME" < "$EARLIEST_TIME" ]]; then
+            echo "Cutoff $CUTOFF_TIME is older than the ${MAX_LOOKBACK_HOURS}h limit, clamping"
+            CUTOFF_TIME="$EARLIEST_TIME"
+          fi
+          echo "Checking for runs that finished after: $CUTOFF_TIME"
+
+          CREATED_SINCE=$(date -u -d "$CUTOFF_TIME - ${CREATION_BUFFER_HOURS} hours" '+%Y-%m-%dT%H:%M:%SZ')
+
+          # Completed nightly runs that finished since the cutoff.
           # No conclusion filter: the jax-upstream job is continue-on-error, so
           # a run whose JAX leg failed still has conclusion "success".
-          # Using --paginate to get ALL runs, not just first page
+          # Using --paginate to get ALL runs, not just first page.
           gh api --paginate \
             -H "Accept: application/vnd.github+json" \
-            "/repos/${MONITORED_REPO}/actions/workflows/${MONITORED_WORKFLOW}/runs?status=completed&created=>${CUTOFF_TIME}&per_page=100" \
-            | jq -r '.workflow_runs[] | .id' \
+            "/repos/${MONITORED_REPO}/actions/workflows/${MONITORED_WORKFLOW}/runs?status=completed&created=>${CREATED_SINCE}&per_page=100" \
+            | jq -r --arg cutoff "$CUTOFF_TIME" '
+                .workflow_runs[]
+                | select(.updated_at > $cutoff)
+                | .id
+              ' \
             > run_ids.txt
 
-          echo "Found $(wc -l < run_ids.txt) completed runs from last 2 hours in ${MONITORED_REPO}"
+          echo "Found $(wc -l < run_ids.txt) runs finished since $CUTOFF_TIME in ${MONITORED_REPO}"
           cat run_ids.txt
 
       - name: Collect failures
