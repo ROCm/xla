@@ -13,9 +13,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -30,7 +27,8 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "Eigen/Core"
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include "absl/algorithm/container.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
@@ -54,7 +52,7 @@ limitations under the License.
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/Pass/PassManager.h"
-#include "tsl/platform/path.h"
+#include "Eigen/Core"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/gpu/codegen/triton/support.h"
 #include "xla/backends/gpu/codegen/triton/test_utils.h"
@@ -97,6 +95,7 @@ limitations under the License.
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
+#include "tsl/platform/path.h"
 
 namespace xla {
 namespace gpu {
@@ -2870,6 +2869,448 @@ ENTRY entry_computation {
 })";
   RunAndCompareScan(kHloText, ErrorSpec{/*aabs=*/1e-3, /*arel=*/1e-3});
 }
+TEST_F(TritonEmitterTest, Conv1DMultiChannelIsEmittedCorrectly) {
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[1,8,4] parameter(0)
+  kernel = f32[3,4,2] parameter(1)
+  ROOT conv = f32[1,6,2] convolution(input, kernel),
+    window={size=3}, dim_labels=b0f_0io->b0f,
+    backend_config={"sizes":["1","4"]}
+}
+
+ENTRY entry {
+  p0 = f32[1,8,4] parameter(0)
+  p1 = f32[3,4,2] parameter(1)
+  ROOT fusion = f32[1,6,2] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","6","2"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_F(TritonEmitterTest, Conv2DFullTilingIsEmittedCorrectly) {
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[2,3,5,5] parameter(0)
+  kernel = f32[3,3,3,4] parameter(1)
+  ROOT conv = f32[2,4,3,3] convolution(input, kernel),
+    window={size=3x3}, dim_labels=bf01_01io->bf01,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","3"]}
+}
+
+ENTRY entry {
+  p0 = f32[2,3,5,5] parameter(0)
+  p1 = f32[3,3,3,4] parameter(1)
+  ROOT fusion = f32[2,4,3,3] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["2","4","3","3"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+struct ConvLayoutTestCase {
+  absl::string_view name;
+  absl::string_view dim_labels;
+  absl::string_view input_shape;
+  absl::string_view kernel_shape;
+  absl::string_view output_shape;
+  absl::string_view output_tile;
+};
+
+std::vector<ConvLayoutTestCase> GetConvLayoutTestCases() {
+  return {
+      {"bf01_01io", "bf01_01io->bf01", "f32[20,120,32,32]", "f32[5,5,120,64]",
+       "f32[20,64,28,28]", R"("1","16","16","16")"},
+      {"b01f_01io", "b01f_01io->b01f", "f32[20,32,32,120]", "f32[5,5,120,64]",
+       "f32[20,28,28,64]", R"("1","16","16","16")"},
+      {"b01f_io01", "b01f_io01->b01f", "f32[20,32,32,120]", "f32[120,64,5,5]",
+       "f32[20,28,28,64]", R"("1","16","16","16")"},
+  };
+}
+
+class ConvLayoutAndTileCInTest
+    : public TritonEmitterTest,
+      public ::testing::WithParamInterface<
+          std::tuple<ConvLayoutTestCase, /*tile_c_in=*/int64_t>> {};
+
+std::string ConvLayoutAndTileCInTestParamToString(
+    const ::testing::TestParamInfo<std::tuple<ConvLayoutTestCase, int64_t>>&
+        info) {
+  const auto& [layout, tile_c_in] = info.param;
+  return absl::StrCat(layout.name, "_tile_c_in_", tile_c_in);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ConvLayoutAndTileCInTestSuite, ConvLayoutAndTileCInTest,
+    ::testing::Combine(::testing::ValuesIn(GetConvLayoutTestCases()),
+                       ::testing::Values(32, 16, 1)),
+    ConvLayoutAndTileCInTestParamToString);
+
+TEST_P(ConvLayoutAndTileCInTest, Conv2DIsEmittedCorrectly) {
+  constexpr absl::string_view kHloTextTemplate = R"(
+HloModule m
+
+triton_computation {
+  input = $0 parameter(0)
+  kernel = $1 parameter(1)
+  ROOT conv = $2 convolution(input, kernel),
+    window={size=5x5}, dim_labels=$3,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","$4"]}
+}
+
+ENTRY entry {
+  p0 = $0 parameter(0)
+  p1 = $1 parameter(1)
+  ROOT fusion = $2 fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":[$5]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  const auto& [layout, tile_c_in] = GetParam();
+  const std::string hlo_text = absl::Substitute(
+      kHloTextTemplate, layout.input_shape, layout.kernel_shape,
+      layout.output_shape, layout.dim_labels, tile_c_in, layout.output_tile);
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      hlo_text, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_F(TritonEmitterTest, Conv3DNoPaddingIsEmittedCorrectly) {
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[1,2,4,4,4] parameter(0)
+  kernel = f32[2,2,2,2,2] parameter(1)
+  ROOT conv = f32[1,2,3,3,3] convolution(input, kernel),
+    window={size=2x2x2}, dim_labels=bf012_012io->bf012,
+    backend_config={"sizes":["1","1","1","2"]}
+}
+
+ENTRY entry {
+  p0 = f32[1,2,4,4,4] parameter(0)
+  p1 = f32[2,2,2,2,2] parameter(1)
+  ROOT fusion = f32[1,2,3,3,3] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","2","3","3","3"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_F(TritonEmitterTest, IntegerConv2DIsEmittedCorrectly) {
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = s8[2,6,6,6] parameter(0)
+  kernel = s8[3,3,6,16] parameter(1)
+  ROOT conv = s32[2,4,4,16] convolution(input, kernel),
+    window={size=3x3}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","4"]}
+}
+
+ENTRY entry {
+  p0 = s8[2,6,6,6] parameter(0)
+  p1 = s8[3,3,6,16] parameter(1)
+  ROOT fusion = s32[2,4,4,16] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["2","4","4","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(kHloText, kExactMatch));
+}
+
+TEST_F(TritonEmitterTest, Conv2DWindowDilationIsEmittedCorrectly) {
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[20,32,32,120] parameter(0)
+  kernel = f32[5,5,120,64] parameter(1)
+  ROOT conv = f32[20,24,24,64] convolution(input, kernel),
+    window={size=5x5 rhs_dilate=2x2}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","32"]}
+}
+
+ENTRY entry {
+  p0 = f32[20,32,32,120] parameter(0)
+  p1 = f32[5,5,120,64] parameter(1)
+  ROOT fusion = f32[20,24,24,64] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","16","16","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_F(TritonEmitterTest, Conv2DStride2IsEmittedCorrectly) {
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[20,32,32,128] parameter(0)
+  kernel = f32[5,5,128,64] parameter(1)
+  ROOT conv = f32[20,14,14,64] convolution(input, kernel),
+    window={size=5x5 stride=2x2}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","32"]}
+}
+
+ENTRY entry {
+  p0 = f32[20,32,32,128] parameter(0)
+  p1 = f32[5,5,128,64] parameter(1)
+  ROOT fusion = f32[20,14,14,64] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","8","8","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_F(TritonEmitterTest, Conv2DStride2NonDivisibleCInIsEmittedCorrectly) {
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[20,32,32,120] parameter(0)
+  kernel = f32[5,5,120,64] parameter(1)
+  ROOT conv = f32[20,14,14,64] convolution(input, kernel),
+    window={size=5x5 stride=2x2}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","32"]}
+}
+
+ENTRY entry {
+  p0 = f32[20,32,32,120] parameter(0)
+  p1 = f32[5,5,120,64] parameter(1)
+  ROOT fusion = f32[20,14,14,64] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","8","8","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_F(TritonEmitterTest, Conv2DSamePaddingIsEmittedCorrectly) {
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[32,56,56,64] parameter(0)
+  kernel = f32[3,3,64,128] parameter(1)
+  ROOT conv = f32[32,56,56,128] convolution(input, kernel),
+    window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","16"]}
+}
+
+ENTRY entry {
+  p0 = f32[32,56,56,64] parameter(0)
+  p1 = f32[3,3,64,128] parameter(1)
+  ROOT fusion = f32[32,56,56,128] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","8","8","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_F(TritonEmitterTest, Conv2DAsymmetricPaddingIsEmittedCorrectly) {
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[32,56,56,64] parameter(0)
+  kernel = f32[3,3,64,128] parameter(1)
+  ROOT conv = f32[32,56,56,128] convolution(input, kernel),
+    window={size=3x3 pad=2_0x0_2}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","16"]}
+}
+
+ENTRY entry {
+  p0 = f32[32,56,56,64] parameter(0)
+  p1 = f32[3,3,64,128] parameter(1)
+  ROOT fusion = f32[32,56,56,128] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","8","8","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_F(TritonEmitterTest, Conv2DValidPaddingIsEmittedCorrectly) {
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[32,56,56,64] parameter(0)
+  kernel = f32[3,3,64,128] parameter(1)
+  ROOT conv = f32[32,54,54,128] convolution(input, kernel),
+    window={size=3x3 pad=0_0x0_0}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","16"]}
+}
+
+ENTRY entry {
+  p0 = f32[32,56,56,64] parameter(0)
+  p1 = f32[3,3,64,128] parameter(1)
+  ROOT fusion = f32[32,54,54,128] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","8","8","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_F(TritonEmitterTest, Conv2DSamePaddingStride2IsEmittedCorrectly) {
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[32,56,56,64] parameter(0)
+  kernel = f32[3,3,64,128] parameter(1)
+  ROOT conv = f32[32,28,28,128] convolution(input, kernel),
+    window={size=3x3 stride=2x2 pad=1_1x1_1}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","16"]}
+}
+
+ENTRY entry {
+  p0 = f32[32,56,56,64] parameter(0)
+  p1 = f32[3,3,64,128] parameter(1)
+  ROOT fusion = f32[32,28,28,128] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","8","8","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
+TEST_F(TritonEmitterTest,
+       Conv2DSamePaddingNonDivisibleCInIsEmittedCorrectly) {
+  const std::string kHloText = R"(
+HloModule m
+
+triton_computation {
+  input = f32[32,56,56,60] parameter(0)
+  kernel = f32[3,3,60,128] parameter(1)
+  ROOT conv = f32[32,56,56,128] convolution(input, kernel),
+    window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f,
+    operand_precision={highest,highest},
+    backend_config={"sizes":["1","1","16"]}
+}
+
+ENTRY entry {
+  p0 = f32[32,56,56,60] parameter(0)
+  p1 = f32[3,3,60,128] parameter(1)
+  ROOT fusion = f32[32,56,56,128] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","8","8","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(
+      kHloText, ErrorSpec{/*aabs=*/1e-4, /*arel=*/1e-6}));
+}
+
 }  // namespace
 }  // namespace gpu
 }  // namespace xla
