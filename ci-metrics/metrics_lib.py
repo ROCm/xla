@@ -90,7 +90,7 @@ REPOS = [
         "pairs": (("XLA job", "XLA job", "XLA job", "xla"),
                   ("JAX job", "JAX job", "JAX job", "jax")),
         # (label suffix, log-sample category, which bazel invocation in the log)
-        "rbe": (("ROCm presubmit, XLA job (<code>single_gpu</code>)", "xla_rocm:xla", 0),
+        "rbe": (("ROCm presubmit, XLA job (`single_gpu`)", "xla_rocm:xla", 0),
                 ("ROCm presubmit, JAX job", "xla_rocm:jax", -1),
                 ("NV presubmit, XLA T4 job (Google RBE)", "xla_nv:xla", -1)),
     },

@@ -90,17 +90,15 @@ jobs:
         working-directory: ci-metrics
         run: python3 sample_logs.py --data "$RUNNER_TEMP/data/${{ steps.window.outputs.stamp }}"
 
-      - name: Render the HTML and Markdown report
+      - name: Render the Markdown report
         working-directory: ci-metrics
         run: |
           mkdir -p "$RUNNER_TEMP/out"
-          # report.py writes the .md next to the .html from the same render, so
-          # both files always carry the same numbers.
           python3 report.py \
             --data "$RUNNER_TEMP/data/${{ steps.window.outputs.stamp }}" \
             --since "${{ steps.window.outputs.since }}" \
             --until "${{ steps.window.outputs.until }}" \
-            --html "$RUNNER_TEMP/out/ci-metrics-${{ steps.window.outputs.stamp }}.html"
+            --md "$RUNNER_TEMP/out/ci-metrics-${{ steps.window.outputs.stamp }}.md"
 
       - name: Push the report to the ${{ env.REPORT_BRANCH }} branch
         env:
@@ -124,7 +122,6 @@ jobs:
             git checkout -q -b "$REPORT_BRANCH"
           fi
           mkdir -p reports
-          cp "$RUNNER_TEMP/out/ci-metrics-${STAMP}.html" reports/
           cp "$RUNNER_TEMP/out/ci-metrics-${STAMP}.md" reports/
           git add -A reports
           if git diff --cached --quiet; then

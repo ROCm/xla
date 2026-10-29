@@ -1,7 +1,6 @@
 # ci-metrics: Nightly CI report for upstream JAX and OpenXLA
 
-Builds a one-page HTML + Markdown report of presubmit CI health over a 1-day
-window, with **one section per repo** (`REPOS` in `metrics_lib.py`) followed by
+Builds a one-page Markdown report of presubmit CI health over a 1-day window, with **one section per repo** (`REPOS` in `metrics_lib.py`) followed by
 the shared infrastructure sections. Each repo section holds: time to
 signal, queue wait, job and test-step execution, where every second of time to
 signal goes, at peak and nominal hours, tail percentiles for PR same-commit on various runner pools and test coverage.
@@ -29,14 +28,18 @@ D=~/ci-metrics-data/2026-10-13 S=2026-10-06T15:00 U=2026-10-13T15:00
 python3 collect.py        --since $S --until $U --out $D
 python3 fetch_attempts.py --data $D
 python3 sample_logs.py    --data $D
-python3 report.py         --data $D --since $S --until $U --html report.html
+python3 report.py         --data $D --since $S --until $U --md report.md
 ```
 
-`report.py` writes `report.md` alongside `report.html`, converted from the same
-rendered HTML so both hold identical numbers and prose. Use `--md PATH` to put it
-elsewhere, or `--no-md` to skip it. In Markdown the green "ROCm wins" highlight
-becomes a bold value with a `▲`, the dominant phase of a row becomes bold, and
-a not-measured figure becomes italic.
+The report is GitHub-flavoured Markdown. Its structure lives in `templates/`,
+one `string.Template` file per block — read `templates/report.md` to see the
+whole document at a glance. `report.py` computes the values and fills the
+`${name}` slots; tables arrive pre-rendered, since `string.Template` has no
+loops. A missing slot raises `KeyError`, so a typo blanks nothing silently.
+
+Meaning that a stylesheet would have carried is in the markup instead: a
+like-for-like ROCm win is a bold value with a `▲`, the dominant phase of a row
+is bold, and a figure that was not measured is italic.
 
 `report.py` only reads the data directory (plus a few cached API lookups for
 fork-PR numbers), so you can re-run it as often as you like while editing.
@@ -51,8 +54,8 @@ For this nightly previous day to current timestamp is used as time window
 | `fetch_attempts.py` | Fetches earlier attempts of re-run PR runs; `collect.py` only stores the latest attempt, and a failed first attempt is already a signal. | `attempts.jsonl` |
 | `sample_logs.py` | Downloads a random sample of job logs and parses bazel's `Executed X out of Y tests` and `Elapsed time / Critical Path` lines. | `logs.jsonl` |
 | `metrics_lib.py` | `REPOS` (the repo/lane config) plus shared definitions: how a step maps to a phase, the time zone. Every CI naming convention lives here. | - |
-| `report.py` | Computes all statistics (`build()`) and renders the HTML (`render()`). | `pr_lookup.json` (cache) |
-| `html_md.py` | Converts the rendered HTML to Markdown, so there is one renderer and one set of numbers. | - |
+| `report.py` | Computes all statistics (`build()`) and fills the templates (`render()`). | `pr_lookup.json` (cache) |
+| `templates/*.md` | The document structure: `report.md` (whole report), `repo_section.md` (one repo), `same_commit.md`. | - |
 
 ## How the numbers are defined
 
@@ -105,11 +108,11 @@ For this nightly previous day to current timestamp is used as time window
 - **New runner pool labels.** The `pool` field of the repo's `REPOS` entry; both
   the peak-vs-nominal table and `POOL_NOW` read it. `POOL_NOW`'s keys are the
   names the `--baseline` JSON uses, so they must stay stable.
+- **Wording or layout of the report.** Edit `templates/*.md`. Reordering
+  sections, rewording prose or moving a table is a template change only; adding
+  a new table means a new `${slot}` plus the value in `report.py`.
 - **Time zone.** `CDT` in `metrics_lib.py` is fixed at UTC-5. Change it to UTC-6
   for winter windows.
-- **New HTML construct in the report.** `html_md.py` handles only the tags
-  `report.py` emits; anything else degrades to its text. Add it there if a new
-  section needs it in the Markdown.
 - **Hand-written text.** Some sections are not computed: the "pending" rows under
   Infrastructure, "Executor queue by pool", "The ask", and the notes about bazel
   strategies. Review them before sharing a report.
