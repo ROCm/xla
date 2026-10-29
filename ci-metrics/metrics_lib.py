@@ -35,36 +35,130 @@ def carried_over(job):
     return bool(a and b and b < a)
 
 
-# ---- lanes -----------------------------------------------------------------
-# A lane is the set of jobs whose completion is "the signal" for one commit.
+# ---- repos -----------------------------------------------------------------
+# One entry per upstream repo the report covers. Everything repo-specific lives
+# here: lanes, display names, job families, runner pools, log sampling. Adding a
+# repo is an entry in REPOS, not a change to report.py.
+#
+# A lane is the set of jobs whose completion is "the signal" for one commit; a
+# repo has a ROCm lane (AMD self-hosted) and an NV lane (the reference).
+#
+# Fields:
+#   short      key prefix for lane names and the PAIRS/REPO_URL lookups
+#   repo       GitHub slug
+#   label      display name, used for every heading and row label
+#   rocm/nv    (workflow, job predicate, log-sample predicate) per lane
+#   families   job families inside one workflow, or () when the repo has one.
+#              openxla/xla runs its own tests and the JAX integration tests in
+#              the same workflow, so its lanes split into "XLA jobs"/"JAX jobs".
+#   pool       the DO scale-set this repo's ROCm jobs run on
+#   nightly    nightly/continuous workflows, or () when the repo has none
+#   job_type   classifies a job name for the per-job-type tables
+#   pairs      (label, ROCm job type, NV job type) compared like-for-like
 
-PRESUBMIT_LANES = {
-    # key: (repo, workflow, job predicate, label)
-    "jax_rocm": ("jax-ml/jax", "bazel_rocm_presubmit.yml", lambda j: is_do(j), "JAX ROCm"),
-    "jax_nv": ("jax-ml/jax", "bazel_cuda_presubmit.yml", lambda j: True, "JAX NV/CUDA"),
-    "xla_rocm": ("openxla/xla", "rocm_ci.yml", lambda j: is_do(j), "OpenXLA ROCm"),
-    "xla_nv": ("openxla/xla", "ci.yml",
-               lambda j: re.search(r"\bGPU\b", j["name"]) and not re.search(r"ROCm|ONEAPI|AMD", j["name"], re.I),
-               "OpenXLA NV/CUDA"),
-}
 
-def xla_family(name):
-    """openxla/xla runs its own tests and the JAX integration tests in one workflow."""
-    return "jax" if name.startswith("JAX") else "xla"
+def _nv_gpu(j):
+    return bool(re.search(r"\bGPU\b", j["name"]) and not re.search(r"ROCm|ONEAPI|AMD", j["name"], re.I))
 
 
-def _split_lane(key, fam):
-    repo, wf, pred, label = PRESUBMIT_LANES[key]
-    return (repo, wf, lambda j, p=pred, f=fam: p(j) and xla_family(j["name"]) == f,
+def _jax_job_type(name):
+    if "blocking gate" in name:
+        return "blocking gate (1 test)"
+    if name.startswith("Build wheels"):
+        return "build wheels"
+    b = re.search(r"build_jaxlib=(\w+)", name)
+    return f"test, build_jaxlib={b.group(1)}" if b else name[:40]
+
+
+def _xla_job_type(name):
+    return "JAX job" if name.startswith("JAX") else "XLA job"
+
+
+REPOS = [
+    {
+        "short": "xla",
+        "repo": "openxla/xla",
+        "label": "OpenXLA",
+        "rocm": ("rocm_ci.yml", is_do, is_do),
+        "nv": ("ci.yml", _nv_gpu, _nv_gpu),
+        "families": (("XLA jobs", "xla"), ("JAX jobs", "jax")),
+        "family_of": lambda name: "jax" if name.startswith("JAX") else "xla",
+        "pool": "amd-do-linux-xla-gpu-gfx950-dpx-1",
+        "nightly": (),
+        "job_type": _xla_job_type,
+        # (label, ROCm job type, NV job type, family the type belongs to)
+        "pairs": (("XLA job", "XLA job", "XLA job", "xla"),
+                  ("JAX job", "JAX job", "JAX job", "jax")),
+        # (label suffix, log-sample category, which bazel invocation in the log)
+        "rbe": (("ROCm presubmit, XLA job (<code>single_gpu</code>)", "xla_rocm:xla", 0),
+                ("ROCm presubmit, JAX job", "xla_rocm:jax", -1),
+                ("NV presubmit, XLA T4 job (Google RBE)", "xla_nv:xla", -1)),
+    },
+    {
+        "short": "jax",
+        "repo": "jax-ml/jax",
+        "label": "JAX",
+        "rocm": ("bazel_rocm_presubmit.yml", is_do,
+                 lambda j: is_do(j) and j["name"].startswith("Test /")),
+        "nv": ("bazel_cuda_presubmit.yml", lambda j: True,
+               lambda j: j["name"].startswith("Test /")),
+        "families": (),
+        "family_of": None,
+        "pool": "amd-do-linux.jax.gpu.gfx950.1",
+        "nightly": ("wheel_tests_continuous.yml", "wheel_tests_nightly_release.yml"),
+        "job_type": _jax_job_type,
+        "pairs": (("tests, jaxlib from PyPI", "test, build_jaxlib=false", "test, build_jaxlib=false", None),
+                  ("tests, jaxlib built from source", "test, build_jaxlib=wheel", "test, build_jaxlib=true", None)),
+        "rbe": (("ROCm presubmit", "jax_rocm", -1),
+                ("NV presubmit (Google RBE)", "jax_nv", -1)),
+        # Hand-written Metrics rows that are not derivable from CI metadata.
+        "extra_metrics": (("Jax-lab complete run (minutes)",
+                           "pending: not a GitHub Actions workflow, needs definition (owner: user)", "n/a"),),
+    },
+]
+
+REPO_BY_SHORT = {R["short"]: R for R in REPOS}
+LANES = ("rocm", "nv")
+
+
+def lane_key(R, lane):
+    """The stable key a lane's commits and coverage figures are stored under."""
+    return f"{R['short']}_{lane}"
+
+
+def cov_key(R, lane):
+    """The log-sample category carrying this lane's test counts.
+
+    A repo with families reports coverage for the family that owns the repo's
+    own tests, not for the whole lane.
+    """
+    return f"{lane_key(R, lane)}:{R['short']}" if R["families"] else lane_key(R, lane)
+
+
+def _lane_entry(R, lane):
+    wf, pred, _ = R[lane]
+    return (R["repo"], wf, pred, f"{R['label']} {'ROCm' if lane == 'rocm' else 'NV/CUDA'}")
+
+
+PRESUBMIT_LANES = {lane_key(R, lane): _lane_entry(R, lane) for R in REPOS for lane in LANES}
+
+
+def _split_lane(R, lane, fam):
+    repo, wf, pred, label = PRESUBMIT_LANES[lane_key(R, lane)]
+    fam_of = R["family_of"]
+    return (repo, wf, lambda j, p=pred, f=fam: p(j) and fam_of(j["name"]) == f,
             f"{label} ({fam.upper()} jobs)")
 
 
-# Sub-lanes of the two openxla/xla lanes: the signal each job family would give
-# on its own. Reported alongside the full lanes, never instead of them; the full
-# lane's time to signal is the max of its two sub-lanes, not their sum.
-SPLIT_LANES = {f"{k}:{f}": _split_lane(k, f) for k in ("xla_rocm", "xla_nv") for f in ("xla", "jax")}
+# Sub-lanes: the signal each job family would give on its own. Reported
+# alongside the full lanes, never instead of them; a lane's time to signal is
+# the slower of its families on each commit, not the sum of the two.
+SPLIT_LANES = {f"{lane_key(R, lane)}:{fam}": _split_lane(R, lane, fam)
+               for R in REPOS for lane in LANES for _, fam in R["families"]}
 
-NIGHTLY_WORKFLOWS = ("wheel_tests_continuous.yml", "wheel_tests_nightly_release.yml")
+ALL_LANES = {**PRESUBMIT_LANES, **SPLIT_LANES}
+
+NIGHTLY_WORKFLOWS = tuple(wf for R in REPOS for wf in R["nightly"])
 
 
 def nightly_kind(rec, job):
@@ -82,15 +176,13 @@ def log_category(rec, job):
     """Job types whose logs are sampled for test counts and critical path."""
     if rec["run"]["event"] != "pull_request":
         return None
-    wf, n = rec["workflow"], job["name"]
-    if wf == "bazel_rocm_presubmit.yml" and is_do(job) and n.startswith("Test /"):
-        return "jax_rocm"
-    if wf == "bazel_cuda_presubmit.yml" and n.startswith("Test /"):
-        return "jax_nv"
-    if wf == "rocm_ci.yml" and is_do(job):
-        return "xla_rocm:" + xla_family(n)
-    if wf == "ci.yml" and PRESUBMIT_LANES["xla_nv"][2](job):
-        return "xla_nv:" + xla_family(n)
+    for R in REPOS:
+        for lane in LANES:
+            wf, _, sample = R[lane]
+            if rec["workflow"] != wf or not sample(job):
+                continue
+            key = lane_key(R, lane)
+            return f"{key}:{R['family_of'](job['name'])}" if R["families"] else key
     return None
 
 

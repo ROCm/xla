@@ -28,12 +28,8 @@ import re
 import statistics
 
 from html_md import to_markdown
-from metrics_lib import (CDT, NIGHTLY_WORKFLOWS, PHASES, PRESUBMIT_LANES, SPLIT_LANES, carried_over, is_do,
-                         job_phases, load, nightly_kind, test_step_seconds, ts)
-
-# The full lanes plus the openxla/xla job-family sub-lanes. Only the phase
-# tables read the sub-lanes; every other section indexes m["commits"] by name.
-ALL_LANES = {**PRESUBMIT_LANES, **SPLIT_LANES}
+from metrics_lib import (ALL_LANES, CDT, LANES, NIGHTLY_WORKFLOWS, PHASES, REPO_BY_SHORT, REPOS, carried_over,
+                         cov_key, is_do, job_phases, lane_key, load, nightly_kind, test_step_seconds, ts)
 
 SIGNAL = ("success", "failure", "timed_out")
 
@@ -204,6 +200,9 @@ body{margin:0;padding:32px 20px 64px;background:#eef1f5;color:var(--ink);
 h1{margin:0 0 6px;font-size:27px;letter-spacing:-.02em}
 h2{margin:38px 0 10px;font-size:19px;letter-spacing:-.01em;
    padding-bottom:7px;border-bottom:2px solid var(--line)}
+h2.repo{margin-top:52px;font-size:23px;color:var(--accent);
+        border-bottom:3px solid var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+h4{margin:20px 0 6px;font-size:14px;color:var(--ink);font-weight:600}
 h3{margin:26px 0 8px;font-size:15.5px;color:var(--accent)}
 p{margin:9px 0}
 .sub{color:var(--mute);font-size:14px;margin:0 0 4px}
@@ -224,9 +223,6 @@ tbody tr:hover{background:#fbfcfd}
 .rocm{color:var(--accent)}
 .pending{color:#9aa5b1;font-style:italic}
 td.dominant{font-weight:700;color:var(--ink);background:#fbf6e8}
-td.subrow{color:var(--mute);font-size:12.5px;border-bottom-style:dotted}
-td.subrow:first-child{padding-left:30px}
-td.subrow.dominant{color:var(--mute)}
 .scope{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:99px;
        background:var(--soft);border:1px solid var(--line);color:var(--mute);
        font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
@@ -267,6 +263,181 @@ def win_pair(rocm, nv, comparable):
     return (a, "n"), (b, "n")
 
 
+def repo_section(m, logs, cov, R, span):
+    """Every table scoped to one repo: coverage, metrics, phases, ROCm vs NV, bands, tail.
+
+    Driven entirely by the repo's REPOS entry, so a new repo is a config entry.
+    Sections about shared hardware (DO pools, NV pools, RBE, scale-sets) stay in
+    render(), since they describe a fleet both repos sit on.
+    """
+    commits = m["commits"]
+    rk, nk = lane_key(R, "rocm"), lane_key(R, "nv")
+    P = [f"<h2 class='repo'>{esc(R['repo'])}</h2>"]
+    add = P.append
+
+    # --- coverage -----------------------------------------------------------
+    add("<h3>Test coverage and cost per test</h3>")
+    add("<p class='sub'>Test counts come from bazel's <code>Executed X out of Y tests</code> line in sampled job "
+        "logs from the last 48h of the window, so suite sizes are current. Test-step p50 and seconds per test use "
+        "only runs that executed at least 90% of the suite (remote-cache hits make the rest cheap and "
+        "unrepresentative).</p>")
+    rows = []
+    for suffix, keys in cov_rows(R):
+        for lane, lane_lbl in [("rocm", "ROCm"), ("nv", "NV/CUDA")]:
+            is_rocm = lane == "rocm"
+            c = cov.get(keys[lane], {})
+            spt = c.get("spt")
+            other = cov.get(keys["nv" if is_rocm else "rocm"], {}).get("spt")
+            spt_cell = ((f"{spt:.2f}s", "n win" if is_rocm and spt and other and spt < other else "n")
+                        if spt else ("n/a", "n pending"))
+            rows.append([f"{R['label']}{suffix}", (lane_lbl, "lane rocm" if is_rocm else "lane"),
+                         c.get("suite_txt", "n/a"),
+                         fmt(c.get("p50")) if c.get("p50") else ("no full-suite run sampled", "n pending"),
+                         spt_cell, str(c.get("n_full", 0))])
+    add(table(["Job family", "Lane", "Tests in suite", "Test step p50 (full-suite runs)", "Seconds per test",
+               "Full-suite runs sampled"], rows, num_from=2))
+    add(coverage_note(cov, R))
+
+    # --- headline metrics ---------------------------------------------------
+    add("<h3>Metrics</h3>")
+
+    def q_do(b):
+        return [(ts(j["started_at"]) - ts(j["created_at"])).total_seconds() for rec, j in m["do_jobs"]
+                if rec["repo"] == R["repo"] and m["band"](ts(j["created_at"])) == b]
+
+    def rbe_steps(key, b):
+        xs = []
+        for _, j in m["lane_jobs"][key]:
+            if j["conclusion"] in SIGNAL and j["completed_at"] and m["band"](ts(j["created_at"])) == b:
+                t = test_step_seconds(j)
+                if t > 0:
+                    xs.append(t)
+        return xs
+
+    def cell(xs):
+        return f"{fmt(pct(xs, 90))} &nbsp;(n={len(xs)})" if xs else "n/a"
+
+    rows = []
+    bands = [("peak", "peak times"), ("nominal", "nominal times")]
+    for b, lbl in bands:
+        rows.append([f"Queue wait (P90, {span}), {lbl}", cell(q_do(b)),
+                     ("n/a: EngFlow scheduler queue is not exposed per action; see RBE detail", "n pending")])
+    for b, lbl in bands:
+        rows.append([f"Time to signal presubmit, {lbl}",
+                     cell([c["total"] for c in commits[rk] if c["band"] == b]), cell(rbe_steps(rk, b))])
+    if R["nightly"]:
+        rows.append(["Time to signal nightly, bazel", cell(m["nightly"]["bazel"]),
+                     cell([x for x in m["nightly_test_steps"]["bazel"] if x > 0])])
+        rows.append(["Time to signal nightly, pytest", cell(m["nightly"]["pytest"]),
+                     ("n/a, pytest runs local", "n pending")])
+    for lbl, do, rbe in R.get("extra_metrics", ()):
+        rows.append([lbl, (do, "pending"), rbe])
+    rows = [[(str(i), "n")] + r for i, r in enumerate(rows, 1)]
+    add(table(["#", "Metric", "DO", "RBE"], rows, num_from=2).replace("<th>#</th>", "<th class='n'>#</th>"))
+    note = ("<p class='note'>DO queue wait = <code>started_at - created_at</code> for every DO job in the band "
+            "(all workflows in the repo). DO time to signal = PR head SHA first triggered (or approved, for fork "
+            "PRs) to its last ROCm job finishing. RBE cells = wall time of the bazel test step that dispatches to "
+            "EngFlow, for jobs created in the band.")
+    if R["nightly"]:
+        wfs = ", ".join(f"<code>{esc(w)}</code>" for w in R["nightly"])
+        note += f" Nightly rows cover {wfs}, one signal per run: run created to its last ROCm job finishing."
+    add(note + "</p>")
+
+    # --- phase breakdown ----------------------------------------------------
+    add("<h3>Where the time to signal goes <span class='scope'>ROCm on DO, NV on Google runners</span></h3>")
+    add("<p class='sub'>For each commit, the lane's job that finishes last is followed from the moment the SHA was "
+        "first triggered. Every second lands in exactly one named phase, and each row adds up to its total "
+        "(checked in code), so there is no unaccounted time. One row per lane, over all hours of the window.</p>")
+    if R["families"]:
+        add(f"<p class='sub'>{esc(R['repo'])} runs more than one job family in a single workflow, so its lanes get "
+            "one row per family. Both rows cover the same commits, so they share one <b>n</b>; <b>Total</b> is that "
+            "family's own signal and <b>Lane signal</b> is the combined one the PR actually waits for - the slower "
+            "family on each commit, which is why it repeats down a lane. The count beside the family name is how "
+            "often it was the family that finished last.</p>")
+    phase_head = ["Line item", "Job family"] + [lbl for _, lbl in PHASES] + ["Total", "Lane signal", "n"]
+
+    def phase_cells(chosen):
+        """The per-phase means plus the row's own total, dominant phase marked."""
+        means = {k: statistics.fmean(c["phases"][k] for c in chosen) for k, _ in PHASES}
+        dom = max(means, key=means.get)
+        return ([(fmt(means[k]), "n dominant" if k == dom else "n") for k, _ in PHASES]
+                + [fmt(statistics.fmean(c["total"] for c in chosen))])
+
+    def phase_rows(sel):
+        rows = []
+        for lane, lane_lbl in [("rocm", "ROCm"), ("nv", "NV")]:
+            key = lane_key(R, lane)
+            # One row per lane over all hours: splitting peak from nominal here
+            # leaves a handful of commits per row once the tail is taken.
+            chosen = sel(commits[key])
+            if not chosen:
+                continue
+            scope = "DO" if lane == "rocm" else "NV"
+            head = f"{lane_lbl} Time to signal presubmit <span class='scope'>{scope}</span>"
+            if not R["families"]:
+                # One family, so the row's own total already is the lane signal.
+                rows.append([head, "all jobs"] + phase_cells(chosen)
+                            + [("&mdash;", "n pending"), str(len(chosen))])
+                continue
+            lane_total = fmt(statistics.fmean(c["total"] for c in chosen))
+            subs = [(lbl, f"{key}:{fam}") for lbl, fam in R["families"]]
+            by = {sk: {c["sha"]: c for c in commits[sk]} for _, sk in subs}
+            shas = [c["sha"] for c in chosen]
+            # Which family finished last on each commit, i.e. set the signal.
+            last = collections.Counter()
+            for s in shas:
+                totals = {sk: by[sk][s]["total"] for _, sk in subs if s in by[sk]}
+                if totals:
+                    last[max(totals, key=totals.get)] += 1
+            for fam_lbl, sub_key in subs:
+                cs = [by[sub_key][s] for s in shas if s in by[sub_key]]
+                if not cs:
+                    continue
+                label = f"{fam_lbl} <span class='scope'>last on {last[sub_key]}/{len(shas)}</span>"
+                rows.append([head, label] + phase_cells(cs) + [lane_total, str(len(cs))])
+        return rows
+
+    def middle(cs):
+        if not cs:
+            return []
+        lo, hi = pct([c["total"] for c in cs], 40), pct([c["total"] for c in cs], 60)
+        return [c for c in cs if lo <= c["total"] <= hi]
+
+    def slowest(cs):
+        if not cs:
+            return []
+        p90 = pct([c["total"] for c in cs], 90)
+        return [c for c in cs if c["total"] >= p90]
+
+    add("<h4>Typical commit (commits between p40 and p60 of time to signal, mean of each phase)</h4>")
+    add(table(phase_head, phase_rows(middle), num_from=2))
+    add("<h4>Slowest 10% of commits (at or above p90, mean of each phase)</h4>")
+    add(table(phase_head, phase_rows(slowest), num_from=2))
+    add(phase_notes(m, R))
+
+    # --- ROCm vs NV ---------------------------------------------------------
+    add("<h3>ROCm versus the NVIDIA reference lane</h3>")
+    add("<p class='sub'>Scoped to the presubmit test lane, <code>pull_request</code> runs only.</p>")
+    ck = (cov_key(R, "rocm"), cov_key(R, "nv"))
+    rs, ns = lane_stats(m, rk), lane_stats(m, nk)
+    rc, nc = cov.get(ck[0], {}).get("suite"), cov.get(ck[1], {}).get("suite")
+    comparable = bool(rc and nc and rc >= 0.9 * nc)
+    rows = []
+    for lbl, k in [("Time to signal, p50", "tts50"), ("Time to signal, p90", "tts90"),
+                   ("Per-job execution, p50", "exe50"), ("Per-job execution, p90", "exe90"),
+                   ("Queue wait, p50", "q50")]:
+        a, b = win_pair(rs[k], ns[k], comparable and k != "q50")
+        rows.append([(lbl, "lane"), a, b])
+    rows[0].append((f"ROCm {rs['jobs']} &middot; NV {ns['jobs']}", "n' rowspan='5"))
+    add(table(["Metric", "ROCm (DO)", "NV (Google)", "Jobs per commit"], rows))
+    add(f"<p class='meta'>n = {rs['n']} ROCm commits, {ns['n']} NV commits.</p>")
+    add(compare_note(R["repo"], rc, nc, cov, ck, comparable))
+
+    add(band_section(m, cov, R))
+    add(tail_section(m, R))
+    return "".join(P)
+
+
 def render(m, logs, since, until, base=None):
     P = []
     add = P.append
@@ -294,175 +465,11 @@ def render(m, logs, since, until, base=None):
         f"<code>{', '.join(f'{h:02d}' for h in peak)}</code> &nbsp;&middot;&nbsp; nominal (quietest 8): "
         f"<code>{', '.join(f'{h:02d}' for h in nominal)}</code></p>")
 
-    # --- coverage -----------------------------------------------------------
     cov = coverage(logs, m)
-    add("<h2>Read this first: test coverage and cost per test</h2>")
-    add("<p class='sub'>Test counts come from bazel's <code>Executed X out of Y tests</code> line in sampled job "
-        "logs from the last 48h of the window, so suite sizes are current. Test-step p50 and seconds per test use "
-        "only runs that executed at least 90% of the suite (remote-cache hits make the rest cheap and "
-        "unrepresentative).</p>")
-    rows = []
-    for fw, lane, key, is_rocm in [("JAX", "ROCm", "jax_rocm", 1), ("JAX", "NV/CUDA", "jax_nv", 0),
-                                   ("OpenXLA (XLA job)", "ROCm", "xla_rocm:xla", 1),
-                                   ("OpenXLA (XLA job)", "NV/CUDA", "xla_nv:xla", 0),
-                                   ("OpenXLA (JAX job)", "ROCm", "xla_rocm:jax", 1),
-                                   ("OpenXLA (JAX job)", "NV/CUDA", "xla_nv:jax", 0)]:
-        c = cov.get(key, {})
-        spt = c.get("spt")
-        other = cov.get(key.replace("rocm", "nv") if is_rocm else key.replace("nv", "rocm"), {}).get("spt")
-        spt_cell = (f"{spt:.2f}s", "n win" if is_rocm and spt and other and spt < other else "n") if spt else ("n/a", "n pending")
-        rows.append([fw, (lane, "lane rocm" if is_rocm else "lane"), c.get("suite_txt", "n/a"),
-                     fmt(c.get("p50")) if c.get("p50") else ("no full-suite run sampled", "n pending"),
-                     spt_cell, str(c.get("n_full", 0))])
-    add(table(["Framework", "Lane", "Tests in suite", "Test step p50 (full-suite runs)", "Seconds per test",
-               "Full-suite runs sampled"], rows, num_from=2))
-    add(coverage_note(cov))
+    for R in REPOS:
+        add(repo_section(m, logs, cov, R, span))
 
-    # --- headline metrics ---------------------------------------------------
-    add("<h2>Metrics</h2>")
-    rows = []
-    idx = 1
-
-    def q_do(repo, b):
-        xs = [(ts(j["started_at"]) - ts(j["created_at"])).total_seconds() for rec, j in m["do_jobs"]
-              if rec["repo"] == repo and m["band"](ts(j["created_at"])) == b]
-        return xs
-
-    def rbe_steps(key, b):
-        xs = []
-        for r, j in m["lane_jobs"][key]:
-            if j["conclusion"] in SIGNAL and j["completed_at"] and m["band"](ts(j["created_at"])) == b:
-                t = test_step_seconds(j)
-                if t > 0:
-                    xs.append(t)
-        return xs
-
-    def cell(xs):
-        return f"{fmt(pct(xs, 90))} &nbsp;(n={len(xs)})" if xs else "n/a"
-
-    for fw, repo, key in [("JAX", "jax-ml/jax", "jax_rocm"), ("OPENXLA", "openxla/xla", "xla_rocm")]:
-        for b, lbl in [("peak", "peak times"), ("nominal", "nominal times")]:
-            rows.append([str(idx), f"{fw} Queue wait (P90, {span}), {lbl}", cell(q_do(repo, b)),
-                         ("n/a: EngFlow scheduler queue is not exposed per action; see RBE detail", "n pending")])
-            idx += 1
-        for b, lbl in [("peak", "peak times"), ("nominal", "nominal times")]:
-            xs = [c["total"] for c in commits[key] if c["band"] == b]
-            rows.append([str(idx), f"{fw} Time to signal presubmit, {lbl}", cell(xs), cell(rbe_steps(key, b))])
-            idx += 1
-        if fw == "JAX":
-            rows.append([str(idx), "JAX Time to signal nightly, bazel", cell(m["nightly"]["bazel"]),
-                         cell([x for x in m["nightly_test_steps"]["bazel"] if x > 0])])
-            idx += 1
-            rows.append([str(idx), "JAX Time to signal nightly, pytest", cell(m["nightly"]["pytest"]),
-                         ("n/a, pytest runs local", "n pending")])
-            idx += 1
-            rows.append([str(idx), "JAX Jax-lab complete run (minutes)",
-                         ("pending: not a GitHub Actions workflow, needs definition (owner: user)", "pending"),
-                         "n/a"])
-            idx += 1
-    for r in rows:
-        r[0] = (r[0], "n")
-    add(table(["#", "Metric", "DO", "RBE"], rows, num_from=2).replace("<th>#</th>", "<th class='n'>#</th>"))
-    add("<p class='note'>DO queue wait = <code>started_at - created_at</code> for every DO job in the band "
-        "(all workflows in the repo). DO time to signal = PR head SHA first triggered (or approved, for fork PRs) "
-        "to its last ROCm job finishing. "
-        "RBE cells = wall time of the bazel test step that dispatches to EngFlow, for jobs created in the band. "
-        "Nightly rows cover <code>wheel_tests_continuous.yml</code> and <code>wheel_tests_nightly_release.yml</code>, "
-        "one signal per run: run created to its last ROCm bazel (or pytest) job finishing.</p>")
-
-    # --- phase breakdown ----------------------------------------------------
-    add("<h2>Where the time to signal goes <span class='scope'>ROCm on DO, NV on Google runners</span></h2>")
-    add("<p class='sub'>For each commit, the lane's job that finishes last is followed from the moment the SHA was "
-        "first triggered. Every second lands in exactly one named phase, and each row adds up to its total "
-        "(checked in code), so there is no unaccounted time. NV rows use the same peak and nominal hours as "
-        "ROCm, so both lanes are measured over the same clock time.</p>")
-    add("<p class='sub'>The <code>&#8627;</code> sub-rows break each OPENXLA row into its two job families: "
-        "openxla/xla runs its own tests and the JAX integration tests in one workflow, so the parent row is "
-        "whichever family finishes last. A sub-row is the signal that family would give on its own. The parent "
-        "is the <em>max</em> of its two sub-rows, not their sum, and each sub-row picks its own commits, so the "
-        "sub-rows are not a decomposition of the parent.</p>")
-    phase_head = ["Line item"] + [lbl for _, lbl in PHASES] + ["Total", "n"]
-
-    LANE_ROWS = [("JAX", "jax_rocm", "ROCm"), ("JAX", "jax_nv", "NV"),
-                 ("OPENXLA", "xla_rocm", "ROCm"), ("OPENXLA", "xla_nv", "NV")]
-    # openxla/xla runs its own tests and the JAX integration tests in one
-    # workflow, so each OpenXLA row breaks out into the signal each job family
-    # would give on its own. The parent row is the max of the two, not the sum.
-    SUB_LANES = {"xla_rocm": [("XLA jobs only", "xla_rocm:xla"), ("JAX jobs only", "xla_rocm:jax")],
-                 "xla_nv": [("XLA jobs only", "xla_nv:xla"), ("JAX jobs only", "xla_nv:jax")]}
-
-    def phase_row(label, key, b, sel, cls=""):
-        cs = [c for c in commits[key] if c["band"] == b]
-        chosen = sel(cs)
-        if not chosen:
-            return None
-        means = {k: statistics.fmean(c["phases"][k] for c in chosen) for k, _ in PHASES}
-        tot = statistics.fmean(c["total"] for c in chosen)
-        dom = max(means, key=means.get)
-        n = f"n {cls}".strip()
-        row = [(label, cls)]
-        row += [(fmt(means[k]), f"{n} dominant" if k == dom else n) for k, _ in PHASES]
-        row += [(fmt(tot), n), (str(len(chosen)), n)]
-        return row
-
-    def phase_rows(sel):
-        rows = []
-        for fw, key, lane in LANE_ROWS:
-            for b, lbl in [("peak", "peak times"), ("nominal", "nominal times")]:
-                scope = "DO" if lane == "ROCm" else "NV"
-                head = f"{fw} {lane} Time to signal presubmit, {lbl} <span class='scope'>{scope}</span>"
-                row = phase_row(head, key, b, sel)
-                if not row:
-                    continue
-                rows.append(row)
-                # Each sub-lane picks its own p40-p60 / p90 commits, so these are
-                # not a decomposition of the row above.
-                for sub_lbl, sub_key in SUB_LANES.get(key, []):
-                    sub = phase_row(f"&#8627; {sub_lbl}", sub_key, b, sel, cls="subrow")
-                    if sub:
-                        rows.append(sub)
-        return rows
-
-    def middle(cs):
-        if not cs:
-            return []
-        lo, hi = pct([c["total"] for c in cs], 40), pct([c["total"] for c in cs], 60)
-        return [c for c in cs if lo <= c["total"] <= hi]
-
-    def slowest(cs):
-        if not cs:
-            return []
-        p90 = pct([c["total"] for c in cs], 90)
-        return [c for c in cs if c["total"] >= p90]
-
-    add("<h3>Typical commit (commits between p40 and p60 of time to signal, mean of each phase)</h3>")
-    add(table(phase_head, phase_rows(middle)))
-    add("<h3>Slowest 10% of commits (at or above p90, mean of each phase)</h3>")
-    add(table(phase_head, phase_rows(slowest)))
-    add(phase_notes(m))
-
-    # --- ROCm vs NV ---------------------------------------------------------
-    add("<h2>ROCm versus the NVIDIA reference lane</h2>")
-    add("<p class='sub'>Scoped to the presubmit test lane in each repo, <code>pull_request</code> runs only.</p>")
-    for title, rk, nk, ck in [("jax-ml/jax", "jax_rocm", "jax_nv", ("jax_rocm", "jax_nv")),
-                              ("openxla/xla", "xla_rocm", "xla_nv", ("xla_rocm:xla", "xla_nv:xla"))]:
-        rs, ns = lane_stats(m, rk), lane_stats(m, nk)
-        rc, nc = cov.get(ck[0], {}).get("suite"), cov.get(ck[1], {}).get("suite")
-        comparable = bool(rc and nc and rc >= 0.9 * nc)
-        add(f"<h3>{title}</h3>")
-        rows = []
-        for lbl, k in [("Time to signal, p50", "tts50"), ("Time to signal, p90", "tts90"),
-                       ("Per-job execution, p50", "exe50"), ("Per-job execution, p90", "exe90"),
-                       ("Queue wait, p50", "q50")]:
-            a, b = win_pair(rs[k], ns[k], comparable and k != "q50")
-            rows.append([(lbl, "lane"), a, b])
-        rows[0].append((f"ROCm {rs['jobs']} &middot; NV {ns['jobs']}", "n' rowspan='5"))
-        add(table(["Metric", "ROCm (DO)", "NV (Google)", "Jobs per commit"], rows))
-        add(f"<p class='meta'>n = {rs['n']} ROCm commits, {ns['n']} NV commits.</p>")
-        add(compare_note(title, rc, nc, cov, ck, comparable))
-
-    add(band_section(m, cov))
-    add(tail_section(m))
+    # --- global sections ----------------------------------------------------
 
     # --- infrastructure -----------------------------------------------------
     add("<h2>Infrastructure</h2>")
@@ -497,7 +504,7 @@ def render(m, logs, since, until, base=None):
         f"DO jobs = every ROCm job on DO in the collected workflows; NV jobs = jobs of the two NV presubmit lanes, "
         f"by the hour they were created. NV's busiest 8 hours are <code>{', '.join(f'{h:02d}' for h in nv_peak)}</code>, "
         f"{shared} of them DO peak hours.</p>")
-    pools = [("JAX", "amd-do-linux.jax.gpu.gfx950.1"), ("XLA", "amd-do-linux-xla-gpu-gfx950-dpx-1")]
+    pools = [(R["label"], R["pool"]) for R in REPOS]
     comp = collections.defaultdict(list)
     for rec, j in m["do_jobs"]:
         if j["conclusion"] not in SIGNAL or not j["completed_at"]:
@@ -568,10 +575,11 @@ def render(m, logs, since, until, base=None):
         "<code>started_at - created_at</code>. A label whose last day seen is before the end of the window "
         "stopped appearing partway through the week.</p>")
     nv_pools = collections.defaultdict(list)
-    for key in ("jax_nv", "xla_nv"):
+    for R in REPOS:
+        key = lane_key(R, "nv")
         for _, j in m["lane_jobs"][key]:
             if j["started_at"] and j["created_at"]:
-                nv_pools[(PRESUBMIT_LANES[key][0], ", ".join(j["labels"]), job_type(key, j["name"]))].append(j)
+                nv_pools[(R["repo"], ", ".join(j["labels"]), job_type(key, j["name"]))].append(j)
     rows = []
     for (repo, lab, ty), js in sorted(nv_pools.items(), key=lambda kv: (kv[0][0], -len(kv[1]))):
         q = [(ts(j["started_at"]) - ts(j["created_at"])).total_seconds() for j in js]
@@ -587,11 +595,7 @@ def render(m, logs, since, until, base=None):
         "whole week. The gap between wall time and critical path is scheduling, queueing, cache lookup and "
         "local work, not test execution on the critical path.</p>")
     rows = []
-    for lbl, cat, inv_idx in [("JAX ROCm presubmit", "jax_rocm", -1),
-                              ("OpenXLA ROCm presubmit, XLA job (<code>single_gpu</code>)", "xla_rocm:xla", 0),
-                              ("OpenXLA ROCm presubmit, JAX job", "xla_rocm:jax", -1),
-                              ("JAX NV presubmit (Google RBE)", "jax_nv", -1),
-                              ("OpenXLA NV presubmit, XLA T4 job (Google RBE)", "xla_nv:xla", -1)]:
+    for lbl, cat, inv_idx in [(f"{R['label']} {sfx}", cat, i) for R in REPOS for sfx, cat, i in R["rbe"]]:
         el = [l["elapsed"][inv_idx] for l in logs if l["cat"] == cat and l["elapsed"]]
         w = [e[0] for e in el]
         c = [e[1] for e in el]
@@ -617,27 +621,23 @@ def render(m, logs, since, until, base=None):
 
 
 def job_type(lane, name):
-    if lane.startswith("xla"):
-        return "JAX job" if name.startswith("JAX") else "XLA job"
-    if "blocking gate" in name:
-        return "blocking gate (1 test)"
-    if name.startswith("Build wheels"):
-        return "build wheels"
-    b = re.search(r"build_jaxlib=(\w+)", name)
-    return f"test, build_jaxlib={b.group(1)}" if b else name[:40]
+    """Classify a job name, using the owning repo's rules. `lane` is a lane key."""
+    return REPO_BY_SHORT[lane.split("_", 1)[0]]["job_type"](name)
 
 
-# Job types compared across lanes on the same commit: (label, repo, ROCm type, NV type).
-PAIRS = [
-    ("JAX tests, jaxlib from PyPI", "jax", "test, build_jaxlib=false", "test, build_jaxlib=false"),
-    ("JAX tests, jaxlib built from source", "jax", "test, build_jaxlib=wheel", "test, build_jaxlib=true"),
-    ("OpenXLA, XLA job", "xla", "XLA job", "XLA job"),
-    ("OpenXLA, JAX job", "xla", "JAX job", "JAX job"),
-]
-REPO_URL = {"jax": "https://github.com/jax-ml/jax/pull/", "xla": "https://github.com/openxla/xla/pull/"}
+def fam_keys(R, fam):
+    """The per-lane coverage/log-sample keys for one job family, or for the lane."""
+    return {lane: (f"{lane_key(R, lane)}:{fam}" if fam else cov_key(R, lane)) for lane in LANES}
 
 
-def band_section(m, cov):
+def cov_rows(R):
+    """(display suffix, {lane: key}) once per job family, or once for the whole lane."""
+    if not R["families"]:
+        return [("", fam_keys(R, None))]
+    return [(f" ({lbl})", fam_keys(R, fam)) for lbl, fam in R["families"]]
+
+
+def band_section(m, cov, R):
     """ROCm and NV over the same clock hours: peak/nominal p50 and p90, then p90 by time of day."""
     def comparable(rc, nc):
         a, b = cov.get(rc, {}).get("suite"), cov.get(nc, {}).get("suite")
@@ -668,50 +668,47 @@ def band_section(m, cov):
                        + [f"{len(s['peak'][metric])} / {len(s['nominal'][metric])}"])
         return out
 
-    P = ["<h2>Peak versus nominal: ROCm and NV side by side</h2>",
+    P = ["<h3>Peak versus nominal: ROCm and NV side by side</h3>",
          "<p class='sub'>Both lanes are measured over the same clock hours: the peak and nominal hours listed at the "
-         "top, which come from DO arrivals. Jobs are placed by the hour they were created, commits by the hour their "
-         "SHA was first triggered.</p>"]
-    for title, rk, nk, short, ck in [("jax-ml/jax", "jax_rocm", "jax_nv", "jax", ("jax_rocm", "jax_nv")),
-                                     ("openxla/xla", "xla_rocm", "xla_nv", "xla", ("xla_rocm:xla", "xla_nv:xla"))]:
-        pairs = [(lbl.replace("OpenXLA, ", ""), rt, nt) for lbl, rp, rt, nt in PAIRS if rp == short]
-        r_types, n_types = {rt for _, rt, _ in pairs}, {nt for _, _, nt in pairs}
-        rs = {b: lane(rk, keep, r_types) for b, keep in bands}
-        ns = {b: lane(nk, keep, n_types) for b, keep in bands}
-        rows = metric_rows("Time to signal (per commit)", "tts", rs, ns, comparable(*ck))
-        rows += metric_rows("Queue wait (every lane job)", "queue", rs, ns, False)
-        for lbl, rt, nt in pairs:
-            cats = ck if short == "jax" else (f"xla_rocm:{'xla' if rt == 'XLA job' else 'jax'}",
-                                              f"xla_nv:{'xla' if rt == 'XLA job' else 'jax'}")
-            rts = {b: lane(rk, keep, {rt}) for b, keep in bands}
-            nts = {b: lane(nk, keep, {nt}) for b, keep in bands}
-            rows += metric_rows(f"Job execution, {lbl}", "exec", rts, nts, comparable(*cats))
-            rows += metric_rows(f"Test step, {lbl}", "test", rts, nts, comparable(*cats))
-        P.append(f"<h3>{title}</h3>")
-        P.append(table(["Metric", "Lane", "Peak p50", "Peak p90", "Nominal p50", "Nominal p90", "n (peak / nominal)"],
-                       rows, num_from=2))
+         "top, which come from DO arrivals pooled across every repo, so all sections share one clock. Jobs are "
+         "placed by the hour they were created, commits by the hour their SHA was first triggered.</p>"]
+    rk, nk = lane_key(R, "rocm"), lane_key(R, "nv")
+    ck = (cov_key(R, "rocm"), cov_key(R, "nv"))
+    pairs = R["pairs"]
+    r_types, n_types = {rt for _, rt, _, _ in pairs}, {nt for _, _, nt, _ in pairs}
+    rs = {b: lane(rk, keep, r_types) for b, keep in bands}
+    ns = {b: lane(nk, keep, n_types) for b, keep in bands}
+    rows = metric_rows("Time to signal (per commit)", "tts", rs, ns, comparable(*ck))
+    rows += metric_rows("Queue wait (every lane job)", "queue", rs, ns, False)
+    for lbl, rt, nt, fam in pairs:
+        cats = tuple(fam_keys(R, fam)[lane] for lane in LANES)
+        rts = {b: lane(rk, keep, {rt}) for b, keep in bands}
+        nts = {b: lane(nk, keep, {nt}) for b, keep in bands}
+        rows += metric_rows(f"Job execution, {lbl}", "exec", rts, nts, comparable(*cats))
+        rows += metric_rows(f"Test step, {lbl}", "test", rts, nts, comparable(*cats))
+    P.append(table(["Metric", "Lane", "Peak p50", "Peak p90", "Nominal p50", "Nominal p90", "n (peak / nominal)"],
+                   rows, num_from=2))
 
-        rows = []
-        for blk in range(8):
-            def keep(t, blk=blk):
-                return hour(t) // 3 == blk
-            r, n = lane(rk, keep, r_types), lane(nk, keep, n_types)
-            hrs = range(3 * blk, 3 * blk + 3)
-            tag = ("peak" if sum(h in m["peak"] for h in hrs) >= 2 else
-                   "nominal" if sum(h in m["nominal"] for h in hrs) >= 2 else "")
-            rows.append([f"{3 * blk:02d}:00-{3 * blk + 3:02d}:00" + (f" <span class='scope'>{tag}</span>" if tag else ""),
-                         f"{len(r['tts'])} / {len(n['tts'])}"]
-                        + [f"{fmt(pct(r[k], 90))} / {fmt(pct(n[k], 90))}" for k in ("tts", "queue", "exec", "test")])
-        P.append(f"<p class='meta'>{title}, p90 by time of day (3-hour blocks, CDT (UTC-5)):</p>")
-        P.append(table(["Hours", "Commits ROCm / NV", "Time to signal ROCm / NV", "Queue ROCm / NV",
-                        "Test job execution ROCm / NV", "Test step ROCm / NV"], rows))
+    rows = []
+    for blk in range(8):
+        def keep(t, blk=blk):
+            return hour(t) // 3 == blk
+        r, n = lane(rk, keep, r_types), lane(nk, keep, n_types)
+        hrs = range(3 * blk, 3 * blk + 3)
+        tag = ("peak" if sum(h in m["peak"] for h in hrs) >= 2 else
+               "nominal" if sum(h in m["nominal"] for h in hrs) >= 2 else "")
+        rows.append([f"{3 * blk:02d}:00-{3 * blk + 3:02d}:00" + (f" <span class='scope'>{tag}</span>" if tag else ""),
+                     f"{len(r['tts'])} / {len(n['tts'])}"]
+                    + [f"{fmt(pct(r[k], 90))} / {fmt(pct(n[k], 90))}" for k in ("tts", "queue", "exec", "test")])
+    P.append("<p class='meta'>p90 by time of day (3-hour blocks, CDT (UTC-5)):</p>")
+    P.append(table(["Hours", "Commits ROCm / NV", "Time to signal ROCm / NV", "Queue ROCm / NV",
+                    "Test job execution ROCm / NV", "Test step ROCm / NV"], rows))
     P.append("<p class='note'>Queue wait covers every job of the presubmit lane, so the ROCm figure differs slightly "
              "from the Metrics table, which takes every DO job in the repo. Job execution and test step use only the "
-             "matched test job types: the JAX ROCm one-test blocking gate and the JAX NV wheel-build jobs are left out. "
+             "matched test job types listed above; job types with no counterpart on the other lane are left out. "
              "Highlights follow the suite-size rule used above, and queue wait is never highlighted. In the "
              "time-of-day tables a block is tagged peak or nominal when at least 2 of its 3 hours are, and test-job "
-             "rows pool the matched job types; each block holds about an eighth of the week, so read p90 with its "
-             "commit count.</p>")
+             "rows pool the matched job types; read p90 with its commit count.</p>")
     return "".join(P)
 
 
@@ -732,102 +729,100 @@ def lookup_pr(m, repo, sha):
     return cache[k]
 
 
-def tail_section(m):
-    P = ["<h2>Tail latency and same-commit comparison</h2>",
+def tail_section(m, cfg):
+    repo = cfg["repo"]
+    rk, nk = lane_key(cfg, "rocm"), lane_key(cfg, "nv")
+    P = ["<h3>Tail latency and same-commit comparison</h3>",
          "<p class='sub'>Job execution = <code>completed_at - started_at</code> for the jobs of the run that "
          "signalled, per job type. The same-commit tables compare ROCm and NV on the <b>same PR head SHA</b>, "
          "so both lanes saw the same code change and the same set of tests invalidated in the cache.</p>"]
     ps = (50, 90, 95, 99)
     rows = []
-    for repo, rk, nk in [("jax-ml/jax", "jax_rocm", "jax_nv"), ("openxla/xla", "xla_rocm", "xla_nv")]:
-        for lane_lbl, key, is_rocm in [("ROCm", rk, 1), ("NV", nk, 0)]:
-            cs = m["commits"][key]
-            tt = [c["total"] for c in cs]
-            rows.append([repo, (lane_lbl, "lane rocm" if is_rocm else "lane"), "<i>commit time to signal</i>",
-                         str(len(tt))] + [fmt(pct(tt, p)) for p in ps])
-            by = collections.defaultdict(list)
-            for c in cs:
-                for j in c["jobs"]:
-                    by[j["type"]].append(j["exec"])
-            for t, xs in sorted(by.items()):
-                rows.append([repo, (lane_lbl, "lane rocm" if is_rocm else "lane"), t, str(len(xs))]
-                            + [fmt(pct(xs, p)) for p in ps])
-    P.append("<h3>Percentiles by job type</h3>")
-    P.append(table(["Repo", "Lane", "Job type", "n", "p50", "p90", "p95", "p99"], rows, num_from=3))
+    for lane_lbl, key, is_rocm in [("ROCm", rk, 1), ("NV", nk, 0)]:
+        cs = m["commits"][key]
+        tt = [c["total"] for c in cs]
+        rows.append([(lane_lbl, "lane rocm" if is_rocm else "lane"), "<i>commit time to signal</i>",
+                     str(len(tt))] + [fmt(pct(tt, p)) for p in ps])
+        by = collections.defaultdict(list)
+        for c in cs:
+            for j in c["jobs"]:
+                by[j["type"]].append(j["exec"])
+        for t, xs in sorted(by.items()):
+            rows.append([(lane_lbl, "lane rocm" if is_rocm else "lane"), t, str(len(xs))]
+                        + [fmt(pct(xs, p)) for p in ps])
+    P.append("<h4>Percentiles by job type</h4>")
+    P.append(table(["Lane", "Job type", "n", "p50", "p90", "p95", "p99"], rows, num_from=2))
     P.append("<p class='note'>p99 of a few hundred jobs rests on a handful of samples; read it with its n.</p>")
 
-    for repo, rk, nk, short in [("jax-ml/jax", "jax_rocm", "jax_nv", "jax"), ("openxla/xla", "xla_rocm", "xla_nv", "xla")]:
-        R = {c["sha"]: c for c in m["commits"][rk]}
-        N = {c["sha"]: c for c in m["commits"][nk]}
-        common = set(R) & set(N)
-        both = sorted(s for s in common if R[s]["passed"] and N[s]["passed"])
-        if not both:
-            continue
-        ratio = [R[s]["total"] / N[s]["total"] for s in both if N[s]["total"] > 0]
-        faster = sum(1 for s in both if R[s]["total"] < N[s]["total"])
-        P.append(f"<h3>{repo}: same commits, {len(both)} PR SHAs where both lanes passed</h3>")
-        P.append(f"<p class='meta'>{len(common) - len(both)} more SHAs signalled on both lanes but failed on at "
-                 f"least one; a failure stops early, so those are left out of the comparison.</p>")
-        P.append(table(["ROCm / NV time to signal, per PR", "p10", "p50", "p90", "p99", "PRs where ROCm is faster"],
-                       [["ratio"] + [f"{pct(ratio, p):.2f}x" for p in (10, 50, 90, 99)]
-                        + [f"{faster} of {len(both)} ({100 * faster / len(both):.0f}%)"]]))
+    R = {c["sha"]: c for c in m["commits"][rk]}
+    N = {c["sha"]: c for c in m["commits"][nk]}
+    common = set(R) & set(N)
+    both = sorted(s for s in common if R[s]["passed"] and N[s]["passed"])
+    if not both:
+        return "".join(P)
+    ratio = [R[s]["total"] / N[s]["total"] for s in both if N[s]["total"] > 0]
+    faster = sum(1 for s in both if R[s]["total"] < N[s]["total"])
+    P.append(f"<h4>{repo}: same commits, {len(both)} PR SHAs where both lanes passed</h4>")
+    P.append(f"<p class='meta'>{len(common) - len(both)} more SHAs signalled on both lanes but failed on at "
+             f"least one; a failure stops early, so those are left out of the comparison.</p>")
+    P.append(table(["ROCm / NV time to signal, per PR", "p10", "p50", "p90", "p99", "PRs where ROCm is faster"],
+                   [["ratio"] + [f"{pct(ratio, p):.2f}x" for p in (10, 50, 90, 99)]
+                    + [f"{faster} of {len(both)} ({100 * faster / len(both):.0f}%)"]]))
 
-        def outlier_row(label, slow_side, shas):
-            rt = [R[s]["total"] for s in shas]
-            nt = [N[s]["total"] for s in shas]
-            rq = [R[s]["phases"]["queue"] for s in shas]
-            rx = [R[s]["phases"]["test"] for s in shas]
-            rg = [R[s]["phases"]["gaps"] for s in shas]
-            n90 = pct([N[s]["total"] for s in both], 90)
-            r90 = pct([R[s]["total"] for s in both], 90)
-            other_slow = sum(1 for s in shas if (N[s]["total"] >= n90 if slow_side == "rocm" else R[s]["total"] >= r90))
-            return [label, str(len(shas)), fmt(pct(rt, 50)), fmt(pct(nt, 50)),
-                    f"{pct([a / b for a, b in zip(rt, nt) if b], 50):.2f}x",
-                    f"{other_slow} ({100 * other_slow / len(shas):.0f}%)",
-                    fmt(statistics.fmean(rq)), fmt(statistics.fmean(rx)), fmt(statistics.fmean(rg))]
-
-        r90 = pct([R[s]["total"] for s in both], 90)
+    def outlier_row(label, slow_side, shas):
+        rt = [R[s]["total"] for s in shas]
+        nt = [N[s]["total"] for s in shas]
+        rq = [R[s]["phases"]["queue"] for s in shas]
+        rx = [R[s]["phases"]["test"] for s in shas]
+        rg = [R[s]["phases"]["gaps"] for s in shas]
         n90 = pct([N[s]["total"] for s in both], 90)
-        slow_r = [s for s in both if R[s]["total"] >= r90]
-        slow_n = [s for s in both if N[s]["total"] >= n90]
-        P.append(table(["Outlier set", "PRs", "ROCm TTS p50", "NV TTS p50", "Median ROCm/NV", "Also in the other lane's slowest 10%",
-                        "ROCm queue (mean)", "ROCm test execution (mean)", "ROCm teardown (mean)"],
-                       [outlier_row("ROCm's slowest 10%", "rocm", slow_r),
-                        outlier_row("NV's slowest 10%", "nv", slow_n)]))
+        r90 = pct([R[s]["total"] for s in both], 90)
+        other_slow = sum(1 for s in shas if (N[s]["total"] >= n90 if slow_side == "rocm" else R[s]["total"] >= r90))
+        return [label, str(len(shas)), fmt(pct(rt, 50)), fmt(pct(nt, 50)),
+                f"{pct([a / b for a, b in zip(rt, nt) if b], 50):.2f}x",
+                f"{other_slow} ({100 * other_slow / len(shas):.0f}%)",
+                fmt(statistics.fmean(rq)), fmt(statistics.fmean(rx)), fmt(statistics.fmean(rg))]
 
-        rows = []
-        for lbl, rp, rt, nt in PAIRS:
-            if rp != short:
-                continue
-            pr, pn = [], []
-            for s in both:
-                a = [j for j in R[s]["jobs"] if j["type"] == rt]
-                b = [j for j in N[s]["jobs"] if j["type"] == nt]
-                if a and b:
-                    pr.append(a[0]["test"])
-                    pn.append(b[0]["test"])
-            if not pr:
-                continue
-            cut = pct(pr, 90)
-            tail = [(x, y) for x, y in zip(pr, pn) if x >= cut]
-            rows.append([lbl, str(len(pr))] + [f"{fmt(pct(pr, p))} / {fmt(pct(pn, p))}" for p in (50, 90, 99)]
-                        + [f"{pct([x / y for x, y in zip(pr, pn) if y], 50):.2f}x",
-                           f"{fmt(pct([x for x, _ in tail], 50))} / {fmt(pct([y for _, y in tail], 50))}"])
-        P.append(table(["Matched job type (test step)", "Commits", "p50 ROCm / NV", "p90 ROCm / NV", "p99 ROCm / NV",
-                        "Median per-commit ratio", "ROCm's slowest 10%: ROCm / NV p50 on the same commits"], rows))
+    r90 = pct([R[s]["total"] for s in both], 90)
+    n90 = pct([N[s]["total"] for s in both], 90)
+    slow_r = [s for s in both if R[s]["total"] >= r90]
+    slow_n = [s for s in both if N[s]["total"] >= n90]
+    P.append(table(["Outlier set", "PRs", "ROCm TTS p50", "NV TTS p50", "Median ROCm/NV", "Also in the other lane's slowest 10%",
+                    "ROCm queue (mean)", "ROCm test execution (mean)", "ROCm teardown (mean)"],
+                   [outlier_row("ROCm's slowest 10%", "rocm", slow_r),
+                    outlier_row("NV's slowest 10%", "nv", slow_n)]))
 
-        worst = sorted(both, key=lambda s: -(R[s]["total"] / N[s]["total"] if N[s]["total"] else 0))[:10]
-        rows = []
-        for s in worst:
-            c = R[s]
-            pr = c["prs"][0] if c["prs"] else lookup_pr(m, repo, s)
-            link = f"<a href='{REPO_URL[short]}{pr}'>#{pr}</a>" if pr else "(fork PR, number not in API)"
-            top = sorted(((k, v) for k, v in c["phases"].items()), key=lambda kv: -kv[1])[:2]
-            rows.append([f"<code>{s[:10]}</code> {link}", fmt(c["total"]), fmt(N[s]["total"]),
-                         f"{c['total'] / N[s]['total']:.1f}x",
-                         ", ".join(f"{dict(PHASES)[k].lower()} {fmt(v)}" for k, v in top)])
-        P.append(table(["Largest ROCm/NV gap (commit)", "ROCm TTS", "NV TTS", "Ratio", "Where ROCm's time went"],
-                       rows, num_from=1))
+    rows = []
+    for lbl, rt, nt, _fam in cfg["pairs"]:
+        pr, pn = [], []
+        for s in both:
+            a = [j for j in R[s]["jobs"] if j["type"] == rt]
+            b = [j for j in N[s]["jobs"] if j["type"] == nt]
+            if a and b:
+                pr.append(a[0]["test"])
+                pn.append(b[0]["test"])
+        if not pr:
+            continue
+        cut = pct(pr, 90)
+        tail = [(x, y) for x, y in zip(pr, pn) if x >= cut]
+        rows.append([lbl, str(len(pr))] + [f"{fmt(pct(pr, p))} / {fmt(pct(pn, p))}" for p in (50, 90, 99)]
+                    + [f"{pct([x / y for x, y in zip(pr, pn) if y], 50):.2f}x",
+                       f"{fmt(pct([x for x, _ in tail], 50))} / {fmt(pct([y for _, y in tail], 50))}"])
+    P.append(table(["Matched job type (test step)", "Commits", "p50 ROCm / NV", "p90 ROCm / NV", "p99 ROCm / NV",
+                    "Median per-commit ratio", "ROCm's slowest 10%: ROCm / NV p50 on the same commits"], rows))
+
+    worst = sorted(both, key=lambda s: -(R[s]["total"] / N[s]["total"] if N[s]["total"] else 0))[:10]
+    rows = []
+    for s in worst:
+        c = R[s]
+        pr = c["prs"][0] if c["prs"] else lookup_pr(m, repo, s)
+        link = f"<a href='https://github.com/{repo}/pull/{pr}'>#{pr}</a>" if pr else "(fork PR, number not in API)"
+        top = sorted(((k, v) for k, v in c["phases"].items()), key=lambda kv: -kv[1])[:2]
+        rows.append([f"<code>{s[:10]}</code> {link}", fmt(c["total"]), fmt(N[s]["total"]),
+                     f"{c['total'] / N[s]['total']:.1f}x",
+                     ", ".join(f"{dict(PHASES)[k].lower()} {fmt(v)}" for k, v in top)])
+    P.append(table(["Largest ROCm/NV gap (commit)", "ROCm TTS", "NV TTS", "Ratio", "Where ROCm's time went"],
+                   rows, num_from=1))
     return "".join(P)
 
 
@@ -875,10 +870,10 @@ def coverage(logs, m):
     return out
 
 
-def coverage_note(cov):
+def coverage_note(cov, R):
     parts = []
-    for lbl, r, n in [("JAX", "jax_rocm", "jax_nv"), ("OpenXLA XLA job", "xla_rocm:xla", "xla_nv:xla"),
-                      ("OpenXLA JAX job", "xla_rocm:jax", "xla_nv:jax")]:
+    for suffix, keys in cov_rows(R):
+        lbl, r, n = f"{R['label']}{suffix}", keys["rocm"], keys["nv"]
         a, b = cov.get(r, {}), cov.get(n, {})
         if a.get("suite") and b.get("suite"):
             s = f"<b>{lbl} runs {100 * a['suite'] / b['suite']:.0f}% of the CUDA suite</b> ({a['suite']} vs {b['suite']})"
@@ -906,17 +901,17 @@ def compare_note(title, rc, nc, cov, ck, comparable):
             f"durations compare a smaller suite to a larger one{per}.</p>")
 
 
-def phase_notes(m):
+def phase_notes(m, R):
     out = []
-    for fw, key, lane, other in [("JAX", "jax_rocm", "ROCm", "NV"), ("JAX", "jax_nv", "NV", "ROCm"),
-                                 ("OpenXLA", "xla_rocm", "ROCm", "NV"), ("OpenXLA", "xla_nv", "NV", "ROCm")]:
+    for lane, other in [("ROCm", "NV"), ("NV", "ROCm")]:
+        key = lane_key(R, lane.lower())
         cs = m["commits"][key]
         if not cs:
             continue
         sup = [c for c in cs if c["phases"]["superseded"] > 0]
         att = [c for c in cs if c["rerun"]]
         ap = m["approval"][key]
-        out.append(f"<b>{fw} {lane}:</b> {len(cs)} commits signalled; {len(sup)} of them first had a run that was "
+        out.append(f"<b>{lane}:</b> {len(cs)} commits signalled; {len(sup)} of them first had a run that was "
                    f"cancelled or re-triggered ({len(att)} signalled on a re-run attempt), and "
                    f"{m['unsignalled'][key]} commits never produced a {lane} signal because every run was cancelled, "
                    f"almost always superseded by a newer push. "
@@ -933,9 +928,6 @@ def phase_notes(m):
 
 
 def ask_section(cov, base):
-    j, jn = cov.get("jax_rocm", {}).get("suite"), cov.get("jax_nv", {}).get("suite")
-    x, xn = cov.get("xla_rocm:xla", {}).get("suite"), cov.get("xla_nv:xla", {}).get("suite")
-    jx, jxn = cov.get("xla_rocm:jax", {}).get("suite"), cov.get("xla_nv:jax", {}).get("suite")
     s = ["<h2>The ask: more runners</h2>",
          table(["Pool", "What it does today", "What we need", "What it unblocks"], [
              [("DO", "lane rocm"), "Builds and launches every ROCm presubmit job", ("pending (owner: user)", "pending"),
@@ -950,32 +942,34 @@ def ask_section(cov, base):
          "<p class='note'>Google's CUDA presubmit compiles remotely (<code>--spawn_strategy=remote,worker,standalone,local</code>, "
          "seen in this week's logs); JAX ROCm pins builds to the GPU box, while <code>openxla/xla</code> ROCm already "
          "uses <code>--spawn_strategy=dynamic</code>.</p>"]
-    if j and jn:
-        up = f", up from {base['jax_rocm_tests']} in the {esc(base['label'])}" if base and "jax_rocm_tests" in base else ""
-        s.append(f"<p><b>JAX: coverage is now near parity.</b> The ROCm presubmit runs {j} bazel targets against "
-                 f"NV's {jn}{up}; the blocking gate still runs 1. Speed is now the "
-                 f"argument for growing the gate.</p>")
-    if x and xn:
-        s.append(f"<p><b>OpenXLA:</b> the XLA job runs {x} ROCm targets against {xn} on the NV T4 job"
-                 + (f", and the JAX job inside the XLA presubmit runs {jx} against NV's {jxn}" if jx and jxn else "")
-                 + ".</p>")
-    s.append("<p><b>Gating coverage:</b> with more hardware we can pitch Google to gate JAX PRs on far more ROCm "
+    for R in REPOS:
+        parts = []
+        for suffix, keys in cov_rows(R):
+            a, b = cov.get(keys["rocm"], {}).get("suite"), cov.get(keys["nv"], {}).get("suite")
+            if a and b:
+                bk = f"{R['short']}_rocm_tests"
+                up = (f", up from {base[bk]} in the {esc(base['label'])}"
+                      if base and bk in base and not suffix else "")
+                parts.append(f"the{suffix or ' presubmit'} runs {a} ROCm targets against NV's {b}{up}")
+        if parts:
+            s.append(f"<p><b>{esc(R['repo'])}:</b> " + ", and ".join(parts) + ".</p>")
+    s.append("<p><b>Gating coverage:</b> with more hardware we can pitch Google to gate PRs on far more ROCm "
              "tests than the single target we gate on today.</p>")
     return "".join(s)
 
 
-POOL_NOW = {"JAX single-GPU pool": "amd-do-linux.jax.gpu.gfx950.1",
-            "XLA single-GPU pool": "amd-do-linux-xla-gpu-gfx950-dpx-1"}
+# Keyed by the names the --baseline JSON uses; keep them stable.
+POOL_NOW = {f"{R['short'].upper()} single-GPU pool": R["pool"] for R in REPOS}
 
 
 def changes_section(m, cov, base):
     """Compare against an earlier report's figures, read from the --baseline JSON."""
     rows = []
-    j, x = cov.get("jax_rocm", {}).get("suite"), cov.get("xla_rocm:xla", {}).get("suite")
-    if "jax_rocm_tests" in base:
-        rows.append(["JAX ROCm presubmit tests", str(base["jax_rocm_tests"]), str(j or "n/a")])
-    if "xla_rocm_tests" in base:
-        rows.append(["OpenXLA ROCm presubmit tests, XLA job", str(base["xla_rocm_tests"]), str(x or "n/a")])
+    for R in REPOS:
+        bk = f"{R['short']}_rocm_tests"
+        if bk in base:
+            now = cov.get(cov_key(R, "rocm"), {}).get("suite")
+            rows.append([f"{R['label']} ROCm presubmit tests", str(base[bk]), str(now or "n/a")])
     for name, (old_lab, p50, p90) in base.get("queue", {}).items():
         lab = POOL_NOW[name]
         xs = [(ts(jb["started_at"]) - ts(jb["created_at"])).total_seconds() for _, jb in m["do_jobs"]

@@ -19,15 +19,20 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# (repo, workflow file, lane). ROCm first so a rate-limit stall hits the NV lane.
-WORKFLOWS = [
-    ("jax-ml/jax", "bazel_rocm_presubmit.yml", "rocm"),
-    ("openxla/xla", "rocm_ci.yml", "rocm"),
-    ("jax-ml/jax", "wheel_tests_continuous.yml", "rocm"),
-    ("jax-ml/jax", "wheel_tests_nightly_release.yml", "rocm"),
-    ("jax-ml/jax", "bazel_cuda_presubmit.yml", "nv"),
-    ("openxla/xla", "ci.yml", "nv"),
-]
+from metrics_lib import REPOS
+
+
+def _workflows():
+    """(repo, workflow file, lane) from REPOS, so collection can't drift from
+    what the report expects. ROCm and the nightlies first, so a rate-limit stall
+    hits the NV reference lane rather than the lanes the report is about."""
+    out = [(R["repo"], R["rocm"][0], "rocm") for R in REPOS]
+    out += [(R["repo"], wf, "rocm") for R in REPOS for wf in R["nightly"]]
+    out += [(R["repo"], R["nv"][0], "nv") for R in REPOS]
+    return out
+
+
+WORKFLOWS = _workflows()
 # Continuous runs whose trigger check skips everything finish in seconds and
 # carry no ROCm jobs; do not spend an API call on them.
 SKIP_SHORT_RUNS = {"wheel_tests_continuous.yml": 180}

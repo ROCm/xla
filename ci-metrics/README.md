@@ -1,6 +1,8 @@
 # ci-metrics: Nightly CI report for upstream JAX and OpenXLA
 
-Builds a one-page HTML report of presubmit CI health over a 1-day window: time to
+Builds a one-page HTML + Markdown report of presubmit CI health over a 1-day
+window, with **one section per repo** (`REPOS` in `metrics_lib.py`) followed by
+the shared infrastructure sections. Each repo section holds: time to
 signal, queue wait, job and test-step execution, where every second of time to
 signal goes, at peak and nominal hours, tail percentiles for PR same-commit on various runner pools and test coverage.
 
@@ -48,23 +50,31 @@ For this nightly previous day to current timestamp is used as time window
 | `collect.py` | Fetches every run of the six workflows in `WORKFLOWS`, with each job's queue/start/end and per-step timestamps. | `jobs.jsonl`, `runs--<repo>--<workflow>.json` |
 | `fetch_attempts.py` | Fetches earlier attempts of re-run PR runs; `collect.py` only stores the latest attempt, and a failed first attempt is already a signal. | `attempts.jsonl` |
 | `sample_logs.py` | Downloads a random sample of job logs and parses bazel's `Executed X out of Y tests` and `Elapsed time / Critical Path` lines. | `logs.jsonl` |
-| `metrics_lib.py` | Shared definitions: which jobs form each lane, how a step maps to a phase, the time zone. Every CI naming convention lives here. | - |
+| `metrics_lib.py` | `REPOS` (the repo/lane config) plus shared definitions: how a step maps to a phase, the time zone. Every CI naming convention lives here. | - |
 | `report.py` | Computes all statistics (`build()`) and renders the HTML (`render()`). | `pr_lookup.json` (cache) |
 | `html_md.py` | Converts the rendered HTML to Markdown, so there is one renderer and one set of numbers. | - |
 
 ## How the numbers are defined
 
-- **Lanes.** One per repo and vendor, in `PRESUBMIT_LANES`:
-  Presubmit means `pull_request` runs only; one commit
-  is one PR head SHA.
+- **Repos and lanes.** `REPOS` lists the upstream repos; each gets a ROCm lane
+  and an NV reference lane, from which `PRESUBMIT_LANES` is derived with the
+  stable keys `<short>_rocm` / `<short>_nv`. Presubmit means `pull_request` runs
+  only; one commit is one PR head SHA.
 - **Job-family sub-lanes.** `openxla/xla` runs its own tests and the JAX
   integration tests in one workflow, so each OpenXLA lane is also measured one
   family at a time (`SPLIT_LANES`, keyed `xla_rocm:xla`, `xla_rocm:jax` and the
-  NV equivalents). In the phase tables each OPENXLA row is followed by two
-  indented `↳` sub-rows (`SUB_LANES` in `report.py`) giving the signal that
-  family would give on its own. The parent row is the *max* of its two
-  sub-rows, not their sum, and each sub-row picks its own p40-p60 and p90
-  commits, so the sub-rows are not a decomposition of the parent.
+  NV equivalents, derived from the entry's `families`). In the phase tables such
+  a lane is one row per family, both over the same commits and so
+  sharing one `n`. `Total` is that family's own signal; `Lane signal` is the
+  combined one the PR waits for - the slower family on each commit, not the sum
+  - so it repeats down the lane, and is `—` for the single-family JAX lanes.
+  `last on N/n` counts the commits where that family finished last; a family at
+  `n/n` necessarily matches the lane signal, because on those commits it is the
+  lane.
+- **Phase tables are not banded.** The "Where the time to signal goes" tables
+  use one row per lane over all hours. Peak/nominal there left only a handful
+  of commits per row once the p90 tail was taken; the band split still applies
+  in the Metrics, band and tail sections.
 - **Time to signal.** From the SHA's first trigger to the last lane job
   finishing, in the run that completed a full signal earliest (every lane job
   succeeded, failed or timed out; cancelled runs never count). For fork
@@ -85,10 +95,16 @@ For this nightly previous day to current timestamp is used as time window
 
 ## Adapting it
 
-- **New or renamed workflow, job or step.** Edit `WORKFLOWS` in `collect.py`, or
-  the lane predicates and step regexes in `metrics_lib.py`.
-- **New runner pool labels.** `pools` in `render()` and `POOL_NOW` in `report.py`
-  name the DO single-GPU pools.
+- **Another repo, or a renamed workflow/job/step.** Add or edit an entry in
+  `REPOS` in `metrics_lib.py`. That one table drives everything: lane keys,
+  display names, job families, the DO pool, the nightly workflows, job-type
+  classification, the like-for-like `pairs`, the RBE rows, and `WORKFLOWS` in
+  `collect.py`. `report.py` loops over it and needs no change — a new entry
+  produces a full report section on its own. Step regexes are still shared
+  (`TEST_STEP_RE`, `CLOSE_STEP_RE`).
+- **New runner pool labels.** The `pool` field of the repo's `REPOS` entry; both
+  the peak-vs-nominal table and `POOL_NOW` read it. `POOL_NOW`'s keys are the
+  names the `--baseline` JSON uses, so they must stay stable.
 - **Time zone.** `CDT` in `metrics_lib.py` is fixed at UTC-5. Change it to UTC-6
   for winter windows.
 - **New HTML construct in the report.** `html_md.py` handles only the tags
