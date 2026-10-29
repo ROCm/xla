@@ -3440,8 +3440,10 @@ cc_library(
     hdrs = ["conv_utils.h"],
     deps = [
         ":backend_configs_cc",
+        "//xla:autotuning_proto_cc",
         "//xla:permutation_util",
         "//xla:shape_util",
+        "//xla:status_macros",
         "//xla:util",
         "//xla:window_util",
         "//xla:xla_data_proto_cc",
@@ -3451,6 +3453,8 @@ cc_library(
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
     ],
 )
 
@@ -3459,6 +3463,7 @@ xla_cc_test(
     srcs = ["conv_utils_test.cc"],
     deps = [
         ":conv_utils",
+        "//xla:autotuning_proto_cc",
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
@@ -3467,6 +3472,7 @@ xla_cc_test(
         "//xla/service:shape_inference",
         "//xla/tests:xla_internal_test_main",
         "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status:status_matchers",
         "@com_google_googletest//:gtest",
     ],
 )
