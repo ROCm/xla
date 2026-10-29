@@ -60,10 +60,11 @@ For this nightly previous day to current timestamp is used as time window
 - **Job-family sub-lanes.** `openxla/xla` runs its own tests and the JAX
   integration tests in one workflow, so each OpenXLA lane is also measured one
   family at a time (`SPLIT_LANES`, keyed `xla_rocm:xla`, `xla_rocm:jax` and the
-  NV equivalents). The "OpenXLA split by job family" tables under the phase
-  breakdown show the signal each family would give on its own; a full lane's
-  time to signal is the *max* of its two sub-lanes, not their sum, and each
-  sub-lane picks its own p40-p60 and p90 commits.
+  NV equivalents). In the phase tables each OPENXLA row is followed by two
+  indented `↳` sub-rows (`SUB_LANES` in `report.py`) giving the signal that
+  family would give on its own. The parent row is the *max* of its two
+  sub-rows, not their sum, and each sub-row picks its own p40-p60 and p90
+  commits, so the sub-rows are not a decomposition of the parent.
 - **Time to signal.** From the SHA's first trigger to the last lane job
   finishing, in the run that completed a full signal earliest (every lane job
   succeeded, failed or timed out; cancelled runs never count). For fork

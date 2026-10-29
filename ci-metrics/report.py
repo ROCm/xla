@@ -224,6 +224,9 @@ tbody tr:hover{background:#fbfcfd}
 .rocm{color:var(--accent)}
 .pending{color:#9aa5b1;font-style:italic}
 td.dominant{font-weight:700;color:var(--ink);background:#fbf6e8}
+td.subrow{color:var(--mute);font-size:12.5px;border-bottom-style:dotted}
+td.subrow:first-child{padding-left:30px}
+td.subrow.dominant{color:var(--mute)}
 .scope{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:99px;
        background:var(--soft);border:1px solid var(--line);color:var(--mute);
        font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
@@ -373,29 +376,51 @@ def render(m, logs, since, until, base=None):
         "first triggered. Every second lands in exactly one named phase, and each row adds up to its total "
         "(checked in code), so there is no unaccounted time. NV rows use the same peak and nominal hours as "
         "ROCm, so both lanes are measured over the same clock time.</p>")
+    add("<p class='sub'>The <code>&#8627;</code> sub-rows break each OPENXLA row into its two job families: "
+        "openxla/xla runs its own tests and the JAX integration tests in one workflow, so the parent row is "
+        "whichever family finishes last. A sub-row is the signal that family would give on its own. The parent "
+        "is the <em>max</em> of its two sub-rows, not their sum, and each sub-row picks its own commits, so the "
+        "sub-rows are not a decomposition of the parent.</p>")
     phase_head = ["Line item"] + [lbl for _, lbl in PHASES] + ["Total", "n"]
 
     LANE_ROWS = [("JAX", "jax_rocm", "ROCm"), ("JAX", "jax_nv", "NV"),
                  ("OPENXLA", "xla_rocm", "ROCm"), ("OPENXLA", "xla_nv", "NV")]
-    SPLIT_ROWS = [("OPENXLA XLA jobs", "xla_rocm:xla", "ROCm"), ("OPENXLA JAX jobs", "xla_rocm:jax", "ROCm"),
-                  ("OPENXLA XLA jobs", "xla_nv:xla", "NV"), ("OPENXLA JAX jobs", "xla_nv:jax", "NV")]
+    # openxla/xla runs its own tests and the JAX integration tests in one
+    # workflow, so each OpenXLA row breaks out into the signal each job family
+    # would give on its own. The parent row is the max of the two, not the sum.
+    SUB_LANES = {"xla_rocm": [("XLA jobs only", "xla_rocm:xla"), ("JAX jobs only", "xla_rocm:jax")],
+                 "xla_nv": [("XLA jobs only", "xla_nv:xla"), ("JAX jobs only", "xla_nv:jax")]}
 
-    def phase_rows(sel, lanes=LANE_ROWS):
+    def phase_row(label, key, b, sel, cls=""):
+        cs = [c for c in commits[key] if c["band"] == b]
+        chosen = sel(cs)
+        if not chosen:
+            return None
+        means = {k: statistics.fmean(c["phases"][k] for c in chosen) for k, _ in PHASES}
+        tot = statistics.fmean(c["total"] for c in chosen)
+        dom = max(means, key=means.get)
+        n = f"n {cls}".strip()
+        row = [(label, cls)]
+        row += [(fmt(means[k]), f"{n} dominant" if k == dom else n) for k, _ in PHASES]
+        row += [(fmt(tot), n), (str(len(chosen)), n)]
+        return row
+
+    def phase_rows(sel):
         rows = []
-        for fw, key, lane in lanes:
+        for fw, key, lane in LANE_ROWS:
             for b, lbl in [("peak", "peak times"), ("nominal", "nominal times")]:
-                cs = [c for c in commits[key] if c["band"] == b]
-                chosen = sel(cs)
-                if not chosen:
-                    continue
-                means = {k: statistics.fmean(c["phases"][k] for c in chosen) for k, _ in PHASES}
-                tot = statistics.fmean(c["total"] for c in chosen)
-                dom = max(means, key=means.get)
                 scope = "DO" if lane == "ROCm" else "NV"
-                row = [f"{fw} {lane} Time to signal presubmit, {lbl} <span class='scope'>{scope}</span>"]
-                row += [(fmt(means[k]), "n dominant" if k == dom else "n") for k, _ in PHASES]
-                row += [fmt(tot), str(len(chosen))]
+                head = f"{fw} {lane} Time to signal presubmit, {lbl} <span class='scope'>{scope}</span>"
+                row = phase_row(head, key, b, sel)
+                if not row:
+                    continue
                 rows.append(row)
+                # Each sub-lane picks its own p40-p60 / p90 commits, so these are
+                # not a decomposition of the row above.
+                for sub_lbl, sub_key in SUB_LANES.get(key, []):
+                    sub = phase_row(f"&#8627; {sub_lbl}", sub_key, b, sel, cls="subrow")
+                    if sub:
+                        rows.append(sub)
         return rows
 
     def middle(cs):
@@ -415,17 +440,6 @@ def render(m, logs, since, until, base=None):
     add("<h3>Slowest 10% of commits (at or above p90, mean of each phase)</h3>")
     add(table(phase_head, phase_rows(slowest)))
     add(phase_notes(m))
-
-    add("<h3>OpenXLA split by job family <span class='scope'>XLA jobs vs JAX jobs</span></h3>")
-    add("<p class='sub'>The openxla/xla presubmit runs its own tests and the JAX integration tests in the same "
-        "workflow, so the OPENXLA rows above are whichever family finishes last. These rows re-run the same "
-        "measurement over one family at a time: the signal that family would give on its own, from the SHA's "
-        "first trigger to the last job of that family finishing. A full lane's total is the <em>max</em> of its "
-        "two sub-lanes, not their sum, and each sub-lane picks its own p40-p60 and p90 commits.</p>")
-    add("<p class='meta'>Typical commit (p40 to p60):</p>")
-    add(table(phase_head, phase_rows(middle, SPLIT_ROWS)))
-    add("<p class='meta'>Slowest 10% (at or above p90):</p>")
-    add(table(phase_head, phase_rows(slowest, SPLIT_ROWS)))
 
     # --- ROCm vs NV ---------------------------------------------------------
     add("<h2>ROCm versus the NVIDIA reference lane</h2>")
