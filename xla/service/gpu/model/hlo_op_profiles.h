@@ -63,6 +63,13 @@ class HloOpProfiles {
 
   const HloOpProfile& GetDefaultProfile() const { return default_profile_; }
 
+  // Returns the throughput profile ("<profile name>_throughput") to use next
+  // to the latency profile of `device_info` for occupancy aware compute costs.
+  // Returns nullptr if occupancy aware costs are disabled or the device has no
+  // throughput profile.
+  const HloOpProfile* GetThroughputProfile(
+      const se::DeviceDescription& device_info) const;
+
  private:
   HloOpProfiles(ProfilesNestedMap profiles,
                 absl::string_view default_profile_name)
@@ -71,6 +78,7 @@ class HloOpProfiles {
 
   ProfilesNestedMap profiles_;
   const HloOpProfile& default_profile_;
+  bool occupancy_aware_ = false;
 };
 
 }  // namespace gpu

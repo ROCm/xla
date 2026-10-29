@@ -40,6 +40,7 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 #include "xla/tsl/concurrency/executor.h"
 #include "xla/tsl/concurrency/future.h"
+#include "xla/util.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -163,10 +164,18 @@ absl::Duration CombinedGpuPerformanceModel::EstimateRunTimeForFusionUncached(
 
   int64_t flops = producer_runtime.flops * utilization_by_this_consumer +
                   consumer_runtime.flops;
+  int64_t latency_extra_flops =
+      cost_analysis->latency_extra_flop_count(*producer) *
+          utilization_by_this_consumer +
+      cost_analysis->latency_extra_flop_count(*consumer);
 
-  absl::Duration compute_time =
-      ComputeTime(device_info_, flops, launch_dimensions.num_blocks(),
-                  launch_dimensions.num_threads_per_block());
+  int64_t num_blocks = launch_dimensions.num_blocks();
+  int64_t num_threads_per_block = launch_dimensions.num_threads_per_block();
+  absl::Duration compute_time = OccupancyAwareComputeTime(
+      device_info_, flops, latency_extra_flops, num_blocks,
+      num_threads_per_block,
+      num_threads_per_block *
+          CeilOfRatio<int64_t>(num_blocks, device_info_.core_count()));
 
   auto fusion_operands = fusion_analysis.fusion().GetParameters();
   CoalescingAnalysis coalescing_analysis = CoalescingAnalysis::Create(

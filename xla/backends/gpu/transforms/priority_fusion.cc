@@ -35,8 +35,10 @@ limitations under the License.
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
+#include "absl/strings/escaping.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
@@ -51,10 +53,12 @@ limitations under the License.
 #include "xla/hlo/analysis/alias_info.h"
 #include "xla/hlo/analysis/hlo_dfs_reachability.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
+#include "xla/hlo/ir/hlo_clone_context.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instruction_utils.h"
 #include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/ir/hlo_print_options.h"
 #include "xla/hlo/utils/hlo_traversal.h"
@@ -75,12 +79,14 @@ limitations under the License.
 #include "xla/service/gpu/model/gpu_performance_model_base.h"
 #include "xla/service/gpu/model/triton_emitter_constraints.h"
 #include "xla/service/hlo_graph_dumper.h"
+#include "xla/service/hlo_module_config.h"
 #include "xla/service/instruction_fusion.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/tsl/concurrency/executor.h"
 #include "xla/tsl/concurrency/future.h"
+#include "xla/tsl/platform/env.h"
 #include "xla/tsl/platform/logging.h"
 #include "xla/tsl/platform/threadpool.h"
 #include "xla/tsl/util/sorted_range.h"
@@ -420,6 +426,7 @@ class PriorityFusionQueue {
       auto next_it = std::prev(producer_priority_queue_.end());
 
       current_producer_ = next_it->second;
+      current_priority_ = next_it->first.first;
       producer_priority_queue_.erase(next_it);
       reverse_map_.erase(current_producer_);
 
@@ -695,6 +702,48 @@ class PriorityFusionQueue {
   }
 
   HloInstruction* current_producer() { return current_producer_; }
+
+  // Helpers for the fusion candidate dump (local experiment).
+
+  // Priority of the producer returned by the last DequeueNextProducer().
+  Priority current_priority() const { return current_priority_; }
+
+  // Fused and unfused run time estimates of fusing `producer` into all of
+  // `consumers`, computed from scratch rather than incrementally.
+  absl::StatusOr<CombinedGpuPerformanceModel::RunTimes> EstimateRunTimesForDump(
+      HloInstruction* producer, absl::Span<HloInstruction* const> consumers) {
+    std::vector<const HloInstruction*> const_consumers(consumers.begin(),
+                                                       consumers.end());
+    return combined_gpu_performance_model_.EstimateRunTimes(
+        producer, cost_analysis_.get(), const_consumers);
+  }
+
+  // Recomputes the priority of `producer` with its current users.
+  absl::StatusOr<Priority> RecomputePriorityForDump(HloInstruction* producer) {
+    return CalculateProducerPriorityAsync(producer).Await();
+  }
+
+  // Triton tiling the cost model chose for fusing `producer` into `consumer`,
+  // if that fusion was evaluated as a Triton fusion.
+  std::optional<BlockLevelParameters> GetBlockLevelParametersForDump(
+      const HloInstruction* producer, const HloInstruction* consumer) {
+    FusionDeduplicationCache::FusionId id;
+    {
+      absl::MutexLock lock(fusion_deduplication_cache_mutex_);
+      id = fusion_deduplication_cache_.GetFusionId(
+          producer, consumer, /*use_multi_output_fusion=*/false);
+    }
+    absl::MutexLock lock(tiled_run_time_data_cache_mutex_);
+    auto it = tiled_run_time_data_cache_.find(id);
+    if (it == tiled_run_time_data_cache_.end()) {
+      return std::nullopt;
+    }
+    if (const auto* tiled_rt_data =
+            std::get_if<TiledRunTimeData>(&it->second)) {
+      return tiled_rt_data->block_level_parameters;
+    }
+    return std::nullopt;
+  }
 
   const std::vector<HloInstruction*>& current_consumers() {
     return current_consumers_;
@@ -1330,6 +1379,9 @@ class PriorityFusionQueue {
   // The current producer being visited.
   HloInstruction* current_producer_;
 
+  // Priority of the current producer when it was dequeued.
+  Priority current_priority_ = absl::ZeroDuration();
+
   // The current consumers being visited.
   std::vector<HloInstruction*> current_consumers_;
 
@@ -1393,6 +1445,306 @@ class PriorityFusionQueue {
   const AliasInfo* alias_info_;
 
   bool dump_fusion_visualization_;
+};
+
+// Local experiment helper. Records priority fusion decisions, both fusions
+// that were performed and producers the cost model rejected, so that the fused
+// and the unfused variant of each decision can be measured on hardware. Each
+// decision is written as a line in candidates.jsonl with the cost model
+// estimates. The two variants are written as standalone HLO modules named
+// after a fingerprint of the unfused variant, so repeated decisions (for
+// example the same layer N times) share one pair of files.
+class FusionCandidateDumper {
+ public:
+  FusionCandidateDumper(std::string dir, const HloModule& module,
+                        const se::DeviceDescription& device_info)
+      : dir_(std::move(dir)),
+        module_name_(module.name()),
+        device_info_(device_info) {
+    config_.set_debug_options(module.config().debug_options());
+  }
+
+  absl::Status Init() {
+    return tsl::Env::Default()->RecursivelyCreateDir(dir_);
+  }
+
+  // Records the decision to fuse (or not) `producer` into `consumers`.
+  // `block_level_parameters` holds the Triton tiling per consumer, if any.
+  absl::Status Record(
+      PriorityFusionQueue& queue, HloInstruction* producer,
+      const std::vector<HloInstruction*>& consumers, absl::string_view decision,
+      absl::Duration priority,
+      const absl::flat_hash_map<const HloInstruction*, BlockLevelParameters>&
+          block_level_parameters,
+      bool use_multi_output_fusion) {
+    if (consumers.empty()) {
+      return absl::OkStatus();
+    }
+    std::optional<CombinedGpuPerformanceModel::RunTimes> run_times;
+    if (!use_multi_output_fusion) {
+      absl::StatusOr<CombinedGpuPerformanceModel::RunTimes> estimate =
+          queue.EstimateRunTimesForDump(producer, consumers);
+      if (estimate.ok()) {
+        run_times = *estimate;
+      }
+    }
+
+    ExtractedModule unfused = Extract(producer, consumers, "unfused");
+    std::string unfused_text = Print(*unfused.module);
+    std::string hash = absl::StrFormat(
+        "%016x", std::hash<std::string>{}(
+                     unfused.module->ToString(HloPrintOptions::Fingerprint())));
+    bool first = written_.insert(hash).second;
+    absl::Status fused_status = absl::OkStatus();
+    if (first) {
+      ExtractedModule fused = Extract(producer, consumers, "fused");
+      fused_status = FuseExtracted(fused, producer, consumers,
+                                   block_level_parameters,
+                                   use_multi_output_fusion);
+      ABSL_RETURN_IF_ERROR(Write(absl::StrCat(hash, ".unfused.hlo"),
+                                 unfused_text));
+      if (fused_status.ok()) {
+        ABSL_RETURN_IF_ERROR(
+            Write(absl::StrCat(hash, ".fused.hlo"), Print(*fused.module)));
+      }
+    }
+
+    std::vector<std::string> consumer_names;
+    for (const HloInstruction* consumer : consumers) {
+      consumer_names.push_back(absl::StrCat("\"", consumer->name(), "\""));
+    }
+    absl::StrAppendFormat(
+        &jsonl_,
+        "{\"module\": \"%s\", \"computation\": \"%s\", \"producer\": \"%s\", "
+        "\"producer_opcode\": \"%s\", \"consumers\": [%s], "
+        "\"decision\": \"%s\", \"priority_us\": %s, \"model_unfused_us\": %s, "
+        "\"model_fused_us\": %s, \"triton\": %s, \"multi_output\": %s, "
+        "\"hash\": \"%s\", \"files_written\": %s, \"fused_variant\": \"%s\"}\n",
+        module_name_, producer->parent()->name(), producer->name(),
+        HloOpcodeString(producer->opcode()),
+        absl::StrJoin(consumer_names, ", "), decision, Number(priority),
+        run_times ? Number(run_times->time_unfused) : "null",
+        run_times ? Number(run_times->time_fused) : "null",
+        block_level_parameters.empty() ? "false" : "true",
+        use_multi_output_fusion ? "true" : "false", hash,
+        first ? "true" : "false",
+        fused_status.ok() ? "ok" : absl::CEscape(fused_status.message()));
+    return absl::OkStatus();
+  }
+
+  // Records producers of `computation` that the cost model rejected, i.e.
+  // whose priority with their current users is negative but finite.
+  absl::Status RecordRejected(PriorityFusionQueue& queue,
+                              HloComputation* computation) {
+    for (HloInstruction* producer : computation->MakeInstructionPostOrder()) {
+      if (HloPredicateIsOp<HloOpcode::kParameter, HloOpcode::kTuple,
+                           HloOpcode::kGetTupleElement, HloOpcode::kConstant>(
+              producer) ||
+          producer->user_count() == 0 || !producer->IsFusible() ||
+          IsFusibleBitcast(*producer)) {
+        continue;
+      }
+      absl::StatusOr<absl::Duration> priority =
+          queue.RecomputePriorityForDump(producer);
+      if (!priority.ok() || *priority >= absl::ZeroDuration() ||
+          *priority == -absl::InfiniteDuration()) {
+        continue;
+      }
+      std::vector<HloInstruction*> consumers;
+      absl::flat_hash_map<const HloInstruction*, BlockLevelParameters>
+          block_level_parameters;
+      for (HloInstruction* consumer : producer->users()) {
+        if (IsFusibleBitcast(*consumer)) {
+          continue;
+        }
+        consumers.push_back(consumer);
+        if (std::optional<BlockLevelParameters> params =
+                queue.GetBlockLevelParametersForDump(producer, consumer)) {
+          block_level_parameters.insert({consumer, *params});
+        }
+      }
+      ABSL_RETURN_IF_ERROR(Record(queue, producer, consumers, "rejected",
+                                  *priority, block_level_parameters,
+                                  /*use_multi_output_fusion=*/false));
+    }
+    return absl::OkStatus();
+  }
+
+  // Appends the decisions recorded so far to candidates.jsonl.
+  absl::Status Flush() {
+    if (jsonl_.empty()) {
+      return absl::OkStatus();
+    }
+    std::unique_ptr<tsl::WritableFile> file;
+    ABSL_RETURN_IF_ERROR(tsl::Env::Default()->NewAppendableFile(
+        absl::StrCat(dir_, "/candidates.jsonl"), &file));
+    ABSL_RETURN_IF_ERROR(file->Append(jsonl_));
+    jsonl_.clear();
+    return file->Close();
+  }
+
+ private:
+  struct ExtractedModule {
+    std::unique_ptr<HloModule> module;
+    // Original instruction to its copy in `module`.
+    absl::flat_hash_map<const HloInstruction*, HloInstruction*> map;
+  };
+
+  // Copies `producer` and `consumers` into a new module. Operands from outside
+  // become parameters (constants are copied) and the consumers form the root
+  // tuple.
+  ExtractedModule Extract(HloInstruction* producer,
+                          const std::vector<HloInstruction*>& consumers,
+                          absl::string_view variant) {
+    ExtractedModule result;
+    result.module = std::make_unique<HloModule>(
+        absl::StrCat("candidate_", variant), config_);
+    HloCloneContext context(result.module.get());
+    HloComputation::Builder builder("entry");
+    int64_t parameter_number = 0;
+    auto get_operand = [&](const HloInstruction* operand) -> HloInstruction* {
+      auto it = result.map.find(operand);
+      if (it != result.map.end()) {
+        return it->second;
+      }
+      HloInstruction* copy;
+      if (HloPredicateIsOp<HloOpcode::kConstant>(operand)) {
+        copy = builder.AddInstruction(operand->Clone("", &context));
+      } else {
+        copy = builder.AddInstruction(HloInstruction::CreateParameter(
+            parameter_number, operand->shape(),
+            absl::StrCat("p", parameter_number)));
+        ++parameter_number;
+      }
+      result.map[operand] = copy;
+      return copy;
+    };
+    auto add = [&](const HloInstruction* instruction) {
+      std::vector<HloInstruction*> operands;
+      for (const HloInstruction* operand : instruction->operands()) {
+        operands.push_back(get_operand(operand));
+      }
+      result.map[instruction] = builder.AddInstruction(
+          instruction->CloneWithNewOperands(instruction->shape(), operands,
+                                            &context));
+    };
+    add(producer);
+    // A consumer can use another consumer, so add them in dependency order.
+    std::vector<HloInstruction*> pending(consumers.begin(), consumers.end());
+    absl::flat_hash_set<const HloInstruction*> pending_set(pending.begin(),
+                                                           pending.end());
+    while (!pending.empty()) {
+      auto ready = absl::c_find_if(pending, [&](const HloInstruction* c) {
+        return absl::c_none_of(c->operands(), [&](const HloInstruction* op) {
+          return pending_set.contains(op);
+        });
+      });
+      // Consumers always form a DAG, but never loop forever on bad input.
+      if (ready == pending.end()) {
+        ready = pending.begin();
+      }
+      pending_set.erase(*ready);
+      add(*ready);
+      pending.erase(ready);
+    }
+    std::vector<HloInstruction*> roots;
+    for (const HloInstruction* consumer : consumers) {
+      roots.push_back(result.map.at(consumer));
+    }
+    builder.AddInstruction(HloInstruction::CreateTuple(roots));
+    result.module->AddEntryComputation(builder.Build());
+    return result;
+  }
+
+  // Fuses the copy of `producer` into the copies of `consumers` the same way
+  // PriorityFusion::Fuse does.
+  absl::Status FuseExtracted(
+      ExtractedModule& extracted, HloInstruction* producer,
+      const std::vector<HloInstruction*>& consumers,
+      const absl::flat_hash_map<const HloInstruction*, BlockLevelParameters>&
+          block_level_parameters,
+      bool use_multi_output_fusion) {
+    HloInstruction* producer_copy = extracted.map.at(producer);
+    HloComputation* computation = producer_copy->parent();
+    for (HloInstruction* consumer : consumers) {
+      HloInstruction* fusion = extracted.map.at(consumer);
+      if (HloPredicateIsNotOp<HloOpcode::kFusion>(fusion)) {
+        HloInstruction* consumer_copy = fusion;
+        fusion = computation->AddInstruction(HloInstruction::CreateFusion(
+            consumer_copy->shape(), HloInstruction::FusionKind::kLoop,
+            consumer_copy));
+        ABSL_RETURN_IF_ERROR(
+            computation->ReplaceInstruction(consumer_copy, fusion));
+      }
+      if (HloPredicateIsOp<HloOpcode::kFusion>(producer_copy)) {
+        if (use_multi_output_fusion) {
+          fusion->MergeFusionInstructionIntoMultiOutput(producer_copy);
+        } else {
+          fusion->MergeFusionInstruction(producer_copy);
+        }
+      } else if (use_multi_output_fusion) {
+        fusion->FuseInstructionIntoMultiOutput(producer_copy);
+      } else {
+        fusion->FuseInstruction(producer_copy);
+      }
+      fusion->set_fusion_kind(KindForEmitter(
+          HloFusionAnalysis::Create(*fusion, device_info_)
+              .emitter_fusion_kind()));
+      auto params_it = block_level_parameters.find(consumer);
+      if (params_it != block_level_parameters.end()) {
+        ABSL_RETURN_IF_ERROR(fusion->set_backend_config(
+            GetTritonGpuBackendConfig(params_it->second)));
+        fusion->set_fusion_kind(HloInstruction::FusionKind::kCustom);
+      }
+    }
+    // MergeFusionInstructionIntoMultiOutput already removed a fusion producer.
+    bool producer_already_removed =
+        use_multi_output_fusion &&
+        HloPredicateIsOp<HloOpcode::kFusion>(producer);
+    if (!producer_already_removed && producer_copy->user_count() == 0) {
+      ABSL_RETURN_IF_ERROR(computation->RemoveInstruction(producer_copy));
+    }
+    return absl::OkStatus();
+  }
+
+  static HloInstruction::FusionKind KindForEmitter(
+      HloFusionAnalysis::EmitterFusionKind kind) {
+    switch (kind) {
+      case HloFusionAnalysis::EmitterFusionKind::kLoop:
+        return HloInstruction::FusionKind::kLoop;
+      case HloFusionAnalysis::EmitterFusionKind::kConcatenate:
+      case HloFusionAnalysis::EmitterFusionKind::kReduction:
+      case HloFusionAnalysis::EmitterFusionKind::kTranspose:
+      case HloFusionAnalysis::EmitterFusionKind::kScatter:
+        return HloInstruction::FusionKind::kInput;
+      default:
+        return HloInstruction::FusionKind::kCustom;
+    }
+  }
+
+  static std::string Print(const HloModule& module) {
+    return module.ToString(HloPrintOptions().set_print_large_constants(true));
+  }
+
+  static std::string Number(absl::Duration duration) {
+    if (duration == absl::InfiniteDuration() ||
+        duration == -absl::InfiniteDuration()) {
+      return "null";
+    }
+    return absl::StrFormat("%.4f", absl::ToDoubleMicroseconds(duration));
+  }
+
+  absl::Status Write(absl::string_view name, const std::string& text) {
+    return tsl::WriteStringToFile(tsl::Env::Default(),
+                                  absl::StrCat(dir_, "/", name), text);
+  }
+
+  std::string dir_;
+  std::string module_name_;
+  const se::DeviceDescription& device_info_;
+  HloModuleConfig config_;
+  absl::flat_hash_set<std::string> written_;
+  std::string jsonl_;
 };
 
 }  // namespace
@@ -1476,6 +1828,20 @@ absl::StatusOr<bool> PriorityFusion::RunImpl(
   FusionDeduplicationCache fusion_deduplication_cache =
       FusionDeduplicationCache::Create(*module, IsFusible);
 
+  std::unique_ptr<FusionCandidateDumper> candidate_dumper;
+  const std::string& candidates_dir =
+      module->config()
+          .debug_options()
+          .xla_gpu_experimental_dump_fusion_candidates_to();
+  if (!candidates_dir.empty()) {
+    candidate_dumper = std::make_unique<FusionCandidateDumper>(
+        absl::StrCat(candidates_dir, "/",
+                     SanitizeFileName(std::string(module->name())),
+                     "_", module->unique_id()),
+        *module, device_info_);
+    ABSL_RETURN_IF_ERROR(candidate_dumper->Init());
+  }
+
   bool changed = false;
   for (auto* computation : fusible_computations) {
     CHECK(!computation->IsFusionComputation());
@@ -1501,6 +1867,22 @@ absl::StatusOr<bool> PriorityFusion::RunImpl(
           block_level_parameters_map =
               fusion_queue->GetCurrentBlockLevelParametersMap(
                   use_multi_output_fusion);
+
+      // Bitcasts and constants have infinite priority and are not cost model
+      // decisions.
+      if (candidate_dumper != nullptr &&
+          fusion_queue->current_priority() != absl::InfiniteDuration()) {
+        std::vector<HloInstruction*> fused_consumers;
+        for (HloInstruction* consumer : consumers) {
+          if (!IsFusibleBitcast(*consumer)) {
+            fused_consumers.push_back(consumer);
+          }
+        }
+        ABSL_RETURN_IF_ERROR(candidate_dumper->Record(
+            *fusion_queue, producer, fused_consumers, "fused",
+            fusion_queue->current_priority(), block_level_parameters_map,
+            use_multi_output_fusion));
+      }
 
       for (auto* consumer : consumers) {
         // Don't fuse into single bitcasts. We ignore them in the check
@@ -1556,6 +1938,12 @@ absl::StatusOr<bool> PriorityFusion::RunImpl(
         fusion_analysis_cache_.Invalidate(consumer_id);
       }
       ABSL_RETURN_IF_ERROR(fusion_queue->UpdatePriorities());
+    }
+
+    if (candidate_dumper != nullptr) {
+      ABSL_RETURN_IF_ERROR(
+          candidate_dumper->RecordRejected(*fusion_queue, computation));
+      ABSL_RETURN_IF_ERROR(candidate_dumper->Flush());
     }
 
     // Fuse all constants.

@@ -64,9 +64,12 @@ EstimateRunTimeData GpuPerformanceModel::EstimateRunTimeForInstructionImpl(
       EstimateFusionLaunchDimensions(fusion_analysis);
   int64_t num_blocks = launch_dimensions.num_blocks();
 
-  absl::Duration compute_time =
-      ComputeTime(device_info_, flops, num_blocks,
-                  launch_dimensions.num_threads_per_block());
+  int64_t num_threads_per_block = launch_dimensions.num_threads_per_block();
+  absl::Duration compute_time = OccupancyAwareComputeTime(
+      device_info_, flops, cost_analysis->latency_extra_flop_count(*instr),
+      num_blocks, num_threads_per_block,
+      num_threads_per_block *
+          CeilOfRatio<int64_t>(num_blocks, device_info_.core_count()));
 
   CoalescingAnalysis coalescing_analysis =
       CoalescingAnalysis::Create(instr, instr->operands(), fusion_analysis);
@@ -147,10 +150,18 @@ absl::Duration GpuPerformanceModel::EstimateRunTimeForFusionImpl(
 
   int64_t flops = producer_runtime.flops * utilization_by_this_consumer +
                   consumer_runtime.flops;
+  int64_t latency_extra_flops =
+      cost_analysis->latency_extra_flop_count(*producer) *
+          utilization_by_this_consumer +
+      cost_analysis->latency_extra_flop_count(*consumer);
 
-  absl::Duration compute_time =
-      ComputeTime(device_info_, flops, launch_dimensions.num_blocks(),
-                  launch_dimensions.num_threads_per_block());
+  int64_t num_blocks = launch_dimensions.num_blocks();
+  int64_t num_threads_per_block = launch_dimensions.num_threads_per_block();
+  absl::Duration compute_time = OccupancyAwareComputeTime(
+      device_info_, flops, latency_extra_flops, num_blocks,
+      num_threads_per_block,
+      num_threads_per_block *
+          CeilOfRatio<int64_t>(num_blocks, device_info_.core_count()));
 
   auto fusion_operands = fusion_analysis.fusion().GetParameters();
   CoalescingAnalysis coalescing_analysis = CoalescingAnalysis::Create(

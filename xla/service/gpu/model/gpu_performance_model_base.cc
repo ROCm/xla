@@ -398,6 +398,33 @@ absl::Duration GpuPerformanceModelBase::ComputeTime(
 }
 
 /*static*/
+absl::Duration GpuPerformanceModelBase::OccupancyAwareComputeTime(
+    const se::DeviceDescription& gpu_device_info, int64_t flops,
+    int64_t latency_extra_flops, int64_t num_blocks,
+    int64_t num_threads_per_block, int64_t num_threads_per_core) {
+  absl::Duration throughput_time =
+      ComputeTime(gpu_device_info, flops, num_blocks, num_threads_per_block);
+  if (latency_extra_flops <= 0) {
+    return throughput_time;
+  }
+  // Both AMD CUs and NVIDIA SMs have four SIMDs (sub-partitions).
+  constexpr int64_t kSimdsPerCore = 4;
+  int64_t resident_threads = num_threads_per_core;
+  if (gpu_device_info.threads_per_core_limit() > 0) {
+    resident_threads = std::min<int64_t>(
+        resident_threads, gpu_device_info.threads_per_core_limit());
+  }
+  double wavefronts_per_simd = std::max(
+      1.0, 1.0 * resident_threads /
+               (gpu_device_info.threads_per_warp() * kSimdsPerCore));
+  absl::Duration latency_time =
+      ComputeTime(gpu_device_info, flops + latency_extra_flops, num_blocks,
+                  num_threads_per_core) /
+      wavefronts_per_simd;
+  return std::max(throughput_time, latency_time);
+}
+
+/*static*/
 absl::Duration GpuPerformanceModelBase::CombineComputeAndMemoryAccessTime(
     absl::Duration compute_time, absl::Duration memory_access_time) {
   return compute_time + memory_access_time -

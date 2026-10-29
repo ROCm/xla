@@ -2716,6 +2716,7 @@ cc_library(
         "//xla/service:dump",
         "//xla/service:hlo_cost_analysis",
         "//xla/service:hlo_graph_dumper",
+        "//xla/service:hlo_module_config",
         "//xla/service:instruction_fusion",
         "//xla/service/gpu:backend_configs_cc",
         "//xla/service/gpu:fusion_deduplication_cache",

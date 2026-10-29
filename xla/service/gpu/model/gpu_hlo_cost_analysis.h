@@ -43,11 +43,18 @@ class GpuHloCostAnalysis : public HloCostAnalysis {
   static constexpr int64_t kMaxIRSize = 10000;
 
  public:
+  // If `hlo_elementwise_op_throughput_profile` is set, FLOPs use its costs and
+  // the extra cost of the latency profile is tracked separately, see
+  // latency_extra_flop_count().
   GpuHloCostAnalysis(
       const Options& options,
-      const HloOpProfiles::HloOpProfile& hlo_elementwise_op_profile)
+      const HloOpProfiles::HloOpProfile& hlo_elementwise_op_profile,
+      const HloOpProfiles::HloOpProfile*
+          hlo_elementwise_op_throughput_profile = nullptr)
       : HloCostAnalysis(options),
-        hlo_elementwise_op_profile_(hlo_elementwise_op_profile) {}
+        hlo_elementwise_op_profile_(hlo_elementwise_op_profile),
+        hlo_elementwise_op_throughput_profile_(
+            hlo_elementwise_op_throughput_profile) {}
 
   explicit GpuHloCostAnalysis(const Options& options)
       : GpuHloCostAnalysis(options,
@@ -56,7 +63,8 @@ class GpuHloCostAnalysis : public HloCostAnalysis {
   GpuHloCostAnalysis(const Options& options,
                      const se::DeviceDescription& device_info)
       : GpuHloCostAnalysis(
-            options, HloOpProfiles::Singleton().GetProfile(device_info)) {}
+            options, HloOpProfiles::Singleton().GetProfile(device_info),
+            HloOpProfiles::Singleton().GetThroughputProfile(device_info)) {}
 
   absl::Status Preprocess(const HloInstruction* hlo) override;
 
@@ -110,6 +118,20 @@ class GpuHloCostAnalysis : public HloCostAnalysis {
   int64_t GetFlopsForElementwiseOp(HloOpcode op_code, const Shape& shape) const;
   int64_t GetFlopsForElementwiseOp(const HloInstruction* instr) const;
 
+  // True if FLOPs use throughput costs and latency costs are tracked too.
+  bool occupancy_aware() const {
+    return hlo_elementwise_op_throughput_profile_ != nullptr;
+  }
+
+  // Latency cost minus throughput cost of one element of the elementwise
+  // instruction. Zero unless occupancy_aware().
+  int64_t GetLatencyExtraFlopsPerElementwiseOpElement(PrimitiveType type,
+                                                      HloOpcode opcode) const;
+
+  // FLOPs that `hlo` costs on top of flop_count() when it runs latency bound.
+  // flop_count() + latency_extra_flop_count() is its cost with latency costs.
+  int64_t latency_extra_flop_count(const HloInstruction& hlo) const;
+
  protected:
   // Populates kCollNumDevicesKey and kCollAlgoScaleRatioKey in
   // current_properties_ for a ring-algorithm collective with `num_ranks`
@@ -141,6 +163,9 @@ class GpuHloCostAnalysis : public HloCostAnalysis {
   // Contains a map from (opcode, element_type) to FLOPs per element estimate
   // for elementwise instructions.
   const HloOpProfiles::HloOpProfile& hlo_elementwise_op_profile_;
+
+  // Throughput costs for the same (opcode, element_type) pairs, or nullptr.
+  const HloOpProfiles::HloOpProfile* hlo_elementwise_op_throughput_profile_;
 
  private:
   // Extracts custom cost estimates from the backend config (either structured
