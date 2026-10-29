@@ -15,11 +15,12 @@ limitations under the License.
 
 #include "xla/service/gpu/conv_utils.h"
 
-#include <gtest/gtest.h>
-
 #include <optional>
 
+#include <gtest/gtest.h>
 #include "absl/log/check.h"
+#include "absl/status/status_matchers.h"
+#include "xla/autotuning.pb.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -33,6 +34,9 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 namespace {
+
+using ::absl_testing::IsOkAndHolds;
+using ::absl_testing::StatusIs;
 
 class ConvUtilsTest : public HloHardwareIndependentTestBase {
  public:
@@ -306,6 +310,79 @@ TEST_F(ConvUtilsTest, BackwardInputConvolveUnevenPaddingOnActivations) {
   EXPECT_EQ(1, backward_conv_col_dim.padding_high());
   EXPECT_EQ(restored_dims.kernel_input_feature_dimension(), 2);
   EXPECT_EQ(restored_dims.kernel_output_feature_dimension(), 3);
+}
+
+TritonConvConfig MakeValidConfig() {
+  return TritonConvConfig(/*batch_tile=*/1, /*output_spatial_tiles=*/{8, 8},
+                          /*output_feature_tile=*/16,
+                          /*kernel_spatial_tiles=*/{1, 1},
+                          /*input_feature_tile=*/32, /*num_stages=*/1,
+                          /*num_warps=*/4, /*num_ctas=*/1,
+                          /*waves_per_eu=*/0);
+}
+
+TEST(TritonConvConfigTest, RoundTripsThroughProto) {
+  TritonConvConfig config = MakeValidConfig();
+  EXPECT_THAT(TritonConvConfig::FromProto(config.ToProto()),
+              IsOkAndHolds(config));
+}
+
+TEST(TritonConvConfigTest, RoundTripsAtSpatialRankOneAndThree) {
+  TritonConvConfig rank1 = MakeValidConfig();
+  rank1.output_spatial_tiles = {8};
+  rank1.kernel_spatial_tiles = {1};
+  EXPECT_THAT(TritonConvConfig::FromProto(rank1.ToProto()),
+              IsOkAndHolds(rank1));
+
+  TritonConvConfig rank3 = MakeValidConfig();
+  rank3.output_spatial_tiles = {4, 4, 4};
+  rank3.kernel_spatial_tiles = {1, 1, 1};
+  EXPECT_THAT(TritonConvConfig::FromProto(rank3.ToProto()),
+              IsOkAndHolds(rank3));
+}
+
+TEST(TritonConvConfigTest, RejectsNonPositiveTiles) {
+  TritonConvConfig config = MakeValidConfig();
+  config.input_feature_tile = 0;
+  EXPECT_THAT(TritonConvConfig::FromProto(config.ToProto()),
+              StatusIs(absl::StatusCode::kInternal));
+}
+
+TEST(TritonConvConfigTest, RejectsSpatialArityMismatch) {
+  TritonConvConfig config = MakeValidConfig();
+  config.kernel_spatial_tiles = {1};  // output has 2 spatial tiles
+  EXPECT_THAT(TritonConvConfig::FromProto(config.ToProto()),
+              StatusIs(absl::StatusCode::kInternal));
+}
+
+TEST(TritonConvConfigTest, RejectsKernelSpatialTileAboveOne) {
+  TritonConvConfig config = MakeValidConfig();
+  config.kernel_spatial_tiles = {2, 1};
+  EXPECT_THAT(TritonConvConfig::FromProto(config.ToProto()),
+              StatusIs(absl::StatusCode::kInternal));
+}
+
+TEST(TritonConvConfigTest, WavesPerEuRoundTripsAndAcceptsZero) {
+  TritonConvConfig config = MakeValidConfig();
+  config.waves_per_eu = 4;
+  EXPECT_THAT(TritonConvConfig::FromProto(config.ToProto()),
+              IsOkAndHolds(config));
+
+  config.waves_per_eu = 0;
+  EXPECT_THAT(TritonConvConfig::FromProto(config.ToProto()),
+              IsOkAndHolds(config));
+
+  config.waves_per_eu = -1;
+  EXPECT_THAT(TritonConvConfig::FromProto(config.ToProto()),
+              StatusIs(absl::StatusCode::kInternal));
+}
+
+TEST(TritonConvConfigTest, RejectsEmptySpatialTiles) {
+  TritonConvConfig config = MakeValidConfig();
+  config.output_spatial_tiles = {};
+  config.kernel_spatial_tiles = {};
+  EXPECT_THAT(TritonConvConfig::FromProto(config.ToProto()),
+              StatusIs(absl::StatusCode::kInternal));
 }
 
 }  // anonymous namespace

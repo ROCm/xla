@@ -295,7 +295,7 @@ message DynamicSliceConfig {
   }
 }
 
-// Next id: 9
+// Next id: 10
 message FusionBackendConfig {
   // kLoop, kInput, or kOutput (from HloInstruction::FusionKind), or your own
   // custom string.
@@ -311,6 +311,9 @@ message FusionBackendConfig {
   // Only valid when kind == "__triton_gemm".  Even then it's optional: If not
   // present, we use the default Triton config.
   AutotuneResult.TritonGemmKey triton_gemm_config = 2;
+
+  // Only valid when kind == "__triton_conv".
+  AutotuneResult.TritonConvKey triton_conv_config = 9;
 
   // Only valid when kind is "__triton" or "__triton_nested_gemm_fusion". Code
   // generation of such fusions will fail if this field is not set.
