@@ -13,7 +13,7 @@
 # limitations under the License.
 # ============================================================================
 
-name: ROCm Infrastructure Error Monitor
+name: ROCm Nightly Failure Monitor
 permissions:
   actions: read
   contents: read
@@ -23,6 +23,11 @@ env:
   # Repository and workflow being monitored: our own nightly pipeline.
   MONITORED_REPO: ROCm/xla
   MONITORED_WORKFLOW: rocm_xla_ci_nightly.yml
+  # Steps whose name contains this marker are known-red and not reported.
+  # The pipeline already tags each test step with its mode - "[single_gpu]",
+  # "[multi_gpu]", "[rocm_cpu]" - so the mode tag is the marker.
+  # TODO: enable when multigpu is green (set this to an empty value).
+  IGNORED_STEP_MARKER: '[multi_gpu]'
 
 on:
   schedule:
@@ -32,13 +37,11 @@ on:
   pull_request:
     paths:
       - '.github/workflows/rocm_infra_monitor.yml'
-      - 'build_tools/rocm/analyze_bep_infra_errors.py'
-      - 'build_tools/rocm/monitor_bep_artifacts.sh'
       - 'build_tools/rocm/create_infra_error_issue.sh'
 
 jobs:
   monitor:
-    name: Monitor ROCm CI Infrastructure Errors
+    name: Monitor ROCm Nightly Failures
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -58,7 +61,7 @@ jobs:
           GITHUB_TIME=$(gh api /rate_limit | jq -r '.resources.core.reset' | xargs -I {} date -u -d '@{}' '+%Y-%m-%dT%H:%M:%SZ')
           echo "GitHub API time: $GITHUB_TIME"
 
-          # Calculate cutoff: 2 hours before GitHub's current time (temporary for testing)
+          # Calculate cutoff: 2 hours before GitHub's current time
           CUTOFF_TIME=$(date -u -d "$GITHUB_TIME - 2 hours" '+%Y-%m-%dT%H:%M:%SZ')
           echo "Checking for failed runs after: $CUTOFF_TIME"
 
@@ -75,116 +78,77 @@ jobs:
           echo "Found $(wc -l < run_ids.txt) completed runs from last 2 hours in ${MONITORED_REPO}"
           cat run_ids.txt
 
-      - name: Download BEP artifacts
-        if: hashFiles('run_ids.txt') != ''
-        continue-on-error: true
+      - name: Collect failures
+        id: collect
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The nightly pipeline is expected to be green, so every failure is
+          # reported - no attempt is made to tell infrastructure failures apart
+          # from build or test failures.
+          rm -f failed_runs.txt
+          touch failed_runs.txt
+
           if [ ! -s run_ids.txt ]; then
-            echo "No runs to check, exiting early"
+            echo "No completed runs to check"
             exit 0
           fi
 
-          build_tools/rocm/monitor_bep_artifacts.sh run_ids.txt "${MONITORED_REPO}" || true
+          while read -r RUN_ID; do
+            [ -z "$RUN_ID" ] && continue
 
-      - name: Analyze BEP files for infrastructure errors
-        id: analyze
-        run: |
-          if [ ! -d "bep-files" ]; then
-            echo "No BEP files downloaded"
-            echo "has_infra_errors=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+            RUN_URL="https://github.com/${MONITORED_REPO}/actions/runs/${RUN_ID}"
+            echo "Checking run ${RUN_ID}"
 
-          HAS_INFRA_ERRORS=false
-          rm -f failed_runs.txt runs_with_bep.txt
-          touch failed_runs.txt runs_with_bep.txt
+            gh api --paginate \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${MONITORED_REPO}/actions/runs/${RUN_ID}/jobs?per_page=100" \
+              > "jobs-${RUN_ID}.json"
 
-          for run_dir in bep-files/run-*; do
-            [ ! -d "$run_dir" ] && continue
+            # Failed steps, except the known-red ones (empty marker: report all).
+            FAILURES=$(jq -r --arg marker "$IGNORED_STEP_MARKER" '
+              .jobs[]
+              | . as $job
+              | ($job.steps // [])[]
+              | select(.conclusion == "failure")
+              | select($marker == "" or ((.name | contains($marker)) | not))
+              | "  - \($job.name) / \(.name)"
+            ' "jobs-${RUN_ID}.json" | sort -u)
 
-            RUN_ID=$(basename "$run_dir" | sed 's/run-//')
+            # Jobs that failed without any failed step (startup failure, runner
+            # lost, cancellation) - these have no step to look at, so report the
+            # job itself.
+            JOB_FAILURES=$(jq -r '
+              .jobs[]
+              | select(.conclusion == "failure" or .conclusion == "startup_failure")
+              | select([(.steps // [])[] | select(.conclusion == "failure")] | length == 0)
+              | "  - \(.name) / job \(.conclusion) with no failed step"
+            ' "jobs-${RUN_ID}.json" | sort -u)
 
-            # Track that this run has BEP files (Bazel ran)
-            echo "$RUN_ID" >> runs_with_bep.txt
+            ALL_FAILURES=$(printf '%s\n%s\n' "$FAILURES" "$JOB_FAILURES" | grep -v '^$' || true)
 
-            FOUND_INFRA_ERROR=false
-
-            for bep_file in "$run_dir"/*.json; do
-              [ ! -f "$bep_file" ] && continue
-
-              echo "Analyzing $bep_file"
-              set +e
-              OUTPUT=$(python3 build_tools/rocm/analyze_bep_infra_errors.py "$bep_file" 2>&1)
-              EXIT_CODE=$?
-              set -e
-
-              # Exit codes: 0=no error, 1=infra error, 2=build/test error
-              if [ $EXIT_CODE -eq 1 ]; then
-                echo "  -> Infrastructure error detected: $OUTPUT"
-                FOUND_INFRA_ERROR=true
-                break  # Found infra error, no need to check other BEP files
-              elif [ $EXIT_CODE -eq 2 ]; then
-                echo "  -> Build/test error (not infrastructure)"
-                # Don't break - continue checking other BEP files in case they have infra errors
-              else
-                echo "  -> No errors detected"
-              fi
-            done
-
-            if [ "$FOUND_INFRA_ERROR" = true ]; then
-              echo "https://github.com/${MONITORED_REPO}/actions/runs/${RUN_ID}" >> failed_runs.txt
-              HAS_INFRA_ERRORS=true
+            if [ -n "$ALL_FAILURES" ]; then
+              echo "  -> failures found:"
+              echo "$ALL_FAILURES"
+              {
+                echo "${RUN_URL}"
+                echo "$ALL_FAILURES"
+                echo ""
+              } >> failed_runs.txt
+            else
+              echo "  -> no reportable failures"
             fi
-          done
-
-          if [ "$HAS_INFRA_ERRORS" = true ]; then
-            echo "has_infra_errors=true" >> "$GITHUB_OUTPUT"
-            echo "Runs with Bazel infrastructure errors:"
-            cat failed_runs.txt
-          else
-            echo "has_infra_errors=false" >> "$GITHUB_OUTPUT"
-            echo "No Bazel infrastructure errors found in BEP files"
-          fi
-
-      - name: Report non-Bazel infrastructure errors
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Only report runs that DON'T have BEP files (failed before Bazel ran)
-          echo "Checking for non-Bazel infrastructure errors..."
-
-          if [ -s run_ids.txt ]; then
-            while read -r RUN_ID; do
-              # Check if this run has BEP files
-              if ! grep -q "^${RUN_ID}$" runs_with_bep.txt 2>/dev/null; then
-                # Verify this is actually a failure (API query might have race conditions)
-                RUN_INFO=$(gh api "/repos/${MONITORED_REPO}/actions/runs/${RUN_ID}")
-                CONCLUSION=$(echo "$RUN_INFO" | jq -r '.conclusion')
-
-                if [ "$CONCLUSION" != "failure" ]; then
-                  echo "Run $RUN_ID has conclusion '$CONCLUSION' (not a failure, skipping)"
-                  continue
-                fi
-
-                # No BEP files = failed before Bazel = non-Bazel infra error
-                echo "Non-Bazel infrastructure error: run $RUN_ID (no BEP files)"
-                echo "https://github.com/${MONITORED_REPO}/actions/runs/${RUN_ID}" >> failed_runs.txt
-              fi
-            done < run_ids.txt
-          fi
+          done < run_ids.txt
 
       - name: Create or update issue for failed runs
         if: hashFiles('failed_runs.txt') != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Only create/update issue if there are actual failures
           if [ -s failed_runs.txt ]; then
             build_tools/rocm/create_infra_error_issue.sh \
               failed_runs.txt \
               "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           else
-            echo "No infrastructure errors found, skipping issue creation"
+            echo "No failures found, skipping issue creation"
           fi
