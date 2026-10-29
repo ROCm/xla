@@ -30,6 +30,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/service/compiler.h"
+#include "xla/service/gpu/conv_utils.h"
 #include "xla/service/gpu/matmul_utils.h"
 #include "xla/service/gpu/mlir_context_pool.h"
 #include "xla/xla.pb.h"
@@ -72,6 +73,9 @@ class TritonBackend : public GpuCodegenBackend {
 
   absl::StatusOr<std::vector<TritonGemmConfig>> GetSupportedConfigsForDot(
       const HloInstruction* instr);
+
+  absl::StatusOr<std::vector<TritonConvConfig>> GetSupportedConfigsForConv(
+      const HloInstruction* conv);
 
   absl::StatusOr<std::vector<TritonGemmConfig>> GetSupportedConfigsForScaledDot(
       const HloInstruction* instr);
