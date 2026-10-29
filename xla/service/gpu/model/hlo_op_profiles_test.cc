@@ -25,6 +25,7 @@ limitations under the License.
 #include "xla/service/gpu/model/hlo_op_profiles_data.h"
 #include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -163,6 +164,22 @@ TEST_F(HloOpProfilesTest, GetProfileSm107) {
   EXPECT_EQ(
       op_profile.at(std::make_pair(HloOpcode::kPower, PrimitiveType::F32)),
       669);
+}
+
+TEST_F(HloOpProfilesTest, GetProfileGfx950) {
+  auto hlo_op_profiles = HloOpProfiles::Load(kDeviceHloOpProfiles,
+                                             /*default_profile_name=*/"sm_80");
+  stream_executor::DeviceDescription device_info;
+  device_info.set_gpu_compute_capability(stream_executor::GpuComputeCapability(
+      stream_executor::RocmComputeCapability("gfx950")));
+
+  EXPECT_EQ(HloOpProfiles::GetProfileName(device_info), "gfx950");
+  const auto& op_profile = hlo_op_profiles->GetProfile(device_info);
+  ASSERT_TRUE(op_profile.contains(
+      std::make_pair(HloOpcode::kDivide, PrimitiveType::S8)));
+  EXPECT_EQ(
+      op_profile.at(std::make_pair(HloOpcode::kDivide, PrimitiveType::S8)),
+      242);
 }
 
 TEST_F(HloOpProfilesTest, GetProfileSm100) {
