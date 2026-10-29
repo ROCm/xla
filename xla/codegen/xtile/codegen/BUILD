@@ -91,6 +91,7 @@ cc_library(
     ],
     compatible_with = get_compatible_with_portable(),
     deps = [
+        ":conv_algorithms",
         ":dot_algorithms",
         ":emitter_helpers",
         "//xla:autotuning_proto_cc",
@@ -174,6 +175,26 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "conv_algorithms",
+    srcs = ["conv_algorithms.cc"],
+    hdrs = ["conv_algorithms.h"],
+    compatible_with = get_compatible_with_portable(),
+    deps = [
+        ":dot_algorithms",
+        ":emitter_helpers",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Support",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
 xla_cc_test(
     name = "dot_algorithms_test",
     srcs = ["dot_algorithms_test.cc"],
