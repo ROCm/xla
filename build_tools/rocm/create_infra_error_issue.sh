@@ -14,7 +14,7 @@
 # limitations under the License.
 # ==============================================================================
 #
-# Create or update GitHub issue for ROCm CI infrastructure errors.
+# Create or update GitHub issue for ROCm CI nightly failures.
 #
 # Usage: create_infra_error_issue.sh <errors_file> <workflow_run_url>
 #
@@ -41,12 +41,12 @@ if [ ! -f "$ERRORS_FILE" ]; then
     exit 1
 fi
 
-TITLE="ROCm CI Infrastructure Errors Detected"
+TITLE="ROCm CI Nightly Failures Detected"
 
 # Repository where issues should be created (ROCm fork, where the team has access)
 ISSUE_REPO="ROCm/xla"
 
-# Team members to assign to infrastructure error issues
+# Team members to assign to nightly failure issues
 # Adjust this list as needed
 TEAM_MEMBERS=(
     alekstheod
@@ -67,18 +67,20 @@ echo "Will assign to: ${TEAM_MEMBERS[*]}"
 # Check if an open issue already exists (search by title, not label)
 ISSUE_NUMBER=$(gh issue list --repo "$ISSUE_REPO" --state open --search "in:title $TITLE" --json number --jq '.[0].number')
 
-BODY="## Infrastructure Errors Detected in ROCm CI
+BODY="## Failures Detected in the ROCm CI Nightly Pipeline
 
 Monitoring run: ${WORKFLOW_URL}
 
-The following workflow runs failed with infrastructure errors:
+The nightly pipeline is expected to be green. The following runs reported
+failures (build, test or infrastructure - all of them are reported):
 
 $(cat "$ERRORS_FILE")
 
 ### Next Steps
 - Click the run links above to view logs and error details
-- For runs with BEP artifacts, download and analyze the Build Event Protocol files
-- For runs without BEP files, the failure occurred during setup/initialization
+- Fix the failing step, or quarantine the failing test, to get the nightly back to green
+
+Note: \`[multi_gpu]\` steps are known-red and are not reported yet.
 
 cc @ROCm/ai-fw-openxla
 
