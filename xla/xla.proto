@@ -1988,7 +1988,23 @@ message DebugOptions {
   // (ScanRewriterTriton).
   optional bool xla_gpu_experimental_enable_triton_scan = 562;
 
-  // Next id: 564
+  // If false, gfx950 uses the default HLO op profile instead of its own.
+  // Local experiment switch for A/B measurements, not for upstream.
+  optional bool xla_gpu_experimental_enable_gfx950_hlo_op_profile = 564;
+
+  // If true (and the gfx950 profile is enabled), gfx950 uses the HLO op
+  // profile measured on large tensors instead of the latency based one.
+  // Local experiment switch for A/B measurements, not for upstream.
+  optional bool xla_gpu_experimental_use_gfx950_throughput_hlo_op_profile =
+      565;
+
+  // If true, devices that have both a latency HLO op profile and a throughput
+  // one ("<name>_throughput") get occupancy aware compute costs. A kernel costs
+  // max(throughput time, latency time / wavefronts per SIMD). Local experiment
+  // switch for A/B measurements, not for upstream.
+  optional bool xla_gpu_experimental_occupancy_aware_op_costs = 566;
+
+  // Next id: 567
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

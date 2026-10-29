@@ -455,6 +455,9 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_operand_bytes_threshold_for_windowed_einsum(-1);
 
   opts.set_xla_gpu_experimental_enable_fusion_block_level_rewriter(false);
+  opts.set_xla_gpu_experimental_enable_gfx950_hlo_op_profile(true);
+  opts.set_xla_gpu_experimental_use_gfx950_throughput_hlo_op_profile(false);
+  opts.set_xla_gpu_experimental_occupancy_aware_op_costs(false);
 
   opts.set_xla_gpu_default_to_alg_dot_bf16_bf16_f32(false);
   opts.set_xla_gpu_enable_libnvptxcompiler(
@@ -3001,6 +3004,30 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_experimental_enable_fusion_block_level_rewriter(),
       "Enabling this flag will attempt to redirect every fusion possible to "
       "the Triton emitter"));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_enable_gfx950_hlo_op_profile",
+      bool_setter_for(
+          &DebugOptions::
+              set_xla_gpu_experimental_enable_gfx950_hlo_op_profile),
+      debug_options->xla_gpu_experimental_enable_gfx950_hlo_op_profile(),
+      "Use the measured gfx950 HLO op profile in the GPU cost model. Set to "
+      "false to fall back to the default profile for A/B measurements."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_use_gfx950_throughput_hlo_op_profile",
+      bool_setter_for(
+          &DebugOptions::
+              set_xla_gpu_experimental_use_gfx950_throughput_hlo_op_profile),
+      debug_options
+          ->xla_gpu_experimental_use_gfx950_throughput_hlo_op_profile(),
+      "Use the gfx950 HLO op profile measured on large tensors (throughput) "
+      "instead of the latency based one, for A/B measurements."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_occupancy_aware_op_costs",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_experimental_occupancy_aware_op_costs),
+      debug_options->xla_gpu_experimental_occupancy_aware_op_costs(),
+      "Use both the latency and the throughput HLO op profile and cost each "
+      "kernel as max(throughput time, latency time / wavefronts per SIMD)."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_enable_libnvptxcompiler",
       [debug_options](bool enabled) {

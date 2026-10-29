@@ -68,6 +68,7 @@ limitations under the License.
 #include "xla/service/gpu/model/gpu_dot_fusion_cost_model.h"
 #include "xla/service/gpu/model/gpu_hlo_cost_analysis.h"
 #include "xla/service/gpu/model/gpu_performance_model_base.h"
+#include "xla/service/gpu/model/hlo_op_profiles.h"
 #include "xla/service/gpu/model/triton_emitter_constraints.h"
 #include "xla/service/hlo_cost_analysis.h"
 #include "xla/service/instruction_fusion.h"
@@ -573,6 +574,43 @@ int64_t GetShapeSizeRecursive(
   return total_size;
 }
 
+// Latency cost minus throughput cost of computing one element of `hlo`. Covers
+// the elementwise and reduce cases of FlopsPerElement, which are the ones that
+// use HLO op profile costs.
+int64_t LatencyExtraFlopsPerElement(
+    const HloInstruction* hlo, const HloOpProfiles::HloOpProfile& latency,
+    const HloOpProfiles::HloOpProfile& throughput) {
+  constexpr int64_t kDefaultFlopsPerElement = 3;
+  if (hlo->IsElementwise()) {
+    const auto key = std::make_pair(hlo->opcode(), hlo->shape().element_type());
+    auto latency_it = latency.find(key);
+    auto throughput_it = throughput.find(key);
+    int64_t latency_cost = latency_it != latency.end()
+                               ? latency_it->second
+                               : kDefaultFlopsPerElement;
+    int64_t throughput_cost = throughput_it != throughput.end()
+                                  ? throughput_it->second
+                                  : kDefaultFlopsPerElement;
+    return std::max<int64_t>(latency_cost - throughput_cost, 0);
+  }
+  if (hlo->opcode() == HloOpcode::kReduce) {
+    int64_t per_reduce_computation = 0;
+    for (const HloInstruction* reducer_instr :
+         hlo->called_computations()[0]->instructions()) {
+      per_reduce_computation +=
+          LatencyExtraFlopsPerElement(reducer_instr, latency, throughput);
+    }
+    const Shape& operand_shape = hlo->operand(0)->shape();
+    int64_t padded_reduction_factor = 1;
+    for (int64_t dim : hlo->dimensions()) {
+      padded_reduction_factor *=
+          llvm::PowerOf2Ceil(operand_shape.dimensions(dim));
+    }
+    return (padded_reduction_factor - 1) * per_reduce_computation;
+  }
+  return 0;
+}
+
 absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledHloComputationImpl(
     const HloFusionAdaptor& fusion_adaptor,
     const experimental::TiledHloComputation& tiled_hlo_computation,
@@ -585,6 +623,13 @@ absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledHloComputationImpl(
   // Compute time for dot flops is counted separately.
   int64_t dot_flops = 0;
   int64_t flops = 0;
+  // Only set when the device has both a latency and a throughput profile and
+  // occupancy aware costs are enabled.
+  int64_t latency_extra_flops = 0;
+  const HloOpProfiles::HloOpProfile* throughput_profile =
+      HloOpProfiles::Singleton().GetThroughputProfile(device_info);
+  const HloOpProfiles::HloOpProfile& latency_profile =
+      HloOpProfiles::Singleton().GetProfile(device_info);
   int64_t bytes_read = 0;
   int64_t dot_l2_bytes_read = 0;
   int64_t num_blocks = tiled_hlo_computation.num_output_tiles();
@@ -639,6 +684,12 @@ absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledHloComputationImpl(
 
           // Tiles inside the computation contribute to the total FLOPs count.
           flops += flops_per_element_fn(hlo) * num_elements;
+          if (throughput_profile != nullptr) {
+            latency_extra_flops +=
+                LatencyExtraFlopsPerElement(hlo, latency_profile,
+                                            *throughput_profile) *
+                num_elements;
+          }
           return;
         }
         // Calculate the total number of elements that are read from memory
@@ -705,8 +756,9 @@ absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledHloComputationImpl(
                                     block_level_parameters.num_warps *
                                     WarpSize(device_info);
   absl::Duration compute_time =
-      GpuPerformanceModelBase::ComputeTime(device_info, flops, num_blocks,
-                                           active_threads_per_core) +
+      GpuPerformanceModelBase::OccupancyAwareComputeTime(
+          device_info, flops, latency_extra_flops, num_blocks,
+          active_threads_per_core, active_threads_per_core) +
       dot_estimates.compute_time;
 
   absl::Duration memory_access_time = read_time + write_time;

@@ -27,6 +27,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "google/protobuf/text_format.h"
 #include "tsl/platform/protobuf.h"
+#include "xla/debug_options_flags.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/gpu/model/hlo_op_profile.pb.h"
 #include "xla/service/gpu/model/hlo_op_profiles_data.h"
@@ -38,10 +39,28 @@ namespace xla {
 namespace gpu {
 
 /*static*/ const HloOpProfiles& HloOpProfiles::Singleton() {
-  static const auto* hlo_op_profiles =
-      HloOpProfiles::Load(kDeviceHloOpProfiles,
-                          /*default_profile_name=*/"sm_86")
-          .release();
+  static const auto* hlo_op_profiles = [] {
+    auto profiles = HloOpProfiles::Load(kDeviceHloOpProfiles,
+                                        /*default_profile_name=*/"sm_86");
+    // Without the gfx950 entry gfx950 falls back to the default profile, which
+    // is the behavior before the gfx950 profile was added. The throughput
+    // variant replaces the latency based gfx950 entry with costs measured on
+    // large tensors. Occupancy aware costs keep both tables and let the
+    // performance model pick per kernel.
+    const DebugOptions debug_options = GetDebugOptionsFromFlags();
+    const bool use_throughput =
+        debug_options
+            .xla_gpu_experimental_use_gfx950_throughput_hlo_op_profile();
+    profiles->occupancy_aware_ =
+        debug_options.xla_gpu_experimental_occupancy_aware_op_costs();
+    if (!debug_options.xla_gpu_experimental_enable_gfx950_hlo_op_profile()) {
+      profiles->profiles_.erase("gfx950");
+    } else if (use_throughput && !profiles->occupancy_aware_) {
+      profiles->profiles_["gfx950"] =
+          profiles->profiles_.at("gfx950_throughput");
+    }
+    return profiles.release();
+  }();
   return *hlo_op_profiles;
 }
 
@@ -98,6 +117,19 @@ const HloOpProfiles::HloOpProfile& HloOpProfiles::GetProfile(
     return it->second;
   }
   return default_profile_;
+}
+
+const HloOpProfiles::HloOpProfile* HloOpProfiles::GetThroughputProfile(
+    const se::DeviceDescription& device_info) const {
+  if (!occupancy_aware_) {
+    return nullptr;
+  }
+  const std::string name = GetProfileName(device_info);
+  if (!profiles_.contains(name)) {
+    return nullptr;
+  }
+  auto it = profiles_.find(absl::StrCat(name, "_throughput"));
+  return it != profiles_.end() ? &it->second : nullptr;
 }
 
 }  // namespace gpu

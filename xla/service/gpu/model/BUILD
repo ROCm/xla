@@ -442,6 +442,7 @@ cc_library(
         ":gpu_indexing_performance_model",
         ":gpu_performance_model",
         ":gpu_performance_model_base",
+        "//xla:util",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/utils:hlo_traversal",
@@ -784,6 +785,7 @@ cc_library(
     compatible_with = get_compatible_with_portable(),
     deps = [
         ":hlo_op_profile_proto_cc",
+        "//xla:debug_options_flags",
         "//xla:types",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",

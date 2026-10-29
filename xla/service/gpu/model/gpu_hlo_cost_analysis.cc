@@ -64,6 +64,9 @@ static constexpr absl::string_view kCollNumDevicesKey =
     "Number of devices of a collective group";
 static constexpr absl::string_view kCollBytesTransferred =
     "Number of bytes transferred.";
+// Latency cost minus throughput cost, only set for occupancy aware costs.
+static constexpr absl::string_view kLatencyExtraFlopsKey =
+    "latency_extra_flops";
 
 template <typename T>
 absl::StatusOr<int64_t> NumRanks(const T& instr) {
@@ -198,6 +201,14 @@ float GpuHloCostAnalysis::BytesTransferred(const HloInstruction& hlo) const {
   return GetPropertyForHlo(hlo, kCollBytesTransferred, hlo_properties_);
 }
 
+int64_t GpuHloCostAnalysis::latency_extra_flop_count(
+    const HloInstruction& hlo) const {
+  if (!occupancy_aware()) {
+    return 0;
+  }
+  return GetPropertyForHlo(hlo, kLatencyExtraFlopsKey, hlo_properties_);
+}
+
 int64_t GpuHloCostAnalysis::FusionParameterReadBytes(
     const HloInstruction* hlo) const {
   CHECK(hlo->IsFused() && (hlo->opcode() == HloOpcode::kParameter ||
@@ -241,6 +252,9 @@ absl::Status GpuHloCostAnalysis::FusionCalculateUtilizations(
 
   current_properties_[kFlopsKey] = 0;
   current_properties_[kIRSizeKey] = 0;
+  if (occupancy_aware()) {
+    current_properties_[kLatencyExtraFlopsKey] = 0;
+  }
 
   for (const HloInstruction* instr : instructions) {
     VLOG(8) << instr->name() << ":";
@@ -259,6 +273,10 @@ absl::Status GpuHloCostAnalysis::FusionCalculateUtilizations(
 
     current_properties_[kFlopsKey] +=
         cur_instr_utilization * instr_props[kFlopsKey];
+    if (occupancy_aware()) {
+      current_properties_[kLatencyExtraFlopsKey] +=
+          cur_instr_utilization * instr_props[kLatencyExtraFlopsKey];
+    }
     current_properties_[kIRSizeKey] += cur_instr_times_emitted;
 
     for (int operand_idx = 0; operand_idx < instr->operand_count();
@@ -471,8 +489,25 @@ int64_t GpuHloCostAnalysis::GetFlopsPerElementwiseOpElement(
     const PrimitiveType type, const HloOpcode opcode) const {
   // Elementwise instructions typically take at least a few clock cycles.
   constexpr int64_t kDefaultFlopsPerElement = 3;
-  return FindOrDefault(hlo_elementwise_op_profile_,
-                       std::make_pair(opcode, type), kDefaultFlopsPerElement);
+  const HloOpProfiles::HloOpProfile& profile =
+      occupancy_aware() ? *hlo_elementwise_op_throughput_profile_
+                        : hlo_elementwise_op_profile_;
+  return FindOrDefault(profile, std::make_pair(opcode, type),
+                       kDefaultFlopsPerElement);
+}
+
+int64_t GpuHloCostAnalysis::GetLatencyExtraFlopsPerElementwiseOpElement(
+    const PrimitiveType type, const HloOpcode opcode) const {
+  if (!occupancy_aware()) {
+    return 0;
+  }
+  constexpr int64_t kDefaultFlopsPerElement = 3;
+  const auto key = std::make_pair(opcode, type);
+  const int64_t latency =
+      FindOrDefault(hlo_elementwise_op_profile_, key, kDefaultFlopsPerElement);
+  const int64_t throughput = FindOrDefault(
+      *hlo_elementwise_op_throughput_profile_, key, kDefaultFlopsPerElement);
+  return std::max<int64_t>(latency - throughput, 0);
 }
 
 int64_t GpuHloCostAnalysis::GetFlopsForElementwiseOp(const HloOpcode op_code,
@@ -713,13 +748,20 @@ absl::Status GpuHloCostAnalysis::HandleCollectivePermuteStart(
 absl::Status GpuHloCostAnalysis::HandleElementwiseOp(
     const HloInstruction* hlo) {
   current_properties_[kFlopsKey] = GetFlopsForElementwiseOp(hlo);
+  if (occupancy_aware()) {
+    current_properties_[kLatencyExtraFlopsKey] =
+        GetLatencyExtraFlopsPerElementwiseOpElement(hlo->shape().element_type(),
+                                                    hlo->opcode()) *
+        ShapeUtil::ElementsInRecursive(hlo->shape());
+  }
   return absl::OkStatus();
 }
 
 std::unique_ptr<HloCostAnalysis>
 GpuHloCostAnalysis::CreateNestedCostAnalysis() {
-  return std::make_unique<GpuHloCostAnalysis>(options_,
-                                              hlo_elementwise_op_profile_);
+  return std::make_unique<GpuHloCostAnalysis>(
+      options_, hlo_elementwise_op_profile_,
+      hlo_elementwise_op_throughput_profile_);
 }
 
 bool GpuHloCostAnalysis::KeyToCopyFromSubcomputation(

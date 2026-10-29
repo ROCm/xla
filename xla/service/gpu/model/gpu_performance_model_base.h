@@ -264,6 +264,16 @@ class GpuPerformanceModelBase {
       const se::DeviceDescription& gpu_device_info, int64_t flops,
       int64_t num_blocks, int64_t num_threads_per_block);
 
+  // Compute time when elementwise ops may be latency bound. `flops` use
+  // throughput costs and `latency_extra_flops` is what latency costs add on top
+  // of them. A SIMD interleaves its resident wavefronts, so with W wavefronts
+  // per SIMD the latency bound time is the latency cost divided by W. Returns
+  // the larger of the throughput and the latency bound time.
+  static absl::Duration OccupancyAwareComputeTime(
+      const se::DeviceDescription& gpu_device_info, int64_t flops,
+      int64_t latency_extra_flops, int64_t num_blocks,
+      int64_t num_threads_per_block, int64_t num_threads_per_core);
+
   static absl::Duration CombineComputeAndMemoryAccessTime(
       absl::Duration compute_time, absl::Duration memory_access_time);
 
