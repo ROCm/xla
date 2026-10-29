@@ -535,6 +535,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   // TODO(b/366475196): Create XLA GPU without cuDNN, cuBLAS.
   opts.set_xla_gpu_experimental_disable_binary_libraries(false);
   opts.set_xla_gpu_experimental_enable_conv_fusion(false);
+  opts.set_xla_gpu_experimental_enable_triton_conv_fusion(false);
   opts.set_xla_gpu_dot_merger_threshold_mb(64);
   opts.set_xla_enable_fast_math(false);
   opts.set_xla_gpu_experimental_parallel_collective_overlap_limit(1);
@@ -3382,6 +3383,13 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
                 debug_options->xla_gpu_experimental_enable_conv_fusion(),
                 "enable experimental XLA GPU passes that rewrite conv as hlo "
                 "fusion instead of custom call."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_enable_triton_conv_fusion",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_experimental_enable_triton_conv_fusion),
+      debug_options->xla_gpu_experimental_enable_triton_conv_fusion(),
+      "enable experimental XLA GPU passes that rewrite conv as Triton "
+      "fusion instead of custom call."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_dot_merger_threshold_mb",
       int32_setter_for(&DebugOptions::set_xla_gpu_dot_merger_threshold_mb),

@@ -26,6 +26,7 @@ limitations under the License.
 #include "xla/backends/gpu/transforms/priority_fusion.h"
 #include "xla/backends/gpu/transforms/ragged_dot_fusion_rewriter.h"
 #include "xla/backends/gpu/transforms/sort_iota_fusion.h"
+#include "xla/backends/gpu/transforms/triton_conv_fusion_rewriter.h"
 #include "xla/backends/gpu/transforms/variadic_op_splitter.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/pass/hlo_pass_fix.h"
@@ -67,6 +68,12 @@ HloPassPipeline FusionPipeline(
       "hlo verifier (debug)");
 
   fusion.AddPass<SortIotaFusion>();
+
+  // Rewrite claimed convs into `__triton_conv` custom fusions .
+  if (debug_options.xla_gpu_experimental_enable_triton_conv_fusion() &&
+      gpu_device_info.gpu_compute_capability().IsRocm()) {
+    fusion.AddPass<TritonConvFusionRewriter>(gpu_device_info);
+  }
 
   // Rewrite convs into conv fusions.
   if (!debug_options.xla_gpu_experimental_disable_binary_libraries() &&
