@@ -38,6 +38,7 @@ limitations under the License.
 #include "xla/backends/gpu/collectives/gpu_clique_key.h"
 #include "xla/backends/gpu/runtime/collective_execution.h"
 #include "xla/backends/gpu/runtime/collective_params.h"
+#include "xla/backends/gpu/runtime/collective_profiler.h"
 #include "xla/backends/gpu/runtime/collective_thunk.pb.h"
 #include "xla/backends/gpu/runtime/command.h"
 #include "xla/backends/gpu/runtime/thunk.h"
@@ -486,13 +487,34 @@ absl::Status CollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
 
   return RunWithCommAndRendezvous(
       params, [&](const GpuCliqueKey& clique_key, Communicator& comm) {
-        return RunCollective(params, clique_key, *params.stream, comm);
+        CollectiveProfiler* profiler = CollectiveProfiler::Get();
+        if (profiler == nullptr) {
+          return RunCollective(params, clique_key, *params.stream, comm);
+        }
+        return profiler->Time(
+            *params.stream, std::string(Thunk::KindToString(kind())),
+            PayloadBytes(), [&] {
+              return RunCollective(params, clique_key, *params.stream, comm);
+            });
       });
+}
+
+int64_t CollectiveThunk::PayloadBytes() const {
+  int64_t bytes = 0;
+  for (const Buffer& buffer : buffers_) {
+    if (buffer.source_buffer.shape.IsArray()) {
+      bytes += ShapeUtil::ByteSizeOf(buffer.source_buffer.shape);
+    }
+  }
+  return bytes;
 }
 
 absl::StatusOr<const se::CommandBuffer::Command*> CollectiveThunk::Record(
     const ExecuteParams& execute_params, const RecordParams& record_params,
     RecordAction record_action, se::CommandBuffer* command_buffer) {
+  if (CollectiveProfiler* profiler = CollectiveProfiler::Get()) {
+    profiler->NoteCommandBufferRecord();
+  }
   std::unique_ptr<se::CommandBuffer> nested_cmd;
   ABSL_RETURN_IF_ERROR(RunWithCommAndRendezvous(
       execute_params,

@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/backends/gpu/runtime/collective_group_thunk.h"
 
+#include <cstdint>
 #include <iterator>
 #include <memory>
 #include <string>
@@ -31,6 +32,7 @@ limitations under the License.
 #include "xla/backends/gpu/collectives/gpu_collectives.h"
 #include "xla/backends/gpu/collectives/gpu_communicator.h"
 #include "xla/backends/gpu/runtime/collective_cliques.h"
+#include "xla/backends/gpu/runtime/collective_profiler.h"
 #include "xla/backends/gpu/runtime/collective_thunk.h"
 #include "xla/backends/gpu/runtime/command.h"
 #include "xla/backends/gpu/runtime/device_to_device_copy_thunk.h"
@@ -79,6 +81,28 @@ Thunk::BufferUses CollectiveGroupThunk::buffer_uses() const {
 }
 
 absl::Status CollectiveGroupThunk::ExecuteOnStream(
+    const Thunk::ExecuteParams& params) {
+  CollectiveProfiler* profiler = CollectiveProfiler::Get();
+  if (profiler == nullptr || CollectiveProfiler::InNestedScope()) {
+    return ExecuteGroup(params);
+  }
+  int64_t bytes = 0;
+  for (const std::unique_ptr<Thunk>& thunk : executor_.thunks()) {
+    if (auto* collective = dynamic_cast<CollectiveThunk*>(thunk.get())) {
+      bytes += collective->PayloadBytes();
+    }
+  }
+  // Collectives inside a group are launched at group end, so they are timed
+  // as a whole rather than individually.
+  return profiler->Time(
+      *params.stream, absl::StrCat(Thunk::KindToString(kind()), " (group)"),
+      bytes, [&] {
+        CollectiveProfiler::NestedScope nested;
+        return ExecuteGroup(params);
+      });
+}
+
+absl::Status CollectiveGroupThunk::ExecuteGroup(
     const Thunk::ExecuteParams& params) {
   GlobalDeviceId global_device_id = params.collective_params->global_device_id;
 
@@ -135,13 +159,17 @@ absl::StatusOr<const se::CommandBuffer::Command*> CollectiveGroupThunk::Record(
   // ranks must enter stream capture together whenever Record is invoked; if one
   // rank hits its local TracedCommandBuffer cache and skips tracing while
   // another rank misses the cache and traces, NCCL will deadlock.
+  if (CollectiveProfiler* profiler = CollectiveProfiler::Get()) {
+    profiler->NoteCommandBufferRecord();
+  }
   std::unique_ptr<se::CommandBuffer> nested_cmd;
   ABSL_ASSIGN_OR_RETURN(
       nested_cmd,
       se::TraceCommandBufferFactory::Create(
           execute_params.stream->parent(),
           execute_params.command_buffer_trace_stream, [&](se::Stream* stream) {
-            return ExecuteOnStream(execute_params.WithComputeStream(stream));
+            CollectiveProfiler::NestedScope nested;
+            return ExecuteGroup(execute_params.WithComputeStream(stream));
           }));
 
   ABSL_RETURN_IF_ERROR(nested_cmd->SetPriority(se::StreamPriority::Highest));

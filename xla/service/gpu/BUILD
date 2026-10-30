@@ -823,6 +823,7 @@ cc_library(
         "//xla/backends/gpu/collectives:gpu_clique_key",
         "//xla/backends/gpu/runtime:annotation",
         "//xla/backends/gpu/runtime:async_thunk",
+        "//xla/backends/gpu/runtime:collective_profiler",
         "//xla/backends/gpu/runtime:collective_clique_requests",
         "//xla/backends/gpu/runtime:collective_cliques",
         "//xla/backends/gpu/runtime:collective_memory",

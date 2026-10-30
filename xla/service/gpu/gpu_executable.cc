@@ -54,6 +54,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/collective_cliques.h"
 #include "xla/backends/gpu/runtime/collective_memory.h"
 #include "xla/backends/gpu/runtime/collective_memory_cache.h"
+#include "xla/backends/gpu/runtime/collective_profiler.h"
 #include "xla/backends/gpu/runtime/collective_memory_requests.h"
 #include "xla/backends/gpu/runtime/collective_params.h"
 #include "xla/backends/gpu/runtime/command_buffer_conversion_pass.h"
@@ -650,6 +651,10 @@ absl::Status GpuExecutable::ExecuteThunksImpl(
   }
   if (use_highest_priority_for_async_stream) {
     communication_stream_priority = se::StreamPriority::Highest;
+  }
+
+  if (CollectiveProfiler* profiler = CollectiveProfiler::Get()) {
+    profiler->BeginRound(executor->device_ordinal());
   }
 
   // Maybe install progress tracker for this execution.

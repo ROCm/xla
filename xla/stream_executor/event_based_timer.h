@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_EVENT_BASED_TIMER_H_
 #define XLA_STREAM_EXECUTOR_EVENT_BASED_TIMER_H_
 
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/time/time.h"
 
@@ -34,6 +35,20 @@ class EventBasedTimer {
   // Stops the timer on the first call and returns the elapsed duration.
   // Subsequent calls error out.
   virtual absl::StatusOr<absl::Duration> GetElapsedDuration() = 0;
+
+  // Records the stop event on the stream without blocking the host. A later
+  // GetElapsedDuration() call reuses this stop event instead of recording a
+  // new one.
+  virtual absl::Status Stop() {
+    return absl::UnimplementedError("EventBasedTimer::Stop is not supported");
+  }
+
+  // Returns true if the stop event recorded by Stop() has completed, i.e.
+  // GetElapsedDuration() will not block. Never blocks.
+  virtual absl::StatusOr<bool> IsDone() {
+    return absl::UnimplementedError(
+        "EventBasedTimer::IsDone is not supported");
+  }
 };
 
 }  // namespace stream_executor

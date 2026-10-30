@@ -67,6 +67,8 @@ class CollectiveGroupThunk : public TracedCommand {
   std::string ToString(int indent) const override;
 
  private:
+  absl::Status ExecuteGroup(const Thunk::ExecuteParams& params);
+
   ThunkExecutor executor_;
 };
 

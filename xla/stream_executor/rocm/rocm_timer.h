@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_ROCM_ROCM_TIMER_H_
 #define XLA_STREAM_EXECUTOR_ROCM_ROCM_TIMER_H_
 
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/time/time.h"
 #include "xla/stream_executor/event_based_timer.h"
@@ -33,6 +34,8 @@ class RocmTimer : public EventBasedTimer {
   RocmTimer& operator=(RocmTimer&&) = default;
 
   absl::StatusOr<absl::Duration> GetElapsedDuration() override;
+  absl::Status Stop() override;
+  absl::StatusOr<bool> IsDone() override;
 
   enum class TimerType {
     kDelayKernel,
@@ -47,6 +50,7 @@ class RocmTimer : public EventBasedTimer {
 
   GpuSemaphore semaphore_;
   bool is_stopped_ = false;
+  bool stop_recorded_ = false;
   StreamExecutor* executor_;
   Stream* stream_;
   RocmEvent start_event_;
