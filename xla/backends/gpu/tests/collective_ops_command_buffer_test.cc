@@ -494,8 +494,13 @@ TEST_F(CollectiveOpsCommandBufferTest, AllReduceSkipUnchangedCollectives) {
                  << device_count() << " available)";
   }
 
+  ASSERT_OK_AND_ASSIGN(
+      tsl::testing::TemporaryDirectory dump_dir,
+      tsl::testing::TemporaryDirectory::CreateForCurrentTestcase());
+
   HloModuleConfig config =
       GetModuleConfigForTest(/*replica_count=*/kNumReplicas);
+  config.mutable_debug_options().set_xla_dump_to(dump_dir.path());
   config.mutable_debug_options().add_xla_gpu_enable_command_buffer(
       DebugOptions::COLLECTIVES);
   config.mutable_debug_options().set_xla_gpu_graph_min_graph_size(1);
@@ -511,6 +516,12 @@ TEST_F(CollectiveOpsCommandBufferTest, AllReduceSkipUnchangedCollectives) {
   ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<OpaqueExecutable> executable,
       CreateExecutable(std::move(module), /*run_hlo_passes=*/true));
+
+  // The all-reduce is a command of a command buffer, not a regular thunk.
+  ASSERT_OK_AND_ASSIGN(CommandBufferThunkCounts all_reduces,
+                       CountThunksInDump(dump_dir.path(), "kAllReduce"));
+  EXPECT_GT(all_reduces.in_command_buffer, 0);
+  EXPECT_EQ(all_reduces.outside_command_buffer, 0);
 
   // Warm-up, record, then executions that may skip the update, followed by new
   // arguments that may move buffers on some replicas.

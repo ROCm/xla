@@ -2876,12 +2876,16 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
           &DebugOptions::set_xla_gpu_command_buffer_skip_unchanged_collectives),
       debug_options->xla_gpu_command_buffer_skip_unchanged_collectives(),
       "If true, a command buffer with collectives and non-persistent buffer "
-      "allocations re-records its collectives on initialization only if one "
-      "of their buffers moved on some participant, instead of on every "
-      "execution. Participants agree through a host rendezvous, so this "
-      "applies only when all of them run in this process. Buffers only stay "
-      "in place if temp buffers have a stable address, e.g. with "
-      "--xla_gpu_temp_buffer_use_separate_color."));
+      "allocations re-records its collectives on initialization only if a "
+      "participant has to, instead of on every execution: it has not "
+      "recorded them yet, cannot replay them (warm-up, profiling, no "
+      "persistent allocation indices yet), or a buffer of these collectives "
+      "moved. Participants agree through a host rendezvous, so this applies "
+      "only when all of them run in this process, and they must all execute "
+      "the same executable. A recorded collective keeps the communicators it "
+      "was recorded with, so cliques must not be re-created between "
+      "executions. Buffers only stay in place if temp buffers have a stable "
+      "address between executions."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_command_buffer_unroll_loops",
       bool_setter_for(&DebugOptions::set_xla_gpu_command_buffer_unroll_loops),

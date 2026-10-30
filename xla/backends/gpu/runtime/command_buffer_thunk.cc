@@ -52,6 +52,7 @@ limitations under the License.
 #include "xla/service/device_assignment.h"
 #include "xla/service/gpu/buffer_allocations.h"
 #include "xla/service/rendezvous.h"
+#include "xla/status_macros.h"
 #include "xla/stream_executor/command_buffer.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/gpu/scoped_command_buffer_annotation.h"
@@ -80,7 +81,8 @@ absl::string_view ModuleTopLevelAnnotation() {
 }
 
 // Returns the number of participants in the execution if all of them run in
-// this process, and std::nullopt otherwise.
+// this process, and std::nullopt otherwise. Without collective params or a
+// device assignment there is a single participant.
 std::optional<int64_t> NumParticipantsIfAllLocal(
     const CollectiveParams* collective_params) {
   if (collective_params == nullptr ||
@@ -261,11 +263,27 @@ absl::Status CommandBufferThunk::Initialize(const InitializeParams& params) {
       tsl::profiler::ProfilerLock::HasActiveSession() && thunks_ &&
       !enable_command_buffers_during_profiling_;
 
+  // The vote and the recording below must see the same command buffer, but
+  // eviction can replace it while this device waits for the others in the vote.
+  std::shared_ptr<ExecutorCommandBuffer> cmd_buffer;
+  if (!disabled_for_profiling && params.persistent_alloc_indices.has_value()) {
+    ABSL_ASSIGN_OR_RETURN(
+        cmd_buffer,
+        GetOrCreateCommandBuffer(params.executor, params.collective_cliques,
+                                 params.collective_memory));
+  }
+
   // Agree before any of the early returns below, because their conditions can
   // differ between participants.
-  ABSL_ASSIGN_OR_RETURN(
-      const Decision skip_update,
-      CanSkipInitializationUpdate(params, disabled_for_profiling));
+  ABSL_ASSIGN_OR_RETURN(const Decision may_skip_update,
+                        CanSkipInitializationUpdate(
+                            params, disabled_for_profiling, cmd_buffer.get()));
+  if (commands_.requires_update_on_initialize()) {
+    XLA_VLOG_DEVICE(3, params.executor->device_ordinal())
+        << "Skip command buffer initialization update? "
+        << (may_skip_update.IsAllowed() ? "yes"
+                                        : "no: " + may_skip_update.Explain());
+  }
 
   if (disabled_for_profiling) {
     VLOG(1) << "Initialize command buffer thunk as a regular thunk sequence "
@@ -284,10 +302,7 @@ absl::Status CommandBufferThunk::Initialize(const InitializeParams& params) {
     return absl::OkStatus();
   }
 
-  ABSL_ASSIGN_OR_RETURN(
-      std::shared_ptr<ExecutorCommandBuffer> cmd_buffer,
-      GetOrCreateCommandBuffer(params.executor, params.collective_cliques,
-                               params.collective_memory));
+  TF_RET_CHECK(cmd_buffer != nullptr);
   absl::MutexLock lock(cmd_buffer->mutex);
 
   // If there are no thunks, or command buffer does not require warmup,
@@ -331,7 +346,7 @@ absl::Status CommandBufferThunk::Initialize(const InitializeParams& params) {
       cmd_buffer->command_buffer->state() == se::CommandBuffer::State::kCreate;
   if (is_first_record ||
       (has_dynamic_allocations && commands_.requires_update_on_initialize() &&
-       skip_update.IsForbidden())) {
+       may_skip_update.IsForbidden())) {
     VLOG(3) << "Initialize command buffer on device #"
             << params.executor->device_ordinal()
             << " by recoding command buffer cmd sequence"
@@ -614,7 +629,8 @@ void CommandBufferThunk::SetRecordedSymmetricMemoryIds(
 }
 
 absl::StatusOr<Decision> CommandBufferThunk::CanSkipInitializationUpdate(
-    const InitializeParams& params, bool disabled_for_profiling) {
+    const InitializeParams& params, bool disabled_for_profiling,
+    ExecutorCommandBuffer* cmd_buffer) const {
   if (!commands_.requires_update_on_initialize()) {
     return Decision::Allow();
   }
@@ -640,10 +656,7 @@ absl::StatusOr<Decision> CommandBufferThunk::CanSkipInitializationUpdate(
     decision =
         Decision::Forbid("persistent allocation indices are not available");
   } else {
-    ABSL_ASSIGN_OR_RETURN(
-        std::shared_ptr<ExecutorCommandBuffer> cmd_buffer,
-        GetOrCreateCommandBuffer(params.executor, params.collective_cliques,
-                                 params.collective_memory));
+    TF_RET_CHECK(cmd_buffer != nullptr);
     absl::MutexLock lock(cmd_buffer->mutex);
     const bool warmed_up =
         cmd_buffer->warmup_done || !thunks_ || !commands_.requires_warmup();
@@ -666,16 +679,18 @@ absl::StatusOr<Decision> CommandBufferThunk::CanSkipInitializationUpdate(
   const int device_ordinal = params.executor->device_ordinal();
   if (*num_participants > 1) {
     const RunId run_id = params.collective_params->run_id;
-    bool can_skip = decision.IsAllowed();
+    const bool can_skip = decision.IsAllowed();
     ABSL_ASSIGN_OR_RETURN(
         std::shared_ptr<bool> all_can_skip,
         Rendezvous<bool>(
-            absl::StrFormat("[%d] command buffer initialization update; "
-                            "run_id=%d",
-                            device_ordinal, run_id.ToInt()),
+            absl::StrFormat(
+                "[%d] command buffer initialization update; run_id=%d; %s",
+                device_ordinal, run_id.ToInt(),
+                thunk_info().profile_annotation),
             std::make_tuple(run_id, this), can_skip, *num_participants,
-            [](absl::Span<bool*> values) {
-              return absl::c_all_of(values, [](bool* value) { return *value; });
+            [](absl::Span<const bool* const> values) {
+              return absl::c_all_of(values,
+                                    [](const bool* value) { return *value; });
             },
             InitializationWarnStuckTimeout(),
             InitializationTerminateTimeout()));
@@ -684,9 +699,6 @@ absl::StatusOr<Decision> CommandBufferThunk::CanSkipInitializationUpdate(
     }
   }
 
-  XLA_VLOG_DEVICE(3, device_ordinal) << absl::StreamFormat(
-      "Skip command buffer initialization update: %s; num_participants=%d",
-      decision.Explain(), *num_participants);
   return decision;
 }
 

@@ -61,8 +61,12 @@ struct CommandBufferThunkOptions {
   // request is ignored with a one-time warning.
   bool enable_command_buffer_telemetry = false;
 
-  // When true, commands that require an update on initialization are recorded
-  // again only if one of their buffers moved on some participant.
+  // When true and all participants are in this process, commands that require
+  // an update on initialization are recorded again only if a participant has
+  // to: it has not recorded them yet, cannot replay them (warm-up, profiling,
+  // no persistent allocation indices yet), or a buffer of these commands moved.
+  // A recorded collective keeps the communicators it was recorded with, so this
+  // assumes that cliques are not re-created between executions.
   bool skip_unchanged_collectives = false;
 };
 
@@ -87,6 +91,10 @@ class CommandBufferThunk : public Thunk {
   }
 
   absl::Status Prepare(const PrepareParams& params) override;
+
+  // With `skip_unchanged_collectives` and several participants in this process,
+  // this is a collective operation: every participant of a run must call it, in
+  // the same order, on this same thunk object.
   absl::Status Initialize(const InitializeParams& params) override;
   absl::Status ExecuteOnStream(const ExecuteParams& params) override;
 
@@ -145,7 +153,8 @@ class CommandBufferThunk : public Thunk {
 
     // Returns the allocations in `alloc_indices` that are not in
     // `persistent_alloc_indices` and whose address in `allocs` differs from the
-    // recorded one. Both spans must be sorted; so is the result.
+    // recorded one, or that were never recorded. Both spans must be sorted; so
+    // is the result.
     std::vector<BufferAllocation::Index> ChangedAllocations(
         absl::Span<const BufferAllocation::Index> alloc_indices,
         const BufferAllocations& allocs,
@@ -239,12 +248,13 @@ class CommandBufferThunk : public Thunk {
                                      const CollectiveMemory* collective_memory);
 
   // Decides whether commands that require an update on initialization can skip
-  // recording again in this execution, and if not, why. With
-  // `skip_unchanged_collectives_` and all participants in this process, this
-  // is a collective operation: all participants must call it for the same
-  // execution.
+  // recording again in this execution, and if not, why. Collective, see
+  // `Initialize`. `cmd_buffer` is the command buffer of `params.executor`; it
+  // is null if profiling disabled command buffers or persistent allocation
+  // indices are missing.
   absl::StatusOr<Decision> CanSkipInitializationUpdate(
-      const InitializeParams& params, bool disabled_for_profiling);
+      const InitializeParams& params, bool disabled_for_profiling,
+      ExecutorCommandBuffer* cmd_buffer) const;
 
   // Each individual command buffer allocates state on device (CUDA graph) and
   // it adds up pretty quickly. To prevent OOM errors we proactively evict
@@ -285,7 +295,7 @@ class CommandBufferThunk : public Thunk {
   bool enable_command_buffer_telemetry_;
 
   // See `CommandBufferThunkOptions::skip_unchanged_collectives`.
-  bool skip_unchanged_collectives_;
+  const bool skip_unchanged_collectives_;
 
   // Command buffer thunk state allocated in heap to allow global (per-process)
   // management of instantiated command buffers.
