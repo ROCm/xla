@@ -81,8 +81,7 @@ absl::string_view ModuleTopLevelAnnotation() {
 }
 
 // Returns the number of participants in the execution if all of them run in
-// this process, and std::nullopt otherwise. Without a global device id map all
-// participants are local, as in the rendezvous after thunk initialization.
+// this process, and std::nullopt otherwise.
 std::optional<int64_t> NumParticipantsIfAllLocal(
     const CollectiveParams* collective_params) {
   if (collective_params == nullptr ||
@@ -92,17 +91,9 @@ std::optional<int64_t> NumParticipantsIfAllLocal(
   const DeviceAssignment& device_assn = *collective_params->device_assn;
   const int64_t num_participants =
       device_assn.replica_count() * device_assn.computation_count();
-  if (collective_params->global_device_id_map == nullptr) {
-    return num_participants;
-  }
-
-  const auto logical_ids = device_assn.GetDeviceToLogicalIdMap();
-  int64_t num_local_participants = 0;
-  for (const auto& [local_id, global_id] :
-       *collective_params->global_device_id_map) {
-    num_local_participants += logical_ids.contains(global_id);
-  }
-  if (num_local_participants != num_participants) {
+  if (CountLocalParticipants(device_assn,
+                             collective_params->global_device_id_map) !=
+      num_participants) {
     return std::nullopt;
   }
   return num_participants;
