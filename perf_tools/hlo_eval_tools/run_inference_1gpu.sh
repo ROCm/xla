@@ -60,7 +60,7 @@ for leaf in "${leaves[@]}"; do
   # so both streams are filtered; PIPESTATUS[0] preserves the run's exit code.
   RESUME=${RESUME:-1} \
   "$HERE/run_hlo_eval.sh" "$RUNNER" "$leaf" "$OUT" "$REPEATS" 2>&1 \
-    | grep --line-buffered -E 'Execution time'
+    | grep --line-buffered -E 'Execution time|FAIL|WARN|skip|error'
   [ "${PIPESTATUS[0]}" -eq 0 ] || fail=1
 done
 
