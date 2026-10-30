@@ -2485,13 +2485,13 @@ absl::StatusOr<SymmetricMemoryType> GetSymmetricMemoryType(
   ABSL_ASSIGN_OR_RETURN(
       const bool is_collective_single_host,
       IsCollectiveSingleHost(gpu_topology, *collective, device_assignment));
-  ABSL_ASSIGN_OR_RETURN(const bool is_cross_host_possible,
-                        IsCrossHostCollectiveKernelPossible(
-                            gpu_topology, *collective, device_assignment));
   const bool is_lsa_possible = IsLsaPossible(gpu_topology);
 
   if (!is_collective_single_host) {
-    if (is_cross_host_possible && is_lsa_possible) {
+    // Symmetric-memory windows span the whole communicator, so any multi-node
+    // layout works as long as the target backs LSA symmetric memory and the
+    // user opted in to the cross-host one-shot kernel.
+    if (IsCrossHostCollectiveKernelPossible(gpu_topology, *collective)) {
       return SymmetricMemoryType::kLoadStoreAccessible;
     }
     return absl::UnimplementedError(

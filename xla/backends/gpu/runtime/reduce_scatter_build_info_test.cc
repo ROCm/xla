@@ -67,13 +67,18 @@ class BuildReduceScatterInfoTest : public HloHardwareIndependentTestBase {
   // `replica_groups` is a flat list of device IDs forming a single replica
   // group. An empty list means replica_groups={} (empty) in the HLO, which
   // will trigger the "replica groups must be provided" error path.
+  //
+  // `cross_host_kernel_enabled` controls
+  // xla_gpu_unsupported_use_cross_host_one_shot_kernel, which is what lets a
+  // collective spanning several processes use symmetric memory.
   absl::StatusOr<ReduceScatterInfo> BuildInfo(
       PrimitiveType element_type, std::vector<int64_t> output_dims,
       HloOpcode hlo_opcode, std::vector<int32_t> replica_groups,
       int64_t scatter_dimension = 0, int num_partitions = 1,
       int active_links = 18,
       se::DeviceDescription device_info =
-          TestGpuDeviceInfo::H100SXMDeviceInfo()) {
+          TestGpuDeviceInfo::H100SXMDeviceInfo(),
+      bool cross_host_kernel_enabled = true) {
     const int num_replicas =
         replica_groups.empty() ? 1 : static_cast<int>(replica_groups.size());
     const std::string element_type_str =
@@ -125,6 +130,11 @@ class BuildReduceScatterInfoTest : public HloHardwareIndependentTestBase {
     ABSL_ASSIGN_OR_RETURN(
         std::unique_ptr<HloModule> module,
         ParseAndReturnVerifiedModule(module_str, num_replicas));
+    if (!cross_host_kernel_enabled) {
+      module->mutable_config()
+          .mutable_debug_options()
+          .clear_xla_gpu_unsupported_use_cross_host_one_shot_kernel();
+    }
 
     const HloInstruction* hlo_instr =
         HloHardwareIndependentTestBase::FindInstruction(
@@ -137,10 +147,13 @@ class BuildReduceScatterInfoTest : public HloHardwareIndependentTestBase {
   absl::StatusOr<ReduceScatterInfo> BuildInfo(
       PrimitiveType element_type, int64_t num_output_elements,
       HloOpcode hlo_opcode, std::vector<int32_t> replica_groups,
-      int num_partitions = 1, int active_links = 18) {
+      int num_partitions = 1, int active_links = 18,
+      bool cross_host_kernel_enabled = true) {
     return BuildInfo(element_type, std::vector<int64_t>{num_output_elements},
                      hlo_opcode, std::move(replica_groups),
-                     /*scatter_dimension=*/0, num_partitions, active_links);
+                     /*scatter_dimension=*/0, num_partitions, active_links,
+                     TestGpuDeviceInfo::H100SXMDeviceInfo(),
+                     cross_host_kernel_enabled);
   }
 };
 
@@ -223,10 +236,22 @@ TEST_F(BuildReduceScatterInfoTest, FailsIfReplicaGroupsEmpty) {
                HasSubstr("Replica groups must be explicitly provided")));
 }
 
-TEST_F(BuildReduceScatterInfoTest, FailsForCrossHostCollective) {
-  // 2 replicas split across 2 partitions -> not local -> should be rejected.
+TEST_F(BuildReduceScatterInfoTest, SucceedsForCrossHostCollective) {
+  // 2 replicas split across 2 partitions: the group spans both processes and
+  // slices. Symmetric-memory windows cover the whole communicator, so an
+  // LSA-capable target still gets the collective kernel.
+  EXPECT_THAT(
+      BuildInfo(F32, /*num_output_elements=*/512, HloOpcode::kAdd,
+                /*replica_groups=*/{0, 1}, /*num_partitions=*/2),
+      IsOkAndHolds(AllOf(Field(&ReduceScatterInfo::num_devices, 2),
+                         Field(&ReduceScatterInfo::num_output_elements, 512))));
+}
+
+TEST_F(BuildReduceScatterInfoTest, FailsForCrossHostCollectiveWithoutFlag) {
   EXPECT_THAT(BuildInfo(F32, /*num_output_elements=*/512, HloOpcode::kAdd,
-                        /*replica_groups=*/{0, 1}, /*num_partitions=*/2),
+                        /*replica_groups=*/{0, 1}, /*num_partitions=*/2,
+                        /*active_links=*/18,
+                        /*cross_host_kernel_enabled=*/false),
               StatusIs(absl::StatusCode::kUnimplemented,
                        HasSubstr("Cross-host symmetric memory collectives")));
 }

@@ -896,9 +896,8 @@ TEST(IsCollectiveSingleHostAndCrossHostTest, SingleHostAndCrossHostSameSlice) {
       /*num_devices_per_process=*/2);
   EXPECT_THAT(IsCollectiveSingleHost(single_host_topology, *instr, &da),
               IsOkAndHolds(true));
-  EXPECT_THAT(
-      IsCrossHostCollectiveKernelPossible(single_host_topology, *instr, &da),
-      IsOkAndHolds(false));
+  EXPECT_FALSE(
+      IsCrossHostCollectiveKernelPossible(single_host_topology, *instr));
   EXPECT_THAT(AreAllReplicasOnSameSlice(single_host_topology, *instr, &da),
               IsOkAndHolds(true));
 
@@ -910,9 +909,7 @@ TEST(IsCollectiveSingleHostAndCrossHostTest, SingleHostAndCrossHostSameSlice) {
       /*num_devices_per_process=*/1);
   EXPECT_THAT(IsCollectiveSingleHost(cross_host_topology, *instr, &da),
               IsOkAndHolds(false));
-  EXPECT_THAT(
-      IsCrossHostCollectiveKernelPossible(cross_host_topology, *instr, &da),
-      IsOkAndHolds(false));
+  EXPECT_FALSE(IsCrossHostCollectiveKernelPossible(cross_host_topology, *instr));
   EXPECT_THAT(AreAllReplicasOnSameSlice(cross_host_topology, *instr, &da),
               IsOkAndHolds(false));
 
@@ -923,11 +920,101 @@ TEST(IsCollectiveSingleHostAndCrossHostTest, SingleHostAndCrossHostSameSlice) {
           DebugOptions::ALLREDUCE);
   EXPECT_THAT(IsCollectiveSingleHost(cross_host_topology, *instr, &da),
               IsOkAndHolds(false));
-  EXPECT_THAT(
-      IsCrossHostCollectiveKernelPossible(cross_host_topology, *instr, &da),
-      IsOkAndHolds(true));
+  EXPECT_TRUE(IsCrossHostCollectiveKernelPossible(cross_host_topology, *instr));
   EXPECT_THAT(AreAllReplicasOnSameSlice(cross_host_topology, *instr, &da),
               IsOkAndHolds(true));
+}
+
+TEST(IsCollectiveSingleHostAndCrossHostTest,
+     CrossSliceIsPossibleWhenFlagEnabledAndLsaSupported) {
+  // Two devices in two different NVLink/xGMI slices, one device per process:
+  // the replica group spans both the host and the slice boundary.
+  absl::string_view kHlo = R"(
+    HloModule m, replica_count=2
+
+    add {
+      a = f32[] parameter(0)
+      b = f32[] parameter(1)
+      ROOT sum = f32[] add(a, b)
+    }
+
+    ENTRY e {
+      p = f32[128] parameter(0)
+      ROOT _ = f32[128] all-reduce(p), replica_groups={{0,1}}, to_apply=add
+    }
+  )";
+
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(kHlo));
+  module->mutable_config()
+      .mutable_debug_options()
+      .clear_xla_gpu_unsupported_use_cross_host_one_shot_kernel();
+  const HloInstruction* instr = module->entry_computation()->root_instruction();
+
+  DeviceAssignment da(2, 1);
+  da(0, 0) = 0;
+  da(1, 0) = 1;
+
+  // 2 partitions (slices) of 1 single-device host each, so slice_size == 1 ==
+  // num_devices_per_process and devices 0 and 1 are in different slices. Both
+  // used to disqualify the cross-host kernel.
+  GpuTopology cross_slice_topology = MakeGpuTopology(
+      /*num_partitions=*/2,
+      /*num_hosts_per_partition=*/1,
+      /*num_devices_per_host=*/1,
+      /*num_devices_per_process=*/1);
+  EXPECT_THAT(IsCollectiveSingleHost(cross_slice_topology, *instr, &da),
+              IsOkAndHolds(false));
+  EXPECT_FALSE(
+      IsCrossHostCollectiveKernelPossible(cross_slice_topology, *instr));
+  EXPECT_THAT(AreAllReplicasOnSameSlice(cross_slice_topology, *instr, &da),
+              IsOkAndHolds(false));
+
+  module->mutable_config()
+      .mutable_debug_options()
+      .add_xla_gpu_unsupported_use_cross_host_one_shot_kernel(
+          DebugOptions::ALLREDUCE);
+  EXPECT_TRUE(IsCrossHostCollectiveKernelPossible(cross_slice_topology, *instr));
+  EXPECT_THAT(AreAllReplicasOnSameSlice(cross_slice_topology, *instr, &da),
+              IsOkAndHolds(true));
+}
+
+TEST(IsCollectiveSingleHostAndCrossHostTest, CrossHostIsImpossibleWithoutLsa) {
+  absl::string_view kHlo = R"(
+    HloModule m, replica_count=2
+
+    add {
+      a = f32[] parameter(0)
+      b = f32[] parameter(1)
+      ROOT sum = f32[] add(a, b)
+    }
+
+    ENTRY e {
+      p = f32[128] parameter(0)
+      ROOT _ = f32[128] all-reduce(p), replica_groups={{0,1}}, to_apply=add
+    }
+  )";
+
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(kHlo));
+  module->mutable_config()
+      .mutable_debug_options()
+      .add_xla_gpu_unsupported_use_cross_host_one_shot_kernel(
+          DebugOptions::ALLCOLLECTIVES);
+  const HloInstruction* instr = module->entry_computation()->root_instruction();
+
+  DeviceAssignment da(2, 1);
+  da(0, 0) = 0;
+  da(1, 0) = 1;
+
+  // MI210 does not back LSA symmetric memory, so the flag alone is not enough.
+  GpuTopology topology = MakeGpuTopology(
+      /*num_partitions=*/1,
+      /*num_hosts_per_partition=*/2,
+      /*num_devices_per_host=*/1,
+      /*num_devices_per_process=*/1,
+      /*is_cuda=*/false);
+  EXPECT_FALSE(IsCrossHostCollectiveKernelPossible(topology, *instr));
+  EXPECT_THAT(AreAllReplicasOnSameSlice(topology, *instr, &da),
+              IsOkAndHolds(false));
 }
 
 TEST(GetCollectiveKernelDomainSizeTest, IsProcessWithoutFlag) {

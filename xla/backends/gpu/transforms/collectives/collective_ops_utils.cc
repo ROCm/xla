@@ -465,38 +465,21 @@ absl::StatusOr<bool> IsCollectiveSingleHost(
                             device_assignment);
 }
 
-absl::StatusOr<bool> IsCrossHostCollectiveKernelPossible(
-    const GpuTopology& gpu_topology, const HloInstruction& instruction,
-    const DeviceAssignment* device_assignment) {
-  const auto* collective = DynCast<HloCollectiveInstruction>(&instruction);
-  CHECK(collective != nullptr)
-      << "Instruction is not a collective instruction: " << instruction.name();
-  if (device_assignment == nullptr && instruction.GetModule() != nullptr &&
-      instruction.GetModule()->config().has_static_device_assignment()) {
-    device_assignment =
-        &instruction.GetModule()->config().static_device_assignment();
-  }
+bool IsCrossHostCollectiveKernelPossible(const GpuTopology& gpu_topology,
+                                         const HloInstruction& instruction) {
   const DebugOptions& debug_options =
       instruction.GetModule() != nullptr
           ? instruction.GetModule()->config().debug_options()
           : DebugOptions::default_instance();
-  if (!IsCrossHostOneShotKernelEnabled(debug_options,
-                                       GetCollectiveOpType(&instruction)) ||
-      gpu_topology.num_devices_per_process() <= 0 ||
-      gpu_topology.slice_size() <= gpu_topology.num_devices_per_process()) {
-    return false;
-  }
-  ABSL_ASSIGN_OR_RETURN(const CollectiveOpGroupMode group_mode,
-                        GetCollectiveOpGroupMode(collective));
-  // A "slice" is an interconnect (NVLink / XGMI) domain. On CUDA an NVLink/LSA
-  // slice can span multiple hosts (e.g. GB200 NVL), so CUDA legitimately allows
-  // cross-host symmetric memory when all replicas are within one NVLink slice.
-  // On ROCm the slice does not cross nodes in the topologies this gate handles,
-  // so `all_replicas_on_single_slice` already identifies the supported
-  // single-node case.
-  return IsAllReplicasLocal(gpu_topology.slice_size(),
-                            collective->replica_groups(), group_mode,
-                            device_assignment);
+  // The participants are deliberately NOT inspected here. Symmetric-memory
+  // windows are registered over the whole communicator, so the one-shot kernel
+  // does not require the replica groups to be confined to a single host or to a
+  // single interconnect (NVLink / xGMI) slice. The only requirements are that
+  // the target can back load/store accessible symmetric memory and that the
+  // user opted in to the cross-host kernel for this collective type.
+  return IsCrossHostOneShotKernelEnabled(debug_options,
+                                         GetCollectiveOpType(&instruction)) &&
+         IsLsaPossible(gpu_topology);
 }
 
 bool AreAllReplicasOnSameSlice(
@@ -519,10 +502,7 @@ absl::StatusOr<bool> AreAllReplicasOnSameSlice(
   if (is_single_host) {
     return true;
   }
-  ABSL_ASSIGN_OR_RETURN(const bool is_cross_host_possible,
-                        IsCrossHostCollectiveKernelPossible(
-                            gpu_topology, instruction, device_assignment));
-  return is_cross_host_possible && IsLsaPossible(gpu_topology);
+  return IsCrossHostCollectiveKernelPossible(gpu_topology, instruction);
 }
 
 bool IsAllReplicasLocal(const GpuTopology& gpu_topology,

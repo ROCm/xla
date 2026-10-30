@@ -1856,6 +1856,77 @@ xla_test(
     ],
 )
 
+# Multi-node variant of all_gather_e2e_multiprocess_test: it drives its own
+# worker subprocesses (one GPU each) so the collective genuinely spans
+# processes, and exercises both the single-slice and the multi-slice topology
+# layouts of the symmetric-memory collective kernel.
+#
+# By default it runs 2 ranks on the local host. Point it at a real multi-node
+# setup with XLA_TEST_NUM_NODES / XLA_TEST_RANKS_PER_NODE, or launch the binary
+# manually per node (see the flags declared in its main()).
+xla_test(
+    name = "all_gather_e2e_multiprocess_test_multi_node",
+    srcs = ["all_gather_e2e_multiprocess_test_multi_node.cc"],
+    backend_tags = {
+        "gpu": [
+            "multi_gpu",
+        ],
+    },
+    backends = [
+        "gpu",
+    ],
+    # RCCL symmetric memory (NCCL windows) requires NCCL_CUMEM_ENABLE=1 on ROCm,
+    # where it defaults to 0. Without it the one-shot collective kernel path fails
+    # at runtime.
+    env = {"NCCL_CUMEM_ENABLE": "1"},
+    deps = [
+        "//xla:debug_options_flags",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:status_macros",
+        "//xla:xla_data_proto_cc",
+        "//xla:xla_proto_cc",
+        "//xla/backends/gpu/target_config",
+        "//xla/backends/gpu/transforms/collectives:collective_ops_utils",
+        "//xla/hlo/builder:xla_computation",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/parser:hlo_parser",
+        "//xla/pjrt:pjrt_client",
+        "//xla/pjrt:pjrt_compiler",
+        "//xla/pjrt:pjrt_executable",
+        "//xla/pjrt/distributed",
+        "//xla/pjrt/distributed:client",
+        "//xla/pjrt/distributed:service",
+        "//xla/pjrt/plugin/xla_gpu:xla_gpu_allocator_config",
+        "//xla/pjrt/plugin/xla_gpu:xla_gpu_client_options",
+        "//xla/pjrt/plugin/xla_gpu:xla_gpu_pjrt_client",
+        "//xla/service:device_assignment",
+        "//xla/service:gpu_topology",
+        "//xla/service:platform_util",
+        "//xla/service/gpu:backend_configs_cc",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor/cuda:cuda_compute_capability",
+        "//xla/tests:literal_test_util",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:subprocess",
+        "//xla/tsl/platform:test",
+        "//xla/tsl/util:command_line_flags",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+        "@com_google_googletest//:gtest",
+        "@tsl//tsl/platform:path",
+    ],
+)
+
 xla_test(
     name = "all_to_all_e2e_test",
     srcs = ["all_to_all_e2e_test.cc"],
@@ -1977,6 +2048,71 @@ xla_test(
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest",
+    ],
+)
+
+# Multi-node variant of all_reduce_multi_process_e2e_test. See the comment on
+# all_gather_e2e_multiprocess_test_multi_node for how to drive it.
+xla_test(
+    name = "all_reduce_multi_process_e2e_test_multi_node",
+    srcs = ["all_reduce_multi_process_e2e_test_multi_node.cc"],
+    backend_tags = {
+        "gpu": [
+            "multi_gpu",
+        ],
+    },
+    backends = [
+        "gpu",
+    ],
+    # RCCL symmetric memory (NCCL windows) requires NCCL_CUMEM_ENABLE=1 on ROCm,
+    # where it defaults to 0. Without it the one-shot collective kernel path fails
+    # at runtime.
+    env = {"NCCL_CUMEM_ENABLE": "1"},
+    deps = [
+        "//xla:debug_options_flags",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:status_macros",
+        "//xla:xla_data_proto_cc",
+        "//xla:xla_proto_cc",
+        "//xla/backends/gpu/target_config",
+        "//xla/backends/gpu/transforms/collectives:collective_ops_utils",
+        "//xla/hlo/builder:xla_computation",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/parser:hlo_parser",
+        "//xla/pjrt:pjrt_client",
+        "//xla/pjrt:pjrt_compiler",
+        "//xla/pjrt:pjrt_executable",
+        "//xla/pjrt/distributed",
+        "//xla/pjrt/distributed:client",
+        "//xla/pjrt/distributed:service",
+        "//xla/pjrt/plugin/xla_gpu:xla_gpu_allocator_config",
+        "//xla/pjrt/plugin/xla_gpu:xla_gpu_client_options",
+        "//xla/pjrt/plugin/xla_gpu:xla_gpu_pjrt_client",
+        "//xla/service:device_assignment",
+        "//xla/service:gpu_topology",
+        "//xla/service:platform_util",
+        "//xla/service/gpu:backend_configs_cc",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor/cuda:cuda_compute_capability",
+        "//xla/tests:literal_test_util",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:subprocess",
+        "//xla/tsl/platform:test",
+        "//xla/tsl/util:command_line_flags",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+        "@com_google_googletest//:gtest",
+        "@tsl//tsl/platform:path",
     ],
 )
 

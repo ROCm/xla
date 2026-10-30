@@ -1074,10 +1074,29 @@ TEST_F(GetSymmetricMemoryTypeTest,
 }
 
 TEST_F(GetSymmetricMemoryTypeTest,
-       CrossProcessNvidiaSeparateSlicesReturnsError) {
+       CrossProcessNvidiaSeparateSlicesWithFlagIsLoadStoreAccessible) {
+  // The 8 replicas are spread over 2 slices of one 4-device process each, so
+  // they share neither a host nor an interconnect slice. Symmetric-memory
+  // windows cover the whole communicator, so the one-shot kernel is still
+  // usable.
   ASSERT_OK_AND_ASSIGN(
       ModuleWithFusion module_with_fusion,
       BuildAllReduceFusion(/*cross_host_kernel_enabled=*/true));
+  EXPECT_THAT(
+      GetSymmetricMemoryType(MakeGpuTopology(/*num_partitions=*/2,
+                                             /*num_hosts_per_partition=*/1,
+                                             /*num_devices_per_host=*/4,
+                                             /*num_devices_per_process=*/4,
+                                             /*is_cuda=*/true),
+                             *module_with_fusion.FusionInstr()),
+      IsOkAndHolds(SymmetricMemoryType::kLoadStoreAccessible));
+}
+
+TEST_F(GetSymmetricMemoryTypeTest,
+       CrossProcessNvidiaSeparateSlicesWithoutFlagReturnsError) {
+  ASSERT_OK_AND_ASSIGN(
+      ModuleWithFusion module_with_fusion,
+      BuildAllReduceFusion(/*cross_host_kernel_enabled=*/false));
   EXPECT_THAT(
       GetSymmetricMemoryType(MakeGpuTopology(/*num_partitions=*/2,
                                              /*num_hosts_per_partition=*/1,

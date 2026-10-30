@@ -117,16 +117,26 @@ absl::StatusOr<bool> IsCollectiveSingleHost(
     const GpuTopology& gpu_topology, const HloInstruction& instruction,
     const DeviceAssignment* device_assignment = nullptr);
 
-// Returns true if cross-host one-shot collective kernel is enabled for
-// `instruction` and all replicas in every replica group are within a single
-// NVLink slice (`gpu_topology.slice_size()`).
-absl::StatusOr<bool> IsCrossHostCollectiveKernelPossible(
-    const GpuTopology& gpu_topology, const HloInstruction& instruction,
-    const DeviceAssignment* device_assignment = nullptr);
+// Returns true if a cross-host one-shot collective kernel can serve
+// `instruction`: `xla_gpu_unsupported_use_cross_host_one_shot_kernel` is
+// enabled for its collective type and the target supports load-store accessible
+// (LSA) symmetric memory.
+//
+// The replica groups are intentionally not inspected. Symmetric-memory windows
+// are registered over the whole communicator, so the kernel does not require
+// the participants to be confined to a single host or to a single interconnect
+// (NVLink / xGMI) slice: any multi-node layout is supported as long as the
+// target can back LSA symmetric memory.
+bool IsCrossHostCollectiveKernelPossible(const GpuTopology& gpu_topology,
+                                         const HloInstruction& instruction);
 
 // Returns true if all replicas in every replica group of the collective
 // are located on the same host, or within the same NVLink slice when
 // cross-host collective kernels and LSA are supported.
+//
+// NOTE: unlike the `HloInstruction` overload below, this one still restricts
+// the participants to a single collective-kernel domain (see
+// `GetCollectiveKernelDomainSize`).
 bool AreAllReplicasOnSameSlice(
     const GpuTopology& gpu_topology, const DebugOptions& debug_options,
     std::optional<DebugOptions::CollectiveOpType> op_type,
@@ -134,9 +144,11 @@ bool AreAllReplicasOnSameSlice(
     CollectiveOpGroupMode group_mode,
     const DeviceAssignment* device_assignment = nullptr);
 
-// Returns true if all replicas in every replica group of `instruction` are on
-// the same host, or within the same NVLink slice when cross-host collective
-// kernels and LSA are supported.
+// Returns true if the collective kernel emitted for `instruction` can reach all
+// of its participants directly: either they all live in a single process, or a
+// cross-host kernel is possible (see `IsCrossHostCollectiveKernelPossible`), in
+// which case the participants may be spread over any number of hosts and
+// slices.
 absl::StatusOr<bool> AreAllReplicasOnSameSlice(
     const GpuTopology& gpu_topology, const HloInstruction& instruction,
     const DeviceAssignment* device_assignment = nullptr);
