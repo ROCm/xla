@@ -200,6 +200,23 @@ static const absl::flat_hash_set<HloOpcode>& UnsupportedOps() {
   return *kOps;
 }
 
+// Ops whose chains LLVM cannot fold, so they can be measured at the default
+// backend optimization level. On ROCm most of them lower to ocml calls, which
+// are not always_inline. At --xla_backend_optimization_level=0 each call stays
+// an unoptimized out-of-line call that spills to the stack, which inflates the
+// measured cost up to 14x for ops such as sine.
+static const absl::flat_hash_set<HloOpcode>& RocmDefaultOptLevelOps() {
+  static const absl::NoDestructor<absl::flat_hash_set<HloOpcode>> kOps({
+      // go/keep-sorted start
+      HloOpcode::kAtan2, HloOpcode::kCbrt, HloOpcode::kCos, HloOpcode::kErf,
+      HloOpcode::kExp, HloOpcode::kExpm1, HloOpcode::kLog, HloOpcode::kLog1p,
+      HloOpcode::kLogistic, HloOpcode::kPower, HloOpcode::kRsqrt,
+      HloOpcode::kSin, HloOpcode::kSqrt, HloOpcode::kTan, HloOpcode::kTanh
+      // go/keep-sorted end
+  });
+  return *kOps;
+}
+
 absl::Span<const PrimitiveType> HloOpProfiler::AllSupportedDtypes() {
   return absl::MakeConstSpan(dtypes);
 }
@@ -261,6 +278,14 @@ absl::StatusOr<absl::Duration> HloOpProfiler::MeasureOpChainDuration(
     HloOpcode op, PrimitiveType data_type, int chain_length) {
   std::unique_ptr<HloModule> module =
       MakeModuleForMeasurements(op, data_type, chain_length);
+  if (dev_info_.gpu_compute_capability().IsRocm() &&
+      RocmDefaultOptLevelOps().contains(op)) {
+    module->mutable_config()
+        .mutable_debug_options()
+        .set_xla_backend_optimization_level(
+            DefaultDebugOptionsIgnoringFlags()
+                .xla_backend_optimization_level());
+  }
   HloVerifier verifier(/*layout_sensitive=*/true,
                        /*allow_mixed_precision=*/false);
   ABSL_RETURN_IF_ERROR(verifier.Run(&*module).status());
