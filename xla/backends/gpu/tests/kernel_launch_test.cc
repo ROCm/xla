@@ -15,6 +15,8 @@ limitations under the License.
 
 #include <gtest/gtest.h>
 
+#include <string>
+
 #include "xla/error_spec.h"
 #include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
 #include "xla/tests/hlo_pjrt_test_base.h"
@@ -62,6 +64,37 @@ TEST_F(KernelLaunchTest, KernelWithConstants) {
   )";
 
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-5, 1e-5}));
+}
+
+TEST_F(KernelLaunchTest, ValidPrefixExtentBoundsLoopFusion) {
+  for (int live_rows : {0, 3, 8}) {
+    std::string hlo_text = R"(
+      HloModule ValidPrefixExtent,
+        input_output_alias={ {}: (0, {}, must-alias) }
+
+      fused_computation {
+        x = f32[8,4] parameter(0)
+        n = s32[] parameter(1)
+        rows = s32[8,4] iota(), iota_dimension=0
+        broadcast_n = s32[8,4] broadcast(n), dimensions={}
+        is_live = pred[8,4] compare(rows, broadcast_n), direction=LT
+        squared = f32[8,4] multiply(x, x)
+        ROOT result = f32[8,4] select(is_live, squared, x)
+      }
+
+      ENTRY main {
+        x = f32[8,4] parameter(0)
+        n = s32[] constant(LIVE_ROWS)
+        ROOT fusion = f32[8,4] fusion(x, n), kind=kLoop,
+          calls=fused_computation,
+          frontend_attributes={xla_gpu.valid_prefix_extent_operand="1"}
+      })";
+    hlo_text.replace(hlo_text.find("LIVE_ROWS"), std::string("LIVE_ROWS").size(),
+                     std::to_string(live_rows));
+
+    EXPECT_TRUE(
+        RunAndCompareNoHloPasses(hlo_text, ErrorSpec{1e-5, 1e-5}));
+  }
 }
 
 }  // namespace

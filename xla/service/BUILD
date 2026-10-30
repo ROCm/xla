@@ -3035,6 +3035,7 @@ cc_library(
         ":shape_inference",
         ":tuple_util",
         "//xla:comparison_util",
+        "//xla:frontend_attributes",
         "//xla:literal_util",
         "//xla:shape_util",
         "//xla:status_macros",

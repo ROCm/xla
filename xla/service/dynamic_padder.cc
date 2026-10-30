@@ -36,6 +36,7 @@ limitations under the License.
 #include "tsl/platform/errors.h"
 #include "tsl/platform/statusor.h"
 #include "xla/comparison_util.h"
+#include "xla/frontend_attributes.h"
 #include "xla/hlo/builder/xla_builder.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/dynamic_parameter_binding.h"
@@ -71,6 +72,64 @@ namespace {
 auto* dynamic_padding_gauge = tsl::monitoring::Gauge<bool, 0>::New(
     "/tensorflow/core/use_dynamic_padding_gauge",
     "Tracks if dynamic padder is used.");
+
+// Preserve the semantic association between a bounded dimension-0 value and
+// its scalar extent when DynamicPadder removes set-dimension-size. GPU fusion
+// formation resolves this transient association into a real fusion operand.
+void AnnotateValidPrefixExtent(HloInstruction* set_dimension_size) {
+  if (set_dimension_size->dimension() != 0 ||
+      !set_dimension_size->shape().IsArray() ||
+      set_dimension_size->shape().dimensions().empty() ||
+      !set_dimension_size->shape().is_dynamic_dimension(0) ||
+      set_dimension_size->operand(1)->shape() !=
+          ShapeUtil::MakeShape(S32, {})) {
+    return;
+  }
+
+  const std::string id = absl::StrCat(set_dimension_size->unique_id());
+  bool annotated_user = false;
+  std::vector<HloInstruction*> worklist(set_dimension_size->users().begin(),
+                                        set_dimension_size->users().end());
+  absl::flat_hash_set<HloInstruction*> visited;
+  while (!worklist.empty()) {
+    HloInstruction* user = worklist.back();
+    worklist.pop_back();
+    if (!visited.insert(user).second || !user->shape().IsArray() ||
+        !user->IsElementwise() ||
+        user->shape().dimensions() !=
+            set_dimension_size->shape().dimensions()) {
+      continue;
+    }
+    user->set_frontend_attribute(kXlaValidPrefixExtentId, id);
+    annotated_user = true;
+    worklist.insert(worklist.end(), user->users().begin(), user->users().end());
+  }
+  if (!annotated_user) {
+    return;
+  }
+
+  HloInstruction* extent = set_dimension_size->mutable_operand(1);
+  extent->set_frontend_attribute(kXlaValidPrefixExtentSource, id);
+  // DynamicPadder immediately runs DCE after removing set-dimension-size.
+  extent->set_frontend_attribute("xla_allow_dce_side_effecting_op", "false");
+}
+
+void PropagateValidPrefixExtentSources(HloComputation* computation) {
+  const Shape extent_shape = ShapeUtil::MakeShape(S32, {});
+  for (HloInstruction* instruction :
+       computation->MakeInstructionPostOrder()) {
+    std::optional<std::string> id =
+        instruction->get_frontend_attribute(kXlaValidPrefixExtentSource);
+    if (!id.has_value()) {
+      continue;
+    }
+    for (HloInstruction* user : instruction->users()) {
+      if (user->IsElementwise() && user->shape() == extent_shape) {
+        user->set_frontend_attribute(kXlaValidPrefixExtentSource, *id);
+      }
+    }
+  }
+}
 
 // ChooseIdentityValue looks at the instruction's operand, returns a
 // identity value which, when padded, doesn't change the result of the
@@ -2298,6 +2357,18 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
     }
   }
 
+  // Capture valid-prefix associations before dynamic-to-static conversion
+  // disconnects set-dimension-size from its elementwise users.
+  for (HloComputation* computation :
+       module->computations(execution_threads)) {
+    for (HloInstruction* instruction :
+         computation->MakeInstructionPostOrder()) {
+      if (instruction->opcode() == HloOpcode::kSetDimensionSize) {
+        AnnotateValidPrefixExtent(instruction);
+      }
+    }
+  }
+
   // There are ops that only support dynamic lowering and ops that only support
   // static lowering, add dynamic<->static tensor conversion around the boundary
   // between those ops, as well as the root instruction.
@@ -2352,6 +2423,16 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
 
       ABSL_ASSIGN_OR_RETURN(c, ReplaceSetBound(instruction));
       changed |= c;
+    }
+  }
+
+  // Dynamic shape removal can add scalar clamps between n and its consumers.
+  // Preserve the source marker through those s32 elementwise chains so later
+  // fusion formation cannot hide the extent source.
+  for (HloComputation* computation :
+       module->computations(execution_threads)) {
+    if (call_graph->CanReach(module->entry_computation(), computation)) {
+      PropagateValidPrefixExtentSources(computation);
     }
   }
 

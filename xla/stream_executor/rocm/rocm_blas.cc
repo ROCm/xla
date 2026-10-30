@@ -182,11 +182,6 @@ bool ROCMBlas::Init() {
     return false;
   }
 
-  if (!blas_lt_.Init().ok()) {
-    LOG(ERROR) << "Failed to initialize hipblasLt";
-    return false;
-  }
-
   int dev = 0;
   hipError_t result = hipGetDevice(&dev);
   hipDeviceProp_t props;
@@ -202,6 +197,19 @@ bool ROCMBlas::Init() {
 
 ROCMBlas::ROCMBlas(StreamExecutor* parent)
     : parent_(CHECK_NOTNULL(parent)), blas_(nullptr), blas_lt_(parent) {}
+
+gpu::BlasLt* ROCMBlas::GetBlasLt() {
+  absl::MutexLock lock(&blas_lt_mu_);
+  if (!blas_lt_initialization_attempted_) {
+    blas_lt_initialization_attempted_ = true;
+    if (absl::Status status = blas_lt_.Init(); status.ok()) {
+      blas_lt_initialized_ = true;
+    } else {
+      LOG(WARNING) << "Failed to initialize hipblasLt: " << status;
+    }
+  }
+  return blas_lt_initialized_ ? &blas_lt_ : nullptr;
+}
 
 ROCMBlas::~ROCMBlas() {
   if (blas_ != nullptr) {

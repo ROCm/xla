@@ -41,6 +41,7 @@ limitations under the License.
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "xla/backends/gpu/codegen/cubin_custom_kernel_compiler.h"
+#include "xla/backends/gpu/codegen/emitters/loop.h"
 #include "xla/backends/gpu/codegen/kernel_compiler.h"
 #include "xla/codegen/emitters/computation_partitioner.h"
 #include "xla/codegen/llvm_kernel_source.h"
@@ -193,6 +194,94 @@ TEST_F(MlirKernelFusionTest, CreateLLVMModule) {
                                  ? "@llvm.amdgcn.workitem.id.x"
                                  : "@llvm.nvvm.read.ptx.sreg.tid.x"}})));
   EXPECT_TRUE(filecheck_result);
+}
+
+TEST_F(MlirKernelFusionTest, ValidPrefixExtentBoundsLoopFusion) {
+  constexpr absl::string_view kValidPrefixModule = R"(
+    fused_computation {
+      %x = f32[8,4] parameter(0)
+      %n = s32[] parameter(1)
+      %extent_is_valid = pred[] compare(%n, %n), direction=EQ
+      %predicate = pred[8,4] broadcast(%extent_is_valid), dimensions={}
+      %squared = f32[8,4] multiply(%x, %x)
+      ROOT %result = f32[8,4] select(%predicate, %squared, %squared)
+    }
+
+    ENTRY main {
+      %x = f32[8,4] parameter(0)
+      %n = s32[] parameter(1)
+      ROOT %fusion = f32[8,4] fusion(%x, %n), kind=kLoop,
+        calls=fused_computation,
+        frontend_attributes={xla_gpu.valid_prefix_extent_operand="1"}
+    })";
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                       ParseAndReturnVerifiedModule(kValidPrefixModule));
+  auto* fusion =
+      Cast<HloFusionInstruction>(module->entry_computation()->root_instruction());
+  HloFusionAnalysis analysis =
+      HloFusionAnalysis::Create(*fusion, device_info_);
+  std::unique_ptr<MlirKernelEmitter> emitter =
+      std::make_unique<LoopFusion>(analysis);
+  ASSERT_OK_AND_ASSIGN(
+      auto mlir_module,
+      emitter->CreateMLIRModule(mlir_context_, *fusion, "fusion",
+                                /*buffer_assignment=*/nullptr));
+
+  std::string out;
+  llvm::raw_string_ostream stream(out);
+  stream << *mlir_module;
+
+  ASSERT_OK_AND_ASSIGN(auto filecheck_result, RunFileCheck(out, R"(
+    // CHECK-LABEL: func.func @fusion(
+    // CHECK:      %[[EXTENT_I32:.*]] = tensor.extract %arg1[]
+    // CHECK:      %[[EXTENT_INDEX:.*]] = arith.index_cast %[[EXTENT_I32]]
+    // CHECK:      %[[ZERO:.*]] = arith.constant 0 : index
+    // CHECK:      %[[CAPACITY:.*]] = arith.constant 8 : index
+    // CHECK:      %[[NONNEGATIVE:.*]] = arith.maxsi %[[EXTENT_INDEX]], %[[ZERO]]
+    // CHECK:      %[[EXTENT:.*]] = arith.minsi %[[NONNEGATIVE]], %[[CAPACITY]]
+    // CHECK:      scf.forall
+    // CHECK:      xla.loop
+    // CHECK-SAME: %[[EXTENT]]
+    // CHECK-SAME: valid_prefix_extent
+  )"));
+  EXPECT_TRUE(filecheck_result);
+
+  GpuTopology gpu_topology(
+      /*platform_version=*/"", /*num_partitions=*/1,
+      /*num_hosts_per_partition=*/1, /*num_devices_per_host=*/1);
+  CubinCustomKernelCompiler kernel_compiler(
+      [](llvm::Module& llvm_module, const se::DeviceDescription& descr,
+         const DebugOptions& opts) { return std::vector<uint8_t>{}; },
+      device_info_, module->config().debug_options(), gpu_topology);
+  MlirContextPool mlir_context_pool([]() { return CreateMlirContext(); });
+  MlirKernelFusion llvm_emitter(std::move(emitter));
+  ASSERT_OK_AND_ASSIGN(BorrowedMlirContext borrowed_context,
+                       mlir_context_pool.GetOrCreate());
+  ASSERT_OK_AND_ASSIGN(
+      LlvmKernelSource source,
+      llvm_emitter
+          .CreateLLVMModule(device_info_, *fusion, "fusion",
+                            /*buffer_assignment=*/nullptr, &kernel_compiler,
+                            std::move(borrowed_context))
+          .Await());
+  auto llvm_module = std::move(source).thread_safe_module();
+
+  std::string llvm_out;
+  llvm::raw_string_ostream llvm_stream(llvm_out);
+  llvm_stream << *llvm_module.getModuleUnlocked();
+  ASSERT_OK_AND_ASSIGN(auto llvm_filecheck_result,
+                       RunFileCheck(llvm_out, R"(
+    // CHECK-LABEL: define void @fusion(
+    // CHECK: %[[EXTENT:.*]] = load i32, ptr
+    // CHECK: %[[ACTIVE:.*]] = icmp
+    // CHECK: br i1 %[[ACTIVE]], label %[[ACTIVE_BLOCK:.*]], label %[[AFTER:.*]]
+    // CHECK: [[ACTIVE_BLOCK]]:
+    // CHECK: load float, ptr
+    // CHECK: store float
+    // CHECK: br label %[[AFTER]]
+  )"));
+  EXPECT_TRUE(llvm_filecheck_result) << llvm_out;
 }
 
 }  // namespace

@@ -20,15 +20,18 @@ limitations under the License.
 #include <iterator>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -52,6 +55,7 @@ limitations under the License.
 #include "xla/codegen/hlo_fusion_spec.h"
 #include "xla/codegen/kernel_spec.h"
 #include "xla/codegen/mlir_kernel_source.h"
+#include "xla/frontend_attributes.h"
 #include "xla/hlo/analysis/indexing_analysis.h"
 #include "xla/hlo/analysis/indexing_map.h"
 #include "xla/hlo/ir/hlo_computation.h"
@@ -70,6 +74,84 @@ limitations under the License.
 namespace xla::emitters {
 
 using ::mlir::MLIRContext;
+
+namespace {
+
+absl::StatusOr<std::optional<int64_t>> GetValidPrefixExtentOperand(
+    const HloFusionInstruction& fusion, const Shape& indexing_shape) {
+  const auto& attributes = fusion.frontend_attributes().map();
+  auto attribute = attributes.find(kXlaValidPrefixExtentOperand);
+  if (attribute == attributes.end()) {
+    return std::nullopt;
+  }
+
+  int64_t operand_index;
+  if (!absl::SimpleAtoi(attribute->second, &operand_index) ||
+      operand_index < 0 || operand_index >= fusion.operand_count()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat(kXlaValidPrefixExtentOperand,
+                     " must name a valid fusion operand, got \"",
+                     attribute->second, "\""));
+  }
+
+  const Shape& extent_shape = fusion.operand(operand_index)->shape();
+  if (extent_shape.element_type() != PrimitiveType::S32 ||
+      extent_shape.dimensions().size() != 0) {
+    return absl::InvalidArgumentError(
+        absl::StrCat(kXlaValidPrefixExtentOperand,
+                     " must refer to an s32 scalar operand"));
+  }
+  if (!indexing_shape.IsArray() || indexing_shape.dimensions().empty()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat(kXlaValidPrefixExtentOperand,
+                     " requires an array output with rank at least one"));
+  }
+  if (fusion.shape().IsTuple()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat(kXlaValidPrefixExtentOperand,
+                     " does not support multi-output fusions"));
+  }
+
+  return operand_index;
+}
+
+IndexingMap AddValidPrefixConstraint(IndexingMap indexing_map,
+                                     int64_t capacity) {
+  const SymbolicMap& old_map = indexing_map.GetSymbolicMap();
+  int64_t extent_dim = old_map.GetNumDims();
+
+  std::vector<IndexingMap::Variable> dim_vars = indexing_map.GetDimVars();
+  dim_vars.emplace_back(/*lb=*/0, /*ub=*/capacity, "valid_prefix_extent");
+
+  IndexingMap constrained_map(
+      SymbolicMap::Get(indexing_map.GetMLIRContext(), extent_dim + 1,
+                       old_map.GetNumSymbols(),
+                       llvm::SmallVector<SymbolicExpr>(old_map.GetResults())),
+      std::move(dim_vars), indexing_map.GetRangeVars(),
+      indexing_map.GetRTVars(), indexing_map.GetSymbolicConstraints());
+
+  SymbolicExpr row = constrained_map.GetSymbolicMap().GetResult(0);
+  SymbolicExpr extent =
+      CreateDimExpr(extent_dim, indexing_map.GetMLIRContext());
+  constrained_map.AddConstraint(row - extent, Interval{-capacity, -1});
+  return constrained_map;
+}
+
+mlir::Value EmitClampedValidPrefixExtent(
+    mlir::ImplicitLocOpBuilder& builder, mlir::Value extent_tensor,
+    int64_t capacity) {
+  mlir::Value extent =
+      builder.create<mlir::tensor::ExtractOp>(extent_tensor);
+  extent = builder.create<mlir::arith::IndexCastOp>(
+      builder.getIndexType(), extent);
+  mlir::Value zero = builder.create<mlir::arith::ConstantIndexOp>(0);
+  mlir::Value upper =
+      builder.create<mlir::arith::ConstantIndexOp>(capacity);
+  extent = builder.create<mlir::arith::MaxSIOp>(extent, zero);
+  return builder.create<mlir::arith::MinSIOp>(extent, upper);
+}
+
+}  // namespace
 
 LoopFusionKernelEmitter::LoopFusionKernelEmitter(
     MLIRContext& mlir_context, const HloFusionInstruction& fusion,
@@ -154,6 +236,18 @@ absl::Status LoopFusionKernelEmitter::EmitEntryFunction(
       EmitWorkGroupIds(builder, work_dimensions_.num_work_groups);
 
   auto indexing = ComputeWorkItemIdToOutputIndexing(&mlir_context_);
+  Shape indexing_shape = GetIndexingShape(fusion_spec_);
+  ABSL_ASSIGN_OR_RETURN(
+      std::optional<int64_t> valid_prefix_extent_operand,
+      GetValidPrefixExtentOperand(fusion, indexing_shape));
+  std::optional<mlir::Value> valid_prefix_extent;
+  if (valid_prefix_extent_operand.has_value()) {
+    valid_prefix_extent = EmitClampedValidPrefixExtent(
+        builder, entry_function.getArgument(*valid_prefix_extent_operand),
+        indexing_shape.dimensions(0));
+    indexing = AddValidPrefixConstraint(std::move(indexing),
+                                        indexing_shape.dimensions(0));
+  }
 
   int num_inputs = fusion.fused_instructions_computation()->num_parameters();
   auto output_tensor_args =
@@ -207,6 +301,9 @@ absl::Status LoopFusionKernelEmitter::EmitEntryFunction(
     work_dims.insert(work_dims.end(), workitem_ids.begin(), workitem_ids.end());
     work_dims.insert(work_dims.end(), workgroup_ids.begin(),
                      workgroup_ids.end());
+    if (valid_prefix_extent.has_value()) {
+      work_dims.push_back(*valid_prefix_extent);
+    }
 
     auto loop_results = emitters::EmitXlaLoopOp(
         nested_b, mlir::ValueRange(work_dims), outputs, indexing, body_builder);

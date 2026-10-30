@@ -91,7 +91,7 @@ class ROCMBlas : public blas::BlasSupport {
 
   TENSORFLOW_STREAM_EXECUTOR_GPU_BLAS_SUPPORT_OVERRIDES
 
-  gpu::BlasLt* GetBlasLt() override { return &blas_lt_; }
+  gpu::BlasLt* GetBlasLt() override;
 
  private:
   // Tells rocBLAS to enqueue the BLAS operation onto a particular Stream.
@@ -183,7 +183,10 @@ class ROCMBlas : public blas::BlasSupport {
   // container holding solutions vector (to avoid reallocating it each time)
   std::vector<rocblas_int> solutions_;
 
+  absl::Mutex blas_lt_mu_;
   rocm::BlasLt blas_lt_;
+  bool blas_lt_initialization_attempted_ ABSL_GUARDED_BY(blas_lt_mu_) = false;
+  bool blas_lt_initialized_ ABSL_GUARDED_BY(blas_lt_mu_) = false;
 
   ROCMBlas(const ROCMBlas&) = delete;
   void operator=(const ROCMBlas&) = delete;

@@ -160,6 +160,7 @@ limitations under the License.
 #include "xla/backends/gpu/transforms/topk_splitter.h"
 #include "xla/backends/gpu/transforms/tree_reduction_rewriter.h"
 #include "xla/backends/gpu/transforms/triton_fusion_numerics_verifier.h"
+#include "xla/backends/gpu/transforms/valid_prefix_extent_rewriter.h"
 #include "xla/backends/gpu/transforms/windowed_einsum_handler.h"
 #include "xla/core/host_offloading/hlo_host_device_type_call_wrapper.h"
 #include "xla/core/host_offloading/host_compute_asyncifier.h"
@@ -1982,6 +1983,18 @@ absl::Status GpuCompiler::OptimizeHloModule(
           hlo_module->config().debug_options(),
           IsNonCudaPlatform(gpu_topology.gpu_target_config())),
       gpu_version, gpu_topology.gpu_target_config(), compilation_stats));
+
+  {
+    // Resolve the transient association after fusion simplification so the
+    // extent's verifier-visible identity use cannot be folded away.
+    HloPassPipeline pipeline("valid-prefix extent", compilation_stats);
+    pipeline.AddPass<ValidPrefixExtentRewriter>();
+    pipeline.AddPass<HloDCE>();
+    ABSL_RETURN_IF_ERROR(
+        pipeline
+            .Run(hlo_module, {HloInstruction::kMainExecutionThread})
+            .status());
+  }
 
   ABSL_RETURN_IF_ERROR(RunPostFusionVerificationPasses(
       hlo_module, stream_exec, options, gpu_topology.gpu_target_config(),
