@@ -73,6 +73,6 @@ echo "packed $OUT -> $TAR" >&2
       printf '%s\t%s\t%s\t%s\n' "$model" "$leaf" "$module" "$duration"
     done
   done
-} | tee "$OUT.tsv"
+} | tee "${OUT%/}.tsv"
 
 exit "$fail"
