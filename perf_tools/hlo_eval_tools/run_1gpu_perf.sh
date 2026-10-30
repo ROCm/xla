@@ -64,7 +64,7 @@ echo "packed $OUT -> $TAR" >&2
     fi
 
     IFS=',' read -r -a headers < <(head -1 "$csv")
-    IFS=',' read -r -a values  < <(sed -n '2p' "$csv")
+    IFS=',' read -r -a values  < <(tail -n 1 "$csv")
     for i in "${!headers[@]}"; do
       [ "$i" -eq 0 ] && continue   # skip Datetime column
       module=$(echo "${headers[$i]}" | xargs | grep -oE '^module_[0-9]+')
