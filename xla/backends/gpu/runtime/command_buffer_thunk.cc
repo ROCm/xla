@@ -18,7 +18,6 @@ limitations under the License.
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -129,21 +128,24 @@ bool CommandBufferThunk::ExecutorCommandBuffer::HasDynamicAllocations(
   return !absl::c_includes(persistent_alloc_indices, commands.allocs_indices());
 }
 
-bool CommandBufferThunk::ExecutorCommandBuffer::AllocationsChanged(
+std::vector<BufferAllocation::Index>
+CommandBufferThunk::ExecutorCommandBuffer::ChangedAllocations(
     absl::Span<const BufferAllocation::Index> alloc_indices,
     const BufferAllocations& allocs,
-    absl::Span<const BufferAllocation::Index> persistent_alloc_indices) {
+    absl::Span<const BufferAllocation::Index> persistent_alloc_indices) const {
+  DCHECK(absl::c_is_sorted(alloc_indices));
   DCHECK(absl::c_is_sorted(persistent_alloc_indices));
+  std::vector<BufferAllocation::Index> changed_allocs;
   for (BufferAllocation::Index index : alloc_indices) {
     if (absl::c_binary_search(persistent_alloc_indices, index)) {
       continue;
     }
     if (recorded_allocs.size() <= index ||
         !recorded_allocs[index].IsSameAs(allocs.GetDeviceAddress(index))) {
-      return true;
+      changed_allocs.push_back(index);
     }
   }
-  return false;
+  return changed_allocs;
 }
 
 bool CommandBufferThunk::ShouldRecordTelemetry(
@@ -204,27 +206,17 @@ std::vector<BufferAllocation::Index>
 CommandBufferThunk::ExecutorCommandBuffer::UpdateBufferAllocations(
     const CommandExecutor& commands, const Thunk::ExecuteParams& params,
     absl::Span<const BufferAllocation::Index> persistent_alloc_indices) {
-  std::vector<BufferAllocation::Index> updated_allocs;
   const BufferAllocations* allocs = params.buffer_allocations;
-  std::vector<BufferAllocation::Index> dynamic_alloc_indices;
-
-  absl::c_set_difference(commands.allocs_indices(), persistent_alloc_indices,
-                         std::back_inserter(dynamic_alloc_indices));
+  std::vector<BufferAllocation::Index> updated_allocs = ChangedAllocations(
+      commands.allocs_indices(), *allocs, persistent_alloc_indices);
 
   // We check only allocations referenced by commands in a cmd sequence, and
   // leave every other entry default initialized (nullptr device memory).
-  for (BufferAllocation::Index index : dynamic_alloc_indices) {
-    se::DeviceAddressBase alloc = allocs->GetDeviceAddress(index);
-
+  for (BufferAllocation::Index index : updated_allocs) {
     if (recorded_allocs.size() <= index) {
       recorded_allocs.resize(index + 1);
-      updated_allocs.push_back(index);
     }
-
-    if (!recorded_allocs[index].IsSameAs(alloc)) {
-      recorded_allocs[index] = alloc;
-      updated_allocs.push_back(index);
-    }
+    recorded_allocs[index] = allocs->GetDeviceAddress(index);
   }
 
   return updated_allocs;
@@ -661,10 +653,12 @@ absl::StatusOr<Decision> CommandBufferThunk::CanSkipInitializationUpdate(
       decision = Decision::Forbid("not warmed up");
     } else if (is_first_record) {
       decision = Decision::Forbid("not recorded yet");
-    } else if (cmd_buffer->AllocationsChanged(
-                   commands_.update_on_initialize_allocs_indices(),
-                   *params.buffer_allocations,
-                   *params.persistent_alloc_indices)) {
+    } else if (!cmd_buffer
+                    ->ChangedAllocations(
+                        commands_.update_on_initialize_allocs_indices(),
+                        *params.buffer_allocations,
+                        *params.persistent_alloc_indices)
+                    .empty()) {
       decision = Decision::Forbid("a buffer of these commands moved");
     }
   }

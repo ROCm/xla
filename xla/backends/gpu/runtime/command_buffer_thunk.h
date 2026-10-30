@@ -143,14 +143,14 @@ class CommandBufferThunk : public Thunk {
         absl::Span<const BufferAllocation::Index> persistent_alloc_indices)
         ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex);
 
-    // Returns true if any allocation in `alloc_indices` that is not in
-    // `persistent_alloc_indices` has a different address in `allocs` than at
-    // the last recording. Both spans must be sorted.
-    bool AllocationsChanged(
+    // Returns the allocations in `alloc_indices` that are not in
+    // `persistent_alloc_indices` and whose address in `allocs` differs from the
+    // recorded one. Both spans must be sorted; so is the result.
+    std::vector<BufferAllocation::Index> ChangedAllocations(
         absl::Span<const BufferAllocation::Index> alloc_indices,
         const BufferAllocations& allocs,
         absl::Span<const BufferAllocation::Index> persistent_alloc_indices)
-        ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex);
+        const ABSL_SHARED_LOCKS_REQUIRED(mutex);
 
     // se::CommandBuffer is not thread safe, and we guard it with a mutex to
     // guarantee that we do not mutate it concurrently.
