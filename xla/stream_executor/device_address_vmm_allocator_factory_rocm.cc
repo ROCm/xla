@@ -25,6 +25,7 @@ limitations under the License.
 #include "xla/stream_executor/device_address_vmm_allocator.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/rocm/rocm_device_address_vmm_allocator.h"
+#include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 
@@ -37,11 +38,17 @@ DeviceAddressVmmAllocator::Create(
     absl::Span<const std::pair<StreamExecutor*, Stream*>> devices,
     std::optional<int64_t> reclaim_exempt_memory_space,
     std::unique_ptr<DeviceAddressAllocator> host_allocator) {
+  // This allocator also serves collective memory - it is the only device
+  // allocator in this configuration, and kCollective is exempt from reclaim
+  // rather than carved out of a separate pool. Collective libraries register
+  // those buffers and export their allocation handles as POSIX file
+  // descriptors, which requires exportable handles.
   ABSL_ASSIGN_OR_RETURN(
       std::unique_ptr<gpu::RocmDeviceAddressVmmAllocator> allocator,
       gpu::RocmDeviceAddressVmmAllocator::Create(
           platform, memory_fraction, gpu_system_memory_size, devices,
-          reclaim_exempt_memory_space, std::move(host_allocator)));
+          reclaim_exempt_memory_space, std::move(host_allocator),
+          gpu::RocmVmmOptions{.enable_posix_fd_handle = true}));
   return std::unique_ptr<DeviceAddressVmmAllocator>(std::move(allocator));
 }
 
