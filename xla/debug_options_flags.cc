@@ -2499,7 +2499,9 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "Enables temp User Buffer Registration. Enable this flag will use a "
       "separate memory allocator (a CUDA async pool on CUDA, a BFC pool on "
       "ROCm) to allocate temp buffer, this will allocate temp buffer to the "
-      "fixed address on every iteration"));
+      "fixed address on every iteration. Temp buffers then do not come from "
+      "the default pool: next to a preallocated default pool they must fit in "
+      "the device memory its memory fraction leaves."));
 
   flag_list->push_back(tsl::Flag(
       "xla_gpu_require_exclusive_lock",

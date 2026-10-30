@@ -360,6 +360,30 @@ absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateCollectiveBFCAllocator(
       absl::StrCat("GPU_collectivememory_", device_ordinal, "_bfc"), opts);
 }
 
+absl::StatusOr<std::shared_ptr<tsl::BFCAllocator>> CreateTempBufferBFCAllocator(
+    se::StreamExecutor* executor, const MemFraction& memory_fraction,
+    bool preallocate, std::optional<int64_t> gpu_system_memory_size) {
+  ABSL_ASSIGN_OR_RETURN(
+      std::shared_ptr<tsl::BFCAllocator> allocator,
+      CreateBFCAllocator(executor,
+                         preallocate ? MemFractionFromFraction(
+                                           MemFractionLeft(memory_fraction))
+                                     : memory_fraction,
+                         /*preallocate=*/false,
+                         preallocate ? std::nullopt : gpu_system_memory_size,
+                         /*sub_allocator_alloc_visitors=*/{},
+                         /*sub_allocator_free_visitors=*/{},
+                         /*enable_spatial_partitioning=*/false,
+                         /*name_prefix=*/"GPU_tempbuffer"));
+  if (allocator->GetStats()->bytes_limit == 0) {
+    return InvalidArgument(
+        "Memory fraction %s leaves no device memory for the temp buffer pool "
+        "of --xla_gpu_temp_buffer_use_separate_color; lower the fraction.",
+        MemFractionToString(memory_fraction));
+  }
+  return allocator;
+}
+
 absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> GetGpuHostAllocator(
     se::StreamExecutor* executor, bool preallocate) {
   ABSL_ASSIGN_OR_RETURN(

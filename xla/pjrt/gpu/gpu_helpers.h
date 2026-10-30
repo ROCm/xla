@@ -94,6 +94,17 @@ absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateCollectiveBFCAllocator(
     se::StreamExecutor* executor, double memory_fraction,
     size_t collective_memory_size);
 
+// Builds a growing BFCAllocator for temp buffers on a device whose default pool
+// was created with `memory_fraction`, `preallocate` and
+// `gpu_system_memory_size`. Next to a preallocated default pool, the temp pool
+// may use the device memory that the start fraction leaves (MemFractionLeft;
+// like the collective pool, it does not consider `gpu_system_memory_size`), and
+// a default pool that grows can still take from it. Otherwise the temp pool has
+// the default pool's limit. Returns InvalidArgument if the limit is zero.
+absl::StatusOr<std::shared_ptr<tsl::BFCAllocator>> CreateTempBufferBFCAllocator(
+    se::StreamExecutor* executor, const MemFraction& memory_fraction,
+    bool preallocate, std::optional<int64_t> gpu_system_memory_size);
+
 // Represents topology of devices.
 struct TopologySizes {
   int num_partitions = 0;
