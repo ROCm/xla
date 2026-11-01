@@ -1,0 +1,298 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+
+name: ROCm Perf Nightly
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily run at 02:00 UTC.
+    - cron: '00 2 * * *'
+  pull_request_target:
+    types: [labeled]
+  pull_request:
+    branches:
+      - rocm-dev-infra
+    paths:
+      - '.github/workflows/rocm_xla_perf_nightly.yml'
+      # So that edits to the perf_tools dir themselves get exercised.
+      - 'perf_tools/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  DATA_BRANCH: perf-metrics-data
+
+jobs:
+  rocm-config:
+    runs-on: ubuntu-latest
+    outputs:
+      docker-image: ${{ steps.out.outputs.docker-image }}
+      therock-version: ${{ steps.therock.outputs.therock_version }}
+      # Upstream XLA commit under test, resolved once so that every matrix mode
+      # measures the *same* tree instead of racing a moving `main`.
+      xla-sha: ${{ steps.xla.outputs.sha }}
+      xla-sha6: ${{ steps.xla.outputs.sha6 }}
+      # Run stamp, shared by every mode so one run lands in one directory.
+      stamp: ${{ steps.xla.outputs.stamp }}
+      iso: ${{ steps.xla.outputs.iso }}
+    steps:
+      - id: out
+        shell: bash
+        run: |
+          echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve the XLA commit under test and stamp the run
+        id: xla
+        shell: bash
+        run: |
+          sha="$(git ls-remote https://github.com/openxla/xla.git refs/heads/main | cut -f1)"
+          [ -n "$sha" ] || { echo "could not resolve openxla/xla main" >&2; exit 1; }
+          {
+            echo "sha=$sha"
+            echo "sha6=${sha:0:6}"
+            echo "stamp=$(date -u +%Y%m%dT%H%M%SZ)"
+            echo "iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Benchmarking openxla/xla @ ${sha:0:6} ($sha)"
+
+      - name: Detect latest TheRock version
+        id: therock
+        env:
+          ROCM_PIP_SOURCE: prerelease
+          GPU_TARGET: device-all
+          ROCM_SDK_VERSION: '10.2'
+          PIP_INDEX_PATH: ''
+          THEROCK_INDEX_URL: 'https://rc.repo.amd.com/rocm/whl-next/'
+        run: bash build_tools/rocm/detect-therock-version.sh
+
+  execute-xla-perf-nightly:
+    needs: rocm-config
+    # Run on schedule, workflow_dispatch, "nightly-pipeline" label, or PR to rocm-dev-infra with workflow changes
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'nightly-pipeline' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'rocm-dev-infra')
+    runs-on: ${{ matrix.mode.runner }}
+    env:
+      COMMON_ARGS: >-
+        --config=rocm_ci_hermetic
+        --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950
+      ROCM_DISTRO_ARGS: >-
+        --repo_env=ROCM_PATH=
+        --repo_env=ROCM_DISTRO_URL=${{ matrix.mode.distro_url }}
+        --repo_env=ROCM_DISTRO_HASH=${{ matrix.mode.distro_hash }}
+      MODE: ${{ matrix.mode.name }}
+      # Stamp applied to every result row, so rows stay self-describing once
+      # they are concatenated across runs for plotting.
+      STAMP_ISO: ${{ needs.rocm-config.outputs.iso }}
+      STAMP_SHA6: ${{ needs.rocm-config.outputs.xla-sha6 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        mode:
+          - name: "therock_release_10.0"
+            distro_url: "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.0.0.tar.gz"
+            distro_hash: "1c5e807875d26a2470ecc7323daa5b5b9009208a55c3290ac255a909cde15fc6"
+            runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
+          - name: "therock_release_10.1"
+            distro_url: "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.1.0.tar.gz"
+            distro_hash: "a95c72f0052168f2262365dff71c2259331721ad0a65da7957dc7d96ccb77021"
+            runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
+          - name: "therock_nightly"
+            distro_url: "https://rc.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-${{ needs.rocm-config.outputs.therock-version }}.tar.gz"
+            distro_hash: "no_hash"
+            runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
+    container:
+      image: ${{ needs.rocm-config.outputs.docker-image }}
+
+    steps:
+      - name: Check out the XLA tree under test
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # This workflow benchmarks the upstream XLA source tree, pinned to the
+          # commit rocm-config resolved so all modes agree.
+          repository: openxla/xla
+          ref: ${{ needs.rocm-config.outputs.xla-sha }}
+          path: xla-src
+          persist-credentials: false
+
+      - name: Check out the perf tools
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # perf_tools/ (the HLO dumps, the runner scripts and the latency tool)
+          # lives in this fork only, not in the upstream tree checked out above.
+          path: perf-tools-src
+          persist-credentials: false
+
+      - name: Build multihost_hlo_runner [${{ matrix.mode.name }}]
+        working-directory: xla-src
+        run: |
+          bazel build -c opt \
+            ${COMMON_ARGS} \
+            ${ROCM_DISTRO_ARGS} \
+            //xla/tools/multihost_hlo_runner:hlo_runner_main
+          # Create empty MODULE.bazel as bazel info needs blzmod
+          > MODULE.bazel
+          bazel_sandbox_dir="$(bazel info output_base)"
+          ROCM_DIST="${bazel_sandbox_dir}/external/+rocm_configure_ext+local_config_rocm/rocm/rocm_dist"
+          HLO_RUNNER="${bazel_sandbox_dir}/execroot/_main/bazel-out/k8-opt/bin/xla/tools/multihost_hlo_runner/hlo_runner_main"
+          LD_LIBRARY_PATH="${ROCM_DIST}/lib:${ROCM_DIST}/lib/rocm_sysdeps/lib:${LD_LIBRARY_PATH}"
+          echo "HLO_RUNNER=${HLO_RUNNER}" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "ROCM_DIST=${ROCM_DIST}" >> "$GITHUB_ENV"
+
+      - name: Run multihost_hlo_runner [${{ matrix.mode.name }}]
+        working-directory: perf-tools-src
+        run: |
+          mkdir -p "$RUNNER_TEMP/raw"
+          ./perf_tools/hlo_eval_tools/run_1gpu_perf.sh \
+            "$HLO_RUNNER" "$RUNNER_TEMP/raw/hlo_eval" 5
+
+      - name: Build and run rocm_latency_check_tool [${{ matrix.mode.name }}]
+        working-directory: perf-tools-src
+        run: |
+          mkdir -p "$RUNNER_TEMP/raw"
+          cd ./perf_tools/rocm_latency_check_tool
+          "${ROCM_DIST}/bin/hipcc" -O3 -std=c++17 \
+            rocm_latency_check_tool.cpp -pthread -o rocm_latency_check_tool
+          # The tool appends to --csv and only writes the header when the file is
+          # empty, so all three GPU counts accumulate into one CSV.
+          for n in 1 2 4; do
+            ./rocm_latency_check_tool \
+              --num-gpus "$n" \
+              --csv "$RUNNER_TEMP/raw/latency.csv" \
+              --label "$MODE"
+          done
+
+      - name: Stamp results with the run date and XLA commit [${{ matrix.mode.name }}]
+        # Runs even if a perf step failed, so a partial pass still publishes the
+        # modules that did complete.
+        if: always()
+        run: |
+          out="$RUNNER_TEMP/out/$MODE"
+          mkdir -p "$out"
+
+          # Prepend timestamp/commit/mode to the header and to every data row.
+          # A plain prepend, so existing quoted fields are left untouched.
+          stamp_file() {
+            local src=$1 dst=$2 sep=$3
+            [ -s "$src" ] || { echo "note: $src missing or empty, skipping" >&2; return; }
+            awk -v ts="$STAMP_ISO" -v c="$STAMP_SHA6" -v m="$MODE" -v OFS="$sep" '
+              NR == 1 { print "timestamp", "commit", "mode", $0; next }
+                      { print ts, c, m, $0 }
+            ' "$src" > "$dst"
+          }
+
+          stamp_file "$RUNNER_TEMP/raw/hlo_eval.tsv" "$out/hlo_eval.tsv" $'\t'
+          stamp_file "$RUNNER_TEMP/raw/latency.csv"  "$out/latency.csv"  ','
+          ls -l "$out"
+
+      - name: Upload stamped results [${{ matrix.mode.name }}]
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: perf-results-${{ matrix.mode.name }}
+          path: ${{ runner.temp }}/out/${{ matrix.mode.name }}
+          if-no-files-found: warn
+          retention-days: 14
+
+  publish-perf-metrics:
+    needs: [rocm-config, execute-xla-perf-nightly]
+    # Publish whatever completed, even if some modes failed, but never from a
+    # test PR -- those must not pollute the data branch.
+    if: always() && needs.rocm-config.result == 'success' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to push the data branch back to this repository.
+      contents: write
+    env:
+      STAMP: ${{ needs.rocm-config.outputs.stamp }}
+      ISO: ${{ needs.rocm-config.outputs.iso }}
+      XLA_SHA: ${{ needs.rocm-config.outputs.xla-sha }}
+      SHA6: ${{ needs.rocm-config.outputs.xla-sha6 }}
+    steps:
+      - name: Download the per-mode results
+        # If every mode failed there is nothing to download; the assemble step
+        # below detects that and no-ops rather than failing the run.
+        continue-on-error: true
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          pattern: perf-results-*
+          path: ${{ runner.temp }}/artifacts
+
+      - name: Assemble the run directory
+        id: assemble
+        run: |
+          run_dir="$RUNNER_TEMP/publish-payload/data/${STAMP}-${SHA6}"
+          mkdir -p "$run_dir"
+
+          modes=()
+          for d in "$RUNNER_TEMP"/artifacts/perf-results-*/; do
+            [ -d "$d" ] || continue
+            mode="$(basename "$d")"
+            mode="${mode#perf-results-}"
+            mkdir -p "$run_dir/$mode"
+            cp -a "$d." "$run_dir/$mode/"
+            modes+=("$mode")
+          done
+
+          if [ "${#modes[@]}" -eq 0 ]; then
+            echo "no result artifacts to publish"
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Per-run manifest, so the directory is self-describing too. Kept to a
+          # single python line: a multi-line -c body would have to sit at column
+          # zero and would terminate this YAML block scalar.
+          printf '%s\n' "${modes[@]}" | python3 -I -c 'import json, os, sys; print(json.dumps({"timestamp": os.environ["ISO"], "commit": os.environ["SHA6"], "xla_sha": os.environ["XLA_SHA"], "repository": "openxla/xla", "workflow_run": os.environ["GITHUB_RUN_ID"], "modes": sorted(l.strip() for l in sys.stdin if l.strip())}, indent=2))' > "$run_dir/run.json"
+
+          echo "empty=false" >> "$GITHUB_OUTPUT"
+          find "$run_dir" -type f | sort
+
+      - name: Push the results to the ${{ env.DATA_BRANCH }} branch
+        if: steps.assemble.outputs.empty == 'false'
+        env:
+          PUSH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          work="$RUNNER_TEMP/publish-data"
+          rm -rf "$work" && mkdir -p "$work" && cd "$work"
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin \
+            "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q --depth 1 origin "$DATA_BRANCH"; then
+            git checkout -q -b "$DATA_BRANCH" FETCH_HEAD
+          else
+            echo "$DATA_BRANCH does not exist yet; creating it"
+            git checkout -q --orphan "$DATA_BRANCH"
+            git rm -rqf --ignore-unmatch .
+          fi
+          cp -a "$RUNNER_TEMP/publish-payload/data" .
+          git add -A data
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -q -m "perf-nightly results ${STAMP} (xla ${SHA6})"
+            git push -q origin "$DATA_BRANCH"
+          fi
