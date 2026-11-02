@@ -74,11 +74,12 @@ RocmTimer::~RocmTimer() {
   }
 }
 
-absl::StatusOr<absl::Duration> RocmTimer::GetElapsedDuration() {
-  if (is_stopped_) {
-    return absl::FailedPreconditionError("Measuring inactive timer");
+absl::Status RocmTimer::Stop() {
+  if (is_stopped_ || stop_recorded_) {
+    return absl::FailedPreconditionError("Timer is already stopped");
   }
   ABSL_RETURN_IF_ERROR(stream_->RecordEvent(&stop_event_));
+  stop_recorded_ = true;
   // If we launched the delay kernel then check if it already timed out.
   if (semaphore_) {
     if (*semaphore_ == GpuSemaphoreState::kTimedOut) {
@@ -89,6 +90,29 @@ absl::StatusOr<absl::Duration> RocmTimer::GetElapsedDuration() {
       // Signal that the kernel can exit
       *semaphore_ = GpuSemaphoreState::kRelease;
     }
+  }
+  return absl::OkStatus();
+}
+
+absl::StatusOr<bool> RocmTimer::IsDone() {
+  if (!stop_recorded_) {
+    return absl::FailedPreconditionError("Timer stop event is not recorded");
+  }
+  std::unique_ptr<ActivateContext> activation = executor_->Activate();
+  hipError_t res = hipEventQuery(stop_event_.GetHandle());
+  if (res == hipErrorNotReady) {
+    return false;
+  }
+  ABSL_RETURN_IF_ERROR(ToStatus(res, "failed to query the stop event"));
+  return true;
+}
+
+absl::StatusOr<absl::Duration> RocmTimer::GetElapsedDuration() {
+  if (is_stopped_) {
+    return absl::FailedPreconditionError("Measuring inactive timer");
+  }
+  if (!stop_recorded_) {
+    ABSL_RETURN_IF_ERROR(Stop());
   }
   ABSL_ASSIGN_OR_RETURN(float elapsed_milliseconds,
                         GetEventElapsedTime(executor_, start_event_.GetHandle(),

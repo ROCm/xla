@@ -3097,6 +3097,38 @@ cc_library(
 )
 
 cc_library(
+    name = "collective_profiler",
+    srcs = ["collective_profiler.cc"],
+    hdrs = ["collective_profiler.h"],
+    deps = [
+        "//xla/stream_executor:event_based_timer",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_executor_h",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:node_hash_map",
+        "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/numeric:bits",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+xla_cc_test(
+    name = "collective_profiler_test",
+    srcs = ["collective_profiler_test.cc"],
+    deps = [
+        ":collective_profiler",
+        "@com_google_absl//absl/time",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "collective_thunk",
     srcs = ["collective_thunk.cc"],
     hdrs = ["collective_thunk.h"],
@@ -3105,6 +3137,7 @@ cc_library(
         ":collective_clique_requests",
         ":collective_execution",
         ":collective_params",
+        ":collective_profiler",
         ":collective_thunk_proto_cc",
         ":command",
         ":thunk",
@@ -3365,6 +3398,7 @@ cc_library(
     deps = [
         ":annotation",
         ":collective_cliques",
+        ":collective_profiler",
         ":collective_thunk",
         ":command",
         ":device_to_device_copy_thunk",

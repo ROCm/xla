@@ -138,6 +138,9 @@ class CollectiveThunk : public Command {
 
   const std::vector<Buffer>& buffers() const { return buffers_; }
 
+  // Total size in bytes of the source buffers on this rank.
+  int64_t PayloadBytes() const;
+
   BufferUses buffer_uses() const override;
 
   CommunicationId communication_id() const { return communication_id_; }
