@@ -111,7 +111,8 @@ REPOS = [
                   ("tests, jaxlib built from source", "test, build_jaxlib=wheel", "test, build_jaxlib=true", None)),
         "rbe": (("ROCm presubmit", "jax_rocm", -1),
                 ("NV presubmit (Google RBE)", "jax_nv", -1)),
-        # Hand-written Metrics rows that are not derivable from CI metadata.
+        # Hand-written Metrics rows that are not derivable from CI metadata:
+        # (label, DO cell, RBE cell[, NV cell]); the NV cell defaults to n/a.
         "extra_metrics": (("Jax-lab complete run (minutes)",
                            "pending: not a GitHub Actions workflow, needs definition (owner: user)", "n/a"),),
     },

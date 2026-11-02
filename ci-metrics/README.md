@@ -10,7 +10,9 @@ EngFlow, DO dashboards or other internal systems.
 
 ## Requirements
 
-- Python 3.10 or newer, standard library only (tested on 3.10).
+- Python 3.10 or newer (tested on 3.10). `collect.py`, `fetch_attempts.py` and
+  `sample_logs.py` are standard library only; `report.py` needs Jinja2 to render
+  the template: `pip install 'jinja2>=3.1'`.
 - `gh` CLI, logged in (tested with 2.97). The scripts take the token from
   `$GH_TOKEN` / `$GITHUB_TOKEN`, or from `gh auth token`. Read access to public
   repos is enough.
@@ -28,18 +30,33 @@ D=~/ci-metrics-data/2026-10-13 S=2026-10-06T15:00 U=2026-10-13T15:00
 python3 collect.py        --since $S --until $U --out $D
 python3 fetch_attempts.py --data $D
 python3 sample_logs.py    --data $D
-python3 report.py         --data $D --since $S --until $U --md report.md
+python3 report.py         --data $D --since $S --until $U --md report.md --json report.json
 ```
 
-The report is GitHub-flavoured Markdown. Its structure lives in `templates/`,
-one `string.Template` file per block — read `templates/report.md` to see the
-whole document at a glance. `report.py` computes the values and fills the
-`${name}` slots; tables arrive pre-rendered, since `string.Template` has no
-loops. A missing slot raises `KeyError`, so a typo blanks nothing silently.
+The report is GitHub-flavoured Markdown, and **the whole document lives in
+`templates/report.md.j2`** — every heading, sentence, table and piece of markup.
+`report.py` computes figures and nothing else: it builds one dict and hands it to
+Jinja2, and never assembles a string of Markdown. To reword the report, or to
+move or restyle a table, edit the template and leave Python alone.
 
-Meaning that a stylesheet would have carried is in the markup instead: a
-like-for-like ROCm win is a bold value with a `▲`, the dominant phase of a row
-is bold, and a figure that was not measured is italic.
+`--json` writes that same dict beside the report, so any figure in it can be
+looked up by name (`jq '.repos[0].metrics.tts_peak.nv' report.json`) and fed back
+in as next week's `--baseline`.
+
+Two conventions in the template are worth knowing:
+
+- Tables whose rows are fixed — Metrics, ROCm vs NV, Infrastructure, the ask —
+  are written out row by row, each figure a named lookup like
+  `{{ M.tts_peak.do }}`. Only tables whose rows are discovered at run time
+  (scale-sets, NV runner pools, per-SHA rows) use a `{% for %}` loop, because
+  there is nothing to name in advance.
+- Meaning that a stylesheet would have carried is in the markup: a figure may
+  arrive as `{text, mark}`, and the `c()` macro at the top of the template turns
+  `win` into a bold value with a `▲`, `dominant` into bold, and `pending` into
+  italics. What each looks like is decided there, not in Python.
+
+Rendering uses `StrictUndefined`, so a name the template asks for and the data
+does not carry raises an error rather than silently blanking a figure.
 
 `report.py` only reads the data directory (plus a few cached API lookups for
 fork-PR numbers), so you can re-run it as often as you like while editing.
@@ -54,8 +71,8 @@ For this nightly previous day to current timestamp is used as time window
 | `fetch_attempts.py` | Fetches earlier attempts of re-run PR runs; `collect.py` only stores the latest attempt, and a failed first attempt is already a signal. | `attempts.jsonl` |
 | `sample_logs.py` | Downloads a random sample of job logs and parses bazel's `Executed X out of Y tests` and `Elapsed time / Critical Path` lines. | `logs.jsonl` |
 | `metrics_lib.py` | `REPOS` (the repo/lane config) plus shared definitions: how a step maps to a phase, the time zone. Every CI naming convention lives here. | - |
-| `report.py` | Computes all statistics (`build()`) and fills the templates (`render()`). | `pr_lookup.json` (cache) |
-| `templates/*.md` | The document structure: `report.md` (whole report), `repo_section.md` (one repo), `same_commit.md`. | - |
+| `report.py` | Computes all statistics (`build()`), assembles them into one dict (`report_data()`) and renders the template with it (`render()`). | `pr_lookup.json` (cache), `report.json` with `--json` |
+| `templates/report.md.j2` | The entire document: headings, prose, tables, markup. | - |
 
 ## How the numbers are defined
 
@@ -74,6 +91,13 @@ For this nightly previous day to current timestamp is used as time window
   `last on N/n` counts the commits where that family finished last; a family at
   `n/n` necessarily matches the lane signal, because on those commits it is the
   lane.
+- **The Metrics table's three columns.** `DO` and `RBE` are the two halves of the
+  ROCm lane: the self-hosted runner and the EngFlow pool its tests dispatch to.
+  `NV` is the same metric on the NVIDIA reference lane, so a row reads across as
+  "us, where our tests actually run, and them". It is `n/a` where that lane has
+  no counterpart (the ROCm-only nightlies). NV queue wait covers the NV
+  presubmit lane's jobs — only that workflow is collected, so unlike the DO cell
+  it is not every NV job in the repo.
 - **Phase tables are not banded.** The "Where the time to signal goes" tables
   use one row per lane over all hours. Peak/nominal there left only a handful
   of commits per row once the p90 tail was taken; the band split still applies
@@ -108,17 +132,19 @@ For this nightly previous day to current timestamp is used as time window
 - **New runner pool labels.** The `pool` field of the repo's `REPOS` entry; both
   the peak-vs-nominal table and `POOL_NOW` read it. `POOL_NOW`'s keys are the
   names the `--baseline` JSON uses, so they must stay stable.
-- **Wording or layout of the report.** Edit `templates/*.md`. Reordering
-  sections, rewording prose or moving a table is a template change only; adding
-  a new table means a new `${slot}` plus the value in `report.py`.
+- **Wording or layout of the report.** Edit `templates/report.md.j2` and nothing
+  else. Reordering sections, rewording a sentence, restyling or moving a table,
+  even dropping a column, is a template change. Only a genuinely new *figure*
+  needs `report.py` to compute and add it to the dict.
 - **Time zone.** `CDT` in `metrics_lib.py` is fixed at UTC-5. Change it to UTC-6
   for winter windows.
 - **Hand-written text.** Some sections are not computed: the "pending" rows under
   Infrastructure, "Executor queue by pool", "The ask", and the notes about bazel
-  strategies. Review them before sharing a report.
+  strategies. They sit in the template as literal Markdown — review them before
+  sharing a report.
 - **Week-over-week comparison.** `report.py --baseline BASE.json` adds a "Changes
-  since" section from an earlier report's figures. The format is in the
-  `report.py` docstring.
+  since" section from an earlier report's figures. Pass last week's `report.json`
+  (written by `--json`); the keys it reads are in the `report.py` docstring.
 
 ## Limits
 

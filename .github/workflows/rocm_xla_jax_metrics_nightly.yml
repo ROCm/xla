@@ -74,6 +74,11 @@ jobs:
           echo "stamp=$stamp"      >> "$GITHUB_OUTPUT"
           echo "Collecting ${since_ts}Z .. ${until_ts}Z (stamp $stamp)"
 
+      - name: Install the report renderer
+        # collect.py / fetch_attempts.py / sample_logs.py are standard library
+        # only; report.py renders templates/report.md.j2 and needs Jinja2.
+        run: python3 -m pip install --disable-pip-version-check 'jinja2>=3.1'
+
       - name: Collect runs, jobs and step timings
         working-directory: ci-metrics
         run: |
@@ -98,7 +103,8 @@ jobs:
             --data "$RUNNER_TEMP/data/${{ steps.window.outputs.stamp }}" \
             --since "${{ steps.window.outputs.since }}" \
             --until "${{ steps.window.outputs.until }}" \
-            --md "$RUNNER_TEMP/out/ci-metrics-${{ steps.window.outputs.stamp }}.md"
+            --md "$RUNNER_TEMP/out/ci-metrics-${{ steps.window.outputs.stamp }}.md" \
+            --json "$RUNNER_TEMP/data/${{ steps.window.outputs.stamp }}/report.json"
 
       - name: Push the report to the ${{ env.REPORT_BRANCH }} branch
         env:
