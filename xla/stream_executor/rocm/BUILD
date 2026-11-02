@@ -1275,6 +1275,51 @@ xla_cc_test(
 )
 
 cc_library(
+    name = "rocm_capture_invalidation",
+    srcs = ["rocm_capture_invalidation.cc"],
+    hdrs = ["rocm_capture_invalidation.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [
+        ":rocm_status",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/tsl/platform:env",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@local_config_rocm//rocm:hip",  # buildcleaner: keep
+        "@local_config_rocm//rocm:rocm_headers",
+    ],
+)
+
+xla_test(
+    name = "rocm_capture_invalidation_test",
+    srcs = ["rocm_capture_invalidation_test.cc"],
+    backends = ["gpu"],
+    tags = ["rocm-only"],
+    deps = [
+        ":rocm_capture_invalidation",
+        "//xla/stream_executor:mock_stream_executor",
+        "//xla/stream_executor:stream_executor_h",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_googletest//:gtest_main",
+        "@local_config_rocm//rocm:hip",  # buildcleaner: keep
+        "@local_config_rocm//rocm:rocm_headers",
+    ],
+)
+
+cc_library(
     name = "rocm_command_buffer",
     srcs = [
         "rocm_command_buffer.cc",

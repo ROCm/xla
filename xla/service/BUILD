@@ -1046,7 +1046,9 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-    ],
+    ] + if_rocm([
+        "//xla/stream_executor/rocm:rocm_capture_invalidation",
+    ]),
 )
 
 xla_cc_test(
@@ -1059,6 +1061,29 @@ xla_cc_test(
         "//xla/stream_executor/host:host_platform_id",
         "//xla/stream_executor/rocm:rocm_platform_id",
         "//xla/stream_executor/sycl:sycl_platform_id",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+xla_test(
+    name = "platform_util_multigpu_test",
+    srcs = ["platform_util_multigpu_test.cc"],
+    backend_tags = {
+        "gpu": ["multi_gpu"],
+    },
+    backends = ["gpu"],
+    tags = ["rocm-only"],
+    deps = [
+        ":platform_util",
+        "//xla/stream_executor:command_buffer",
+        "//xla/stream_executor:dnn",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor:trace_command_buffer_factory",
+        "//xla/tsl/platform:env",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_googletest//:gtest_main",

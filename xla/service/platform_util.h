@@ -68,6 +68,10 @@ class PlatformUtil {
   // their StreamExecutors initialized, otherwise all StreamExecutors will be
   // initialized and returned.
   //
+  // On ROCm, with more than one device, this can also create every device's
+  // DNN support (MIOpen handle); see
+  // CreateDnnSupportUnlessCaptureInvalidationIsDeviceScoped.
+  //
   // If the platform has no visible devices, a not-found error is returned.
   static absl::StatusOr<std::vector<se::StreamExecutor*>> GetStreamExecutors(
       se::Platform* platform,

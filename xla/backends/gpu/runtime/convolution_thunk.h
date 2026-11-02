@@ -55,6 +55,7 @@ class ConvolutionThunk : public TracedCommand {
   ConvolutionThunk(const ConvolutionThunk&) = delete;
   ConvolutionThunk& operator=(const ConvolutionThunk&) = delete;
 
+  absl::Status Initialize(const InitializeParams& params) override;
   absl::Status ExecuteOnStream(const ExecuteParams& params) override;
 
   BufferUses buffer_uses() const override;
