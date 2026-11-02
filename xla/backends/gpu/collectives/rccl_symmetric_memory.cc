@@ -212,20 +212,6 @@ stream_executor::DeviceAddressBase RcclSymmetricMemory::addr() const {
 }
 
 absl::StatusOr<stream_executor::DeviceAddressBase>
-RcclSymmetricMemory::multimem_addr() const {
-#if (TF_ROCM_VERSION >= 100000)
-  // ncclGetLsaMultimemDevicePointer is available in ROCm/RCCL 10.0+.
-  void* multimem = nullptr;
-  XLA_RCCL_RETURN_IF_ERROR(ncclGetLsaMultimemDevicePointer(win_, 0, &multimem));
-  if (multimem) {
-    return stream_executor::DeviceAddressBase(multimem, addr_.size());
-  }
-#endif  // TF_ROCM_VERSION >= 100000
-  return absl::UnimplementedError(
-      "Multimem not supported on this RCCL version or device");
-}
-
-absl::StatusOr<stream_executor::DeviceAddressBase>
 RcclSymmetricMemory::peer_addr(RankId peer) const {
 #if (TF_ROCM_VERSION >= 100000)
   // ncclGetPeerDevicePointer is available in ROCm/RCCL 10.0+.

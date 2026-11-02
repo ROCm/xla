@@ -49,6 +49,7 @@ limitations under the License.
 #include "xla/side_effect_util.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/semantic_version.h"
+#include "xla/tsl/util/env_var.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -235,13 +236,6 @@ bool IsLocalReplicaGroup(int64_t num_devices_per_host,
 // On ROCm, DeviceDescription::runtime_version() reports the HIP runtime version
 // (populated from hipRuntimeGetVersion()), not the ROCm release version. ROCm
 // 10.0 ships HIP runtime 7.15, so that is what we compare against.
-//
-// Symmetric-memory windows on ROCm additionally require NCCL_CUMEM_ENABLE=1 in
-// the environment (it enables RCCL's cuMem allocator; without it RCCL's
-// comm->symmetricSupport is false). That is deliberately not checked here, so
-// that this decision does not depend on the environment the compiler happens to
-// run in. RcclSymmetricMemory::Create enforces it at runtime and warns that
-// NCCL_CUMEM_ENABLE must be set.
 constexpr se::SemanticVersion kMinRocmSymmetricMemoryHipVersion{7, 15, 0};
 
 // Returns true if xla_gpu_unsupported_use_cross_host_one_shot_kernel is enabled
@@ -379,10 +373,20 @@ bool IsLsaPossible(const GpuTopology& gpu_topology) {
     return true;
   }
   // ROCm: LSA / GIN symmetric memory needs the RCCL symmetric-memory window
-  // APIs, which first ship with ROCm 10.0.
+  // APIs, which first ship with ROCm 10.0, and RCCL's cuMem allocator, which is
+  // only on when NCCL_CUMEM_ENABLE >= 1 (on ROCm it defaults to 0). Without
+  // cuMem, comm->symmetricSupport is false and RcclSymmetricMemory::Create
+  // fails; since the kLoadStoreAccessible choice is final (the thunk has no
+  // run-time fallback), the emitter must see "no" here to fall back to the
+  // rendezvous path.
   if (cc.IsRocm()) {
+    int64_t cumem_enable = 0;
     return device_description.runtime_version() >=
-           kMinRocmSymmetricMemoryHipVersion;
+               kMinRocmSymmetricMemoryHipVersion &&
+           tsl::ReadInt64FromEnvVar("NCCL_CUMEM_ENABLE", /*default_val=*/0,
+                                    &cumem_enable)
+               .ok() &&
+           cumem_enable >= 1;
   }
   return false;
 }
@@ -481,12 +485,6 @@ absl::StatusOr<bool> IsCrossHostCollectiveKernelPossible(
   }
   ABSL_ASSIGN_OR_RETURN(const CollectiveOpGroupMode group_mode,
                         GetCollectiveOpGroupMode(collective));
-  // A "slice" is an interconnect (NVLink / XGMI) domain. On CUDA an NVLink/LSA
-  // slice can span multiple hosts (e.g. GB200 NVL), so CUDA legitimately allows
-  // cross-host symmetric memory when all replicas are within one NVLink slice.
-  // On ROCm the slice does not cross nodes in the topologies this gate handles,
-  // so `all_replicas_on_single_slice` already identifies the supported
-  // single-node case.
   return IsAllReplicasLocal(gpu_topology.slice_size(),
                             collective->replica_groups(), group_mode,
                             device_assignment);

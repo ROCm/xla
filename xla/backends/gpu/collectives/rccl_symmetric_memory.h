@@ -29,9 +29,9 @@ limitations under the License.
 #include "xla/tsl/concurrency/executor.h"
 
 #if (TF_ROCM_VERSION >= 100000)
-// ROCm/RCCL 10.0+ exposes the host-side symmetric-memory pointer helpers
-// (ncclGetLsaMultimemDevicePointer, ncclGetPeerDevicePointer) as
-// `NCCL_EXTERN_C __host__` symbols exported from librccl.so.
+// ROCm/RCCL 10.0+ exposes the host-side symmetric-memory pointer helper
+// ncclGetPeerDevicePointer as an `NCCL_EXTERN_C __host__` symbol exported from
+// librccl.so.
 //
 // These are declared in RCCL's nccl_device/core.h, but that header is NOT
 // shipped by the ROCm install -- the installed RCCL dev package only provides
@@ -41,8 +41,6 @@ limitations under the License.
 // PROVENANCE: copied verbatim from RCCL hip-version_10.2.62640,
 // nccl_device/core.h.
 extern "C" {
-ncclResult_t ncclGetLsaMultimemDevicePointer(ncclWindow_t window, size_t offset,
-                                             void** outPtr);
 ncclResult_t ncclGetPeerDevicePointer(ncclWindow_t window, size_t offset,
                                       int peer, void** outPtr);
 }  // extern "C"
@@ -63,10 +61,10 @@ class RcclSymmetricMemory final : public SymmetricMemory {
   // window registration (in Create) and deregistration (in the destructor) -
   // onto the communicator's owning thread.
   //
-  // The read-only device-pointer lookups (multimem_addr()/peer_addr(), i.e.
-  // ncclGet{LsaMultimem,Peer}DevicePointer) are NOT dispatched onto `executor`:
-  // they only read already-populated window/comm metadata and do not touch
-  // RCCL's per-thread enqueue/group state.
+  // The read-only device-pointer lookups (peer_addr(), i.e.
+  // ncclGetPeerDevicePointer) are NOT dispatched onto `executor`: they only
+  // read already-populated window/comm metadata and do not touch RCCL's
+  // per-thread enqueue/group state.
   //
   // `symmetric_window` selects the window registration flags: when true the
   // window is registered with NCCL_WIN_COLL_SYMMETRIC.
@@ -76,11 +74,9 @@ class RcclSymmetricMemory final : public SymmetricMemory {
 
   stream_executor::DeviceAddressBase addr() const final;
 
-  // For RCCL versions that expose ncclGetLsaMultimemDevicePointer (ROCm 10.0+)
-  // returns the multimem address for the LSA (load/store accessible) team
-  // associated with this symmetric memory.
-  absl::StatusOr<stream_executor::DeviceAddressBase> multimem_addr()
-      const final;
+  // multimem_addr() is deliberately not overridden: no AMD GPU provides
+  // multicast memory, so RCCL always reports comm->nvlsSupport == 0. The base
+  // class returns Unimplemented.
 
   // For RCCL versions that expose ncclGetPeerDevicePointer (ROCm 10.0+)
   // returns the address of the symmetric memory on a peer device.

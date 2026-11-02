@@ -34,6 +34,7 @@ namespace {
 namespace se = stream_executor;
 
 using ::absl_testing::IsOk;
+using ::absl_testing::StatusIs;
 using ::testing::HasSubstr;
 using ::testing::Not;
 
@@ -209,21 +210,19 @@ TEST_F(RcclSymmetricMemoryTest, PackKernelArgReturnsValidWindowHandle) {
   EXPECT_NE(symm_mem->win(), nullptr);
 }
 
-// Verifies that multimem_addr() fails for a single-rank communicator.
+// Verifies that multimem_addr() reports multimem as unsupported.
 //
-// A single-rank communicator has no remote peers, so even when Create()
-// succeeds (the window is load/store accessible for the local rank),
-// ncclGetLsaMultimemDevicePointer has no multimem mapping to return and the
-// call fails; the RCCL error is propagated verbatim (typically kInternal /
-// kInvalidArgument). Skipped when symmetric memory is unavailable for this
-// comm.
-TEST_F(RcclSymmetricMemoryTest, MultimemAddrFailsForSingleRankComm) {
+// No AMD GPU provides multicast memory, so RCCL always reports
+// comm->nvlsSupport == 0. RcclSymmetricMemory does not override
+// multimem_addr(); the base class returns Unimplemented.
+TEST_F(RcclSymmetricMemoryTest, MultimemAddrIsUnimplemented) {
   se::DeviceAddressBase addr(buf_ptr_, buf_size_);
   auto create_result =
       RcclSymmetricMemory::Create(comm_, addr, /*executor=*/nullptr);
   SKIP_IF_SYMMETRIC_MEMORY_UNAVAILABLE(create_result.status());
   ASSERT_OK_AND_ASSIGN(auto symm_mem, std::move(create_result));
-  EXPECT_THAT(symm_mem->multimem_addr(), Not(IsOk()));
+  EXPECT_THAT(symm_mem->multimem_addr(),
+              StatusIs(absl::StatusCode::kUnimplemented));
 }
 
 // Verifies that two independent windows created from the same communicator
