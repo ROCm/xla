@@ -100,6 +100,13 @@ jobs:
         --repo_env=ROCM_PATH=
         --repo_env=ROCM_DISTRO_URL=${{ matrix.mode.distro_url }}
         --repo_env=ROCM_DISTRO_HASH=${{ matrix.mode.distro_hash }}
+      ROCM_BB_CACHE_ARGS: >-
+        --remote_cache="grpcs://cas.bb-rbe.amd.com"
+        --tls_client_certificate="/data/bb-rbe-client.crt"
+        --tls_client_key="/data/bb-rbe-client.key"
+        --tls_certificate="/data/bb-rbe-ca.crt"
+        --remote_timeout=3600
+        --remote_cache_compression
       MODE: ${{ matrix.mode.name }}
       # Stamp applied to every result row, so rows stay self-describing once
       # they are concatenated across runs for plotting.
@@ -147,6 +154,7 @@ jobs:
         working-directory: xla-src
         run: |
           bazel build -c opt \
+            ${ROCM_BB_CACHE_ARGS} \
             ${COMMON_ARGS} \
             ${ROCM_DISTRO_ARGS} \
             //xla/tools/multihost_hlo_runner:hlo_runner_main
