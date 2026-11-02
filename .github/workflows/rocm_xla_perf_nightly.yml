@@ -207,23 +207,29 @@ jobs:
           ls -l "$out"
 
       - name: Upload stamped results [${{ matrix.mode.name }}]
+        # Transport to publish-perf-metrics only, not a published deliverable:
+        # that job assembles every mode into one commit on the data branch and
+        # then deletes these artifacts. retention-days is only the backstop for
+        # the case where it never gets that far.
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: perf-results-${{ matrix.mode.name }}
           path: ${{ runner.temp }}/out/${{ matrix.mode.name }}
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 1
 
   publish-perf-metrics:
     needs: [rocm-config, execute-xla-perf-nightly]
-    # Publish whatever completed, even if some modes failed, but never from a
-    # test PR -- those must not pollute the data branch.
-    if: always() && needs.rocm-config.result == 'success' && github.event_name != 'pull_request'
+    # Publish whatever completed, even if some modes failed. PR runs publish
+    # too, so that a change to this workflow exercises the push path as well.
+    if: always() && needs.rocm-config.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       # Needed to push the data branch back to this repository.
       contents: write
+      # Needed to delete the transport artifacts once the push has landed.
+      actions: write
     env:
       STAMP: ${{ needs.rocm-config.outputs.stamp }}
       ISO: ${{ needs.rocm-config.outputs.iso }}
@@ -296,3 +302,24 @@ jobs:
             git commit -q -m "perf-nightly results ${STAMP} (xla ${SHA6})"
             git push -q origin "$DATA_BRANCH"
           fi
+
+      - name: Delete the transport artifacts
+        # Runs only once the results are safely on the data branch; if the push
+        # failed they are worth keeping for the day retention-days allows.
+        if: steps.assemble.outputs.empty == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+            --jq '.artifacts[] | select(.name | startswith("perf-results-")) | "\(.id) \(.name)"' \
+          | while read -r id name; do
+              # Best effort: the results are already published, so a failure to
+              # clean up must not fail the run -- retention-days expires it.
+              if gh api --silent -X DELETE \
+                   "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}"; then
+                echo "deleted artifact $name"
+              else
+                echo "warning: could not delete artifact $name ($id)" >&2
+              fi
+            done
