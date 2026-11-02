@@ -1,0 +1,133 @@
+/* Copyright 2026 The OpenXLA Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include "xla/backends/gpu/runtime/collective_profiler.h"
+
+#include <cstdint>
+#include <string>
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "absl/time/time.h"
+
+namespace xla::gpu {
+namespace {
+
+using ::testing::HasSubstr;
+using ::testing::Not;
+
+TEST(CollectiveProfilerTest, SizeBucket) {
+  EXPECT_EQ(CollectiveProfiler::SizeBucket(0), -1);
+  EXPECT_EQ(CollectiveProfiler::SizeBucket(1), 0);
+  EXPECT_EQ(CollectiveProfiler::SizeBucket(2), 1);
+  EXPECT_EQ(CollectiveProfiler::SizeBucket(3), 1);
+  EXPECT_EQ(CollectiveProfiler::SizeBucket(1024), 10);
+  EXPECT_EQ(CollectiveProfiler::SizeBucket(2047), 10);
+  EXPECT_EQ(CollectiveProfiler::SizeBucket(int64_t{1} << 30), 30);
+}
+
+TEST(CollectiveProfilerTest, StatsAdd) {
+  CollectiveProfiler::Stats stats;
+  stats.Add(absl::Microseconds(10));
+  stats.Add(absl::Microseconds(30));
+  EXPECT_EQ(stats.count, 2);
+  EXPECT_EQ(stats.total, absl::Microseconds(40));
+  EXPECT_EQ(stats.min, absl::Microseconds(10));
+  EXPECT_EQ(stats.max, absl::Microseconds(30));
+}
+
+TEST(CollectiveProfilerTest, Format) {
+  CollectiveProfiler::Aggregates aggregates;
+  aggregates.sync["kAllReduce"][20].Add(absl::Milliseconds(3));
+  aggregates.sync["kAllReduce"][20].Add(absl::Milliseconds(1));
+  aggregates.async["kAllGather"][10].Add(absl::Milliseconds(4));
+  aggregates.async["kAllGather"][10].Add(absl::Milliseconds(8));
+
+  std::string out = CollectiveProfiler::Format(aggregates, /*skip_rounds=*/5,
+                                               /*num_devices=*/2, /*pending=*/0,
+                                               /*command_buffer_records=*/0);
+  EXPECT_THAT(out, HasSubstr("skipped first 5"));
+  EXPECT_THAT(out, HasSubstr("--- Sync collectives"));
+  EXPECT_THAT(out, HasSubstr("--- Async collectives"));
+  EXPECT_THAT(out, HasSubstr("kAllReduce: calls=2 total=4.000 ms (25.0%)"));
+  EXPECT_THAT(out, HasSubstr("kAllGather: calls=2 total=12.000 ms (75.0%)"));
+  EXPECT_THAT(out, HasSubstr("[1 MiB, 2 MiB)"));
+  EXPECT_THAT(out, HasSubstr("[1 KiB, 2 KiB)"));
+  EXPECT_THAT(out, HasSubstr("SYNC TOTAL: 4.000 ms (25.0%)"));
+  EXPECT_THAT(out, HasSubstr("ASYNC TOTAL: 12.000 ms (75.0%)"));
+  EXPECT_THAT(out, HasSubstr("\nTOTAL: 16.000 ms"));
+}
+
+TEST(CollectiveProfilerTest, FormatSkipsEmptySection) {
+  CollectiveProfiler::Aggregates aggregates;
+  aggregates.sync["kAllReduce"][20].Add(absl::Milliseconds(2));
+
+  std::string out = CollectiveProfiler::Format(aggregates, /*skip_rounds=*/0,
+                                               /*num_devices=*/1, /*pending=*/0,
+                                               /*command_buffer_records=*/0);
+  EXPECT_THAT(out, HasSubstr("SYNC TOTAL: 2.000 ms (100.0%)"));
+  EXPECT_THAT(out, Not(HasSubstr("Async collectives")));
+}
+
+TEST(CollectiveProfilerTest, NestedScopeDisablesTiming) {
+  CollectiveProfiler profiler(/*skip_rounds=*/0);
+  int executable = 0;
+  auto round = profiler.BeginRound(0, &executable);
+  EXPECT_TRUE(profiler.IsActive());
+  {
+    CollectiveProfiler::NestedScope scope;
+    EXPECT_FALSE(profiler.IsActive());
+  }
+  EXPECT_TRUE(profiler.IsActive());
+}
+
+TEST(CollectiveProfilerTest, SkipsRoundsPerExecutableAndDevice) {
+  CollectiveProfiler profiler(/*skip_rounds=*/2);
+  int exe_a = 0;
+  int exe_b = 0;
+  EXPECT_FALSE(profiler.IsActive());
+  profiler.BeginRound(0, &exe_a);
+  profiler.BeginRound(0, &exe_a);
+  {
+    auto round = profiler.BeginRound(0, &exe_b);
+    EXPECT_FALSE(profiler.IsActive());
+  }
+  {
+    auto round = profiler.BeginRound(0, &exe_a);
+    EXPECT_TRUE(profiler.IsActive());
+  }
+  EXPECT_FALSE(profiler.IsActive());
+  {
+    auto round = profiler.BeginRound(1, &exe_a);
+    EXPECT_FALSE(profiler.IsActive());
+  }
+}
+
+TEST(CollectiveProfilerTest, RoundRestoresOuterState) {
+  CollectiveProfiler profiler(/*skip_rounds=*/0);
+  int outer_exe = 0;
+  int inner_exe = 0;
+  CollectiveProfiler skipping(/*skip_rounds=*/1);
+  auto outer = profiler.BeginRound(0, &outer_exe);
+  EXPECT_TRUE(profiler.IsActive());
+  {
+    auto inner = skipping.BeginRound(0, &inner_exe);
+    EXPECT_FALSE(profiler.IsActive());
+  }
+  EXPECT_TRUE(profiler.IsActive());
+}
+
+}  // namespace
+}  // namespace xla::gpu

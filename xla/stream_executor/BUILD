@@ -814,6 +814,7 @@ cc_library(
     name = "event_based_timer",
     hdrs = ["event_based_timer.h"],
     deps = [
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/time",
     ],
