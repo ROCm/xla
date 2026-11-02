@@ -213,7 +213,7 @@ cc_library(
         "//xla/service:hlo_module_config",
         "//xla/service/gpu:backend_configs_cc",
         "//xla/stream_executor:device_description",
-        "//xla/tsl/util:env_var",
+        "//xla/stream_executor:semantic_version",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -226,7 +226,6 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/types:span",
-        "@local_config_rocm//rocm:rocm_config",  # buildcleaner: keep  (defines TF_ROCM_VERSION)
     ],
 )
 

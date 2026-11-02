@@ -33,7 +33,6 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#include "rocm/rocm_config.h"  // IWYU pragma: keep  (defines TF_ROCM_VERSION)
 #include "xla/backends/gpu/target_config/target_config.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -49,7 +48,7 @@ limitations under the License.
 #include "xla/service/hlo_module_config.h"
 #include "xla/side_effect_util.h"
 #include "xla/stream_executor/device_description.h"
-#include "xla/tsl/util/env_var.h"
+#include "xla/stream_executor/semantic_version.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -229,27 +228,21 @@ bool IsLocalReplicaGroup(int64_t num_devices_per_host,
   });
 }
 
-// Returns true if the ROCm/RCCL runtime can actually back LSA (load/store
-// accessible) symmetric memory for the collective kernels.
+// Minimum ROCm runtime required for LSA (load/store accessible) symmetric
+// memory: the symmetric-memory window APIs (ncclCommWindowRegister and friends)
+// first ship with the RCCL of ROCm 10.0.
 //
-// Symmetric-memory windows on ROCm require two things that are not implied by
-// the device architecture alone:
-//   1. ROCm/RCCL >= 10.0, which provides ncclCommWindowRegister and friends
-//      (a compile-time property, TF_ROCM_VERSION).
-//   2. NCCL_CUMEM_ENABLE=1 in the environment, which enables RCCL's cuMem
-//      allocator; without it RCCL's comm->symmetricSupport is false and window
-//      registration silently downgrades to a non-symmetric window.
-bool IsRocmSymmetricMemoryRuntimeAvailable() {
-#if (TF_ROCM_VERSION >= 100000)
-  bool cumem_enabled = false;
-  return tsl::ReadBoolFromEnvVar("NCCL_CUMEM_ENABLE", /*default_val=*/false,
-                                 &cumem_enabled)
-             .ok() &&
-         cumem_enabled;
-#else
-  return false;
-#endif  // TF_ROCM_VERSION >= 100000
-}
+// On ROCm, DeviceDescription::runtime_version() reports the HIP runtime version
+// (populated from hipRuntimeGetVersion()), not the ROCm release version. ROCm
+// 10.0 ships HIP runtime 7.15, so that is what we compare against.
+//
+// Symmetric-memory windows on ROCm additionally require NCCL_CUMEM_ENABLE=1 in
+// the environment (it enables RCCL's cuMem allocator; without it RCCL's
+// comm->symmetricSupport is false). That is deliberately not checked here, so
+// that this decision does not depend on the environment the compiler happens to
+// run in. RcclSymmetricMemory::Create enforces it at runtime and warns that
+// NCCL_CUMEM_ENABLE must be set.
+constexpr se::SemanticVersion kMinRocmSymmetricMemoryHipVersion{7, 15, 0};
 
 // Returns true if xla_gpu_unsupported_use_cross_host_one_shot_kernel is enabled
 // for the given collective op type.
@@ -377,19 +370,19 @@ bool IsLsaPossible(const GpuTopology& gpu_topology) {
   if (!gpu_topology.has_gpu_target_config()) {
     return false;
   }
+  const se::DeviceDescription& device_description =
+      gpu_topology.gpu_target_config().device_description;
   const se::GpuComputeCapability& cc =
-      gpu_topology.gpu_target_config()
-          .device_description.gpu_compute_capability();
+      device_description.gpu_compute_capability();
   // CUDA devices support load-store accessible (LSA) symmetric memory.
   if (cc.IsCuda()) {
     return true;
   }
-  // ROCm: LSA / GIN symmetric memory is only available on the MI300 series
-  // (gfx942 / gfx950), and only when the ROCm/RCCL runtime actually supports it
-  // (ROCm/RCCL >= 10.0 and NCCL_CUMEM_ENABLE=1).
-  if (const auto* rocm_cc = cc.rocm_compute_capability(); rocm_cc != nullptr) {
-    return rocm_cc->gfx9_mi300_series() &&
-           IsRocmSymmetricMemoryRuntimeAvailable();
+  // ROCm: LSA / GIN symmetric memory needs the RCCL symmetric-memory window
+  // APIs, which first ship with ROCm 10.0.
+  if (cc.IsRocm()) {
+    return device_description.runtime_version() >=
+           kMinRocmSymmetricMemoryHipVersion;
   }
   return false;
 }

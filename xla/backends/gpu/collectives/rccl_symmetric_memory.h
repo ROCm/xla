@@ -21,17 +21,12 @@ limitations under the License.
 #include <string>
 
 #include "absl/status/statusor.h"
+#include "rocm/include/rccl/rccl.h"
 #include "rocm/rocm_config.h"  // IWYU pragma: keep  (defines TF_ROCM_VERSION)
 #include "xla/core/collectives/rank_id.h"
 #include "xla/core/collectives/symmetric_memory.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/tsl/concurrency/executor.h"
-
-#if (TF_ROCM_VERSION >= 50200)
-#include "rocm/include/rccl/rccl.h"
-#else
-#include "rocm/include/rccl.h"
-#endif  // TF_ROCM_VERSION >= 50200
 
 #if (TF_ROCM_VERSION >= 100000)
 // ROCm/RCCL 10.0+ exposes the host-side symmetric-memory pointer helpers

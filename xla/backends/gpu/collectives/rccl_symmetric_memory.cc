@@ -24,9 +24,9 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
-#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/numbers.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "xla/backends/gpu/collectives/rccl_errors.h"
@@ -72,6 +72,14 @@ absl::Status CheckNcclCuMemEnabledForSymmetricMemory() {
       "path.",
       raw == nullptr ? "unset" : absl::StrFormat("\"%s\"", raw)));
 }
+
+// Hint printed when ncclCommWindowRegister rejects a buffer.
+constexpr absl::string_view kSymmetricMemoryAllocatorHint =
+    "Only VMM-backed buffers can be registered as RCCL symmetric windows. "
+    "Re-run with --xla_gpu_enable_allocator_spatial_partitioning=false, so "
+    "that collective memory is allocated through ncclMemAlloc, or with "
+    "--xla_gpu_enable_allocator_spatial_partitioning=true "
+    "--xla_gpu_command_buffer_update_mode=SKIP_TEMP to use the VMM allocator.";
 #endif  // TF_ROCM_VERSION >= 100000
 
 }  // namespace
@@ -94,18 +102,33 @@ RcclSymmetricMemory::Create(ncclComm_t comm,
   // Require NCCL_CUMEM_ENABLE=1 before touching the window-registration path.
   // Without it RCCL's comm->symmetricSupport is false and the registration
   // below silently downgrades to a non-symmetric window.
-  ABSL_RETURN_IF_ERROR(CheckNcclCuMemEnabledForSymmetricMemory());
+  //
+  // This is the only place the environment is inspected: the compiler-side
+  // decision to emit symmetric-memory collectives (IsLsaPossible) deliberately
+  // does not look at NCCL_CUMEM_ENABLE. Log in addition to returning the error,
+  // because callers may fall back to another collective strategy.
+  if (absl::Status cumem_status = CheckNcclCuMemEnabledForSymmetricMemory();
+      !cumem_status.ok()) {
+    LOG_FIRST_N(WARNING, 1) << cumem_status.message();
+    return cumem_status;
+  }
 
   // ncclCommWindowRegister is available in ROCm/RCCL 10.0+.
   ncclWindow_t win = nullptr;
   int win_flags = symmetric_window ? NCCL_WIN_COLL_SYMMETRIC : NCCL_WIN_DEFAULT;
-  ncclResult_t register_status =
-      ncclCommWindowRegister(comm, addr.opaque(), addr.size(), &win, win_flags);
-  if (register_status != ncclSuccess) {
+  if (absl::Status status = XLA_RCCL_STATUS(ncclCommWindowRegister(
+          comm, addr.opaque(), addr.size(), &win, win_flags));
+      !status.ok()) {
+    // Carry the hint in the status, not just in the log: the status is what
+    // reaches the user, the log line may be buried in other ranks' output.
+    absl::Status annotated(
+        status.code(),
+        absl::StrCat(status.message(), " ", kSymmetricMemoryAllocatorHint));
     LOG(ERROR) << absl::StrFormat(
-        "ncclCommWindowRegister failed on comm=%p (ptr=%p, size=%ld): %s", comm,
-        addr.opaque(), addr.size(), ncclGetErrorString(register_status));
-    XLA_RCCL_RETURN_IF_ERROR(register_status);
+        "Failed to register an RCCL symmetric window on comm=%p (ptr=%p, "
+        "size=%ld): %s",
+        comm, addr.opaque(), addr.size(), annotated.message());
+    return annotated;
   }
 
   // Validate that the window is genuinely symmetric / load-store accessible.
