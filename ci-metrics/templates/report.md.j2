@@ -1,0 +1,294 @@
+{#-
+  The entire report. report.py computes values and puts them in one dict; every
+  heading, sentence, table and piece of markup is here. Nothing is rendered in
+  Python. `report.json` beside the .md is this same dict, so any figure below can
+  be looked up by name.
+
+  `c()` renders one cell value: a bare value, or {text, mark} where mark names the
+  meaning the old HTML carried in a CSS class.
+-#}
+{%- macro c(v) -%}
+{%- if v is mapping -%}
+{%- if v.mark == 'win' %}**{{ v.text|cell }}** ▲
+{%- elif v.mark == 'dominant' %}**{{ v.text|cell }}**
+{%- elif v.mark == 'pending' %}*{{ v.text|cell }}*
+{%- else %}{{ v.text|cell }}
+{%- endif -%}
+{%- else %}{{ v|cell }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro phase_table(rows) -%}
+| Line item | Job family |{% for p in phase_labels %} {{ p }} |{% endfor %} Total | Lane signal | n |
+| --- | --- |{% for p in phase_labels %} ---: |{% endfor %} ---: | ---: | ---: |
+{% for row in rows %}
+| {{ c(row.line_item) }} | {{ c(row.family) }} |{% for k in phase_keys %} {{ c(row.phases[k]) }} |{% endfor %} {{ c(row.total) }} | {{ c(row.lane_signal) }} | {{ row.n }} |
+{% endfor %}
+{%- endmacro -%}
+
+{#- The per-test factor, shared by the coverage and compare notes. Note that a
+    line whose last tag is {% endif %} loses its own newline to trim_blocks, so
+    such lines are followed by a second blank line here. -#}
+{%- macro per_test(p) %}{{ p.factor }}x {{ p.direction }}{% endmacro -%}
+
+# CI metrics: upstream JAX & OpenXLA on ROCm
+
+Window **{{ window }}** ({{ span }}). Generated {{ generated }}.
+
+**DO** = Digital Ocean self-hosted runners (`amd-do-*`), where presubmits build. **RBE** = EngFlow remote pool (`wardite`), where tests dispatch. **NV** = Google-hosted NVIDIA runners, the reference lane. **Presubmit** = `pull_request` runs only; one commit = one PR head SHA.
+
+**▲** marks a like-for-like ROCm win; plain = trails, or the suites are not comparable. **Bold** in a phase row is that row's largest phase, and *italics* is a figure that was not measured.
+
+Peak hours (CDT (UTC-5), busiest 8 by measured DO arrivals): `{{ peak_hours }}`  ·  nominal (quietest 8): `{{ nominal_hours }}`
+
+{% for repo in repos %}
+## {{ repo.repo }}
+
+### Test coverage and cost per test
+
+Test counts come from bazel's `Executed X out of Y tests` line in sampled job logs from the last 48h of the window, so suite sizes are current. Test-step p50 and seconds per test use only runs that executed at least 90% of the suite (remote-cache hits make the rest cheap and unrepresentative).
+
+| Job family | Lane | Tests in suite | Test step p50 (full-suite runs) | Seconds per test | Full-suite runs sampled |
+| --- | --- | ---: | ---: | ---: | ---: |
+{% for row in repo.coverage_rows %}
+| {{ c(row.family) }} | {{ c(row.lane) }} | {{ c(row.suite) }} | {{ c(row.p50) }} | {{ c(row.per_test) }} | {{ row.sampled }} |
+{% endfor %}
+
+{% if repo.coverage_clauses %}
+> {% for cl in repo.coverage_clauses %}**{{ cl.label }} runs {{ cl.share }}% of the CUDA suite** ({{ cl.rocm }} vs {{ cl.nv }}){% if cl.per_test %} and is {{ per_test(cl.per_test) }} per test{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}.
+{% endif %}
+
+### Metrics
+
+{% set M = repo.metrics %}
+| # | Metric | DO | RBE | NV |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Queue wait (P90, {{ span }}), peak times | {{ M.queue_peak.do }} | *n/a: EngFlow scheduler queue is not exposed per action; see RBE detail* | {{ M.queue_peak.nv }} |
+| 2 | Queue wait (P90, {{ span }}), nominal times | {{ M.queue_nominal.do }} | *n/a: EngFlow scheduler queue is not exposed per action; see RBE detail* | {{ M.queue_nominal.nv }} |
+| 3 | Time to signal presubmit, peak times | {{ M.tts_peak.do }} | {{ M.tts_peak.rbe }} | {{ M.tts_peak.nv }} |
+| 4 | Time to signal presubmit, nominal times | {{ M.tts_nominal.do }} | {{ M.tts_nominal.rbe }} | {{ M.tts_nominal.nv }} |
+{% if repo.nightly %}
+| 5 | Time to signal nightly, bazel | {{ M.nightly_bazel.do }} | {{ M.nightly_bazel.rbe }} | *n/a: ROCm-only workflow* |
+| 6 | Time to signal nightly, pytest | {{ M.nightly_pytest.do }} | *n/a, pytest runs local* | *n/a: ROCm-only workflow* |
+{% endif %}
+{% for row in repo.extra_metrics %}
+| {{ loop.index + (6 if repo.nightly else 4) }} | {{ row.metric }} | *{{ row.do }}* | {{ row.rbe }} | {% if row.nv %}{{ c(row.nv) }}{% else %}*n/a: no NV counterpart*{% endif %} |
+{% endfor %}
+
+> DO queue wait = `started_at - created_at` for every DO job in the band (all workflows in the repo). DO time to signal = PR head SHA first triggered (or approved, for fork PRs) to its last ROCm job finishing. RBE cells = wall time of the bazel test step that dispatches to EngFlow, for jobs created in the band. NV cells are the same two definitions on the NVIDIA reference lane, with one scope difference: only the NV presubmit workflow is collected, so NV queue wait covers that lane's jobs rather than every NV job in the repo, and it is the GitHub-side wait for a Google-hosted runner, not EngFlow's.{% if repo.nightly %} Nightly rows cover {% for wf in repo.nightly %}`{{ wf }}`{% if not loop.last %}, {% endif %}{% endfor %}, one signal per run: run created to its last ROCm job finishing.{% endif %}
+
+
+### Where the time to signal goes (ROCm on DO, NV on Google runners)
+
+For each commit, the lane's job that finishes last is followed from the moment the SHA was first triggered. Every second lands in exactly one named phase, and each row adds up to its total (checked in code), so there is no unaccounted time. One row per lane, over all hours of the window.
+
+{% if repo.has_families %}
+{{ repo.repo }} runs more than one job family in a single workflow, so its lanes get one row per family. Both rows cover the same commits, so they share one **n**; **Total** is that family's own signal and **Lane signal** is the combined one the PR actually waits for - the slower family on each commit, which is why it repeats down a lane. The count beside the family name is how often it was the family that finished last.
+{% endif %}
+
+#### Typical commit (commits between p40 and p60 of time to signal, mean of each phase)
+
+{{ phase_table(repo.phase_typical) }}
+
+#### Slowest 10% of commits (at or above p90, mean of each phase)
+
+{{ phase_table(repo.phase_slowest) }}
+
+{% for ln in repo.phase_lanes %}
+> **{{ ln.lane }}:** {{ ln.signalled }} commits signalled; {{ ln.superseded }} of them first had a run that was cancelled or re-triggered ({{ ln.rerun }} signalled on a re-run attempt), and {{ ln.unsignalled }} commits never produced a {{ ln.lane }} signal because every run was cancelled, almost always superseded by a newer push.{% if ln.approval %} {{ ln.approval.n }} fork-PR commits waited for a maintainer to approve CI (median {{ ln.approval.median }}, max {{ ln.approval.max }}); their clock starts at approval, since that wait is a human gate the {{ ln.approval.other }} lane shares.{% endif %}
+
+
+{% endfor %}
+> **Superseded runs + re-run delay** = time from the SHA's first trigger to the start of the run that finally signalled. **Waiting on earlier jobs** = `needs:` jobs ahead of the lane's last job in the same run. **Runner teardown + completion report** = job wall time minus the sum of its step durations; almost all of it sits after the `Complete job` step, before GitHub marks the job done, so the check stays pending while the ephemeral runner shuts down.
+
+### ROCm versus the NVIDIA reference lane
+
+Scoped to the presubmit test lane, `pull_request` runs only.
+
+{% set V = repo.vs_nv %}
+{% set J = "ROCm " ~ repo.jobs_rocm ~ " · NV " ~ repo.jobs_nv %}
+| Metric | ROCm (DO) | NV (Google) | Jobs per commit |
+| --- | ---: | ---: | ---: |
+| Time to signal, p50 | {{ c(V.tts50.rocm) }} | {{ c(V.tts50.nv) }} | {{ J }} |
+| Time to signal, p90 | {{ c(V.tts90.rocm) }} | {{ c(V.tts90.nv) }} | {{ J }} |
+| Per-job execution, p50 | {{ c(V.exe50.rocm) }} | {{ c(V.exe50.nv) }} | {{ J }} |
+| Per-job execution, p90 | {{ c(V.exe90.rocm) }} | {{ c(V.exe90.nv) }} | {{ J }} |
+| Queue wait, p50 | {{ c(V.q50.rocm) }} | {{ c(V.q50.nv) }} | {{ J }} |
+
+n = {{ repo.rocm_commits }} ROCm commits, {{ repo.nv_commits }} NV commits.
+
+{% if repo.compare %}
+{% if repo.compare.comparable %}
+> **Comparable suites:** {{ repo.compare.rocm }} ROCm tests against NV's {{ repo.compare.nv }} ({{ repo.compare.share }}%), so durations are highlighted where ROCm is faster{% if repo.compare.per_test %}; per test ROCm is **{{ per_test(repo.compare.per_test) }}**{% endif %}. Queue wait is never highlighted; NV queue by runner pool is under NV runner pools.
+{% else %}
+> **Not highlighted:** {{ repo.compare.rocm }} ROCm tests against NV's {{ repo.compare.nv }} ({{ repo.compare.share }}%), so these durations compare a smaller suite to a larger one{% if repo.compare.per_test %}; per test ROCm is **{{ per_test(repo.compare.per_test) }}**{% endif %}.
+{% endif %}
+{% endif %}
+
+### Peak versus nominal: ROCm and NV side by side
+
+Both lanes are measured over the same clock hours: the peak and nominal hours listed at the top, which come from DO arrivals pooled across every repo, so all sections share one clock. Jobs are placed by the hour they were created, commits by the hour their SHA was first triggered.
+
+| Metric | Lane | Peak p50 | Peak p90 | Nominal p50 | Nominal p90 | n (peak / nominal) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+{% for row in repo.band_rows %}
+| {{ c(row.metric) }} | {{ c(row.lane) }} | {{ c(row.peak_p50) }} | {{ c(row.peak_p90) }} | {{ c(row.nominal_p50) }} | {{ c(row.nominal_p90) }} | {{ row.n }} |
+{% endfor %}
+
+p90 by time of day (3-hour blocks, CDT (UTC-5)):
+
+| Hours | Commits ROCm / NV | Time to signal ROCm / NV | Queue ROCm / NV | Test job execution ROCm / NV | Test step ROCm / NV |
+| --- | ---: | ---: | ---: | ---: | ---: |
+{% for row in repo.band_hours %}
+| {{ row.hours }} | {{ row.commits }} | {{ row.tts }} | {{ row.queue }} | {{ row.exec }} | {{ row.test }} |
+{% endfor %}
+
+> Queue wait covers every job of the presubmit lane, so the ROCm figure differs slightly from the Metrics table, which takes every DO job in the repo. Job execution and test step use only the matched test job types listed above; job types with no counterpart on the other lane are left out. Highlights follow the suite-size rule used above, and queue wait is never highlighted. In the time-of-day tables a block is tagged peak or nominal when at least 2 of its 3 hours are, and test-job rows pool the matched job types; read p90 with its commit count.
+
+### Tail latency and same-commit comparison
+
+Job execution = `completed_at - started_at` for the jobs of the run that signalled, per job type. The same-commit tables compare ROCm and NV on the **same PR head SHA**, so both lanes saw the same code change and the same set of tests invalidated in the cache.
+
+#### Percentiles by job type
+
+| Lane | Job type | n | p50 | p90 | p95 | p99 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+{% for row in repo.tail_rows %}
+| {{ c(row.lane) }} | {{ c(row.job_type) }} | {{ row.n }} | {{ c(row.p50) }} | {{ c(row.p90) }} | {{ c(row.p95) }} | {{ c(row.p99) }} |
+{% endfor %}
+
+> p99 of a few hundred jobs rests on a handful of samples; read it with its n.
+
+{% if repo.same_commit %}
+{% set sc = repo.same_commit %}
+#### {{ repo.repo }}: same commits, {{ sc.n_both }} PR SHAs where both lanes passed
+
+{{ sc.n_failed }} more SHAs signalled on both lanes but failed on at least one; a failure stops early, so those are left out of the comparison.
+
+| ROCm / NV time to signal, per PR | p10 | p50 | p90 | p99 | PRs where ROCm is faster |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| ratio | {{ sc.ratio.p10 }} | {{ sc.ratio.p50 }} | {{ sc.ratio.p90 }} | {{ sc.ratio.p99 }} | {{ sc.ratio.faster }} of {{ sc.n_both }} ({{ sc.ratio.faster_pct }}%) |
+
+| Outlier set | PRs | ROCm TTS p50 | NV TTS p50 | Median ROCm/NV | Also in the other lane's slowest 10% | ROCm queue (mean) | ROCm test execution (mean) | ROCm teardown (mean) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+{% set O = sc.outliers %}
+| ROCm's slowest 10% | {{ O.rocm.prs }} | {{ O.rocm.rocm_p50 }} | {{ O.rocm.nv_p50 }} | {{ O.rocm.ratio }} | {{ O.rocm.other_slow }} ({{ O.rocm.other_slow_pct }}%) | {{ O.rocm.queue }} | {{ O.rocm.test }} | {{ O.rocm.teardown }} |
+| NV's slowest 10% | {{ O.nv.prs }} | {{ O.nv.rocm_p50 }} | {{ O.nv.nv_p50 }} | {{ O.nv.ratio }} | {{ O.nv.other_slow }} ({{ O.nv.other_slow_pct }}%) | {{ O.nv.queue }} | {{ O.nv.test }} | {{ O.nv.teardown }} |
+
+| Matched job type (test step) | Commits | p50 ROCm / NV | p90 ROCm / NV | p99 ROCm / NV | Median per-commit ratio | ROCm's slowest 10%: ROCm / NV p50 on the same commits |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+{% for row in sc.matched %}
+| {{ row.job_type }} | {{ row.commits }} | {{ row.p50 }} | {{ row.p90 }} | {{ row.p99 }} | {{ row.ratio }} | {{ row.tail }} |
+{% endfor %}
+
+| Largest ROCm/NV gap (commit) | ROCm TTS | NV TTS | Ratio | Where ROCm's time went |
+| --- | ---: | ---: | ---: | ---: |
+{% for row in sc.largest_gap %}
+| `{{ row.sha }}` {% if row.pr %}[#{{ row.pr }}](https://github.com/{{ repo.repo }}/pull/{{ row.pr }}){% else %}(fork PR, number not in API){% endif %} | {{ row.rocm }} | {{ row.nv }} | {{ row.ratio }} | {% for p in row.where %}{{ p.phase }} {{ p.value }}{% if not loop.last %}, {% endif %}{% endfor %} |
+{% endfor %}
+{% endif %}
+
+{% endfor %}
+## Infrastructure
+
+| Item | Value |
+| --- | ---: |
+| DO node count (DPX) | *not re-measured: not derivable from job metadata{% if infra.base_do_nodes %} ({{ baseline_label }}: {{ infra.base_do_nodes }}){% endif %}* |
+| DO GPUs (executors) | *not re-measured: not derivable from job metadata{% if infra.base_do_gpus %} ({{ baseline_label }}: {{ infra.base_do_gpus }}){% endif %}* |
+| DO runner labels seen in the window | {{ infra.labels_seen }} |
+| Local node count | *pending: not derivable from CI metadata (owner: user)* |
+| Local GPUs | *pending: not derivable from CI metadata (owner: user)* |
+
+## Peak versus nominal: measured
+
+| Hour CDT (UTC-5) | DO jobs | NV jobs |   | Hour CDT (UTC-5) | DO jobs | NV jobs |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+{% for row in arrivals %}
+| {{ row.am_hour }} | {{ row.am_do }} | {{ row.am_nv }} |   | {{ row.pm_hour }} | {{ row.pm_do }} | {{ row.pm_nv }} |
+{% endfor %}
+
+> Arrival volume swings **{{ swing }}x** across the day ({{ arrivals_lo }} to {{ arrivals_hi }} jobs/hour). DO jobs = every ROCm job on DO in the collected workflows; NV jobs = jobs of the NV presubmit lanes, by the hour they were created. NV's busiest 8 hours are `{{ nv_peak_hours }}`, {{ shared_peak_hours }} of them DO peak hours.
+
+| Per-job component (DO, single-GPU pools) | Peak p50 | Nominal p50 | Peak p90 | Nominal p90 |
+| --- | ---: | ---: | ---: | ---: |
+{% for row in pool_components %}
+| {{ row.component }} | {{ row.peak_p50 }} | {{ row.nominal_p50 }} | {{ row.peak_p90 }} | {{ row.nominal_p90 }} |
+{% endfor %}
+
+> Arrivals swing {{ swing }}x. {% for v in pool_verdicts %}**{{ v.pool }} pool**: queue p50 {{ v.peak }} at peak vs {{ v.nominal }} at nominal; {% if v.kind == 'flat' %}flat at p50 and p90, so the wait is provisioning latency, not contention{% elif v.kind == 'tail' %}flat at p50 but p90 goes {{ v.tail.nominal }} to {{ v.tail.peak }}, so the typical wait is provisioning latency and the tail is contention{% else %}it moves with demand, so part of the wait is contention{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}.
+
+## DO scale-sets
+
+| Scale-set | GPUs | Jobs | Queue p50 | p90 | p99 | Max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+{% for row in scale_sets %}
+| `{{ row.label }}` | {{ row.gpus }} | {{ row.jobs }} | {{ row.p50 }} | {{ row.p90 }} | {{ row.p99 }} | {{ row.max }} |
+{% endfor %}
+
+> GPUs per job read from the label suffix. All ROCm jobs in the collected workflows, any conclusion except skipped.
+
+### Runner teardown: tests done, check still pending
+
+Job wall time minus the sum of its steps. Almost all of it sits after the `Complete job` step, before GitHub marks the job finished.
+
+| Scale-set | Jobs | Teardown p50 | p90 | p99 | Jobs over 5 min | Worst |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+{% for row in teardown %}
+| `{{ row.label }}` | {{ row.jobs }} | {{ row.p50 }} | {{ row.p90 }} | {{ row.p99 }} | {{ row.over }} | {{ row.worst }} |
+{% endfor %}
+
+## NV runner pools
+
+Google-hosted runners of the NV presubmit lanes, by runner label and job type. Queue = `started_at - created_at`. A label whose last day seen is before the end of the window stopped appearing partway through the window.
+
+| Repo | Runner label | Job type | Jobs | Queue p50 | p90 | p99 | Over 10 min | Seen (CDT) |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+{% for row in nv_pools %}
+| {{ row.repo }} | `{{ row.label }}` | {{ row.job_type }} | {{ row.jobs }} | {{ row.p50 }} | {{ row.p90 }} | {{ row.p99 }} | {{ row.over }} | {{ row.seen }} |
+{% endfor %}
+
+## RBE (EngFlow) detail
+
+From bazel's `Elapsed time / Critical Path` line in sampled job logs across the whole window. The gap between wall time and critical path is scheduling, queueing, cache lookup and local work, not test execution on the critical path.
+
+| Set | Invocations sampled | Wall p50 | Wall p90 | Critical path p50 | Critical path p90 | Wall:cpath at p50 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+{% for row in rbe %}
+| {{ row.set }} | {{ row.sampled }} | {{ row.wall_p50 }} | {{ row.wall_p90 }} | {{ row.cpath_p50 }} | {{ row.cpath_p90 }} | {{ row.ratio }} |
+{% endfor %}
+
+> Both ROCm presubmits run `--config=rocm_rbe_dynamic`: tests race a local run on the DO GPU against the EngFlow run (`--strategy=TestRunner=dynamic` in JAX, `--spawn_strategy=dynamic` in XLA), so RBE wall time includes work that may have finished locally.
+
+### Executor queue by pool
+
+> Not refreshed. This table came from a manual AWS dashboard export; it needs a new export for this window (owner: user).
+
+## The ask: more runners
+
+| Pool | What it does today | What we need | What it unblocks |
+| --- | --- | --- | --- |
+| DO | Builds and launches every ROCm presubmit job | *pending (owner: user)* | Removes the provisioning wait paid on every job, and the multi-GPU starvation |
+| RBE | Runs the bazel test actions dispatched from DO | *pending (owner: user)* | Shortens test execution, the largest phase of time to signal |
+| Remote build | JAX: nothing. `rocm_rbe_dynamic` sets `--spawn_strategy=local`, so compile actions run on the GPU runner | *pending (owner: user)* | Stops GPU nodes being used as build machines, freeing the same hardware for tests without buying more |
+
+> Google's CUDA presubmit compiles remotely (`--spawn_strategy=remote,worker,standalone,local`, seen in this window's logs); JAX ROCm pins builds to the GPU box, while `openxla/xla` ROCm already uses `--spawn_strategy=dynamic`.
+
+{% for a in ask_coverage %}
+**{{ a.repo }}:** {% for cl in a.clauses %}the{{ cl.kind }} runs {{ cl.rocm }} ROCm targets against NV's {{ cl.nv }}{% if cl.up %}, up from {{ cl.up.count }} in the {{ cl.up.label }}{% endif %}{% if not loop.last %}, and {% endif %}{% endfor %}.
+
+{% endfor %}
+**Gating coverage:** with more hardware we can pitch Google to gate PRs on far more ROCm tests than the single target we gate on today.
+
+{% if changes %}
+## Changes since the {{ changes.label }}
+
+| Item | {{ changes.label }} | This week |
+| --- | ---: | ---: |
+{% for row in changes.rows %}
+| {{ row.item }} | {{ row.then }} | {{ row.now }} |
+{% endfor %}
+
+{% if changes.note %}
+> {{ changes.note }}
+{% endif %}
+{% endif %}
