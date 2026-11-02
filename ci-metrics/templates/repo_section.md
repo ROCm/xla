@@ -12,7 +12,7 @@ ${coverage_note}
 
 ${metrics_table}
 
-> DO queue wait = `started_at - created_at` for every DO job in the band (all workflows in the repo). DO time to signal = PR head SHA first triggered (or approved, for fork PRs) to its last ROCm job finishing. RBE cells = wall time of the bazel test step that dispatches to EngFlow, for jobs created in the band.${nightly_note}
+> DO queue wait = `started_at - created_at` for every DO job in the band (all workflows in the repo). DO time to signal = PR head SHA first triggered (or approved, for fork PRs) to its last ROCm job finishing. RBE cells = wall time of the bazel test step that dispatches to EngFlow, for jobs created in the band. NV cells are the same two definitions on the NVIDIA reference lane, with one scope difference: only the NV presubmit workflow is collected, so NV queue wait covers that lane's jobs rather than every NV job in the repo, and it is the GitHub-side wait for a Google-hosted runner, not EngFlow's.${nightly_note}
 
 ### Where the time to signal goes (ROCm on DO, NV on Google runners)
 

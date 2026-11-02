@@ -300,6 +300,12 @@ def repo_section(m, logs, cov, R, span):
         return [(ts(j["started_at"]) - ts(j["created_at"])).total_seconds() for rec, j in m["do_jobs"]
                 if rec["repo"] == R["repo"] and m["band"](ts(j["created_at"])) == b]
 
+    def q_nv(b):
+        """Queue wait on the NV reference lane. Scoped to that lane's jobs, not
+        every NV job in the repo: only the NV presubmit workflow is collected."""
+        return [(ts(j["started_at"]) - ts(j["created_at"])).total_seconds() for _, j in m["lane_jobs"][nk]
+                if j["started_at"] and j["created_at"] and m["band"](ts(j["created_at"])) == b]
+
     def rbe_steps(key, b):
         xs = []
         for _, j in m["lane_jobs"][key]:
@@ -312,23 +318,27 @@ def repo_section(m, logs, cov, R, span):
     def cell(xs):
         return f"{fmt(pct(xs, 90))}  (n={len(xs)})" if xs else "n/a"
 
+    na_nv = ("n/a: no NV counterpart", "n pending")
     rows = []
     bands = [("peak", "peak times"), ("nominal", "nominal times")]
     for b, lbl in bands:
         rows.append([f"Queue wait (P90, {span}), {lbl}", cell(q_do(b)),
-                     ("n/a: EngFlow scheduler queue is not exposed per action; see RBE detail", "n pending")])
+                     ("n/a: EngFlow scheduler queue is not exposed per action; see RBE detail", "n pending"),
+                     cell(q_nv(b))])
     for b, lbl in bands:
         rows.append([f"Time to signal presubmit, {lbl}",
-                     cell([c["total"] for c in commits[rk] if c["band"] == b]), cell(rbe_steps(rk, b))])
+                     cell([c["total"] for c in commits[rk] if c["band"] == b]), cell(rbe_steps(rk, b)),
+                     cell([c["total"] for c in commits[nk] if c["band"] == b])])
     if R["nightly"]:
         rows.append(["Time to signal nightly, bazel", cell(m["nightly"]["bazel"]),
-                     cell([x for x in m["nightly_test_steps"]["bazel"] if x > 0])])
+                     cell([x for x in m["nightly_test_steps"]["bazel"] if x > 0]),
+                     ("n/a: ROCm-only workflow", "n pending")])
         rows.append(["Time to signal nightly, pytest", cell(m["nightly"]["pytest"]),
-                     ("n/a, pytest runs local", "n pending")])
-    for lbl, do, rbe in R.get("extra_metrics", ()):
-        rows.append([lbl, (do, "pending"), rbe])
+                     ("n/a, pytest runs local", "n pending"), ("n/a: ROCm-only workflow", "n pending")])
+    for lbl, do, rbe, *rest in R.get("extra_metrics", ()):
+        rows.append([lbl, (do, "pending"), rbe, rest[0] if rest else na_nv])
     rows = [[(str(i), "n")] + r for i, r in enumerate(rows, 1)]
-    slot["metrics_table"] = table(["#", "Metric", "DO", "RBE"], rows, num_from=2)
+    slot["metrics_table"] = table(["#", "Metric", "DO", "RBE", "NV"], rows, num_from=2)
     slot["nightly_note"] = ""
     if R["nightly"]:
         wfs = ", ".join(f"`{esc(w)}`" for w in R["nightly"])

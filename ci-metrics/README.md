@@ -74,6 +74,13 @@ For this nightly previous day to current timestamp is used as time window
   `last on N/n` counts the commits where that family finished last; a family at
   `n/n` necessarily matches the lane signal, because on those commits it is the
   lane.
+- **The Metrics table's three columns.** `DO` and `RBE` are the two halves of the
+  ROCm lane: the self-hosted runner and the EngFlow pool its tests dispatch to.
+  `NV` is the same metric on the NVIDIA reference lane, so a row reads across as
+  "us, where our tests actually run, and them". It is `n/a` where that lane has
+  no counterpart (the ROCm-only nightlies). NV queue wait covers the NV
+  presubmit lane's jobs — only that workflow is collected, so unlike the DO cell
+  it is not every NV job in the repo.
 - **Phase tables are not banded.** The "Where the time to signal goes" tables
   use one row per lane over all hours. Peak/nominal there left only a handful
   of commits per row once the p90 tail was taken; the band split still applies
