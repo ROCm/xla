@@ -30,6 +30,20 @@ env:
   # "[multi_gpu]", "[rocm_cpu]" - so the mode tag is the marker.
   # TODO: enable when multigpu is green (set this to an empty value).
   IGNORED_STEP_MARKER: '[multi_gpu]'
+  # Only jobs whose name matches this regex are reported at all. The nightly
+  # run holds more than what we monitor:
+  #   - It calls the sanitizers workflow as a reusable workflow, so its jobs
+  #     land in the same run under the "sanitizers / ..." prefix. They are
+  #     expected to be red and are tracked separately, so they are not infra
+  #     failures for us.
+  #   - Its XLA matrix also builds against the TheRock nightly tarball, in
+  #     "execute-xla-ut-nightly (therock_nightly, ...)". That tarball moves
+  #     every day, so the job is not expected to be green either.
+  # What is left, and what we monitor, is the XLA matrix on the pinned TheRock
+  # release - "(therock_release, ...)" and its BuildBuddy variant
+  # "(therock_release_bb, ...)", both matched by the one prefix below - plus
+  # the nightly JAX run, which is reusable too ("jax-upstream / ...").
+  MONITORED_JOB_PATTERN: '^(execute-xla-ut-nightly \(therock_release|jax-upstream)'
 
 on:
   schedule:

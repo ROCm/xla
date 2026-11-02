@@ -29,6 +29,13 @@
 # Env:
 #   IGNORED_STEP_MARKER: Steps whose name contains this marker are known-red
 #                        and are not reported. Empty means report everything.
+#   MONITORED_JOB_PATTERN: Only jobs whose name matches this regex are reported
+#                        at all, whatever their steps are called. Reusable
+#                        workflows called by the monitored pipeline put their
+#                        jobs in the same run, prefixed with the calling job's
+#                        name ("sanitizers / ..."), so anchoring the pattern at
+#                        the start of the name is what keeps unwanted ones out.
+#                        Empty means report every job.
 #
 # Output:
 #   One indented "job / step" line per failure on stdout, nothing if the run
@@ -49,10 +56,21 @@ REPOSITORY="$1"
 RUN_ID="$2"
 
 IGNORED_STEP_MARKER="${IGNORED_STEP_MARKER:-}"
+MONITORED_JOB_PATTERN="${MONITORED_JOB_PATTERN:-}"
 
 JOBS_JSON=$(gh api --paginate \
     -H "Accept: application/vnd.github+json" \
     "/repos/${REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100")
+
+# Keep only the monitored jobs up front, so neither the step pass nor the job
+# pass below can report anything else. Matched on the full, unshortened job
+# name, so a pattern anchored with "^" sees the reusable-workflow prefix
+# ("sanitizers / ...", "jax-upstream / ...") and not just the inner job name.
+if [ -n "$MONITORED_JOB_PATTERN" ]; then
+    JOBS_JSON=$(printf '%s' "$JOBS_JSON" | jq --arg pattern "$MONITORED_JOB_PATTERN" '
+        .jobs |= map(select(.name | test($pattern)))
+    ')
+fi
 
 # GitHub truncates job names at 100 characters, and the nightly matrix puts a
 # ROCm tarball URL in them, so the name usually ends in a half-cut URL. Keep
