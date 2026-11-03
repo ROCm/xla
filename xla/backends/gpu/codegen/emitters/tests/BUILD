@@ -26,6 +26,9 @@ package(
 )
 
 _FILECHECK_ONLY_TESTS = [
+    "dynamic_row_extent/masked_prefix_guard.hlo",
+    "dynamic_row_extent/not_most_major_dim.hlo",
+    "dynamic_row_extent/silu_gate_bias_bf16.hlo",
     "reduce_column_small/f32_32_v2.hlo",
     "reduce_column_small/s8_f32_32_v4.hlo",
     "scatter/sorted_indices_large.hlo",

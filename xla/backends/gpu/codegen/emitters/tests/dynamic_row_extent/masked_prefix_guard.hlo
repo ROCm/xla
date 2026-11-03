@@ -1,0 +1,41 @@
+// RUN: env XLA_FLAGS=--xla_gpu_experimental_dynamic_row_extent=true \
+// RUN:   gpu_fusion_to_mlir %s | FileCheck %s --check-prefix=GUARD
+// RUN: gpu_fusion_to_mlir %s | FileCheck %s --check-prefix=NOGUARD
+
+// The masked MoE epilogue as JAX emits it today: the live row count n is a
+// device scalar and the capacity (4096 rows) is baked into every shape. The
+// select promises zeros past n, so without the flag every thread loads,
+// computes and stores. With the flag the emitter recognizes the root pattern
+// and guards the whole element loop with `first_row < n`.
+
+fusion {
+  x = f32[4096,256] parameter(0)
+  n = s32[] parameter(1)
+  iota = s32[4096,256] iota(), iota_dimension=0
+  n_b = s32[4096,256] broadcast(n), dimensions={}
+  mask = pred[4096,256] compare(iota, n_b), direction=LT
+  lo = f32[] constant(0)
+  hi = f32[] constant(50)
+  lo_b = f32[4096,256] broadcast(lo), dimensions={}
+  hi_b = f32[4096,256] broadcast(hi), dimensions={}
+  clamped = f32[4096,256] clamp(lo_b, x, hi_b)
+  act = f32[4096,256] multiply(clamped, x)
+  ROOT masked = f32[4096,256] select(mask, act, lo_b)
+}
+
+ENTRY entry {
+  x = f32[4096,256] parameter(0)
+  n = s32[] parameter(1)
+  ROOT fusion = f32[4096,256] fusion(x, n), kind=kLoop, calls=fusion
+}
+
+// GUARD:      tensor.extract %arg1[]
+// GUARD:      arith.cmpi slt
+// GUARD:      scf.if
+// GUARD:      xla.loop
+// GUARD:      scf.yield
+// GUARD:      } else {
+// GUARD:      scf.yield
+
+// NOGUARD:     xla.loop
+// NOGUARD-NOT: scf.if
