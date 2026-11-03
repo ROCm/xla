@@ -3139,6 +3139,7 @@ cc_library(
         "//xla:comparison_util",
         "//xla:frontend_attributes",
         "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/pass:hlo_pass",
         "//xla/service/gpu:valid_prefix_extent",

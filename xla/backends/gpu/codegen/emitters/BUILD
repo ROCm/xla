@@ -201,7 +201,6 @@ xla_cc_test(
         "//xla/hlo/testlib:verified_hlo_module",
         "//xla/service:gpu_topology",
         "//xla/service/gpu:gpu_device_info_for_tests",
-        "//xla/service/gpu:hlo_fusion_analysis",
         "//xla/service/gpu:launch_dimensions",
         "//xla/service/gpu:mlir_context_pool",
         "//xla/stream_executor:device_description",

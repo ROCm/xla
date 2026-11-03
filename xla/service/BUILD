@@ -3107,6 +3107,7 @@ xla_test(
         ":hlo_module_config",
         ":pattern_matcher",
         "//xla:error_spec",
+        "//xla:frontend_attributes",
         "//xla:literal",
         "//xla:literal_util",
         "//xla:shape_util",
