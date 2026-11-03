@@ -93,7 +93,7 @@ class TransposeFusionTest : public HloHardwareIndependentTestBase {
       EXPECT_THAT(
           indexing->GetRangeVars(),
           Contains(Field(&IndexingMap::Variable::bounds, *vector_range)))
-          << indexing->ToString();
+          << *indexing;
     }
   }
 
