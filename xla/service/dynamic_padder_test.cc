@@ -15,13 +15,12 @@ limitations under the License.
 
 #include "xla/service/dynamic_padder.h"
 
-#include <gmock/gmock.h>
-
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 
+#include <gmock/gmock.h>
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"

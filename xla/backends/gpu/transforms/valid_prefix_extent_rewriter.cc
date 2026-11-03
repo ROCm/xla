@@ -33,8 +33,8 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/shape_util.h"
 #include "xla/service/gpu/valid_prefix_extent.h"
+#include "xla/shape_util.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -46,8 +46,7 @@ constexpr absl::string_view kAllowDceSideEffectingOp =
 
 bool IsEligibleFusion(const HloInstruction* fusion) {
   return fusion->fusion_kind() == HloInstruction::FusionKind::kLoop &&
-         fusion->shape().IsArray() &&
-         !fusion->shape().dimensions().empty();
+         fusion->shape().IsArray() && !fusion->shape().dimensions().empty();
 }
 
 bool ConsumesValidPrefix(const HloInstruction* user,
@@ -105,8 +104,7 @@ absl::StatusOr<bool> ValidPrefixExtentRewriter::RunImpl(
   for (HloComputation* computation :
        module->MakeNonfusionComputations(execution_threads)) {
     for (HloInstruction* fusion : computation->instructions()) {
-      if (fusion->opcode() != HloOpcode::kFusion ||
-          !IsEligibleFusion(fusion)) {
+      if (fusion->opcode() != HloOpcode::kFusion || !IsEligibleFusion(fusion)) {
         continue;
       }
       std::optional<std::string> id =
@@ -133,8 +131,7 @@ absl::StatusOr<bool> ValidPrefixExtentRewriter::RunImpl(
       for (HloInstruction* user : fusion->users()) {
         auto user_candidate = candidates.find(user);
         const bool same_extent_fusion =
-            user_candidate != candidates.end() &&
-            user_candidate->second == id;
+            user_candidate != candidates.end() && user_candidate->second == id;
         const bool materializes_dynamic_result =
             user->IsCustomCall("SliceToDynamic") &&
             user->operand_count() >= 2 && user->operand(0) == fusion;

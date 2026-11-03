@@ -35,8 +35,6 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/statusor.h"
 #include "xla/comparison_util.h"
 #include "xla/frontend_attributes.h"
 #include "xla/hlo/builder/xla_builder.h"
@@ -66,6 +64,8 @@ limitations under the License.
 #include "xla/util.h"
 #include "xla/window_util.h"
 #include "xla/xla_data.pb.h"
+#include "tsl/platform/errors.h"
+#include "tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -116,8 +116,7 @@ void AnnotateValidPrefixExtents(HloComputation* computation) {
   absl::flat_hash_map<std::string, HloInstruction*> extent_sources;
   std::vector<HloInstruction*> worklist;
 
-  for (HloInstruction* instruction :
-       computation->MakeInstructionPostOrder()) {
+  for (HloInstruction* instruction : computation->MakeInstructionPostOrder()) {
     const bool set_dimension_size =
         instruction->opcode() == HloOpcode::kSetDimensionSize &&
         instruction->dimension() == 0 &&
@@ -143,8 +142,8 @@ void AnnotateValidPrefixExtents(HloComputation* computation) {
     for (HloInstruction* user : instruction->users()) {
       bool preserves = false;
       for (int64_t i = 0; i < user->operand_count(); ++i) {
-        preserves |= user->operand(i) == instruction &&
-                     PreservesValidPrefix(*user, i);
+        preserves |=
+            user->operand(i) == instruction && PreservesValidPrefix(*user, i);
       }
       if (!preserves) {
         continue;
@@ -162,8 +161,7 @@ void AnnotateValidPrefixExtents(HloComputation* computation) {
   absl::flat_hash_set<std::string> used_extents;
   for (auto& [instruction, ids] : extents) {
     if (instruction->opcode() == HloOpcode::kSetDimensionSize ||
-        IsValidPrefixMarker(*instruction) ||
-        ids.size() != 1) {
+        IsValidPrefixMarker(*instruction) || ids.size() != 1) {
       continue;
     }
     instruction->set_frontend_attribute(kXlaValidPrefixExtentId, *ids.begin());
@@ -177,11 +175,9 @@ void AnnotateValidPrefixExtents(HloComputation* computation) {
   }
 }
 
-absl::StatusOr<bool> RemoveValidPrefixMarkers(
-    HloComputation* computation) {
+absl::StatusOr<bool> RemoveValidPrefixMarkers(HloComputation* computation) {
   bool changed = false;
-  for (HloInstruction* instruction :
-       computation->MakeInstructionPostOrder()) {
+  for (HloInstruction* instruction : computation->MakeInstructionPostOrder()) {
     if (!IsValidPrefixMarker(*instruction)) {
       continue;
     }
@@ -201,8 +197,7 @@ void PropagateValidPrefixExtentSources(HloComputation* computation) {
   using ExtentIds = absl::flat_hash_set<std::string>;
   const Shape extent_shape = ShapeUtil::MakeShape(S32, {});
   absl::flat_hash_map<HloInstruction*, ExtentIds> extents;
-  for (HloInstruction* instruction :
-       computation->MakeInstructionPostOrder()) {
+  for (HloInstruction* instruction : computation->MakeInstructionPostOrder()) {
     ExtentIds& instruction_extents = extents[instruction];
     std::optional<std::string> id =
         instruction->get_frontend_attribute(kXlaValidPrefixExtentSource);
@@ -2460,8 +2455,7 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
 
   // Capture valid-prefix associations before dynamic-to-static conversion
   // disconnects set-dimension-size from extent-preserving users.
-  for (HloComputation* computation :
-       module->computations(execution_threads)) {
+  for (HloComputation* computation : module->computations(execution_threads)) {
     AnnotateValidPrefixExtents(computation);
     ABSL_ASSIGN_OR_RETURN(bool c, RemoveValidPrefixMarkers(computation));
     changed |= c;
@@ -2527,8 +2521,7 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
   // Dynamic shape removal can add scalar clamps between n and its consumers.
   // Preserve the source marker through those s32 elementwise chains so later
   // fusion formation cannot hide the extent source.
-  for (HloComputation* computation :
-       module->computations(execution_threads)) {
+  for (HloComputation* computation : module->computations(execution_threads)) {
     if (call_graph->CanReach(module->entry_computation(), computation)) {
       PropagateValidPrefixExtentSources(computation);
     }

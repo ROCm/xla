@@ -13,10 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <gtest/gtest.h>
-
 #include <string>
 
+#include <gtest/gtest.h>
 #include "xla/error_spec.h"
 #include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
 #include "xla/tests/hlo_pjrt_test_base.h"
@@ -89,11 +88,11 @@ TEST_F(KernelLaunchTest, ValidPrefixExtentBoundsLoopFusion) {
           calls=fused_computation,
           backend_config={"fusion_backend_config":{"kind":"kLoop"},"valid_prefix_extent":{"operand_index":"1","dimension":"0"}}
       })";
-    hlo_text.replace(hlo_text.find("LIVE_ROWS"), std::string("LIVE_ROWS").size(),
+    hlo_text.replace(hlo_text.find("LIVE_ROWS"),
+                     std::string("LIVE_ROWS").size(),
                      std::to_string(live_rows));
 
-    EXPECT_TRUE(
-        RunAndCompareNoHloPasses(hlo_text, ErrorSpec{1e-5, 1e-5}));
+    EXPECT_TRUE(RunAndCompareNoHloPasses(hlo_text, ErrorSpec{1e-5, 1e-5}));
   }
 }
 

@@ -15,12 +15,11 @@ limitations under the License.
 
 #include "xla/backends/gpu/transforms/valid_prefix_extent_rewriter.h"
 
-#include <gtest/gtest.h>
-
 #include <memory>
 #include <optional>
 #include <string>
 
+#include <gtest/gtest.h>
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
@@ -48,16 +47,14 @@ namespace xla {
 namespace gpu {
 namespace {
 
-class ValidPrefixExtentRewriterTest
-    : public HloHardwareIndependentTestBase {
+class ValidPrefixExtentRewriterTest : public HloHardwareIndependentTestBase {
  public:
   ValidPrefixExtentRewriterTest() {
     RegisterSymbolicExprStorage(&mlir_context_);
   }
 
  protected:
-  se::DeviceDescription device_info_ =
-      TestGpuDeviceInfo::RTXA6000DeviceInfo();
+  se::DeviceDescription device_info_ = TestGpuDeviceInfo::RTXA6000DeviceInfo();
   GpuAliasInfo alias_info_{device_info_};
   mlir::MLIRContext mlir_context_;
 };
@@ -135,21 +132,20 @@ TEST_F(ValidPrefixExtentRewriterTest,
         }
       }
       if (!found_annotation) {
-        return absl::InternalError(
-            absl::StrCat("DynamicPadder lost valid-prefix metadata:\n",
-                         module->ToString()));
+        return absl::InternalError(absl::StrCat(
+            "DynamicPadder lost valid-prefix metadata:\n", module->ToString()));
       }
     }
 
     auto shape_size = [](const Shape& shape) {
       return ShapeUtil::ByteSizeOf(shape);
     };
-    ABSL_RETURN_IF_ERROR(
-        FusionPipeline(module->config().debug_options(), shape_size,
-                       &alias_info_, /*thread_pool=*/nullptr, device_info_,
-                       &mlir_context_)
-            .Run(module.get())
-            .status());
+    ABSL_RETURN_IF_ERROR(FusionPipeline(module->config().debug_options(),
+                                        shape_size, &alias_info_,
+                                        /*thread_pool=*/nullptr, device_info_,
+                                        &mlir_context_)
+                             .Run(module.get())
+                             .status());
 
     ValidPrefixExtentRewriter rewriter;
     ABSL_RETURN_IF_ERROR(rewriter.Run(module.get()).status());
@@ -186,9 +182,8 @@ ENTRY main {
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           run_bridge(kSupported, /*expect_annotation=*/true));
 
-  TF_ASSERT_OK_AND_ASSIGN(
-      HloInstruction* valid_prefix_fusion,
-      find_valid_prefix_fusion(module.get()));
+  TF_ASSERT_OK_AND_ASSIGN(HloInstruction * valid_prefix_fusion,
+                          find_valid_prefix_fusion(module.get()));
   ASSERT_NE(valid_prefix_fusion, nullptr) << module->ToString();
   ASSERT_EQ(valid_prefix_fusion->operand_count(), 2);
   TF_ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> extent,
@@ -272,16 +267,14 @@ ENTRY main {
   ROOT result = f32[4,<=8] transpose(negated), dimensions={1,0}
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(module,
-                          run_bridge(kUnsupported,
-                                     /*expect_annotation=*/true));
+  TF_ASSERT_OK_AND_ASSIGN(module, run_bridge(kUnsupported,
+                                             /*expect_annotation=*/true));
   TF_ASSERT_OK_AND_ASSIGN(valid_prefix_fusion,
                           find_valid_prefix_fusion(module.get()));
   EXPECT_EQ(valid_prefix_fusion, nullptr);
 }
 
-TEST_F(ValidPrefixExtentRewriterTest,
-       GroupedGemmConsumesValidPrefixFusion) {
+TEST_F(ValidPrefixExtentRewriterTest, GroupedGemmConsumesValidPrefixFusion) {
   constexpr absl::string_view kHlo = R"(
 HloModule GroupedGemmConsumesValidPrefix
 
@@ -355,10 +348,10 @@ ENTRY main {
   TF_ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> contract,
                           GetValidPrefixExtent(*fusion));
   EXPECT_FALSE(contract.has_value());
-  EXPECT_FALSE(fusion->get_frontend_attribute(kXlaValidPrefixExtentId)
-                   .has_value());
-  EXPECT_FALSE(extent->get_frontend_attribute(kXlaValidPrefixExtentSource)
-                   .has_value());
+  EXPECT_FALSE(
+      fusion->get_frontend_attribute(kXlaValidPrefixExtentId).has_value());
+  EXPECT_FALSE(
+      extent->get_frontend_attribute(kXlaValidPrefixExtentSource).has_value());
 }
 
 }  // namespace

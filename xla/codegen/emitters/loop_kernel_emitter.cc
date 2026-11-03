@@ -100,17 +100,15 @@ IndexingMap AddValidPrefixConstraint(IndexingMap indexing_map,
   constraints.reserve(indexing_map.GetConstraintsCount());
   for (const auto& [expression, interval] :
        indexing_map.GetSymbolicConstraints()) {
-    constraints.emplace_back(
-        expression.ReplaceDimsAndSymbols(
-            /*dim_replacements=*/{}, symbol_replacements,
-            /*num_result_dims=*/extent_dim + 1),
-        interval);
+    constraints.emplace_back(expression.ReplaceDimsAndSymbols(
+                                 /*dim_replacements=*/{}, symbol_replacements,
+                                 /*num_result_dims=*/extent_dim + 1),
+                             interval);
   }
 
-  IndexingMap constrained_map(
-      std::move(remapped_map),
-      std::move(dim_vars), indexing_map.GetRangeVars(),
-      indexing_map.GetRTVars(), constraints);
+  IndexingMap constrained_map(std::move(remapped_map), std::move(dim_vars),
+                              indexing_map.GetRangeVars(),
+                              indexing_map.GetRTVars(), constraints);
 
   SymbolicExpr row = constrained_map.GetSymbolicMap().GetResult(0);
   SymbolicExpr extent =
@@ -119,16 +117,14 @@ IndexingMap AddValidPrefixConstraint(IndexingMap indexing_map,
   return constrained_map;
 }
 
-mlir::Value EmitClampedValidPrefixExtent(
-    mlir::ImplicitLocOpBuilder& builder, mlir::Value extent_tensor,
-    int64_t capacity) {
-  mlir::Value extent =
-      builder.create<mlir::tensor::ExtractOp>(extent_tensor);
-  extent = builder.create<mlir::arith::IndexCastOp>(
-      builder.getIndexType(), extent);
+mlir::Value EmitClampedValidPrefixExtent(mlir::ImplicitLocOpBuilder& builder,
+                                         mlir::Value extent_tensor,
+                                         int64_t capacity) {
+  mlir::Value extent = builder.create<mlir::tensor::ExtractOp>(extent_tensor);
+  extent =
+      builder.create<mlir::arith::IndexCastOp>(builder.getIndexType(), extent);
   mlir::Value zero = builder.create<mlir::arith::ConstantIndexOp>(0);
-  mlir::Value upper =
-      builder.create<mlir::arith::ConstantIndexOp>(capacity);
+  mlir::Value upper = builder.create<mlir::arith::ConstantIndexOp>(capacity);
   extent = builder.create<mlir::arith::MaxSIOp>(extent, zero);
   return builder.create<mlir::arith::MinSIOp>(extent, upper);
 }
@@ -227,8 +223,7 @@ absl::Status LoopFusionKernelEmitter::EmitEntryFunction(
     valid_prefix_extent = EmitClampedValidPrefixExtent(
         builder, entry_function.getArgument(extent.operand_index),
         extent.capacity);
-    indexing =
-        AddValidPrefixConstraint(std::move(indexing), extent.capacity);
+    indexing = AddValidPrefixConstraint(std::move(indexing), extent.capacity);
   }
 
   int num_inputs = fusion.fused_instructions_computation()->num_parameters();

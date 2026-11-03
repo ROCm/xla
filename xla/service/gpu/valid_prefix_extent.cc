@@ -83,8 +83,8 @@ absl::Status SetValidPrefixExtent(HloInstruction* instruction,
     return absl::InvalidArgumentError(
         "cannot attach a valid-prefix extent to a null instruction");
   }
-  ABSL_RETURN_IF_ERROR(Validate(*instruction, operand_index, /*dimension=*/0)
-                           .status());
+  ABSL_RETURN_IF_ERROR(
+      Validate(*instruction, operand_index, /*dimension=*/0).status());
   ABSL_ASSIGN_OR_RETURN(GpuBackendConfig config,
                         instruction->backend_config<GpuBackendConfig>());
   ValidPrefixExtentConfig* extent = config.mutable_valid_prefix_extent();

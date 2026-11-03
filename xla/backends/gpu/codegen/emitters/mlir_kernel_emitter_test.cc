@@ -14,9 +14,6 @@ limitations under the License.
 ==============================================================================*/
 #include "xla/backends/gpu/codegen/emitters/mlir_kernel_emitter.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -24,6 +21,8 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include "absl/status/status.h"
 #include "absl/status/status_matchers.h"
 #include "absl/strings/str_replace.h"
@@ -219,16 +218,14 @@ TEST_F(MlirKernelFusionTest, ValidPrefixExtentBoundsLoopFusion) {
 
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
                        ParseAndReturnVerifiedModule(kValidPrefixModule));
-  auto* fusion =
-      Cast<HloFusionInstruction>(module->entry_computation()->root_instruction());
-  HloFusionAnalysis analysis =
-      HloFusionAnalysis::Create(*fusion, device_info_);
+  auto* fusion = Cast<HloFusionInstruction>(
+      module->entry_computation()->root_instruction());
+  HloFusionAnalysis analysis = HloFusionAnalysis::Create(*fusion, device_info_);
   std::unique_ptr<MlirKernelEmitter> emitter =
       std::make_unique<LoopFusion>(analysis);
-  ASSERT_OK_AND_ASSIGN(
-      auto mlir_module,
-      emitter->CreateMLIRModule(mlir_context_, *fusion, "fusion",
-                                /*buffer_assignment=*/nullptr));
+  ASSERT_OK_AND_ASSIGN(auto mlir_module, emitter->CreateMLIRModule(
+                                             mlir_context_, *fusion, "fusion",
+                                             /*buffer_assignment=*/nullptr));
 
   std::string out;
   llvm::raw_string_ostream stream(out);
@@ -272,8 +269,7 @@ TEST_F(MlirKernelFusionTest, ValidPrefixExtentBoundsLoopFusion) {
   std::string llvm_out;
   llvm::raw_string_ostream llvm_stream(llvm_out);
   llvm_stream << *llvm_module.getModuleUnlocked();
-  ASSERT_OK_AND_ASSIGN(auto llvm_filecheck_result,
-                       RunFileCheck(llvm_out, R"(
+  ASSERT_OK_AND_ASSIGN(auto llvm_filecheck_result, RunFileCheck(llvm_out, R"(
     // CHECK-LABEL: define void @fusion(
     // CHECK: %[[EXTENT:.*]] = load i32, ptr
     // CHECK: %[[ACTIVE:.*]] = icmp
@@ -285,7 +281,7 @@ TEST_F(MlirKernelFusionTest, ValidPrefixExtentBoundsLoopFusion) {
   )"));
   EXPECT_TRUE(llvm_filecheck_result) << llvm_out;
 }
-  
+
 TEST_F(MlirKernelFusionTest, CreateLLVMModuleRejectsUnsupportedFmaTypes) {
   auto check_rejected = [&](absl::string_view dtype,
                             const se::DeviceDescription& dev_info) {
