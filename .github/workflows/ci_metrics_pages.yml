@@ -1,0 +1,75 @@
+# Deploys the Pages site when new CI metrics are published.
+#
+# A Pages deployment replaces the entire site, so this builds every section,
+# not just the dashboard -- otherwise each nightly would delete /scaling-book.
+# The build itself lives in the composite action both Pages workflows share;
+# see .github/actions/build-pages-site/action.yml.
+#
+# The companion workflow, scaling_book_pages.yml, is the same deployment driven
+# by the scaling-book side. Both are serialised by the `pages` concurrency
+# group, so whichever runs second simply republishes the same complete site.
+#
+#   rocm.github.io/xla/scaling-book
+#   rocm.github.io/xla/ci-metrics
+
+name: Deploy CI metrics dashboard
+
+on:
+  push:
+    branches: [rocm-dev-infra]
+    paths:
+      - ci-metrics/**
+      - .github/workflows/ci_metrics_pages.yml
+      - .github/actions/build-pages-site/**
+  # Redeploy once the nightly has published a new snapshot, so the trend page
+  # picks it up without waiting for a push. Note that `workflow_run` only fires
+  # for workflow files on the default branch.
+  workflow_run:
+    workflows: ["CI ROCm XLA JAX PR run metrics collection"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # A failed nightly publishes nothing, so there is nothing new to deploy.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Pin the ref: on a `workflow_run` event the checkout would otherwise
+          # follow the event's commit rather than the branch the site is built
+          # from.
+          ref: rocm-dev-infra
+
+      - uses: actions/configure-pages@v6
+        id: pages
+
+      - uses: ./.github/actions/build-pages-site
+        with:
+          base_path: ${{ steps.pages.outputs.base_path }}
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _pages
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
