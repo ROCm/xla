@@ -65,24 +65,50 @@ TEST(CollectiveProfilerTest, Format) {
 
 TEST(CollectiveProfilerTest, NestedScopeDisablesTiming) {
   CollectiveProfiler profiler(/*skip_rounds=*/0);
-  profiler.BeginRound(0);
-  EXPECT_TRUE(profiler.IsActive(0));
+  int executable = 0;
+  auto round = profiler.BeginRound(0, &executable);
+  EXPECT_TRUE(profiler.IsActive());
   {
     CollectiveProfiler::NestedScope scope;
-    EXPECT_FALSE(profiler.IsActive(0));
+    EXPECT_FALSE(profiler.IsActive());
   }
-  EXPECT_TRUE(profiler.IsActive(0));
+  EXPECT_TRUE(profiler.IsActive());
 }
 
-TEST(CollectiveProfilerTest, SkipsRounds) {
+TEST(CollectiveProfilerTest, SkipsRoundsPerExecutableAndDevice) {
   CollectiveProfiler profiler(/*skip_rounds=*/2);
-  EXPECT_FALSE(profiler.IsActive(0));
-  profiler.BeginRound(0);
-  profiler.BeginRound(0);
-  EXPECT_FALSE(profiler.IsActive(0));
-  profiler.BeginRound(0);
-  EXPECT_TRUE(profiler.IsActive(0));
-  EXPECT_FALSE(profiler.IsActive(1));
+  int exe_a = 0;
+  int exe_b = 0;
+  EXPECT_FALSE(profiler.IsActive());
+  profiler.BeginRound(0, &exe_a);
+  profiler.BeginRound(0, &exe_a);
+  {
+    auto round = profiler.BeginRound(0, &exe_b);
+    EXPECT_FALSE(profiler.IsActive());
+  }
+  {
+    auto round = profiler.BeginRound(0, &exe_a);
+    EXPECT_TRUE(profiler.IsActive());
+  }
+  EXPECT_FALSE(profiler.IsActive());
+  {
+    auto round = profiler.BeginRound(1, &exe_a);
+    EXPECT_FALSE(profiler.IsActive());
+  }
+}
+
+TEST(CollectiveProfilerTest, RoundRestoresOuterState) {
+  CollectiveProfiler profiler(/*skip_rounds=*/0);
+  int outer_exe = 0;
+  int inner_exe = 0;
+  CollectiveProfiler skipping(/*skip_rounds=*/1);
+  auto outer = profiler.BeginRound(0, &outer_exe);
+  EXPECT_TRUE(profiler.IsActive());
+  {
+    auto inner = skipping.BeginRound(0, &inner_exe);
+    EXPECT_FALSE(profiler.IsActive());
+  }
+  EXPECT_TRUE(profiler.IsActive());
 }
 
 }  // namespace

@@ -657,8 +657,10 @@ absl::Status GpuExecutable::ExecuteThunksImpl(
     communication_stream_priority = se::StreamPriority::Highest;
   }
 
+  std::unique_ptr<CollectiveProfiler::Round> collective_round;
   if (CollectiveProfiler* profiler = CollectiveProfiler::Get()) {
-    profiler->BeginRound(executor->device_ordinal());
+    collective_round =
+        profiler->BeginRound(executor->device_ordinal(), &thunk_executor);
   }
 
   // Maybe install progress tracker for this execution.

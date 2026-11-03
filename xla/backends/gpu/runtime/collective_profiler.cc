@@ -47,6 +47,7 @@ namespace {
 constexpr size_t kMaxPendingPerDevice = 1 << 16;
 
 thread_local bool in_nested_scope = false;
+thread_local bool round_active = false;
 
 std::string FormatBytes(uint64_t bytes) {
   static constexpr const char* kUnits[] = {"B", "KiB", "MiB", "GiB", "TiB"};
@@ -79,7 +80,7 @@ CollectiveProfiler* CreateFromEnv() {
   auto* profiler = new CollectiveProfiler(skip_rounds);
   std::atexit([] { CollectiveProfiler::Get()->Print(); });
   LOG(INFO) << "Collective timing enabled, skipping the first " << skip_rounds
-            << " executable runs per device";
+            << " runs of each executable per device";
   return profiler;
 }
 
@@ -119,23 +120,30 @@ CollectiveProfiler::DeviceState& CollectiveProfiler::GetDeviceState(
   return devices_[device_ordinal];
 }
 
-void CollectiveProfiler::BeginRound(int device_ordinal) {
-  DeviceState& state = GetDeviceState(device_ordinal);
-  state.rounds.fetch_add(1, std::memory_order_relaxed);
-  Harvest(state, /*block_oldest=*/false);
+CollectiveProfiler::Round::Round(bool active) : prev_active_(round_active) {
+  round_active = active;
 }
 
-bool CollectiveProfiler::IsActive(int device_ordinal) {
-  if (in_nested_scope) return false;
-  return GetDeviceState(device_ordinal).rounds.load(std::memory_order_relaxed) >
-         skip_rounds_;
+CollectiveProfiler::Round::~Round() { round_active = prev_active_; }
+
+std::unique_ptr<CollectiveProfiler::Round> CollectiveProfiler::BeginRound(
+    int device_ordinal, const void* executable) {
+  int64_t rounds;
+  {
+    absl::MutexLock lock(rounds_mu_);
+    rounds = ++rounds_[{executable, device_ordinal}];
+  }
+  Harvest(GetDeviceState(device_ordinal), /*block_oldest=*/false);
+  return std::make_unique<Round>(rounds > skip_rounds_);
 }
+
+bool CollectiveProfiler::IsActive() { return !in_nested_scope && round_active; }
 
 absl::Status CollectiveProfiler::Time(stream_executor::Stream& stream,
                                       std::string name, int64_t bytes,
                                       absl::FunctionRef<absl::Status()> fn) {
   int device_ordinal = stream.parent()->device_ordinal();
-  if (!IsActive(device_ordinal)) return fn();
+  if (!IsActive()) return fn();
 
   absl::StatusOr<std::unique_ptr<stream_executor::EventBasedTimer>> timer =
       stream.CreateEventBasedTimer(/*use_delay_kernel=*/false);
@@ -218,7 +226,8 @@ std::string CollectiveProfiler::Format(const Aggregates& aggregates,
                                        int64_t command_buffer_records) {
   std::string out = absl::StrFormat(
       "\n===== XLA GPU collective timing (devices: %d, skipped first %d "
-      "executable runs per device; times are summed over devices) =====\n",
+      "runs of each executable per device; times are summed over devices) "
+      "=====\n",
       num_devices, skip_rounds);
 
   absl::Duration grand_total = absl::ZeroDuration();
