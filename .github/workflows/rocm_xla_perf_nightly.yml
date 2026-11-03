@@ -34,7 +34,7 @@ on:
       - 'perf_tools/**'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.label.name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -150,30 +150,36 @@ jobs:
           path: perf-tools-src
           persist-credentials: false
 
-      - name: Build multihost_hlo_runner [${{ matrix.mode.name }}]
+      - name: Build and run multihost_hlo_runner [${{ matrix.mode.name }}]
         working-directory: xla-src
+        env:
+          # Read by the --run_under shim. Absolute, because `bazel run` starts
+          # the command in the runfiles tree.
+          HLO_EVAL_OUT: ${{ runner.temp }}/raw/hlo_eval
+          HLO_EVAL_REPEATS: 5
         run: |
-          bazel build -c opt \
+          mkdir -p "$RUNNER_TEMP/raw"
+          # --run_under hands the script the binary bazel just built, so the
+          # path never has to be reconstructed from the output base -- that
+          # spelling bakes in both the `k8-opt` configuration fragment and the
+          # canonical `+rocm_configure_ext+local_config_rocm` repo name.
+          # The flags must match the build step above, or this runs in a
+          # different configuration and rebuilds instead of hitting the cache.
+          bazel run -c opt \
             ${ROCM_BB_CACHE_ARGS} \
             ${COMMON_ARGS} \
             ${ROCM_DISTRO_ARGS} \
+            --run_under="${GITHUB_WORKSPACE}/perf-tools-src/perf_tools/hlo_eval_tools/run_1gpu_perf_under.sh" \
             //xla/tools/multihost_hlo_runner:hlo_runner_main
           # Create empty MODULE.bazel as bazel info needs blzmod
           > MODULE.bazel
+          # Still needed for hipcc and for the runner's ROCm shared libraries;
+          # the hlo_runner_main path itself comes from `bazel run --run_under`.
           bazel_sandbox_dir="$(bazel info output_base)"
           ROCM_DIST="${bazel_sandbox_dir}/external/+rocm_configure_ext+local_config_rocm/rocm/rocm_dist"
-          HLO_RUNNER="${bazel_sandbox_dir}/execroot/_main/bazel-out/k8-opt/bin/xla/tools/multihost_hlo_runner/hlo_runner_main"
           LD_LIBRARY_PATH="${ROCM_DIST}/lib:${ROCM_DIST}/lib/rocm_sysdeps/lib:${LD_LIBRARY_PATH}"
-          echo "HLO_RUNNER=${HLO_RUNNER}" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
           echo "ROCM_DIST=${ROCM_DIST}" >> "$GITHUB_ENV"
-
-      - name: Run multihost_hlo_runner [${{ matrix.mode.name }}]
-        working-directory: perf-tools-src
-        run: |
-          mkdir -p "$RUNNER_TEMP/raw"
-          ./perf_tools/hlo_eval_tools/run_1gpu_perf.sh \
-            "$HLO_RUNNER" "$RUNNER_TEMP/raw/hlo_eval" 5
 
       - name: Build and run rocm_latency_check_tool [${{ matrix.mode.name }}]
         working-directory: perf-tools-src
@@ -244,6 +250,13 @@ jobs:
       XLA_SHA: ${{ needs.rocm-config.outputs.xla-sha }}
       SHA6: ${{ needs.rocm-config.outputs.xla-sha6 }}
     steps:
+      - name: Check out the perf tools
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # For perf_tools/publish_perf_metrics.sh, which every step below
+          # runs. The push uses its own token, so no stored credentials here.
+          persist-credentials: false
+
       - name: Download the per-mode results
         # If every mode failed there is nothing to download; the assemble step
         # below detects that and no-ops rather than failing the run.
@@ -255,61 +268,13 @@ jobs:
 
       - name: Assemble the run directory
         id: assemble
-        run: |
-          run_dir="$RUNNER_TEMP/publish-payload/data/${STAMP}-${SHA6}"
-          mkdir -p "$run_dir"
-
-          modes=()
-          for d in "$RUNNER_TEMP"/artifacts/perf-results-*/; do
-            [ -d "$d" ] || continue
-            mode="$(basename "$d")"
-            mode="${mode#perf-results-}"
-            mkdir -p "$run_dir/$mode"
-            cp -a "$d." "$run_dir/$mode/"
-            modes+=("$mode")
-          done
-
-          if [ "${#modes[@]}" -eq 0 ]; then
-            echo "no result artifacts to publish"
-            echo "empty=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Per-run manifest, so the directory is self-describing too. Kept to a
-          # single python line: a multi-line -c body would have to sit at column
-          # zero and would terminate this YAML block scalar.
-          printf '%s\n' "${modes[@]}" | python3 -I -c 'import json, os, sys; print(json.dumps({"timestamp": os.environ["ISO"], "commit": os.environ["SHA6"], "xla_sha": os.environ["XLA_SHA"], "repository": "openxla/xla", "workflow_run": os.environ["GITHUB_RUN_ID"], "modes": sorted(l.strip() for l in sys.stdin if l.strip())}, indent=2))' > "$run_dir/run.json"
-
-          echo "empty=false" >> "$GITHUB_OUTPUT"
-          find "$run_dir" -type f | sort
+        run: ./perf_tools/publish_perf_metrics.sh assemble
 
       - name: Push the results to the ${{ env.DATA_BRANCH }} branch
         if: steps.assemble.outputs.empty == 'false'
         env:
           PUSH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          work="$RUNNER_TEMP/publish-data"
-          rm -rf "$work" && mkdir -p "$work" && cd "$work"
-          git init -q
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add origin \
-            "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          if git fetch -q --depth 1 origin "$DATA_BRANCH"; then
-            git checkout -q -b "$DATA_BRANCH" FETCH_HEAD
-          else
-            echo "$DATA_BRANCH does not exist yet; creating it"
-            git checkout -q --orphan "$DATA_BRANCH"
-            git rm -rqf --ignore-unmatch .
-          fi
-          cp -a "$RUNNER_TEMP/publish-payload/data" .
-          git add -A data
-          if git diff --cached --quiet; then
-            echo "nothing to commit"
-          else
-            git commit -q -m "perf-nightly results ${STAMP} (xla ${SHA6})"
-            git push -q origin "$DATA_BRANCH"
-          fi
+        run: ./perf_tools/publish_perf_metrics.sh push
 
       - name: Delete the transport artifacts
         # Runs only once the results are safely on the data branch; if the push
@@ -317,17 +282,4 @@ jobs:
         if: steps.assemble.outputs.empty == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
-            --jq '.artifacts[] | select(.name | startswith("perf-results-")) | "\(.id) \(.name)"' \
-          | while read -r id name; do
-              # Best effort: the results are already published, so a failure to
-              # clean up must not fail the run -- retention-days expires it.
-              if gh api --silent -X DELETE \
-                   "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}"; then
-                echo "deleted artifact $name"
-              else
-                echo "warning: could not delete artifact $name ($id)" >&2
-              fi
-            done
+        run: ./perf_tools/publish_perf_metrics.sh cleanup
