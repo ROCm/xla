@@ -43,6 +43,7 @@ limitations under the License.
 #include "xla/layout.h"
 #include "xla/literal.h"
 #include "xla/literal_util.h"
+#include "xla/primitive_util.h"
 #include "xla/service/compiler.h"
 #include "xla/service/decision.h"
 #include "xla/service/gpu/backend_configs.pb.h"
@@ -248,11 +249,17 @@ const HloInstruction* GetScaledDotFromFusion(const HloInstruction& instr) {
 
 // The structure of a scaled-dot fusion that ApplyConfig can lower to
 // __cublas$lt$matmul$mx: each scaled-dot operand comes from its own fusion
-// parameter through bitcasts, and every other instruction belongs to an
-// optional elementwise epilogue, which runs after the GEMM in a loop fusion.
+// parameter through bitcasts, a data operand possibly also through one
+// transpose, which runs before the GEMM in a loop fusion, and every other
+// instruction belongs to an optional elementwise epilogue, which runs after
+// the GEMM in a loop fusion.
 struct MxFusionStructure {
   // The fusion parameter that feeds each scaled-dot operand.
   std::array<int64_t, 4> dot_parameter_numbers = {};
+  // For each data operand whose path contains a transpose, the instructions
+  // of the path after the parameter, from the parameter's user to the
+  // scaled-dot operand. Empty for a path of bitcasts, which is elided.
+  std::array<std::vector<const HloInstruction*>, 2> relayouts;
   // The fusion parameters that feed only the epilogue, in increasing order.
   std::vector<int64_t> epilogue_parameter_numbers;
   // The epilogue instructions other than parameters, in post order. Empty if
@@ -310,6 +317,45 @@ absl::Status CheckMxEpilogueInstruction(const HloInstruction& instr) {
   return absl::OkStatus();
 }
 
+// Whether data operand `dot_index` (0 or 1) of `scaled_dot` has the layout
+// hipBLASLt reads MX data in, a row-major LHS and a column-major RHS, in the
+// one form GemmConfig::For maps to it: from minor to major, the contracting
+// dimensions, the non-contracting dimensions and the batch dimensions, each
+// group in reverse order (of the dimension numbers for the contracting and
+// batch dimensions, of the index for the others). With leading batch
+// dimensions in increasing order this is the descending layout.
+bool HasCanonicalMxDataLayout(const HloInstruction& scaled_dot,
+                              int64_t dot_index) {
+  const Shape& shape = scaled_dot.operand(dot_index)->shape();
+  if (!shape.IsArray() || !shape.has_layout()) {
+    return false;
+  }
+  const DotDimensionNumbers& dims = scaled_dot.dot_dimension_numbers();
+  const auto& contracting = dot_index == 0 ? dims.lhs_contracting_dimensions()
+                                           : dims.rhs_contracting_dimensions();
+  const auto& batch = dot_index == 0 ? dims.lhs_batch_dimensions()
+                                     : dims.rhs_batch_dimensions();
+  if (contracting.empty()) {
+    return false;
+  }
+  const int64_t rank = shape.dimensions().size();
+  std::vector<int64_t> minor_to_major;
+  minor_to_major.reserve(rank);
+  for (int i = contracting.size() - 1; i >= 0; --i) {
+    minor_to_major.push_back(contracting[i]);
+  }
+  for (int64_t dim = rank - 1; dim >= 0; --dim) {
+    if (!absl::c_linear_search(contracting, dim) &&
+        !absl::c_linear_search(batch, dim)) {
+      minor_to_major.push_back(dim);
+    }
+  }
+  for (int i = batch.size() - 1; i >= 0; --i) {
+    minor_to_major.push_back(batch[i]);
+  }
+  return absl::c_equal(minor_to_major, shape.layout().minor_to_major());
+}
+
 // Analyzes `fusion`, a Triton GEMM fusion around `scaled_dot`, for lowering
 // with `scale_mode`. Returns an InvalidArgument error that names the reason if
 // the fusion cannot be lowered.
@@ -342,8 +388,29 @@ absl::StatusOr<MxFusionStructure> AnalyzeMxScaledDotFusion(
   // by a bitcast/reshape inside the fusion. Only such trivial rank-changing
   // ops are allowed on the path, and each instruction on it must have a single
   // user, so that no data or scale value reaches the epilogue.
+  //
+  // A data operand's path may also contain one transpose, which GemmFusionV2
+  // fuses when layout assignment had to copy a gathered weight into the
+  // contracting-minor layout of the scaled-dot. Such a path is materialized
+  // instead of elided. Scale paths keep the bitcast-only rule: GemmFusionV2
+  // fuses no transpose into them.
+  //
+  // Each data operand, materialized or not, must have the canonical layout:
+  // the custom call reads it as it is, and GemmConfig::For, which would
+  // refuse some other layouts, does not run on the default config.
   for (int64_t dot_index = 0; dot_index < 4; ++dot_index) {
     const HloInstruction* cur = scaled_dot.operand(dot_index);
+    if (dot_index < 2 && !HasCanonicalMxDataLayout(scaled_dot, dot_index)) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "hipBLASLt MX lowering requires scaled-dot operand ", dot_index,
+          " in the canonical GEMM layout, contracting dimensions minor and "
+          "the others row-major: ",
+          cur->ToString()));
+    }
+    // The instructions of the path other than the parameter, from the
+    // scaled-dot operand back.
+    std::vector<const HloInstruction*> path;
+    bool has_transpose = false;
     while (true) {
       ABSL_RETURN_IF_ERROR(validate_fp4_storage(cur->shape()));
       if (cur->user_count() != 1) {
@@ -358,29 +425,56 @@ absl::StatusOr<MxFusionStructure> AnalyzeMxScaledDotFusion(
       if (cur->opcode() == HloOpcode::kParameter) {
         break;
       }
-      if (cur->opcode() != HloOpcode::kBitcast &&
-          cur->opcode() != HloOpcode::kReshape) {
+      if (cur->opcode() == HloOpcode::kTranspose) {
+        if (dot_index >= 2) {
+          return absl::InvalidArgumentError(absl::StrCat(
+              "hipBLASLt MX lowering cannot transpose scale operand ",
+              dot_index, ": ", cur->ToString()));
+        }
+        if (has_transpose) {
+          return absl::InvalidArgumentError(
+              absl::StrCat("The path to scaled-dot operand ", dot_index,
+                           " has more than one transpose: ", cur->ToString()));
+        }
+        has_transpose = true;
+      } else if (cur->opcode() != HloOpcode::kBitcast &&
+                 cur->opcode() != HloOpcode::kReshape) {
         return absl::InvalidArgumentError(absl::StrCat(
             "Unexpected op between fusion parameter and scaled-dot: ",
             cur->ToString()));
       }
-      // The whole path is elided. Equal endpoint shapes do not make that safe:
-      // an intermediate bitcast followed by a materializing reshape can change
-      // the byte order and still restore the same shape.
+      // A path without a transpose is elided. Equal endpoint shapes do not
+      // make that safe: an intermediate bitcast followed by a materializing
+      // reshape can change the byte order and still restore the same shape.
+      // A materialized path keeps the same rule.
       if (cur->opcode() == HloOpcode::kReshape &&
           !ShapeUtil::ReshapeIsBitcast(cur->operand(0)->shape(),
                                        cur->shape())) {
         return absl::InvalidArgumentError(
             "hipBLASLt MX lowering cannot discard a materializing reshape");
       }
+      path.push_back(cur);
       cur = cur->operand(0);
     }
     const HloInstruction* ext = fusion.operand(cur->parameter_number());
     ABSL_RETURN_IF_ERROR(validate_fp4_storage(ext->shape()));
     const Shape& inner_shape = scaled_dot.operand(dot_index)->shape();
-    if (scale_mode == se::gpu::ScaleMode::kBlockScaling32x8 &&
-        !ShapeUtil::Equal(ext->shape(), inner_shape) &&
-        !ShapeUtil::ReshapeIsBitcast(ext->shape(), inner_shape)) {
+    if (has_transpose) {
+      // No 4-bit relayout has been tested. The check follows the walk so that
+      // the FP4 storage checks above still report unpacked 4-bit storage.
+      if (primitive_util::BitWidth(inner_shape.element_type()) == 4) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "hipBLASLt MX lowering does not materialize a transposed 4-bit "
+            "data operand: ",
+            scaled_dot.operand(dot_index)->ToString()));
+      }
+      // The materialized path computes the scaled-dot operand in its own
+      // shape and layout, so the external operand needs no further check.
+      absl::c_reverse(path);
+      structure.relayouts[dot_index] = std::move(path);
+    } else if (scale_mode == se::gpu::ScaleMode::kBlockScaling32x8 &&
+               !ShapeUtil::Equal(ext->shape(), inner_shape) &&
+               !ShapeUtil::ReshapeIsBitcast(ext->shape(), inner_shape)) {
       return absl::InvalidArgumentError(
           "Pre-swizzled MX operands require layout-preserving reshapes");
     }
@@ -457,9 +551,62 @@ absl::StatusOr<HloInstruction*> CreateMxEpilogueFusion(
       computation));
 }
 
+// Builds the loop fusion that materializes data operand `dot_index` (0 or 1)
+// of the scaled-dot in the scaled-dot fusion `fusion`, whose operand path
+// contains a transpose. Its only parameter is the operand of `fusion` that
+// feeds the path, and its body is a clone of the path, so its root has the
+// shape and layout of the scaled-dot operand. It is named
+// "<fusion>_lhs_relayout" or "<fusion>_rhs_relayout".
+absl::StatusOr<HloInstruction*> CreateMxRelayoutFusion(
+    HloInstruction& fusion, const HloInstruction& scaled_dot,
+    const MxFusionStructure& structure, int64_t dot_index) {
+  TF_RET_CHECK(dot_index == 0 || dot_index == 1);
+  const std::vector<const HloInstruction*>& path =
+      structure.relayouts[dot_index];
+  TF_RET_CHECK(!path.empty());
+  const int64_t parameter_number = structure.dot_parameter_numbers[dot_index];
+  const HloInstruction* parameter =
+      fusion.fused_instructions_computation()->parameter_instruction(
+          parameter_number);
+  HloComputation::Builder builder("hipblaslt_mx_relayout");
+  HloInstruction* clone =
+      builder.AddInstruction(HloInstruction::CreateParameter(
+          0, parameter->shape(), parameter->name()));
+  for (const HloInstruction* instr : path) {
+    TF_RET_CHECK(instr->operand_count() == 1);
+    clone = builder.AddInstruction(
+        instr->CloneWithNewOperands(instr->shape(), {clone}));
+  }
+  TF_RET_CHECK(
+      ShapeUtil::Equal(clone->shape(), scaled_dot.operand(dot_index)->shape()));
+  HloComputation* computation =
+      fusion.GetModule()->AddEmbeddedComputation(builder.Build(clone));
+  computation->SetExecutionThread(fusion.parent()->execution_thread());
+  HloInstruction* relayout = fusion.parent()->AddInstruction(
+      HloInstruction::CreateFusion(
+          clone->shape(), HloInstruction::FusionKind::kLoop,
+          {fusion.mutable_operand(parameter_number)}, computation),
+      absl::StrCat(fusion.name(),
+                   dot_index == 0 ? "_lhs_relayout" : "_rhs_relayout"));
+  // Only the op name and the source location, for profile attribution:
+  // deduplicated_name and scheduling_name name `fusion`, not this fusion.
+  OpMetadata metadata;
+  metadata.set_op_name(fusion.metadata().op_name());
+  metadata.set_source_file(fusion.metadata().source_file());
+  metadata.set_source_line(fusion.metadata().source_line());
+  metadata.set_source_end_line(fusion.metadata().source_end_line());
+  metadata.set_source_column(fusion.metadata().source_column());
+  metadata.set_source_end_column(fusion.metadata().source_end_column());
+  metadata.set_stack_frame_id(fusion.metadata().stack_frame_id());
+  relayout->set_metadata(metadata);
+  return relayout;
+}
+
 // Replaces `fusion` by `result`. The control predecessors of `fusion` become
 // predecessors of `gemm`, which `result` depends on, and its control
-// successors become successors of `result`.
+// successors become successors of `result`. The operand bitcasts and the
+// relayout and scale swizzle fusions are pure functions of the operands of
+// `fusion` and stay unordered with respect to its predecessors.
 absl::Status ReplaceMxScaledDotFusion(HloInstruction& fusion,
                                       HloInstruction* gemm,
                                       HloInstruction* result) {
@@ -989,10 +1136,18 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
         MxFusionStructure structure,
         AnalyzeMxScaledDotFusion(instr, *scaled_dot, scale_mode));
 
+    // Every check that can refuse the fusion has run. A failure from here on
+    // is an internal error and may leave unused instructions behind.
+    //
     // The operand paths are elided: each external operand is bitcast to the
-    // shape of the scaled-dot operand it feeds.
+    // shape of the scaled-dot operand it feeds. A data operand path with a
+    // transpose is materialized in a loop fusion instead, created last.
     absl::InlinedVector<HloInstruction*, 4> operands;
     for (int64_t dot_index = 0; dot_index < 4; ++dot_index) {
+      if (dot_index < 2 && !structure.relayouts[dot_index].empty()) {
+        operands.push_back(nullptr);
+        continue;
+      }
       HloInstruction* ext =
           instr.mutable_operand(structure.dot_parameter_numbers[dot_index]);
       const Shape& inner_shape = scaled_dot->operand(dot_index)->shape();
@@ -1007,6 +1162,13 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
                             SwizzleHipblasLtScale32x8(operands[2]));
       ABSL_ASSIGN_OR_RETURN(operands[3],
                             SwizzleHipblasLtScale32x8(operands[3]));
+    }
+    for (int64_t dot_index = 0; dot_index < 2; ++dot_index) {
+      if (!structure.relayouts[dot_index].empty()) {
+        ABSL_ASSIGN_OR_RETURN(
+            operands[dot_index],
+            CreateMxRelayoutFusion(instr, *scaled_dot, structure, dot_index));
+      }
     }
     const Shape& result_shape = scaled_dot->shape();
     int64_t workspace_size = gemm_key.autotune_workspace_size();

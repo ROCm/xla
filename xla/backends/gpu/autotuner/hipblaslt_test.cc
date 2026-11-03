@@ -1217,6 +1217,493 @@ TEST_F(HipblasLtScaledDotTest, RefusesFusionStructure) {
   }
 }
 
+// How a transposed data operand reaches the scaled-dot in
+// TransposedOperandFusionHlo. In each form the entry bitcasts the gathered
+// [MN,K]{0,1} buffer to the fusion operand.
+enum class TransposeForm {
+  // The fusion bitcasts its [K,MN] parameter to [K,1,MN] and transposes that
+  // with dimensions={1,2,0}.
+  kBitcastBefore,
+  // The fusion parameter is already [K,1,MN] and is transposed directly with
+  // dimensions={1,2,0}, with no bitcast in the fusion.
+  kParameter,
+  // The fusion transposes its [K,MN] parameter to [MN,K] with
+  // dimensions={1,0} and bitcasts that to [1,MN,K].
+  kBitcastAfter,
+};
+
+// A scaled-dot fusion over a [1,64,512] LHS and a [1,96,512] RHS in which data
+// operand `transposed` (0 or 1, or 2 for both) arrives with K outermost, as a
+// weight all-gathered along its contracting dimension does under FSDP, and is
+// transposed in the fusion, in `form`, to the [1,MN,K]{2,1,0} operand,
+// contracting dimension minor, that layout assignment requires. With
+// `residual`, a BF16 residual add follows the scaled-dot, as in
+// kScaledDotResidualFusionHlo.
+std::string TransposedOperandFusionHlo(
+    int transposed, bool residual, bool fp4 = false,
+    TransposeForm form = TransposeForm::kBitcastBefore) {
+  const std::string type = fp4 ? "f4e2m1fn" : "f8e4m3fn";
+  const std::string storage = fp4 ? ":E(4)" : "";
+  const int first = residual ? 1 : 0;
+  std::string fused, entry;
+  if (residual) {
+    fused += "  r0 = bf16[1,64,96]{2,1,0} parameter(0)\n";
+    entry += "  r0 = bf16[1,64,96]{2,1,0} parameter(0)\n";
+  }
+  for (int side = 0; side < 2; ++side) {
+    const char* name = side == 0 ? "a" : "b";
+    const int mn = side == 0 ? 64 : 96;
+    const int number = first + side;
+    if (transposed == side || transposed == 2) {
+      absl::string_view fused_path;
+      absl::string_view fusion_operand;
+      switch (form) {
+        case TransposeForm::kBitcastBefore:
+          fused_path =
+              "  $0 = $1[512,$2]{1,0$3} parameter($4)\n"
+              "  $0_kmn = $1[512,1,$2]{2,1,0$3} bitcast($0)\n"
+              "  $0_op = $1[1,$2,512]{2,1,0$3} transpose($0_kmn), "
+              "dimensions={1,2,0}\n";
+          fusion_operand = "$1[512,$2]{1,0$3}";
+          break;
+        case TransposeForm::kParameter:
+          fused_path =
+              "  $0 = $1[512,1,$2]{2,1,0$3} parameter($4)\n"
+              "  $0_op = $1[1,$2,512]{2,1,0$3} transpose($0), "
+              "dimensions={1,2,0}\n";
+          fusion_operand = "$1[512,1,$2]{2,1,0$3}";
+          break;
+        case TransposeForm::kBitcastAfter:
+          fused_path =
+              "  $0 = $1[512,$2]{1,0$3} parameter($4)\n"
+              "  $0_t = $1[$2,512]{1,0$3} transpose($0), dimensions={1,0}\n"
+              "  $0_op = $1[1,$2,512]{2,1,0$3} bitcast($0_t)\n";
+          fusion_operand = "$1[512,$2]{1,0$3}";
+          break;
+      }
+      absl::StrAppend(&fused, absl::Substitute(fused_path, name, type, mn,
+                                               storage, number));
+      absl::StrAppend(
+          &entry,
+          absl::Substitute(
+              absl::StrCat("  $0_gathered = $1[$2,512]{0,1$3} parameter($4)\n"
+                           "  $0 = ",
+                           fusion_operand, " bitcast($0_gathered)\n"),
+              name, type, mn, storage, number));
+    } else {
+      absl::StrAppend(
+          &fused,
+          absl::Substitute("  $0_op = $1[1,$2,512]{2,1,0$3} parameter($4)\n",
+                           name, type, mn, storage, number));
+      absl::StrAppend(
+          &entry,
+          absl::Substitute("  $0 = $1[1,$2,512]{2,1,0$3} parameter($4)\n", name,
+                           type, mn, storage, number));
+    }
+  }
+  const std::string scales = absl::Substitute(
+      "  sa = f8e8m0fnu[1,64,16]{2,1,0} parameter($0)\n"
+      "  sb = f8e8m0fnu[1,96,16]{2,1,0} parameter($1)\n",
+      first + 2, first + 3);
+  absl::StrAppend(&fused, scales, residual ? "  dot" : "  ROOT dot",
+                  " = bf16[1,64,96]{2,1,0} scaled-dot(a_op, b_op, sa, sb),\n"
+                  "      lhs_batch_dims={0}, lhs_contracting_dims={2},\n"
+                  "      rhs_batch_dims={0}, rhs_contracting_dims={2}\n");
+  if (residual) {
+    absl::StrAppend(&fused,
+                    "  r0_f32 = f32[1,64,96]{2,1,0} convert(r0)\n"
+                    "  dot_f32 = f32[1,64,96]{2,1,0} convert(dot)\n"
+                    "  sum0 = f32[1,64,96]{2,1,0} add(r0_f32, dot_f32)\n"
+                    "  ROOT out = bf16[1,64,96]{2,1,0} convert(sum0)\n");
+  }
+  absl::StrAppend(&entry, scales);
+  return absl::StrCat(
+      "HloModule ScaledDotTransposedOperand\nfusion_dot {\n", fused,
+      "}\nENTRY main {\n", entry,
+      "  ROOT fusion = bf16[1,64,96]{2,1,0} fusion(", residual ? "r0, " : "",
+      "a, b, sa, sb), kind=kCustom,\n"
+      "      calls=fusion_dot, "
+      "backend_config={\"fusion_backend_config\":{\"kind\":\"__triton_gemm\"}}"
+      "\n}\n");
+}
+
+// The parameter is {the transposed data operands (0 or 1, or 2 for both), the
+// form of the transpose, whether a residual add follows the scaled-dot}.
+class HipblasLtMxRelayoutTest : public HipblasLtPreswizzledScaleTest,
+                                public ::testing::WithParamInterface<
+                                    std::tuple<int, TransposeForm, bool>> {
+ protected:
+  int transposed() const { return std::get<0>(GetParam()); }
+  TransposeForm form() const { return std::get<1>(GetParam()); }
+  bool residual() const { return std::get<2>(GetParam()); }
+  bool IsTransposed(int side) const {
+    return transposed() == side || transposed() == 2;
+  }
+  std::string Hlo() const {
+    return TransposedOperandFusionHlo(transposed(), residual(), /*fp4=*/false,
+                                      form());
+  }
+  // The number of the entry parameter of data or scale operand `operand`.
+  int EntryParameter(int operand) const {
+    return (residual() ? 1 : 0) + operand;
+  }
+};
+
+TEST_P(HipblasLtMxRelayoutTest, OffersBothScaleLayouts) {
+  debug_options_.set_xla_gpu_blas_max_algorithms(4);
+  debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
+      DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_AUTO);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(Hlo()));
+  ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> configs,
+                       backend_.GetSupportedConfigs(
+                           *module->entry_computation()->root_instruction()));
+  bool has_linear = false;
+  bool has_32x8 = false;
+  for (const auto& config : configs) {
+    has_linear |= config->gemm().mx_scale_layout() ==
+                  HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR;
+    has_32x8 |= config->gemm().mx_scale_layout() ==
+                HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8;
+  }
+  EXPECT_TRUE(has_linear);
+  EXPECT_TRUE(has_32x8);
+}
+
+TEST_P(HipblasLtMxRelayoutTest, MaterializesTransposedOperand) {
+  for (auto layout : {HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR,
+                      HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8}) {
+    SCOPED_TRACE(::testing::Message() << "layout=" << layout);
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                         ParseAndReturnVerifiedModule(Hlo()));
+    HloComputation* entry = module->entry_computation();
+    Shape fusion_shape = entry->root_instruction()->shape();
+    BackendConfig config;
+    config.mutable_gemm()->set_autotune_workspace_size(64 * 1024 * 1024);
+    config.mutable_gemm()->set_mx_scale_layout(layout);
+    ASSERT_THAT(backend_.ApplyConfig(*entry->root_instruction(), config),
+                absl_testing::IsOk());
+    EXPECT_THAT(module->Verify(), absl_testing::IsOk());
+
+    // With a residual, the root is the epilogue fusion of the GEMM result.
+    const HloInstruction* gte = entry->root_instruction();
+    if (residual()) {
+      ASSERT_EQ(gte->opcode(), HloOpcode::kFusion);
+      EXPECT_THAT(gte->name(), ::testing::StartsWith("fusion_epilogue"));
+      EXPECT_TRUE(ShapeUtil::Equal(gte->shape(), fusion_shape));
+      ASSERT_EQ(gte->operand_count(), 2);
+      EXPECT_EQ(gte->operand(1), entry->parameter_instruction(0));
+      gte = gte->operand(0);
+    }
+    ASSERT_EQ(gte->opcode(), HloOpcode::kGetTupleElement);
+    const HloInstruction* call = gte->operand(0);
+    ASSERT_EQ(call->opcode(), HloOpcode::kCustomCall);
+    EXPECT_EQ(call->custom_call_target(), "__cublas$lt$matmul$mx");
+    ASSERT_EQ(call->operand_count(), 4);
+    ASSERT_OK_AND_ASSIGN(GpuBackendConfig gpu_config,
+                         call->backend_config<GpuBackendConfig>());
+    EXPECT_EQ(gpu_config.gemm_backend_config().scale_mode(),
+              layout == HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR ? 2 : 3);
+
+    for (int side = 0; side < 2; ++side) {
+      SCOPED_TRACE(::testing::Message() << "side=" << side);
+      const HloInstruction* parameter =
+          entry->parameter_instruction(EntryParameter(side));
+      if (!IsTransposed(side)) {
+        // A data operand without a transpose is elided.
+        EXPECT_EQ(call->operand(side), parameter);
+        continue;
+      }
+      // A transposed operand comes from a loop fusion of the entry bitcast
+      // that computes the scaled-dot operand: [1,MN,512], contracting minor.
+      const HloInstruction* relayout = call->operand(side);
+      ASSERT_EQ(relayout->opcode(), HloOpcode::kFusion);
+      EXPECT_EQ(relayout->fusion_kind(), HloInstruction::FusionKind::kLoop);
+      EXPECT_THAT(relayout->name(),
+                  ::testing::StartsWith(side == 0 ? "fusion_lhs_relayout"
+                                                  : "fusion_rhs_relayout"));
+      EXPECT_TRUE(ShapeUtil::Equal(
+          relayout->shape(),
+          ShapeUtil::MakeShapeWithDenseLayout(
+              F8E4M3FN, {1, side == 0 ? 64 : 96, 512}, {2, 1, 0})));
+      ASSERT_EQ(parameter->user_count(), 1);
+      const HloInstruction* bitcast = parameter->users()[0];
+      ASSERT_EQ(bitcast->opcode(), HloOpcode::kBitcast);
+      ASSERT_EQ(relayout->operand_count(), 1);
+      EXPECT_EQ(relayout->operand(0), bitcast);
+      EXPECT_EQ(bitcast->user_count(), 1);
+
+      // The body is a clone of the path: the parameter, the transpose and,
+      // in the forms that have one, the bitcast before or after it.
+      const HloComputation* body = relayout->fused_instructions_computation();
+      ASSERT_EQ(body->num_parameters(), 1);
+      EXPECT_TRUE(ShapeUtil::Equal(body->parameter_instruction(0)->shape(),
+                                   bitcast->shape()));
+      EXPECT_TRUE(ShapeUtil::Equal(body->root_instruction()->shape(),
+                                   relayout->shape()));
+      EXPECT_EQ(body->instruction_count(),
+                form() == TransposeForm::kParameter ? 2 : 3);
+      const HloInstruction* transpose = body->root_instruction();
+      if (form() == TransposeForm::kBitcastAfter) {
+        ASSERT_EQ(transpose->opcode(), HloOpcode::kBitcast);
+        transpose = transpose->operand(0);
+      }
+      ASSERT_EQ(transpose->opcode(), HloOpcode::kTranspose);
+      if (form() == TransposeForm::kBitcastAfter) {
+        EXPECT_THAT(transpose->dimensions(), ::testing::ElementsAre(1, 0));
+      } else {
+        EXPECT_THAT(transpose->dimensions(), ::testing::ElementsAre(1, 2, 0));
+      }
+      int num_transposes = 0;
+      for (const HloInstruction* instr : body->instructions()) {
+        EXPECT_NE(instr->opcode(), HloOpcode::kScaledDot);
+        num_transposes += instr->opcode() == HloOpcode::kTranspose;
+      }
+      EXPECT_EQ(num_transposes, 1);
+    }
+
+    // The scales are as without a transpose.
+    for (int operand : {2, 3}) {
+      const HloInstruction* parameter =
+          entry->parameter_instruction(EntryParameter(operand));
+      ASSERT_EQ(parameter->user_count(), 1);
+      if (layout == HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8) {
+        EXPECT_TRUE(IsHipblasLtScale32x8Swizzle(*call->operand(operand)));
+        EXPECT_EQ(call->operand(operand)->operand(0), parameter);
+      } else {
+        EXPECT_EQ(call->operand(operand), parameter);
+      }
+    }
+  }
+}
+
+// Every config that GetSupportedConfigs offers can be applied.
+TEST_P(HipblasLtMxRelayoutTest, AppliesEverySupportedConfig) {
+  debug_options_.set_xla_gpu_blas_max_algorithms(4);
+  debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
+      DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_AUTO);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(Hlo()));
+  ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> configs,
+                       backend_.GetSupportedConfigs(
+                           *module->entry_computation()->root_instruction()));
+  bool has_linear = false;
+  bool has_32x8 = false;
+  for (const std::unique_ptr<BackendConfig>& config : configs) {
+    SCOPED_TRACE(config->ShortDebugString());
+    has_linear |= config->gemm().mx_scale_layout() ==
+                  HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR;
+    has_32x8 |= config->gemm().mx_scale_layout() ==
+                HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8;
+    // A fresh copy of the module for each config.
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> copy,
+                         ParseAndReturnVerifiedModule(Hlo()));
+    EXPECT_THAT(backend_.ApplyConfig(
+                    *copy->entry_computation()->root_instruction(), *config),
+                absl_testing::IsOk());
+    EXPECT_THAT(copy->Verify(), absl_testing::IsOk());
+  }
+  EXPECT_TRUE(has_linear);
+  EXPECT_TRUE(has_32x8);
+}
+
+// The autotuner's profiling path compiles the relayout fusion with the GEMM.
+TEST_P(HipblasLtMxRelayoutTest, CompilesWithRelayout) {
+  for (auto policy :
+       {DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_LINEAR,
+        DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_PRESWIZZLED_32X8}) {
+    SCOPED_TRACE(::testing::Message() << "policy=" << policy);
+    debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(policy);
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                         ParseAndReturnVerifiedModule(Hlo()));
+    HloInstruction* fusion = module->entry_computation()->root_instruction();
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackendConfig> config,
+                         backend_.GetDefaultConfig(*fusion));
+    EXPECT_THAT(backend_.Compile(*fusion, *config), absl_testing::IsOk());
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MxRelayouts, HipblasLtMxRelayoutTest,
+    ::testing::Combine(::testing::Values(0, 1, 2),
+                       ::testing::Values(TransposeForm::kBitcastBefore,
+                                         TransposeForm::kParameter,
+                                         TransposeForm::kBitcastAfter),
+                       ::testing::Bool()),
+    [](const ::testing::TestParamInfo<std::tuple<int, TransposeForm, bool>>&
+           info) {
+      const int transposed = std::get<0>(info.param);
+      const TransposeForm form = std::get<1>(info.param);
+      return absl::StrCat(
+          transposed == 0 ? "Lhs" : (transposed == 1 ? "Rhs" : "Both"),
+          "Transposed",
+          form == TransposeForm::kParameter
+              ? "FromParameter"
+              : (form == TransposeForm::kBitcastAfter ? "ThenBitcast" : ""),
+          std::get<2>(info.param) ? "WithResidual" : "");
+    });
+
+// Under 32x8, FP4 data must be packed along the whole materialized path, not
+// only at the scaled-dot operand.
+TEST_F(HipblasLtPreswizzledScaleTest, RejectsUnpackedFp4BeforeTranspose) {
+  for (int location : {0, 1}) {
+    SCOPED_TRACE(::testing::Message() << "location=" << location);
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<VerifiedHloModule> module,
+        ParseAndReturnVerifiedModule(TransposedOperandFusionHlo(
+            /*transposed=*/1, /*residual=*/false, /*fp4=*/true)));
+    HloInstruction* fusion = module->entry_computation()->root_instruction();
+    HloInstruction* parameter =
+        fusion->fused_instructions_computation()->parameter_instruction(1);
+    ASSERT_EQ(parameter->user_count(), 1);
+    // The fusion parameter, or the bitcast between it and the transpose.
+    HloInstruction* unpacked =
+        location == 0 ? parameter : parameter->users()[0];
+    unpacked->mutable_shape()->mutable_layout()->set_element_size_in_bits(0);
+    BackendConfig config;
+    config.mutable_gemm()->set_mx_scale_layout(
+        HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8);
+    EXPECT_THAT(backend_.ApplyConfig(*fusion, config),
+                absl_testing::StatusIs(
+                    absl::StatusCode::kInvalidArgument,
+                    ::testing::HasSubstr("packed E(4) storage throughout")));
+    EXPECT_EQ(module->entry_computation()->root_instruction(), fusion);
+  }
+}
+
+// No 4-bit relayout has been tested, so a transposed FP4 data operand is
+// refused under both scale layouts, although the scaled-dot operands are packed
+// and allow 32x8.
+TEST_F(HipblasLtPreswizzledScaleTest, RefusesTransposedFp4Operand) {
+  debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
+      DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_AUTO);
+  constexpr absl::string_view kError =
+      "does not materialize a transposed 4-bit data operand";
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<VerifiedHloModule> module,
+      ParseAndReturnVerifiedModule(TransposedOperandFusionHlo(
+          /*transposed=*/1, /*residual=*/false, /*fp4=*/true)));
+  HloInstruction* fusion = module->entry_computation()->root_instruction();
+  const std::string before = module->ToString();
+  EXPECT_THAT(backend_.GetSupportedConfigs(*fusion),
+              absl_testing::IsOkAndHolds(testing::IsEmpty()));
+  EXPECT_THAT(backend_.GetDefaultConfig(*fusion),
+              absl_testing::StatusIs(absl::StatusCode::kInvalidArgument,
+                                     ::testing::HasSubstr(kError)));
+  for (auto layout : {HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR,
+                      HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8}) {
+    SCOPED_TRACE(::testing::Message() << "layout=" << layout);
+    BackendConfig config;
+    config.mutable_gemm()->set_autotune_workspace_size(64 * 1024 * 1024);
+    config.mutable_gemm()->set_mx_scale_layout(layout);
+    EXPECT_THAT(backend_.ApplyConfig(*fusion, config),
+                absl_testing::StatusIs(absl::StatusCode::kInvalidArgument,
+                                       ::testing::HasSubstr(kError)));
+  }
+  EXPECT_EQ(module->ToString(), before);
+}
+
+// An FP8 scaled-dot fusion over [1,64,64] data and [1,64,2] scales whose
+// operand paths contain transposes or give a data operand a layout other than
+// the canonical one. Each case of RefusesTransposedOperandPath supplies the
+// fused computation's body and the shape of `sa`.
+const char kMxTransposedPathHlo[] = R"(
+HloModule MxTransposedPath
+fusion_dot {
+<<BODY>>
+}
+ENTRY main {
+  a = f8e4m3fn[1,64,64]{2,1,0} parameter(0)
+  b = f8e4m3fn[1,64,64]{2,1,0} parameter(1)
+  sa = <<SA>> parameter(2)
+  sb = f8e8m0fnu[1,64,2]{2,1,0} parameter(3)
+  ROOT fusion = bf16[1,64,64]{2,1,0} fusion(a, b, sa, sb), kind=kCustom,
+      calls=fusion_dot, backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
+})";
+
+TEST_F(HipblasLtScaledDotTest, RefusesTransposedOperandPath) {
+  debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
+      DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_AUTO);
+  constexpr absl::string_view kDims =
+      "lhs_batch_dims={0}, lhs_contracting_dims={2}, "
+      "rhs_batch_dims={0}, rhs_contracting_dims={2}";
+  struct Case {
+    absl::string_view name;
+    absl::string_view sa_shape;
+    absl::string_view body;
+    absl::string_view error;
+  };
+  const Case kCases[] = {
+      {"transpose on a scale operand path", "f8e8m0fnu[1,2,64]{2,1,0}", R"(
+  a = f8e4m3fn[1,64,64]{2,1,0} parameter(0)
+  b = f8e4m3fn[1,64,64]{2,1,0} parameter(1)
+  sa = f8e8m0fnu[1,2,64]{2,1,0} parameter(2)
+  sb = f8e8m0fnu[1,64,2]{2,1,0} parameter(3)
+  sa_t = f8e8m0fnu[1,64,2]{2,1,0} transpose(sa), dimensions={0,2,1}
+  ROOT dot = bf16[1,64,64]{2,1,0} scaled-dot(a, b, sa_t, sb), <<DIMS>>)",
+       "cannot transpose scale operand 2"},
+      {"two transposes on a data operand path", "f8e8m0fnu[1,64,2]{2,1,0}", R"(
+  a = f8e4m3fn[1,64,64]{2,1,0} parameter(0)
+  b = f8e4m3fn[1,64,64]{2,1,0} parameter(1)
+  sa = f8e8m0fnu[1,64,2]{2,1,0} parameter(2)
+  sb = f8e8m0fnu[1,64,2]{2,1,0} parameter(3)
+  b_t0 = f8e4m3fn[1,64,64]{2,1,0} transpose(b), dimensions={0,2,1}
+  b_t1 = f8e4m3fn[1,64,64]{2,1,0} transpose(b_t0), dimensions={0,2,1}
+  ROOT dot = bf16[1,64,64]{2,1,0} scaled-dot(a, b_t1, sa, sb), <<DIMS>>)",
+       "more than one transpose"},
+      {"transpose result with the contracting dimension major",
+       "f8e8m0fnu[1,64,2]{2,1,0}", R"(
+  a = f8e4m3fn[1,64,64]{2,1,0} parameter(0)
+  b = f8e4m3fn[1,64,64]{2,1,0} parameter(1)
+  sa = f8e8m0fnu[1,64,2]{2,1,0} parameter(2)
+  sb = f8e8m0fnu[1,64,2]{2,1,0} parameter(3)
+  b_t = f8e4m3fn[1,64,64]{1,2,0} transpose(b), dimensions={0,2,1}
+  ROOT dot = bf16[1,64,64]{2,1,0} scaled-dot(a, b_t, sa, sb), <<DIMS>>)",
+       "operand 1 in the canonical GEMM layout"},
+      {"bitcast to the contracting dimension major without a transpose",
+       "f8e8m0fnu[1,64,2]{2,1,0}", R"(
+  a = f8e4m3fn[1,64,64]{2,1,0} parameter(0)
+  b = f8e4m3fn[1,64,64]{2,1,0} parameter(1)
+  sa = f8e8m0fnu[1,64,2]{2,1,0} parameter(2)
+  sb = f8e8m0fnu[1,64,2]{2,1,0} parameter(3)
+  a_km = f8e4m3fn[1,64,64]{1,2,0} bitcast(a)
+  ROOT dot = bf16[1,64,64]{2,1,0} scaled-dot(a_km, b, sa, sb), <<DIMS>>)",
+       "operand 0 in the canonical GEMM layout"},
+      {"batch dimension minor to the non-contracting dimension",
+       "f8e8m0fnu[1,64,2]{2,1,0}", R"(
+  a = f8e4m3fn[1,64,64]{2,1,0} parameter(0)
+  b = f8e4m3fn[1,64,64]{2,1,0} parameter(1)
+  sa = f8e8m0fnu[1,64,2]{2,1,0} parameter(2)
+  sb = f8e8m0fnu[1,64,2]{2,1,0} parameter(3)
+  b_nb = f8e4m3fn[1,64,64]{2,0,1} bitcast(b)
+  ROOT dot = bf16[1,64,64]{2,1,0} scaled-dot(a, b_nb, sa, sb), <<DIMS>>)",
+       "operand 1 in the canonical GEMM layout"},
+  };
+  for (const Case& c : kCases) {
+    SCOPED_TRACE(c.name);
+    std::string body = absl::StrReplaceAll(c.body, {{"<<DIMS>>", kDims}});
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                         ParseAndReturnVerifiedModule(absl::StrReplaceAll(
+                             kMxTransposedPathHlo,
+                             {{"<<BODY>>", body}, {"<<SA>>", c.sa_shape}})));
+    HloInstruction* fusion = module->entry_computation()->root_instruction();
+    const std::string before = module->ToString();
+    EXPECT_THAT(backend_.GetSupportedConfigs(*fusion),
+                absl_testing::IsOkAndHolds(testing::IsEmpty()));
+    EXPECT_THAT(backend_.GetDefaultConfig(*fusion),
+                absl_testing::StatusIs(absl::StatusCode::kInvalidArgument,
+                                       ::testing::HasSubstr(c.error)));
+    BackendConfig config;
+    config.mutable_gemm()->set_autotune_workspace_size(64 * 1024 * 1024);
+    config.mutable_gemm()->set_mx_scale_layout(
+        HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR);
+    EXPECT_THAT(backend_.ApplyConfig(*fusion, config),
+                absl_testing::StatusIs(absl::StatusCode::kInvalidArgument,
+                                       ::testing::HasSubstr(c.error)));
+    EXPECT_EQ(module->ToString(), before);
+  }
+}
+
 }  // namespace
 
 }  // namespace gpu

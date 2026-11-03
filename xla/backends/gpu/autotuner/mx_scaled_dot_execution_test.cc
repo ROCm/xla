@@ -457,6 +457,131 @@ TEST_F(MxScaledDotExecutionTest,
   }
 }
 
+// An RHS that arrives with K outermost, as a weight all-gathered along its
+// contracting dimension does under FSDP. GemmFusionV2 fuses the transpose to
+// the contracting-minor operand into the scaled-dot fusion, and the hipBLASLt
+// lowering moves it to a loop fusion before the GEMM.
+constexpr absl::string_view kMxFp8TransposedRhsHlo = R"(
+HloModule mx_fp8_transposed_rhs_test
+ENTRY main {
+  a = f8e4m3fn[1,64,512]{2,1,0} parameter(0)
+  b = f8e4m3fn[512,1,96]{2,1,0} parameter(1)
+  sa = f8e8m0fnu[1,64,16]{2,1,0} parameter(2)
+  sb = f8e8m0fnu[1,96,16]{2,1,0} parameter(3)
+  b_t = f8e4m3fn[1,96,512]{2,1,0} transpose(b), dimensions={1,2,0}
+  ROOT dot = f32[1,64,96]{2,1,0} scaled-dot(a, b_t, sa, sb),
+      lhs_batch_dims={0}, lhs_contracting_dims={2},
+      rhs_batch_dims={0}, rhs_contracting_dims={2}
+})";
+
+TEST_F(MxScaledDotExecutionTest,
+       MxFp8TransposedRhsMatchesDequantizedReference) {
+  const auto* rocm =
+      device_description().gpu_compute_capability().rocm_compute_capability();
+  if (rocm == nullptr || !rocm->gfx9_mi350()) {
+    GTEST_SKIP() << "Pre-swizzled scale tests require gfx950";
+  }
+  // {scale layout policy, expected scale_mode}
+  for (auto [layout, scale_mode] :
+       {std::pair{DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_LINEAR, 2},
+        std::pair{DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_PRESWIZZLED_32X8,
+                  3}}) {
+    SCOPED_TRACE(::testing::Message() << "layout=" << layout);
+    HloModuleConfig ref_config = GetModuleConfigForTest();
+    ref_config.mutable_debug_options()
+        .set_xla_gpu_experimental_scaled_dot_with_triton(false);
+    ref_config.mutable_debug_options().set_xla_gpu_enable_triton_gemm(false);
+    auto reference_or = GetOptimizedModule(kMxFp8TransposedRhsHlo, ref_config);
+    ASSERT_THAT(reference_or, absl_testing::IsOk());
+    auto reference = std::move(reference_or).value();
+
+    HloModuleConfig hipblaslt_config = GetModuleConfigForTest();
+    DebugOptions& options = hipblaslt_config.mutable_debug_options();
+    options.set_xla_gpu_experimental_scaled_dot_with_triton(true);
+    options.set_xla_gpu_enable_triton_gemm(true);
+    options.set_xla_gpu_blas_max_algorithms(4);
+    options.set_xla_autotuner_preferred_backend(autotuner::HIPBLASLT);
+    options.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(layout);
+    auto hipblaslt_or =
+        GetOptimizedModule(kMxFp8TransposedRhsHlo, hipblaslt_config);
+    ASSERT_THAT(hipblaslt_or, absl_testing::IsOk());
+    auto hipblaslt = std::move(hipblaslt_or).value();
+    // Follow live operands from the result to the MX call.
+    const HloInstruction* mx_call = nullptr;
+    std::vector<const HloInstruction*> pending{
+        hipblaslt->entry_computation()->root_instruction()};
+    while (!pending.empty()) {
+      const HloInstruction* instruction = pending.back();
+      pending.pop_back();
+      if (instruction->opcode() == HloOpcode::kCustomCall &&
+          instruction->custom_call_target() == "__cublas$lt$matmul$mx") {
+        mx_call = instruction;
+        break;
+      }
+      for (const HloInstruction* operand : instruction->operands()) {
+        pending.push_back(operand);
+      }
+    }
+    ASSERT_NE(mx_call, nullptr) << hipblaslt->ToString();
+    auto config_or = mx_call->backend_config<GpuBackendConfig>();
+    ASSERT_THAT(config_or, absl_testing::IsOk());
+    auto config = std::move(config_or).value();
+    ASSERT_EQ(config.gemm_backend_config().scale_mode(), scale_mode);
+    // The transpose was fused into the scaled-dot fusion and split off by the
+    // hipBLASLt lowering, so a relayout fusion computes the RHS of the GEMM.
+    const HloInstruction* rhs = mx_call->operand(1);
+    ASSERT_EQ(rhs->opcode(), HloOpcode::kFusion) << hipblaslt->ToString();
+    EXPECT_TRUE(absl::StrContains(rhs->name(), "_relayout"))
+        << hipblaslt->ToString();
+    int num_transposes = 0;
+    for (const HloInstruction* instruction :
+         rhs->fused_instructions_computation()->instructions()) {
+      num_transposes += instruction->opcode() == HloOpcode::kTranspose;
+    }
+    EXPECT_EQ(num_transposes, 1) << hipblaslt->ToString();
+
+    // Exactly representable data and power-of-two scales that change along
+    // both MN and K/32, as in RunPreswizzledCorrectnessTest, indexed by the
+    // logical [MN, K] position so that the product signs are constant along
+    // K. `b` is stored as [K, 1, N].
+    auto value = [](int operand, int64_t mn, int64_t k) -> uint8_t {
+      if (operand < 2) {
+        return static_cast<uint8_t>((0x28 + (mn * 17 + k * 11 + operand) % 17) |
+                                    (((mn + k) & 1) << 7));
+      }
+      return static_cast<uint8_t>(125 + (mn * 7 + k * 11 + operand) % 5);
+    };
+    std::vector<Literal> inputs;
+    inputs.reserve(4);
+    for (int operand = 0; operand < 4; ++operand) {
+      const Shape& shape = hipblaslt->entry_computation()
+                               ->parameter_instruction(operand)
+                               ->shape();
+      inputs.emplace_back(shape);
+      auto* bytes = static_cast<uint8_t*>(inputs.back().untyped_data());
+      if (operand == 1) {
+        for (int64_t k = 0; k < 512; ++k) {
+          for (int64_t n = 0; n < 96; ++n) {
+            bytes[k * 96 + n] = value(operand, n, k);
+          }
+        }
+        continue;
+      }
+      int64_t rows = shape.dimensions(1);
+      int64_t cols = shape.dimensions(2);
+      for (int64_t r = 0; r < rows; ++r) {
+        for (int64_t c = 0; c < cols; ++c) {
+          bytes[r * cols + c] = value(operand, r, c);
+        }
+      }
+    }
+    EXPECT_TRUE(RunAndCompareTwoModules(
+        std::move(hipblaslt), std::move(reference),
+        {&inputs[0], &inputs[1], &inputs[2], &inputs[3]},
+        ErrorSpec(/*aabs=*/1e-3, /*arel=*/1e-5), /*run_hlo_passes=*/false));
+  }
+}
+
 // Two scaled-dots that share their LHS data and scale, as the q, k and v
 // projections share their normalized input.
 constexpr absl::string_view kMxFp8SharedScaleHlo = R"(

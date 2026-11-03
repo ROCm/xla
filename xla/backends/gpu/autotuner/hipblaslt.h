@@ -41,7 +41,8 @@ namespace gpu {
 // 1. cuBLASLt custom calls (__cublas$lt$matmul, __cublas$lt$matmul$f8)
 // 2. __triton_gemm fusions containing kScaledDot, which are converted to
 // __cublas$lt$matmul$mx custom calls. Elementwise instructions that consume
-// the scaled-dot result in the fusion move to a loop fusion after the call.
+// the scaled-dot result in the fusion move to a loop fusion after the call,
+// and a transpose of a data operand moves to a loop fusion before it.
 //
 // If hipBLASLt has no algorithm for the FP8 output of a __cublas$lt$matmul$f8,
 // the configs are for a GEMM with a wider output, and ApplyConfig adds a loop
@@ -70,8 +71,9 @@ class HipblasLtBackend : public GpuCodegenBackend {
     // Loose cache matching may still reuse another backend's cached winner.
     // ApplyConfig always consumes the serialized layout, not the policy.
     // v4: scaled-dot fusions with an elementwise epilogue have candidates.
+    // v5: scaled-dot fusions with a transposed data operand have candidates.
     return target_config().device_description.runtime_version().ToString() +
-           ":mx-scale-layout-v4:" +
+           ":mx-scale-layout-v5:" +
            std::to_string(
                debug_options()
                    .xla_gpu_experimental_hipblaslt_mx_scale_layout());
