@@ -2571,6 +2571,35 @@ ENTRY main {
                 ->get_frontend_attribute(kXlaValidPrefixExtentSource));
 }
 
+TEST_F(DynamicPadderTest, DoesNotPropagateExtentSourceToDerivedScalars) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+HloModule ValidPrefixDerivedScalar
+
+ENTRY main {
+  data = f32[8,4] parameter(0)
+  n = s32[] parameter(1)
+  one = s32[] constant(1)
+  n_minus_one = s32[] subtract(n, one)
+  bounded = f32[<=8,4] set-dimension-size(data, n), dimensions={0}
+  result = f32[<=8,4] exponential(bounded)
+  ROOT tuple = (f32[<=8,4], s32[]) tuple(result, n_minus_one)
+}
+)")
+                    .value();
+
+  DynamicPadder pass;
+  ASSERT_TRUE(pass.Run(module.get()).value());
+
+  HloInstruction* n = FindInstruction(module.get(), "n");
+  HloInstruction* n_minus_one = FindInstruction(module.get(), "n_minus_one");
+  ASSERT_NE(n, nullptr);
+  ASSERT_NE(n_minus_one, nullptr);
+  EXPECT_TRUE(
+      n->get_frontend_attribute(kXlaValidPrefixExtentSource).has_value());
+  EXPECT_FALSE(n_minus_one->get_frontend_attribute(kXlaValidPrefixExtentSource)
+                   .has_value());
+}
+
 TEST_F(DynamicPadderTest, ValidPrefixMarkerSeedsAssociation) {
   auto module = ParseAndReturnVerifiedModule(R"(
 HloModule ValidPrefixMarker

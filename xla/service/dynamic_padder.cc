@@ -193,36 +193,6 @@ absl::StatusOr<bool> RemoveValidPrefixMarkers(HloComputation* computation) {
   return changed;
 }
 
-void PropagateValidPrefixExtentSources(HloComputation* computation) {
-  using ExtentIds = absl::flat_hash_set<std::string>;
-  const Shape extent_shape = ShapeUtil::MakeShape(S32, {});
-  absl::flat_hash_map<HloInstruction*, ExtentIds> extents;
-  for (HloInstruction* instruction : computation->MakeInstructionPostOrder()) {
-    ExtentIds& instruction_extents = extents[instruction];
-    std::optional<std::string> id =
-        instruction->get_frontend_attribute(kXlaValidPrefixExtentSource);
-    if (id.has_value()) {
-      instruction_extents.insert(*id);
-    }
-    if (!instruction->IsElementwise() || instruction->shape() != extent_shape) {
-      continue;
-    }
-    for (HloInstruction* operand : instruction->operands()) {
-      auto operand_extents = extents.find(operand);
-      if (operand_extents != extents.end()) {
-        instruction_extents.insert(operand_extents->second.begin(),
-                                   operand_extents->second.end());
-      }
-    }
-    if (instruction_extents.size() == 1) {
-      instruction->set_frontend_attribute(kXlaValidPrefixExtentSource,
-                                          *instruction_extents.begin());
-    } else if (extents[instruction].size() > 1) {
-      instruction->erase_frontend_attribute(kXlaValidPrefixExtentSource);
-    }
-  }
-}
-
 // ChooseIdentityValue looks at the instruction's operand, returns a
 // identity value which, when padded, doesn't change the result of the
 // instruction.
@@ -2129,6 +2099,8 @@ absl::StatusOr<HloInstruction*> DynamicShapeRemovingVisitor::ConvertToDynamic(
         dimension_size = inst->AddInstruction(HloInstruction::CreateConstant(
             LiteralUtil::CreateR0<int32_t>(subshape.dimensions(i))));
       } else {
+        std::optional<std::string> valid_prefix_extent =
+            dimension_size->get_frontend_attribute(kXlaValidPrefixExtentSource);
         // Clamp the size to [0, bound]: nothing validates the size operand
         // of set-dimension-size, and SliceToDynamic uses it as an unchecked
         // copy bound.
@@ -2140,6 +2112,10 @@ absl::StatusOr<HloInstruction*> DynamicShapeRemovingVisitor::ConvertToDynamic(
         dimension_size = inst->AddInstruction(HloInstruction::CreateTernary(
             dimension_size->shape(), HloOpcode::kClamp, zero, dimension_size,
             bound));
+        if (valid_prefix_extent.has_value()) {
+          dimension_size->set_frontend_attribute(kXlaValidPrefixExtentSource,
+                                                 *valid_prefix_extent);
+        }
       }
       slice_operand.push_back(dimension_size);
     }
@@ -2515,15 +2491,6 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
 
       ABSL_ASSIGN_OR_RETURN(c, ReplaceSetBound(instruction));
       changed |= c;
-    }
-  }
-
-  // Dynamic shape removal can add scalar clamps between n and its consumers.
-  // Preserve the source marker through those s32 elementwise chains so later
-  // fusion formation cannot hide the extent source.
-  for (HloComputation* computation : module->computations(execution_threads)) {
-    if (call_graph->CanReach(module->entry_computation(), computation)) {
-      PropagateValidPrefixExtentSources(computation);
     }
   }
 

@@ -79,8 +79,8 @@ ENTRY main {
     calls=fused_computation
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(kHlo));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHlo));
   std::unique_ptr<HloModule> without_extent = module->Clone("without_extent");
   ASSERT_OK(SetValidPrefixExtent(
       module->entry_computation()->root_instruction(), /*operand_index=*/1));
@@ -88,8 +88,8 @@ ENTRY main {
   auto verify_contract = [](const HloModule& candidate) {
     const HloInstruction* fusion =
         candidate.entry_computation()->root_instruction();
-    TF_ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> extent,
-                            GetValidPrefixExtent(*fusion));
+    ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> extent,
+                         GetValidPrefixExtent(*fusion));
     ASSERT_TRUE(extent.has_value());
     EXPECT_EQ(extent->operand_index, 1);
     EXPECT_EQ(extent->dimension, 0);
@@ -100,7 +100,7 @@ ENTRY main {
   std::unique_ptr<HloModule> clone = module->Clone("clone");
   verify_contract(*clone);
 
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<HloModule> roundtrip,
       HloModule::CreateFromProto(module->ToProto(), module->config()));
   verify_contract(*roundtrip);
@@ -179,15 +179,15 @@ ENTRY main {
   ROOT result = f32[<=8,4] exponential(negated)
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          run_bridge(kSupported, /*expect_annotation=*/true));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       run_bridge(kSupported, /*expect_annotation=*/true));
 
-  TF_ASSERT_OK_AND_ASSIGN(HloInstruction * valid_prefix_fusion,
-                          find_valid_prefix_fusion(module.get()));
+  ASSERT_OK_AND_ASSIGN(HloInstruction * valid_prefix_fusion,
+                       find_valid_prefix_fusion(module.get()));
   ASSERT_NE(valid_prefix_fusion, nullptr) << module->ToString();
   ASSERT_EQ(valid_prefix_fusion->operand_count(), 2);
-  TF_ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> extent,
-                          GetValidPrefixExtent(*valid_prefix_fusion));
+  ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> extent,
+                       GetValidPrefixExtent(*valid_prefix_fusion));
   ASSERT_TRUE(extent.has_value());
   EXPECT_EQ(extent->operand_index, 1);
   EXPECT_EQ(extent->dimension, 0);
@@ -211,10 +211,10 @@ ENTRY main {
   ROOT result = f32[<=8,2,2] negate(reshaped)
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       module, run_bridge(kStructuralTransfers, /*expect_annotation=*/true));
-  TF_ASSERT_OK_AND_ASSIGN(valid_prefix_fusion,
-                          find_valid_prefix_fusion(module.get()));
+  ASSERT_OK_AND_ASSIGN(valid_prefix_fusion,
+                       find_valid_prefix_fusion(module.get()));
   ASSERT_NE(valid_prefix_fusion, nullptr) << module->ToString();
 
   constexpr absl::string_view kSharedExtent = R"(
@@ -230,10 +230,10 @@ ENTRY main {
   ROOT result = f32[<=8,4] exponential(sum)
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(
-      module, run_bridge(kSharedExtent, /*expect_annotation=*/true));
-  TF_ASSERT_OK_AND_ASSIGN(valid_prefix_fusion,
-                          find_valid_prefix_fusion(module.get()));
+  ASSERT_OK_AND_ASSIGN(module,
+                       run_bridge(kSharedExtent, /*expect_annotation=*/true));
+  ASSERT_OK_AND_ASSIGN(valid_prefix_fusion,
+                       find_valid_prefix_fusion(module.get()));
   ASSERT_NE(valid_prefix_fusion, nullptr) << module->ToString();
 
   constexpr absl::string_view kUnequalExtents = R"(
@@ -250,10 +250,10 @@ ENTRY main {
   ROOT result = f32[<=8,4] exponential(sum)
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(
+  ASSERT_OK_AND_ASSIGN(
       module, run_bridge(kUnequalExtents, /*expect_annotation=*/false));
-  TF_ASSERT_OK_AND_ASSIGN(valid_prefix_fusion,
-                          find_valid_prefix_fusion(module.get()));
+  ASSERT_OK_AND_ASSIGN(valid_prefix_fusion,
+                       find_valid_prefix_fusion(module.get()));
   EXPECT_EQ(valid_prefix_fusion, nullptr);
 
   constexpr absl::string_view kUnsupported = R"(
@@ -267,10 +267,10 @@ ENTRY main {
   ROOT result = f32[4,<=8] transpose(negated), dimensions={1,0}
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(module, run_bridge(kUnsupported,
-                                             /*expect_annotation=*/true));
-  TF_ASSERT_OK_AND_ASSIGN(valid_prefix_fusion,
-                          find_valid_prefix_fusion(module.get()));
+  ASSERT_OK_AND_ASSIGN(module, run_bridge(kUnsupported,
+                                          /*expect_annotation=*/true));
+  ASSERT_OK_AND_ASSIGN(valid_prefix_fusion,
+                       find_valid_prefix_fusion(module.get()));
   EXPECT_EQ(valid_prefix_fusion, nullptr);
 }
 
@@ -294,8 +294,8 @@ ENTRY main {
     custom_call_target="__cublas$lt$groupedMatmul"
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(kHlo));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHlo));
   HloInstruction* fusion =
       module->entry_computation()->GetInstructionWithName("epilogue");
   HloInstruction* extent =
@@ -306,10 +306,10 @@ ENTRY main {
   extent->set_frontend_attribute(kXlaValidPrefixExtentSource, "extent");
 
   ValidPrefixExtentRewriter rewriter;
-  TF_ASSERT_OK_AND_ASSIGN(bool changed, rewriter.Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(bool changed, rewriter.Run(module.get()));
   EXPECT_TRUE(changed);
-  TF_ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> contract,
-                          GetValidPrefixExtent(*fusion));
+  ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> contract,
+                       GetValidPrefixExtent(*fusion));
   ASSERT_TRUE(contract.has_value());
   EXPECT_EQ(fusion->operand(contract->operand_index), extent);
 }
@@ -331,8 +331,8 @@ ENTRY main {
     custom_call_target="unknown"
 }
 )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnVerifiedModule(kHlo));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHlo));
   HloInstruction* fusion =
       module->entry_computation()->GetInstructionWithName("epilogue");
   HloInstruction* extent =
@@ -343,10 +343,10 @@ ENTRY main {
   extent->set_frontend_attribute(kXlaValidPrefixExtentSource, "extent");
 
   ValidPrefixExtentRewriter rewriter;
-  TF_ASSERT_OK_AND_ASSIGN(bool changed, rewriter.Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(bool changed, rewriter.Run(module.get()));
   EXPECT_TRUE(changed);
-  TF_ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> contract,
-                          GetValidPrefixExtent(*fusion));
+  ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> contract,
+                       GetValidPrefixExtent(*fusion));
   EXPECT_FALSE(contract.has_value());
   EXPECT_FALSE(
       fusion->get_frontend_attribute(kXlaValidPrefixExtentId).has_value());

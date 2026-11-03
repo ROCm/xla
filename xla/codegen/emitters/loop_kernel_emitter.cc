@@ -120,13 +120,13 @@ IndexingMap AddValidPrefixConstraint(IndexingMap indexing_map,
 mlir::Value EmitClampedValidPrefixExtent(mlir::ImplicitLocOpBuilder& builder,
                                          mlir::Value extent_tensor,
                                          int64_t capacity) {
-  mlir::Value extent = builder.create<mlir::tensor::ExtractOp>(extent_tensor);
+  mlir::Value extent = mlir::tensor::ExtractOp::create(builder, extent_tensor);
   extent =
-      builder.create<mlir::arith::IndexCastOp>(builder.getIndexType(), extent);
-  mlir::Value zero = builder.create<mlir::arith::ConstantIndexOp>(0);
-  mlir::Value upper = builder.create<mlir::arith::ConstantIndexOp>(capacity);
-  extent = builder.create<mlir::arith::MaxSIOp>(extent, zero);
-  return builder.create<mlir::arith::MinSIOp>(extent, upper);
+      mlir::arith::IndexCastOp::create(builder, builder.getIndexType(), extent);
+  mlir::Value zero = mlir::arith::ConstantIndexOp::create(builder, 0);
+  mlir::Value upper = mlir::arith::ConstantIndexOp::create(builder, capacity);
+  extent = mlir::arith::MaxSIOp::create(builder, extent, zero);
+  return mlir::arith::MinSIOp::create(builder, extent, upper);
 }
 
 }  // namespace
@@ -214,9 +214,11 @@ absl::Status LoopFusionKernelEmitter::EmitEntryFunction(
       EmitWorkGroupIds(builder, work_dimensions_.num_work_groups);
 
   auto indexing = ComputeWorkItemIdToOutputIndexing(&mlir_context_);
-  ABSL_ASSIGN_OR_RETURN(
-      std::optional<gpu::ValidPrefixExtent> valid_prefix_extent_contract,
-      gpu::GetValidPrefixExtent(fusion));
+  std::optional<gpu::ValidPrefixExtent> valid_prefix_extent_contract;
+  if (backend_kind_ == BackendKind::kGpu) {
+    ABSL_ASSIGN_OR_RETURN(valid_prefix_extent_contract,
+                          gpu::GetValidPrefixExtent(fusion));
+  }
   std::optional<mlir::Value> valid_prefix_extent;
   if (valid_prefix_extent_contract.has_value()) {
     const gpu::ValidPrefixExtent& extent = *valid_prefix_extent_contract;

@@ -33,6 +33,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/service/gpu/cublas_cudnn.h"
 #include "xla/service/gpu/valid_prefix_extent.h"
 #include "xla/shape_util.h"
 #include "xla/xla_data.pb.h"
@@ -51,7 +52,7 @@ bool IsEligibleFusion(const HloInstruction* fusion) {
 
 bool ConsumesValidPrefix(const HloInstruction* user,
                          const HloInstruction* producer) {
-  return user->IsCustomCall("__cublas$lt$groupedMatmul") &&
+  return user->IsCustomCall(kCublasLtGroupedMatmulCallTarget) &&
          user->operand_count() > 0 && user->operand(0) == producer;
 }
 
