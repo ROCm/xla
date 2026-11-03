@@ -1621,7 +1621,8 @@ GetStreamExecutorGpuDeviceAllocator(
           /*reclaim_exempt_memory_space=*/
           static_cast<int64_t>(gpu::MemorySpaceColor::kCollective),
           std::make_unique<se::MultiDeviceAdapter>(platform,
-                                                   std::move(host_allocators)));
+                                                   std::move(host_allocators)),
+          allocator_config.sub_allocator_free_visitors);
     }
   }
 
@@ -2053,7 +2054,7 @@ std::unique_ptr<PjRtClient> MakeStreamExecutorGpuClient(
   attrs.attributes["dump_on_deserialize"] = true;
   attrs.attributes["should_stage_host_to_device_transfers"] =
       raw_client->should_stage_host_to_device_transfers();
-  auto result = std::make_unique<CommonPjRtClientImpl>(
+  auto result = std::make_unique<CommonPjRtClient>(
       tsl::Fingerprint64(platform_name), platform_name, platform_version,
       process_index, std::move(topology), std::move(raw_client),
       std::move(kv_store), std::move(attrs));
@@ -2488,10 +2489,10 @@ static absl::StatusOr<PjRtStreamExecutorExecutionOutput> RunGpuAsync(
       gpu_exec->buffer_allocator().CreateExecutionScope(
           run_options, memory_allocator, device_ordinal));
 
-  ABSL_ASSIGN_OR_RETURN(xla::gpu::BufferAllocations buffer_allocations,
-                        allocation_scope->GenerateBufferAllocations(
-                            run_options, get_parameter_buffer, globals,
-                            memory_allocator, device_ordinal));
+  ABSL_ASSIGN_OR_RETURN(
+      xla::gpu::BufferAllocations buffer_allocations,
+      allocation_scope->GenerateBufferAllocations(
+          run_options, get_parameter_buffer, globals, memory_allocator));
   XLA_VLOG_DEVICE(3, device_ordinal)
       << "Buffer allocations: " << buffer_allocations.ToString();
 
@@ -2550,7 +2551,7 @@ static absl::StatusOr<PjRtStreamExecutorExecutionOutput> RunGpuAsync(
             result_buffer,
             allocation_scope->AllocateCopyProtectedOutputBuffer(
                 run_options, buffer_allocations, index, *allocation,
-                device_ordinal, memory_allocator, [&](absl::Status status) {
+                memory_allocator, [&](absl::Status status) {
                   return ResourceExhausted(
                       "%s\n%s\n", status.message(),
                       gpu_exec->buffer_allocations_debug_summary());
@@ -2639,15 +2640,15 @@ static absl::StatusOr<PjRtStreamExecutorExecutionOutput> RunGpuAsync(
   }
 
   absl::Status execute_status = allocation_scope->ExecuteWithBufferAllocations(
-      buffer_allocations, device_ordinal,
+      buffer_allocations,
       [&](const gpu::BufferAllocations& execution_buffers,
           std::optional<absl::Span<const BufferAllocation::Index>>
               persistent_alloc_indices) {
         return gpu_exec->ExecuteThunks(execution_buffers, run_options,
                                        persistent_alloc_indices);
       });
-  absl::Status teardown_status = buffer_allocations.TearDown(
-      buffers_in_result, gpu_exec->GetAllocations());
+  absl::Status teardown_status =
+      allocation_scope->TearDown(buffers_in_result, buffer_allocations);
 
   ABSL_RETURN_IF_ERROR(execute_status);
   ABSL_RETURN_IF_ERROR(teardown_status);
