@@ -303,6 +303,42 @@ TransposeFusion::TransposeFusion(const HloFusionAnalysis& analysis)
         break;
       }
     }
+
+    // A thread that stores half a byte of a 4-bit output (F4E2M1FN, S4, ...)
+    // does so with an atomic read-modify-write of the byte, and its neighbour
+    // contends for it. If the heuristics above chose vector size 1 for a
+    // fusion with a 4-bit root, use vector size 2 when both tiled minor
+    // dimensions are even and the enlarged tile fits in shared memory; then
+    // no two threads share an output byte. Otherwise the rule is skipped. 1-
+    // and 2-bit roots keep the heuristics' choice, since larger tiles for them
+    // are untested. Intel GPUs do not vectorize sub-byte stores.
+    constexpr int kFourBitVectorSize = 2;
+    bool has_four_bit_root = absl::c_any_of(
+        analysis_.fusion_roots(), [](const HloInstructionAdaptor& root) {
+          PrimitiveType element_type = root.shape().element_type();
+          return primitive_util::IsSubByteNonPredType(element_type) &&
+                 primitive_util::BitWidth(element_type) == 4;
+        });
+    if (has_four_bit_root && vector_size_ < kFourBitVectorSize &&
+        !device.gpu_compute_capability().IsOneAPI()) {
+      int64_t elems_per_thread = kFourBitVectorSize * kFourBitVectorSize;
+      if (input_shape_.back() % kFourBitVectorSize != 0 ||
+          input_shape_[permutation_.back()] % kFourBitVectorSize != 0) {
+        VLOG(2) << "Transpose with a 4-bit root keeps vector size "
+                << vector_size_ << ": a tiled minor dimension ("
+                << input_shape_.back() << ", "
+                << input_shape_[permutation_.back()] << ") is odd";
+      } else if (shmem_usage * elems_per_thread >
+                 device.shared_memory_per_block()) {
+        VLOG(2) << "Transpose with a 4-bit root keeps vector size "
+                << vector_size_ << ": the enlarged tile needs "
+                << shmem_usage * elems_per_thread
+                << " bytes of shared memory, more than the "
+                << device.shared_memory_per_block() << " per block";
+      } else {
+        compute_block_sizes(kFourBitVectorSize);
+      }
+    }
   }
 }
 

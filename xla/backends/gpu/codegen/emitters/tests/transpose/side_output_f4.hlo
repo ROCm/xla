@@ -1,0 +1,33 @@
+// RUN: gpu_fusion_to_mlir %s | emitters_opt -xla-test-optimize |\
+// RUN:   FileCheck %s --check-prefix=TILE
+// RUN: gpu_fusion_to_mlir %s | emitters_opt -xla-test-optimize \
+// RUN:   -xla-gpu-test-transform-loops | FileCheck %s --check-prefix=VEC
+// RUN: gpu_fusion_to_mlir %s | emitters_opt -xla-test-optimize \
+// RUN:   -xla-gpu-test-transform-loops | FileCheck %s --check-prefix=SCALAR
+// RUN: gpu_test_correctness %s
+
+// An f32 weight cast to FP4 in both orientations, as for MXFP4 weights. The
+// heuristics alone pick vector size 1 here, which leaves every thread with a
+// single FP4 element of each output, stored with an atomic read-modify-write
+// of its byte. Each thread must store at least one whole byte (two elements)
+// of both the transposed output and the side output.
+fusion {
+  %p0 = f32[1024,4096] parameter(0)
+  %side = f32[1024,128,32] bitcast(%p0)
+  %side_cvt = f4e2m1fn[1024,128,32]{2,1,0:E(4)} convert(%side)
+  %tr = f32[4096,1024] transpose(%p0), dimensions={1,0}
+  %tr_bc = f32[4096,32,32] bitcast(%tr)
+  %tr_cvt = f4e2m1fn[4096,32,32]{2,1,0:E(4)} convert(%tr_bc)
+  ROOT %t = (f4e2m1fn[1024,128,32]{2,1,0:E(4)},
+             f4e2m1fn[4096,32,32]{2,1,0:E(4)}) tuple(%side_cvt, %tr_cvt)
+}
+
+// A 64x64 tile (vector size 2) instead of 32x32.
+// TILE: xla_gpu.allocate_shared : tensor<64x65xf32>
+
+// VEC: vector.transfer_write
+// VEC-SAME: vector<2xf4E2M1FN>, tensor<4194304xf4E2M1FN>
+// VEC: vector.transfer_write
+// VEC-SAME: vector<2xf4E2M1FN>, tensor<4194304xf4E2M1FN>
+
+// SCALAR-NOT: tensor.insert {{.*}} : tensor<4194304xf4E2M1FN>

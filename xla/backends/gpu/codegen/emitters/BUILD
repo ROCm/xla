@@ -461,3 +461,27 @@ cc_library(
         "@llvm-project//mlir:VectorDialect",
     ],
 )
+
+xla_cc_test(
+    name = "transpose_test",
+    srcs = ["transpose_test.cc"],
+    tags = ["gpu"],
+    deps = [
+        ":mlir_kernel_emitter",
+        ":transpose",
+        "//xla/hlo/analysis:indexing_analysis",
+        "//xla/hlo/analysis:interval",
+        "//xla/hlo/analysis:symbolic_map",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
+        "//xla/service/gpu:gpu_device_info_for_tests",
+        "//xla/service/gpu:hlo_fusion_analysis",
+        "//xla/service/gpu:launch_dimensions",
+        "//xla/stream_executor:device_description",
+        "//xla/tests:xla_internal_test_main",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest",
+        "@llvm-project//mlir:IR",
+    ],
+)
