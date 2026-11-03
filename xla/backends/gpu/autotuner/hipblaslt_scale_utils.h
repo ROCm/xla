@@ -34,9 +34,17 @@ Decision CanUseHipblasLtScale32x8(
 // original scale available to other users. Accepts row-major [MN, K/32] or
 // [1, MN, K/32] E8M0 scales with MN divisible by 32 and K/32 divisible by 8.
 // The returned buffer has the same shape, but must only be consumed using
-// HIPBLASLT_MATMUL_MATRIX_SCALE_BLK32_UE8M0_32_8_EXT.
+// HIPBLASLT_MATMUL_MATRIX_SCALE_BLK32_UE8M0_32_8_EXT. If any structurally
+// identical swizzle of this operand (IsHipblasLtScale32x8Swizzle) without
+// control predecessors or successors is among the users of `scale`, it is
+// returned instead of a new one, so a scale shared by several GEMMs is
+// swizzled once.
 absl::StatusOr<HloInstruction*> SwizzleHipblasLtScale32x8(
     HloInstruction* scale);
+
+// Whether `instr` is a loop fusion that computes the 32x8 swizzle of its only
+// operand, i.e. has the structure SwizzleHipblasLtScale32x8 emits.
+bool IsHipblasLtScale32x8Swizzle(const HloInstruction& instr);
 
 }  // namespace xla::gpu
 

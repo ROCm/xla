@@ -671,6 +671,7 @@ cc_library(
         "//xla/service:decision",
         "//xla/stream_executor:device_description",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -754,6 +755,7 @@ xla_test(
         "rocm-only",
     ],
     deps = [
+        ":hipblaslt_scale_utils",
         "//xla:error_spec",
         "//xla:literal",
         "//xla:shape_util",
@@ -787,6 +789,7 @@ xla_test(
     use_legacy_runtime = True,
     deps = [
         ":hipblaslt",
+        ":hipblaslt_scale_utils",
         "//xla:autotuning_proto_cc",
         "//xla:shape_util",
         "//xla:xla_proto_cc",

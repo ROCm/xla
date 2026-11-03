@@ -27,8 +27,10 @@ limitations under the License.
 #include "absl/strings/substitute.h"
 #include "absl/types/span.h"
 #include "xla/backends/autotuner/backends.pb.h"
+#include "xla/backends/gpu/autotuner/hipblaslt_scale_utils.h"
 #include "xla/backends/gpu/tests/hlo_pjrt_gpu_test_base.h"
 #include "xla/error_spec.h"
+#include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/parser/hlo_parser.h"
@@ -453,6 +455,106 @@ TEST_F(MxScaledDotExecutionTest,
         {&inputs[0], &inputs[1], &inputs[2], &inputs[3], &inputs[4]},
         ErrorSpec(/*aabs=*/1e-2, /*arel=*/1e-2), /*run_hlo_passes=*/false));
   }
+}
+
+// Two scaled-dots that share their LHS data and scale, as the q, k and v
+// projections share their normalized input.
+constexpr absl::string_view kMxFp8SharedScaleHlo = R"(
+HloModule mx_fp8_shared_scale_test
+ENTRY main {
+  a = f8e4m3fn[64,512]{1,0} parameter(0)
+  b = f8e4m3fn[96,512]{1,0} parameter(1)
+  c = f8e4m3fn[128,512]{1,0} parameter(2)
+  sa = f8e8m0fnu[64,16]{1,0} parameter(3)
+  sb = f8e8m0fnu[96,16]{1,0} parameter(4)
+  sc = f8e8m0fnu[128,16]{1,0} parameter(5)
+  dot0 = f32[64,96]{1,0} scaled-dot(a, b, sa, sb),
+      lhs_contracting_dims={1}, rhs_contracting_dims={1}
+  dot1 = f32[64,128]{1,0} scaled-dot(a, c, sa, sc),
+      lhs_contracting_dims={1}, rhs_contracting_dims={1}
+  ROOT results = (f32[64,96]{1,0}, f32[64,128]{1,0}) tuple(dot0, dot1)
+})";
+
+TEST_F(MxScaledDotExecutionTest,
+       SharedScaleSwizzledOnceMatchesDequantizedReference) {
+  const auto* rocm =
+      device_description().gpu_compute_capability().rocm_compute_capability();
+  if (rocm == nullptr || !rocm->gfx9_mi350()) {
+    GTEST_SKIP() << "Pre-swizzled scale tests require gfx950";
+  }
+  HloModuleConfig ref_config = GetModuleConfigForTest();
+  ref_config.mutable_debug_options()
+      .set_xla_gpu_experimental_scaled_dot_with_triton(false);
+  ref_config.mutable_debug_options().set_xla_gpu_enable_triton_gemm(false);
+  auto reference_or = GetOptimizedModule(kMxFp8SharedScaleHlo, ref_config);
+  ASSERT_THAT(reference_or, absl_testing::IsOk());
+  auto reference = std::move(reference_or).value();
+
+  HloModuleConfig packed_config = GetModuleConfigForTest();
+  DebugOptions& options = packed_config.mutable_debug_options();
+  options.set_xla_gpu_experimental_scaled_dot_with_triton(true);
+  options.set_xla_gpu_enable_triton_gemm(true);
+  options.set_xla_gpu_blas_max_algorithms(4);
+  options.set_xla_autotuner_preferred_backend(autotuner::HIPBLASLT);
+  options.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
+      DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_PRESWIZZLED_32X8);
+  auto packed_or = GetOptimizedModule(kMxFp8SharedScaleHlo, packed_config);
+  ASSERT_THAT(packed_or, absl_testing::IsOk());
+  auto packed = std::move(packed_or).value();
+
+  // Both GEMMs run as packed hipBLASLt calls, and one swizzle fusion of `sa`
+  // feeds both of them.
+  const HloComputation* entry = packed->entry_computation();
+  std::vector<const HloInstruction*> mx_calls;
+  int swizzles = 0;
+  for (const HloInstruction* instruction : entry->instructions()) {
+    if (instruction->opcode() == HloOpcode::kCustomCall &&
+        instruction->custom_call_target() == "__cublas$lt$matmul$mx") {
+      mx_calls.push_back(instruction);
+    }
+    if (IsHipblasLtScale32x8Swizzle(*instruction)) {
+      ++swizzles;
+    }
+  }
+  ASSERT_THAT(mx_calls, ::testing::SizeIs(2)) << packed->ToString();
+  for (const HloInstruction* mx_call : mx_calls) {
+    auto config_or = mx_call->backend_config<GpuBackendConfig>();
+    ASSERT_THAT(config_or, absl_testing::IsOk());
+    ASSERT_EQ(config_or->gemm_backend_config().scale_mode(), 3);
+  }
+  const HloInstruction* shared_swizzle = mx_calls[0]->operand(2);
+  EXPECT_EQ(mx_calls[1]->operand(2), shared_swizzle) << packed->ToString();
+  EXPECT_TRUE(IsHipblasLtScale32x8Swizzle(*shared_swizzle))
+      << packed->ToString();
+  EXPECT_EQ(shared_swizzle->operand(0), entry->parameter_instruction(3))
+      << packed->ToString();
+  EXPECT_EQ(swizzles, 3) << packed->ToString();
+
+  // Exactly representable data and power-of-two scales that change along both
+  // MN and K/32, as in RunPreswizzledCorrectnessTest.
+  std::vector<Literal> inputs;
+  inputs.reserve(6);
+  for (int operand = 0; operand < 6; ++operand) {
+    const Shape& shape = entry->parameter_instruction(operand)->shape();
+    inputs.emplace_back(shape);
+    auto* bytes = static_cast<uint8_t*>(inputs.back().untyped_data());
+    int64_t rows = shape.dimensions(0);
+    int64_t cols = shape.dimensions(1);
+    for (int64_t r = 0; r < rows; ++r) {
+      for (int64_t c = 0; c < cols; ++c) {
+        if (operand < 3) {
+          bytes[r * cols + c] =
+              (0x28 + (r * 17 + c * 11 + operand) % 17) | (((r + c) & 1) << 7);
+        } else {
+          bytes[r * cols + c] = 125 + (r * 7 + c * 11 + operand) % 5;
+        }
+      }
+    }
+  }
+  EXPECT_TRUE(RunAndCompareTwoModules(
+      std::move(packed), std::move(reference),
+      {&inputs[0], &inputs[1], &inputs[2], &inputs[3], &inputs[4], &inputs[5]},
+      ErrorSpec(/*aabs=*/1e-3, /*arel=*/1e-5), /*run_hlo_passes=*/false));
 }
 
 }  // namespace

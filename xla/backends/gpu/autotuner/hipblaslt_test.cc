@@ -33,6 +33,7 @@ limitations under the License.
 #include "absl/strings/substitute.h"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/codegen_backend.h"
+#include "xla/backends/gpu/autotuner/hipblaslt_scale_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
@@ -718,6 +719,80 @@ TEST_F(HipblasLtPreswizzledScaleTest, RejectsUnpackedFp4OperandPath) {
       EXPECT_EQ(module->entry_computation()->root_instruction(), fusion);
     }
   }
+}
+
+// Two scaled-dots that share their LHS data and scale, as the q, k and v
+// projections share their normalized input.
+const char kSharedScaleScaledDotsHlo[] = R"(
+HloModule SharedScaleScaledDots
+fusion_dot0 {
+  a = f8e4m3fn[64,512]{1,0} parameter(0)
+  b = f8e4m3fn[96,512]{1,0} parameter(1)
+  sa = f8e8m0fnu[64,16]{1,0} parameter(2)
+  sb = f8e8m0fnu[96,16]{1,0} parameter(3)
+  ROOT dot = f32[64,96]{1,0} scaled-dot(a, b, sa, sb),
+      lhs_contracting_dims={1}, rhs_contracting_dims={1}
+}
+fusion_dot1 {
+  a = f8e4m3fn[64,512]{1,0} parameter(0)
+  c = f8e4m3fn[128,512]{1,0} parameter(1)
+  sa = f8e8m0fnu[64,16]{1,0} parameter(2)
+  sc = f8e8m0fnu[128,16]{1,0} parameter(3)
+  ROOT dot = f32[64,128]{1,0} scaled-dot(a, c, sa, sc),
+      lhs_contracting_dims={1}, rhs_contracting_dims={1}
+}
+ENTRY main {
+  a = f8e4m3fn[64,512]{1,0} parameter(0)
+  b = f8e4m3fn[96,512]{1,0} parameter(1)
+  c = f8e4m3fn[128,512]{1,0} parameter(2)
+  sa = f8e8m0fnu[64,16]{1,0} parameter(3)
+  sb = f8e8m0fnu[96,16]{1,0} parameter(4)
+  sc = f8e8m0fnu[128,16]{1,0} parameter(5)
+  fusion0 = f32[64,96]{1,0} fusion(a, b, sa, sb), kind=kCustom,
+      calls=fusion_dot0, backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
+  fusion1 = f32[64,128]{1,0} fusion(a, c, sa, sc), kind=kCustom,
+      calls=fusion_dot1, backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
+  ROOT results = (f32[64,96]{1,0}, f32[64,128]{1,0}) tuple(fusion0, fusion1)
+})";
+
+TEST_F(HipblasLtPreswizzledScaleTest, SwizzlesSharedScaleOnce) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                       ParseAndReturnVerifiedModule(kSharedScaleScaledDotsHlo));
+  HloComputation* entry = module->entry_computation();
+  HloInstruction* results = entry->root_instruction();
+  BackendConfig config;
+  config.mutable_gemm()->set_autotune_workspace_size(64 * 1024 * 1024);
+  config.mutable_gemm()->set_mx_scale_layout(
+      HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8);
+  ASSERT_THAT(backend_.ApplyConfig(*results->mutable_operand(0), config),
+              absl_testing::IsOk());
+  ASSERT_THAT(backend_.ApplyConfig(*results->mutable_operand(1), config),
+              absl_testing::IsOk());
+  EXPECT_THAT(module->Verify(), absl_testing::IsOk());
+
+  const HloInstruction* calls[2];
+  for (int i = 0; i < 2; ++i) {
+    const HloInstruction* gte = results->operand(i);
+    ASSERT_EQ(gte->opcode(), HloOpcode::kGetTupleElement);
+    calls[i] = gte->operand(0);
+    ASSERT_EQ(calls[i]->opcode(), HloOpcode::kCustomCall);
+    EXPECT_EQ(calls[i]->custom_call_target(), "__cublas$lt$matmul$mx");
+  }
+  // One swizzle of `sa` feeds both custom calls; `sb` and `sc` have their own.
+  const HloInstruction* sa = entry->parameter_instruction(3);
+  EXPECT_EQ(calls[0]->operand(2), calls[1]->operand(2));
+  EXPECT_TRUE(IsHipblasLtScale32x8Swizzle(*calls[0]->operand(2)));
+  EXPECT_EQ(calls[0]->operand(2)->operand(0), sa);
+  EXPECT_EQ(calls[0]->operand(3)->operand(0), entry->parameter_instruction(4));
+  EXPECT_EQ(calls[1]->operand(3)->operand(0), entry->parameter_instruction(5));
+  int swizzles = 0;
+  for (const HloInstruction* instr : entry->instructions()) {
+    if (IsHipblasLtScale32x8Swizzle(*instr)) {
+      ++swizzles;
+    }
+  }
+  EXPECT_EQ(swizzles, 3);
+  EXPECT_EQ(sa->user_count(), 1);
 }
 
 TEST_F(HipblasLtPreswizzledScaleTest,

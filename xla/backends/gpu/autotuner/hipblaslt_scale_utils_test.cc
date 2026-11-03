@@ -26,6 +26,7 @@ limitations under the License.
 #include "absl/strings/substitute.h"
 #include "xla/autotuning.pb.h"
 #include "xla/hlo/evaluator/hlo_evaluator.h"
+#include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/layout.h"
@@ -351,6 +352,123 @@ ENTRY main {
   ASSERT_THAT(root->ReplaceOperandWith(0, *a_or), absl_testing::IsOk());
   ASSERT_THAT(root->ReplaceOperandWith(1, *b_or), absl_testing::IsOk());
   EXPECT_THAT(module->Verify(), absl_testing::IsOk());
+}
+
+TEST_F(HipblasLtScaleUtilsTest, ReusesSwizzleOfTheSameScale) {
+  auto module_or = ParseAndReturnVerifiedModule(R"(
+HloModule shared_scale
+ENTRY main {
+  a = f8e8m0fnu[64,16]{1,0} parameter(0)
+  b = f8e8m0fnu[64,16]{1,0} parameter(1)
+  ROOT scales = (f8e8m0fnu[64,16]{1,0}, f8e8m0fnu[64,16]{1,0}) tuple(a, b)
+})");
+  ASSERT_THAT(module_or, absl_testing::IsOk());
+  auto module = std::move(module_or).value();
+  HloComputation* entry = module->entry_computation();
+  HloInstruction* root = entry->root_instruction();
+  HloInstruction* a = root->mutable_operand(0);
+  HloInstruction* b = root->mutable_operand(1);
+
+  auto first_or = SwizzleHipblasLtScale32x8(a);
+  ASSERT_THAT(first_or, absl_testing::IsOk());
+  HloInstruction* first = *first_or;
+  EXPECT_TRUE(IsHipblasLtScale32x8Swizzle(*first));
+  EXPECT_EQ(first->operand(0), a);
+  int64_t instruction_count = entry->instruction_count();
+
+  // A second GEMM consuming the same scale gets the same swizzle.
+  auto second_or = SwizzleHipblasLtScale32x8(a);
+  ASSERT_THAT(second_or, absl_testing::IsOk());
+  EXPECT_EQ(*second_or, first);
+  EXPECT_EQ(entry->instruction_count(), instruction_count);
+
+  // A different scale of the same shape gets its own swizzle.
+  auto other_or = SwizzleHipblasLtScale32x8(b);
+  ASSERT_THAT(other_or, absl_testing::IsOk());
+  EXPECT_NE(*other_or, first);
+  EXPECT_EQ((*other_or)->operand(0), b);
+  EXPECT_EQ(entry->instruction_count(), instruction_count + 1);
+  EXPECT_THAT(module->Verify(), absl_testing::IsOk());
+}
+
+TEST_F(HipblasLtScaleUtilsTest, RecognizesSwizzleByStructureNotName) {
+  // `swizzle` has the structure SwizzleHipblasLtScale32x8 emits under another
+  // name; `other_permutation` permutes the same dimensions differently and
+  // `copy_scale` keeps the bytes in place.
+  auto module_or = ParseAndReturnVerifiedModule(R"(
+HloModule lookalikes
+other_permutation {
+  p = f8e8m0fnu[64,16]{1,0} parameter(0)
+  split = f8e8m0fnu[2,2,16,2,2,4]{5,4,3,2,1,0} reshape(p)
+  t = f8e8m0fnu[2,2,4,16,2,2]{5,4,3,2,1,0} transpose(split),
+      dimensions={0,3,5,2,1,4}
+  ROOT merge = f8e8m0fnu[64,16]{1,0} reshape(t)
+}
+copy_scale {
+  p = f8e8m0fnu[64,16]{1,0} parameter(0)
+  ROOT c = f8e8m0fnu[64,16]{1,0} copy(p)
+}
+swizzle {
+  p = f8e8m0fnu[64,16]{1,0} parameter(0)
+  split = f8e8m0fnu[2,2,16,2,2,4]{5,4,3,2,1,0} reshape(p)
+  t = f8e8m0fnu[2,2,4,16,2,2]{5,4,3,2,1,0} transpose(split),
+      dimensions={0,3,5,2,4,1}
+  ROOT merge = f8e8m0fnu[64,16]{1,0} reshape(t)
+}
+ENTRY main {
+  a = f8e8m0fnu[64,16]{1,0} parameter(0)
+  other = f8e8m0fnu[64,16]{1,0} fusion(a), kind=kLoop, calls=other_permutation
+  copied = f8e8m0fnu[64,16]{1,0} fusion(a), kind=kLoop, calls=copy_scale
+  swizzled = f8e8m0fnu[64,16]{1,0} fusion(a), kind=kLoop, calls=swizzle
+  ROOT t = (f8e8m0fnu[64,16]{1,0}, f8e8m0fnu[64,16]{1,0},
+            f8e8m0fnu[64,16]{1,0}) tuple(other, copied, swizzled)
+})");
+  ASSERT_THAT(module_or, absl_testing::IsOk());
+  auto module = std::move(module_or).value();
+  HloComputation* entry = module->entry_computation();
+  HloInstruction* root = entry->root_instruction();
+  EXPECT_FALSE(IsHipblasLtScale32x8Swizzle(*root->operand(0)));
+  EXPECT_FALSE(IsHipblasLtScale32x8Swizzle(*root->operand(1)));
+  EXPECT_TRUE(IsHipblasLtScale32x8Swizzle(*root->operand(2)));
+  EXPECT_FALSE(IsHipblasLtScale32x8Swizzle(*root));
+
+  int64_t instruction_count = entry->instruction_count();
+  auto swizzle_or = SwizzleHipblasLtScale32x8(entry->parameter_instruction(0));
+  ASSERT_THAT(swizzle_or, absl_testing::IsOk());
+  EXPECT_EQ(*swizzle_or, root->operand(2));
+  EXPECT_EQ(entry->instruction_count(), instruction_count);
+}
+
+TEST_F(HipblasLtScaleUtilsTest, DoesNotReuseSwizzleWithControlDependencies) {
+  auto module_or = ParseAndReturnVerifiedModule(R"(
+HloModule ordered_swizzle
+ENTRY main {
+  a = f8e8m0fnu[64,16]{1,0} parameter(0)
+  ROOT copy = f8e8m0fnu[64,16]{1,0} copy(a)
+})");
+  ASSERT_THAT(module_or, absl_testing::IsOk());
+  auto module = std::move(module_or).value();
+  HloComputation* entry = module->entry_computation();
+  HloInstruction* a = entry->parameter_instruction(0);
+  HloInstruction* copy = entry->root_instruction();
+
+  // A swizzle ordered before `copy` by a control edge is not reused: the new
+  // user would be ordered against `copy` too.
+  auto first_or = SwizzleHipblasLtScale32x8(a);
+  ASSERT_THAT(first_or, absl_testing::IsOk());
+  HloInstruction* first = *first_or;
+  ASSERT_THAT(first->AddControlDependencyTo(copy), absl_testing::IsOk());
+  auto second_or = SwizzleHipblasLtScale32x8(a);
+  ASSERT_THAT(second_or, absl_testing::IsOk());
+  EXPECT_NE(*second_or, first);
+  EXPECT_TRUE(IsHipblasLtScale32x8Swizzle(**second_or));
+
+  // The same holds for a swizzle ordered after another instruction.
+  ASSERT_THAT(copy->AddControlDependencyTo(*second_or), absl_testing::IsOk());
+  auto third_or = SwizzleHipblasLtScale32x8(a);
+  ASSERT_THAT(third_or, absl_testing::IsOk());
+  EXPECT_NE(*third_or, first);
+  EXPECT_NE(*third_or, *second_or);
 }
 
 }  // namespace
