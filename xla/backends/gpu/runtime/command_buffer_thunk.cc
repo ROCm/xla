@@ -139,15 +139,34 @@ CommandBufferThunk::ExecutorCommandBuffer::ChangedAllocations(
   DCHECK(absl::c_is_sorted(persistent_alloc_indices));
   std::vector<BufferAllocation::Index> changed_allocs;
   for (BufferAllocation::Index index : alloc_indices) {
-    if (absl::c_binary_search(persistent_alloc_indices, index)) {
-      continue;
-    }
-    if (recorded_allocs.size() <= index ||
-        !recorded_allocs[index].IsSameAs(allocs.GetDeviceAddress(index))) {
+    if (AllocationChanged(index, allocs, persistent_alloc_indices)) {
       changed_allocs.push_back(index);
     }
   }
   return changed_allocs;
+}
+
+bool CommandBufferThunk::ExecutorCommandBuffer::HasChangedAllocations(
+    absl::Span<const BufferAllocation::Index> alloc_indices,
+    const BufferAllocations& allocs,
+    absl::Span<const BufferAllocation::Index> persistent_alloc_indices) const {
+  DCHECK(absl::c_is_sorted(persistent_alloc_indices));
+  for (BufferAllocation::Index index : alloc_indices) {
+    if (AllocationChanged(index, allocs, persistent_alloc_indices)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool CommandBufferThunk::ExecutorCommandBuffer::AllocationChanged(
+    BufferAllocation::Index index, const BufferAllocations& allocs,
+    absl::Span<const BufferAllocation::Index> persistent_alloc_indices) const {
+  if (absl::c_binary_search(persistent_alloc_indices, index)) {
+    return false;
+  }
+  return recorded_allocs.size() <= index ||
+         !recorded_allocs[index].IsSameAs(allocs.GetDeviceAddress(index));
 }
 
 bool CommandBufferThunk::ShouldRecordTelemetry(
@@ -666,12 +685,10 @@ absl::StatusOr<Decision> CommandBufferThunk::CanSkipInitializationUpdate(
       decision = Decision::Forbid("not warmed up");
     } else if (is_first_record) {
       decision = Decision::Forbid("not recorded yet");
-    } else if (!cmd_buffer
-                    ->ChangedAllocations(
-                        commands_.update_on_initialize_allocs_indices(),
-                        *params.buffer_allocations,
-                        *params.persistent_alloc_indices)
-                    .empty()) {
+    } else if (cmd_buffer->HasChangedAllocations(
+                   commands_.update_on_initialize_allocs_indices(),
+                   *params.buffer_allocations,
+                   *params.persistent_alloc_indices)) {
       decision = Decision::Forbid("a buffer of these commands moved");
     }
   }
