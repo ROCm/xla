@@ -150,6 +150,15 @@ jobs:
           path: perf-tools-src
           persist-credentials: false
 
+      - name: Generate required environment to run under hermetic rocm [${{ matrix.mode.name }}]
+        working-directory: xla-src
+        run: |
+          bazel_sandbox_dir="$(bazel info ${ROCM_BB_CACHE_ARGS} ${COMMON_ARGS} ${ROCM_DISTRO_ARGS} output_base)"
+          ROCM_DIST="${bazel_sandbox_dir}/external/+rocm_configure_ext+local_config_rocm/rocm/rocm_dist"
+          LD_LIBRARY_PATH="${ROCM_DIST}/lib:${ROCM_DIST}/lib/rocm_sysdeps/lib:${LD_LIBRARY_PATH}"
+          echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "ROCM_DIST=${ROCM_DIST}" >> "$GITHUB_ENV"
+
       - name: Build and run multihost_hlo_runner [${{ matrix.mode.name }}]
         working-directory: xla-src
         env:
@@ -169,17 +178,9 @@ jobs:
             ${ROCM_BB_CACHE_ARGS} \
             ${COMMON_ARGS} \
             ${ROCM_DISTRO_ARGS} \
+            --repo_env=LD_LIBRARY_PATH=${LD_LIBRARY_PATH} \
             --run_under="${GITHUB_WORKSPACE}/perf-tools-src/perf_tools/hlo_eval_tools/run_1gpu_perf_under.sh" \
             //xla/tools/multihost_hlo_runner:hlo_runner_main
-          # Create empty MODULE.bazel as bazel info needs blzmod
-          > MODULE.bazel
-          # Still needed for hipcc and for the runner's ROCm shared libraries;
-          # the hlo_runner_main path itself comes from `bazel run --run_under`.
-          bazel_sandbox_dir="$(bazel info output_base)"
-          ROCM_DIST="${bazel_sandbox_dir}/external/+rocm_configure_ext+local_config_rocm/rocm/rocm_dist"
-          LD_LIBRARY_PATH="${ROCM_DIST}/lib:${ROCM_DIST}/lib/rocm_sysdeps/lib:${LD_LIBRARY_PATH}"
-          echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
-          echo "ROCM_DIST=${ROCM_DIST}" >> "$GITHUB_ENV"
 
       - name: Build and run rocm_latency_check_tool [${{ matrix.mode.name }}]
         working-directory: perf-tools-src
