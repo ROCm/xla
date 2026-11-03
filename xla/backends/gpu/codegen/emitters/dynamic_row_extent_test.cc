@@ -27,10 +27,12 @@ limitations under the License.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/log/check.h"
+#include "absl/status/status.h"
 #include "absl/status/status_macros.h"
+#include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "llvm/Support/raw_ostream.h"
@@ -53,7 +55,6 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 #include "xla/tests/hlo_test_base.h"
 #include "xla/tests/literal_test_util.h"
-#include "xla/tsl/platform/statusor.h"
 #include "xla/types.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
@@ -69,7 +70,7 @@ constexpr int64_t kCols = 256;
 
 // The masked epilogue as it reaches the GPU compiler today: `n` only feeds the
 // select predicate, the launch grid is derived from the static capacity.
-constexpr absl::string_view kClampModule = R"(
+constexpr absl::string_view kClampModule = R"hlo(
 HloModule masked_clamp, input_output_alias={ {}: (0, {}) }
 
 ENTRY entry {
@@ -85,59 +86,70 @@ ENTRY entry {
   clamped = f32[4096,256] clamp(lo_b, recv, hi_b)
   act = f32[4096,256] multiply(clamped, recv)
   ROOT masked = f32[4096,256] select(mask, act, lo_b)
-})";
+})hlo";
 
 // A realistic MoE epilogue: silu(x) * gate + bias, in the element type `T`,
 // with the select in the output type `O` (`O` == `T` unless the epilogue casts
 // its result).
 std::string SiluModule(absl::string_view t, absl::string_view o) {
   const std::string cast =
-      t == o ? absl::StrCat("  act = ", o, "[4096,256] copy(act_t)\n")
-             : absl::StrCat("  act = ", o, "[4096,256] convert(act_t)\n");
-  return absl::StrCat(R"(
+      t == o ? absl::StrCat("  act = ", o, "[4096,256] copy(act_t)")
+             : absl::StrCat("  act = ", o, "[4096,256] convert(act_t)");
+  return absl::StrReplaceAll(R"hlo(
 HloModule masked_silu
 
 ENTRY entry {
-  x = )",
-                      t, R"([4096,256] parameter(0)
-  gate = )",
-                      t, R"([4096,256] parameter(1)
-  bias = )",
-                      t, R"([256] parameter(2)
+  x = $T[4096,256] parameter(0)
+  gate = $T[4096,256] parameter(1)
+  bias = $T[256] parameter(2)
   n = s32[] parameter(3)
   iota = s32[4096,256] iota(), iota_dimension=0
   n_b = s32[4096,256] broadcast(n), dimensions={}
   mask = pred[4096,256] compare(iota, n_b), direction=LT
-  sig = )",
-                      t, R"([4096,256] logistic(x)
-  silu = )",
-                      t, R"([4096,256] multiply(x, sig)
-  gated = )",
-                      t, R"([4096,256] multiply(silu, gate)
-  bias_b = )",
-                      t, R"([4096,256] broadcast(bias), dimensions={1}
-  act_t = )",
-                      t, R"([4096,256] add(gated, bias_b)
-)",
-                      cast, R"(  zero = )", o, R"([] constant(0)
-  zero_b = )",
-                      o, R"([4096,256] broadcast(zero), dimensions={}
-  ROOT masked = )",
-                      o, R"([4096,256] select(mask, act, zero_b)
-})");
+  sig = $T[4096,256] logistic(x)
+  silu = $T[4096,256] multiply(x, sig)
+  gated = $T[4096,256] multiply(silu, gate)
+  bias_b = $T[4096,256] broadcast(bias), dimensions={1}
+  act_t = $T[4096,256] add(gated, bias_b)
+$CAST
+  zero = $O[] constant(0)
+  zero_b = $O[4096,256] broadcast(zero), dimensions={}
+  ROOT masked = $O[4096,256] select(mask, act, zero_b)
+})hlo",
+                             {{"$T", t}, {"$O", o}, {"$CAST", cast}});
 }
 
 template <typename NativeT>
-Literal MakeRamp(const Shape& shape, float scale) {
+absl::StatusOr<Literal> MakeRamp(const Shape& shape, float scale) {
   Literal literal(shape);
   int64_t counter = 0;
-  CHECK_OK(literal.Populate<NativeT>([&](absl::Span<const int64_t> index) {
-    // Values in [-2, 2) * scale, with a different offset in every row so a
-    // wrong row mapping is visible.
-    const float v = ((counter++ % 97) / 97.0f - 0.5f) * 4.0f * scale;
-    return static_cast<NativeT>(v);
-  }));
+  ABSL_RETURN_IF_ERROR(
+      literal.Populate<NativeT>([&](absl::Span<const int64_t> index) {
+        // Values in [-2, 2) * scale, with a different offset in every row so
+        // a wrong row mapping is visible.
+        const float v = ((counter++ % 97) / 97.0f - 0.5f) * 4.0f * scale;
+        return static_cast<NativeT>(v);
+      }));
   return literal;
+}
+
+// x, gate and bias for `SiluModule`, in the element type `NativeT`.
+template <typename NativeT>
+absl::StatusOr<std::vector<Literal>> SiluInputs(PrimitiveType type) {
+  ABSL_ASSIGN_OR_RETURN(
+      Literal x,
+      MakeRamp<NativeT>(ShapeUtil::MakeShape(type, {kRows, kCols}), 1.0f));
+  ABSL_ASSIGN_OR_RETURN(
+      Literal gate,
+      MakeRamp<NativeT>(ShapeUtil::MakeShape(type, {kRows, kCols}), 0.5f));
+  ABSL_ASSIGN_OR_RETURN(
+      Literal bias,
+      MakeRamp<NativeT>(ShapeUtil::MakeShape(type, {kCols}), 0.1f));
+  std::vector<Literal> inputs;
+  inputs.push_back(std::move(x));
+  inputs.push_back(std::move(gate));
+  inputs.push_back(std::move(bias));
+  return inputs;
 }
 
 class DynamicRowExtentTest : public HloTestBase {
@@ -172,8 +184,9 @@ class DynamicRowExtentTest : public HloTestBase {
 
   // Runs `hlo` with the guard off (reference, today's masked kernel) and on,
   // and checks that the first `n` rows agree bit for bit.
-  void RunAndCompareLivePrefix(absl::string_view hlo,
-                               const std::vector<Literal>& inputs, int64_t n) {
+  absl::Status RunAndCompareLivePrefix(absl::string_view hlo,
+                                       const std::vector<Literal>& inputs,
+                                       int64_t n) {
     std::vector<const Literal*> args;
     for (const Literal& input : inputs) {
       args.push_back(&input);
@@ -182,22 +195,26 @@ class DynamicRowExtentTest : public HloTestBase {
     args.push_back(&n_literal);
 
     enable_guard_ = false;
-    ASSERT_OK_AND_ASSIGN(auto reference_module,
-                         ParseAndReturnVerifiedModule(hlo));
-    ASSERT_OK_AND_ASSIGN(Literal reference,
-                         Execute(std::move(reference_module), args));
+    ABSL_ASSIGN_OR_RETURN(auto reference_module,
+                          ParseAndReturnVerifiedModule(hlo));
+    ABSL_ASSIGN_OR_RETURN(Literal reference,
+                          Execute(std::move(reference_module), args));
 
     enable_guard_ = true;
-    ASSERT_OK_AND_ASSIGN(auto guarded_module,
-                         ParseAndReturnVerifiedModule(hlo));
-    ASSERT_OK_AND_ASSIGN(Literal guarded,
-                         Execute(std::move(guarded_module), args));
+    ABSL_ASSIGN_OR_RETURN(auto guarded_module,
+                          ParseAndReturnVerifiedModule(hlo));
+    ABSL_ASSIGN_OR_RETURN(Literal guarded,
+                          Execute(std::move(guarded_module), args));
 
     const int64_t live_rows = std::min<int64_t>(std::max<int64_t>(n, 0), kRows);
-    EXPECT_TRUE(
-        LiteralTestUtil::Equal(reference.Slice({0, 0}, {live_rows, kCols}),
-                               guarded.Slice({0, 0}, {live_rows, kCols})))
-        << "live rows differ for n=" << n;
+    if (!LiteralTestUtil::Equal(reference.Slice({0, 0}, {live_rows, kCols}),
+                                guarded.Slice({0, 0}, {live_rows, kCols}))) {
+      return absl::InternalError(
+          absl::StrCat("live rows differ between the masked and the guarded "
+                       "kernel for n=",
+                       n));
+    }
+    return absl::OkStatus();
   }
 
   bool enable_guard_ = false;
@@ -205,7 +222,7 @@ class DynamicRowExtentTest : public HloTestBase {
       TestGpuDeviceInfo::CudaOrRocmDeviceInfo();
 };
 
-constexpr absl::string_view kFusedClampModule = R"(
+constexpr absl::string_view kFusedClampModule = R"hlo(
 HloModule fused_masked_clamp
 
 fused_computation {
@@ -227,7 +244,7 @@ ENTRY entry {
   recv = f32[4096,256] parameter(0)
   n = s32[] parameter(1)
   ROOT fusion = f32[4096,256] fusion(recv, n), kind=kLoop, calls=fused_computation
-})";
+})hlo";
 
 TEST_F(DynamicRowExtentTest, GuardIsEmittedOnlyWhenEnabled) {
   enable_guard_ = false;
@@ -246,7 +263,7 @@ TEST_F(DynamicRowExtentTest, GuardIsEmittedOnlyWhenEnabled) {
 
 TEST_F(DynamicRowExtentTest, PatternWithoutScalarParameterIsNotGuarded) {
   // The bound is a constant, not a runtime parameter: nothing to guard on.
-  constexpr absl::string_view kConstantBound = R"(
+  constexpr absl::string_view kConstantBound = R"hlo(
 HloModule fused_constant_bound
 
 fused_computation {
@@ -263,26 +280,29 @@ fused_computation {
 ENTRY entry {
   recv = f32[4096,256] parameter(0)
   ROOT fusion = f32[4096,256] fusion(recv), kind=kLoop, calls=fused_computation
-})";
+})hlo";
   enable_guard_ = true;
   ASSERT_OK_AND_ASSIGN(std::string text, EmitFusionMlir(kConstantBound));
   EXPECT_THAT(text, Not(HasSubstr("scf.if")));
 }
 
 TEST_F(DynamicRowExtentTest, ClampLivePrefixMatchesMaskedKernel) {
-  std::vector<Literal> inputs;
-  inputs.push_back(
+  ASSERT_OK_AND_ASSIGN(
+      Literal input,
       MakeRamp<float>(ShapeUtil::MakeShape(F32, {kRows, kCols}), 30.0f));
+  std::vector<Literal> inputs;
+  inputs.push_back(std::move(input));
   for (int64_t n : {0, 1, 7, 1000, 2048, 4095, 4096}) {
-    RunAndCompareLivePrefix(kClampModule, inputs, n);
+    EXPECT_OK(RunAndCompareLivePrefix(kClampModule, inputs, n));
   }
 }
 
 TEST_F(DynamicRowExtentTest, GuardLeavesRowsBeyondExtentUntouched) {
   // The output aliases the input buffer. With the guard, rows >= n are never
   // written, so they still hold the input; the masked kernel writes zeros.
-  Literal input =
-      MakeRamp<float>(ShapeUtil::MakeShape(F32, {kRows, kCols}), 30.0f);
+  ASSERT_OK_AND_ASSIGN(
+      Literal input,
+      MakeRamp<float>(ShapeUtil::MakeShape(F32, {kRows, kCols}), 30.0f));
   const Literal expected_tail = input.Slice({1024, 0}, {kRows, kCols});
   Literal n_literal = LiteralUtil::CreateR0<int32_t>(1024);
   std::vector<const Literal*> args = {&input, &n_literal};
@@ -303,34 +323,18 @@ TEST_F(DynamicRowExtentTest, GuardLeavesRowsBeyondExtentUntouched) {
 }
 
 TEST_F(DynamicRowExtentTest, SiluF32LivePrefixMatchesMaskedKernel) {
-  std::vector<Literal> inputs;
-  inputs.push_back(
-      MakeRamp<float>(ShapeUtil::MakeShape(F32, {kRows, kCols}), 1.0f));
-  inputs.push_back(
-      MakeRamp<float>(ShapeUtil::MakeShape(F32, {kRows, kCols}), 0.5f));
-  inputs.push_back(MakeRamp<float>(ShapeUtil::MakeShape(F32, {kCols}), 0.1f));
-  RunAndCompareLivePrefix(SiluModule("f32", "f32"), std::move(inputs), 1500);
+  ASSERT_OK_AND_ASSIGN(std::vector<Literal> inputs, SiluInputs<float>(F32));
+  ASSERT_OK(RunAndCompareLivePrefix(SiluModule("f32", "f32"), inputs, 1500));
 }
 
 TEST_F(DynamicRowExtentTest, SiluBf16LivePrefixMatchesMaskedKernel) {
-  std::vector<Literal> inputs;
-  inputs.push_back(
-      MakeRamp<bfloat16>(ShapeUtil::MakeShape(BF16, {kRows, kCols}), 1.0f));
-  inputs.push_back(
-      MakeRamp<bfloat16>(ShapeUtil::MakeShape(BF16, {kRows, kCols}), 0.5f));
-  inputs.push_back(
-      MakeRamp<bfloat16>(ShapeUtil::MakeShape(BF16, {kCols}), 0.1f));
-  RunAndCompareLivePrefix(SiluModule("bf16", "bf16"), std::move(inputs), 777);
+  ASSERT_OK_AND_ASSIGN(std::vector<Literal> inputs, SiluInputs<bfloat16>(BF16));
+  ASSERT_OK(RunAndCompareLivePrefix(SiluModule("bf16", "bf16"), inputs, 777));
 }
 
 TEST_F(DynamicRowExtentTest, SiluF32ToBf16LivePrefixMatchesMaskedKernel) {
-  std::vector<Literal> inputs;
-  inputs.push_back(
-      MakeRamp<float>(ShapeUtil::MakeShape(F32, {kRows, kCols}), 1.0f));
-  inputs.push_back(
-      MakeRamp<float>(ShapeUtil::MakeShape(F32, {kRows, kCols}), 0.5f));
-  inputs.push_back(MakeRamp<float>(ShapeUtil::MakeShape(F32, {kCols}), 0.1f));
-  RunAndCompareLivePrefix(SiluModule("f32", "bf16"), std::move(inputs), 3000);
+  ASSERT_OK_AND_ASSIGN(std::vector<Literal> inputs, SiluInputs<float>(F32));
+  ASSERT_OK(RunAndCompareLivePrefix(SiluModule("f32", "bf16"), inputs, 3000));
 }
 
 }  // namespace

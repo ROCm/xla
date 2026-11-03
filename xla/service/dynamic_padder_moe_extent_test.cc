@@ -54,7 +54,7 @@ limitations under the License.
 #include "xla/literal.h"
 #include "xla/literal_util.h"
 #include "xla/service/dynamic_padder.h"
-#include "xla/tests/hlo_pjrt_test_base.h"
+#include "xla/tests/hlo_test_base.h"
 
 namespace xla {
 namespace {
@@ -64,7 +64,7 @@ namespace op = xla::testing::opcode_matchers;
 // Today's form. The live count n only decides what the last N - n rows
 // contribute; every instruction, and therefore the launch grid of the fusion
 // XLA builds from this, is shaped by the capacity [8,2].
-constexpr char kMaskedModule[] = R"(
+constexpr char kMaskedModule[] = R"hlo(
 HloModule moe_extent_masked
 
 add_f32 {
@@ -89,7 +89,7 @@ ENTRY entry {
   masked = f32[8,2] select(mask, act, zero_b)
   ROOT combined = f32[2] reduce(masked, lo), dimensions={0}, to_apply=add_f32
 }
-)";
+)hlo";
 
 // Bounded form. n is attached to dimension 0 of the buffer by
 // set-dimension-size, and the epilogue and the reduce are typed on the
@@ -97,7 +97,7 @@ ENTRY entry {
 // elementwise operand carries the same extent: DynamicPadder rejects a
 // bounded operand that has no size source (such as a broadcast declared
 // f32[<=8,2] directly) with "Dynamic input unexpectedly found".
-constexpr char kBoundedModule[] = R"(
+constexpr char kBoundedModule[] = R"hlo(
 HloModule moe_extent_bounded
 
 add_f32 {
@@ -120,10 +120,10 @@ ENTRY entry {
   act = f32[<=8,2] multiply(clamped, live)
   ROOT combined = f32[2] reduce(act, lo), dimensions={0}, to_apply=add_f32
 }
-)";
+)hlo";
 
 // Bounded form without the reduce: the bounded value is the entry result.
-constexpr char kBoundedElementwiseModule[] = R"(
+constexpr char kBoundedElementwiseModule[] = R"hlo(
 HloModule moe_extent_bounded_elementwise
 
 ENTRY entry {
@@ -139,7 +139,7 @@ ENTRY entry {
   clamped = f32[<=8,2] clamp(lo_live, live, hi_live)
   ROOT act = f32[<=8,2] multiply(clamped, live)
 }
-)";
+)hlo";
 
 // Test vector: the rank 0 buffer of the note's example, capacity 8, n = 5.
 // Live rows hold 1.0 and contribute 1 * clamp(1) = 1 each; the three padding
@@ -164,8 +164,9 @@ Literal ExpectedCombined() {
 
 class MoeExtentPadderTest : public HloTestBase {
  protected:
-  std::unique_ptr<HloModule> GetHloModule(const std::string& hlo_text) {
-    return ParseAndReturnVerifiedModule(hlo_text).value();
+  absl::StatusOr<std::unique_ptr<HloModule>> GetHloModule(
+      const std::string& hlo_text) {
+    return ParseAndReturnVerifiedModule(hlo_text);
   }
 
   // Mirrors DynamicPadderTest::RunPadder in dynamic_padder_test.cc.
@@ -215,7 +216,7 @@ class MoeExtentPadderTest : public HloTestBase {
 // (a) Both forms compute the same values.
 
 TEST_F(MoeExtentPadderTest, MaskedFormComputesLivePrefix) {
-  auto module = GetHloModule(kMaskedModule);
+  ASSERT_OK_AND_ASSIGN(auto module, GetHloModule(kMaskedModule));
   Literal recv = ReceiveBuffer();
   Literal n = LiveCount();
   ASSERT_OK_AND_ASSIGN(Literal result, Execute(std::move(module), {&recv, &n}));
@@ -223,7 +224,7 @@ TEST_F(MoeExtentPadderTest, MaskedFormComputesLivePrefix) {
 }
 
 TEST_F(MoeExtentPadderTest, BoundedFormComputesLivePrefix) {
-  auto module = GetHloModule(kBoundedModule);
+  ASSERT_OK_AND_ASSIGN(auto module, GetHloModule(kBoundedModule));
   Literal recv = ReceiveBuffer();
   Literal n = LiveCount();
   ASSERT_OK_AND_ASSIGN(Literal result,
@@ -238,7 +239,7 @@ TEST_F(MoeExtentPadderTest, BoundedFormComputesLivePrefix) {
 // [8,2], and no set-dimension-size remains. The emitter will size the launch
 // grid from [8,2] and n is only a predicate inside the kernel body.
 TEST_F(MoeExtentPadderTest, PadderRewritesBoundedFormToMaskedForm) {
-  auto module = GetHloModule(kBoundedModule);
+  ASSERT_OK_AND_ASSIGN(auto module, GetHloModule(kBoundedModule));
   ASSERT_OK_AND_ASSIGN(bool changed, RunPadder(module.get()));
   EXPECT_TRUE(changed);
 
@@ -259,7 +260,7 @@ TEST_F(MoeExtentPadderTest, PadderRewritesBoundedFormToMaskedForm) {
 // boundary as a SliceToDynamic custom call. The multiply feeding it is static
 // [8,2]: a fusion built from it still launches over all 8 rows.
 TEST_F(MoeExtentPadderTest, ExtentSurvivesOnlyAtEntryBoundary) {
-  auto module = GetHloModule(kBoundedElementwiseModule);
+  ASSERT_OK_AND_ASSIGN(auto module, GetHloModule(kBoundedElementwiseModule));
   ASSERT_OK_AND_ASSIGN(bool changed,
                        RunPadder(module.get(), /*slice_dynamic_output=*/true));
   EXPECT_TRUE(changed);

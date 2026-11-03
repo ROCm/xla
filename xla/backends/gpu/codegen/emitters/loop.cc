@@ -166,6 +166,12 @@ std::optional<emitters::DynamicRowExtent> LoopFusion::FindDynamicRowExtent(
       !ShapeUtil::ElementIsIntegral(extent->shape())) {
     return std::nullopt;
   }
+  // The fill operand has to be a broadcast scalar constant. The constant is
+  // never written: rows at or past the extent are skipped, which is the
+  // bounded-shape semantics this flag opts into. The check only identifies
+  // the masking idiom (`where(iota < n, value, c)`); a select whose other
+  // operand is a data tensor is a blend of two inputs, not a prefix mask, and
+  // must keep reading both.
   const HloInstruction* fill = root.operand(2);
   if (fill->opcode() != HloOpcode::kBroadcast || !fill->dimensions().empty() ||
       fill->operand(0)->opcode() != HloOpcode::kConstant) {

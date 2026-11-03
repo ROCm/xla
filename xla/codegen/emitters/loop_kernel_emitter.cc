@@ -219,7 +219,7 @@ absl::Status LoopFusionKernelEmitter::EmitEntryFunction(
       // the linear order, so comparing that row against the extent is enough:
       // a work item either starts inside the extent and runs its loop, or
       // starts at or beyond it and leaves its outputs untouched.
-      mlir::Value zero = nested_b.create<mlir::arith::ConstantIndexOp>(0);
+      mlir::Value zero = mlir::arith::ConstantIndexOp::create(nested_b, 0);
       llvm::SmallVector<mlir::Value> zero_symbols(indexing.GetSymbolCount(),
                                                   zero);
       llvm::SmallVector<mlir::Value, 3> first_indices = emitters::ApplyIndexing(
@@ -227,23 +227,23 @@ absl::Status LoopFusionKernelEmitter::EmitEntryFunction(
       mlir::Value row = first_indices[dynamic_row_extent_->dimension];
       mlir::Value extent_arg =
           entry_function.getArgument(dynamic_row_extent_->parameter_index);
-      mlir::Value extent = nested_b.create<mlir::tensor::ExtractOp>(
-          extent_arg, mlir::ValueRange{});
-      extent = nested_b.create<mlir::arith::IndexCastOp>(
-          nested_b.getIndexType(), extent);
-      mlir::Value live = nested_b.create<mlir::arith::CmpIOp>(
-          mlir::arith::CmpIPredicate::slt, row, extent);
-      auto guard = nested_b.create<mlir::scf::IfOp>(outputs.getTypes(), live,
-                                                    /*withElseRegion=*/true);
+      mlir::Value extent = mlir::tensor::ExtractOp::create(nested_b, extent_arg,
+                                                           mlir::ValueRange{});
+      extent = mlir::arith::IndexCastOp::create(
+          nested_b, nested_b.getIndexType(), extent);
+      mlir::Value live = mlir::arith::CmpIOp::create(
+          nested_b, mlir::arith::CmpIPredicate::slt, row, extent);
+      auto guard = mlir::scf::IfOp::create(nested_b, outputs.getTypes(), live,
+                                           /*withElseRegion=*/true);
       {
         mlir::OpBuilder::InsertionGuard insertion_guard(nested_b);
         nested_b.setInsertionPointToStart(guard.thenBlock());
         mlir::ValueRange then_results =
             emitters::EmitXlaLoopOp(nested_b, mlir::ValueRange(work_dims),
                                     outputs, indexing, body_builder);
-        nested_b.create<mlir::scf::YieldOp>(then_results);
+        mlir::scf::YieldOp::create(nested_b, then_results);
         nested_b.setInsertionPointToStart(guard.elseBlock());
-        nested_b.create<mlir::scf::YieldOp>(outputs);
+        mlir::scf::YieldOp::create(nested_b, outputs);
       }
       loop_results = guard.getResults();
     } else {
