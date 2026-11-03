@@ -276,6 +276,7 @@ cc_library(
         "//xla/service/gpu:gpu_fusible",
         "//xla/service/gpu:hlo_fusion_analysis",
         "//xla/service/gpu:launch_dimensions",
+        "//xla/service/gpu:valid_prefix_extent",
         "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",

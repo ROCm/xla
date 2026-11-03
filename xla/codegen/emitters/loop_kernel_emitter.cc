@@ -62,7 +62,6 @@ limitations under the License.
 #include "xla/runtime/work_dimensions.h"
 #include "xla/runtime/work_item.h"
 #include "xla/service/buffer_assignment.h"
-#include "xla/service/gpu/valid_prefix_extent.h"
 #include "xla/service/llvm_ir/llvm_util.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
@@ -136,7 +135,8 @@ LoopFusionKernelEmitter::LoopFusionKernelEmitter(
     const HloFusionSpec& fusion_spec, const BufferAssignment* buffer_assignment,
     KernelArguments::BufferAlignment buffer_alignment,
     WorkDimensions work_dimensions, absl::string_view entry_function_name,
-    BackendKind backend_kind)
+    BackendKind backend_kind,
+    std::optional<LoopFusionValidPrefixExtent> valid_prefix_extent)
     : mlir_context_(mlir_context),
       fusion_(fusion),
       fusion_spec_(fusion_spec),
@@ -144,7 +144,8 @@ LoopFusionKernelEmitter::LoopFusionKernelEmitter(
       buffer_alignment_(std::move(buffer_alignment)),
       work_dimensions_(std::move(work_dimensions)),
       entry_function_name_(entry_function_name),
-      backend_kind_(backend_kind) {}
+      backend_kind_(backend_kind),
+      valid_prefix_extent_(valid_prefix_extent) {}
 
 absl::StatusOr<LoopFusionKernelEmitter::KernelDefinition>
 LoopFusionKernelEmitter::EmitKernelDefinition() {
@@ -214,14 +215,9 @@ absl::Status LoopFusionKernelEmitter::EmitEntryFunction(
       EmitWorkGroupIds(builder, work_dimensions_.num_work_groups);
 
   auto indexing = ComputeWorkItemIdToOutputIndexing(&mlir_context_);
-  std::optional<gpu::ValidPrefixExtent> valid_prefix_extent_contract;
-  if (backend_kind_ == BackendKind::kGpu) {
-    ABSL_ASSIGN_OR_RETURN(valid_prefix_extent_contract,
-                          gpu::GetValidPrefixExtent(fusion));
-  }
   std::optional<mlir::Value> valid_prefix_extent;
-  if (valid_prefix_extent_contract.has_value()) {
-    const gpu::ValidPrefixExtent& extent = *valid_prefix_extent_contract;
+  if (valid_prefix_extent_.has_value()) {
+    const LoopFusionValidPrefixExtent& extent = *valid_prefix_extent_;
     valid_prefix_extent = EmitClampedValidPrefixExtent(
         builder, entry_function.getArgument(extent.operand_index),
         extent.capacity);

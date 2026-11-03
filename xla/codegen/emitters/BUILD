@@ -367,7 +367,6 @@ cc_library(
         "//xla/runtime:work_dimensions",
         "//xla/runtime:work_item",
         "//xla/service:buffer_assignment",
-        "//xla/service/gpu:valid_prefix_extent",
         "//xla/service/llvm_ir:llvm_util",
         "//xla/tsl/platform:errors",
         "//xla/tsl/platform:statusor",
