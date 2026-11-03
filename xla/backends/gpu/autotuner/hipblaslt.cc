@@ -15,13 +15,17 @@ limitations under the License.
 
 #include "xla/backends/gpu/autotuner/hipblaslt.h"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
@@ -240,6 +244,236 @@ const HloInstruction* GetScaledDotFromFusion(const HloInstruction& instr) {
   }
   return hlo_query::GetFirstInstructionWithOpcode(
       *instr.fused_instructions_computation(), HloOpcode::kScaledDot);
+}
+
+// The structure of a scaled-dot fusion that ApplyConfig can lower to
+// __cublas$lt$matmul$mx: each scaled-dot operand comes from its own fusion
+// parameter through bitcasts, and every other instruction belongs to an
+// optional elementwise epilogue, which runs after the GEMM in a loop fusion.
+struct MxFusionStructure {
+  // The fusion parameter that feeds each scaled-dot operand.
+  std::array<int64_t, 4> dot_parameter_numbers = {};
+  // The fusion parameters that feed only the epilogue, in increasing order.
+  std::vector<int64_t> epilogue_parameter_numbers;
+  // The epilogue instructions other than parameters, in post order. Empty if
+  // and only if the scaled-dot is the root of the fusion.
+  std::vector<const HloInstruction*> epilogue;
+
+  // Whether the epilogue only reinterprets the scaled-dot result: every
+  // epilogue instruction is a bitcast or a reshape, which the analysis accepts
+  // only if it keeps the element type and order.
+  bool EpilogueIsBitcast() const {
+    return epilogue_parameter_numbers.empty() &&
+           absl::c_all_of(epilogue, [](const HloInstruction* instr) {
+             return instr->opcode() == HloOpcode::kBitcast ||
+                    instr->opcode() == HloOpcode::kReshape;
+           });
+  }
+};
+
+// Returns an error unless `instr`, an epilogue instruction of a scaled-dot
+// fusion, can run in a loop fusion after the GEMM: an elementwise instruction
+// whose operands have its dimensions, or a bitcast or reshape that keeps the
+// element order. Transposes, broadcasts, reductions, slices and tuples are
+// refused.
+absl::Status CheckMxEpilogueInstruction(const HloInstruction& instr) {
+  if (!instr.shape().IsArray() || !instr.shape().has_layout()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "hipBLASLt MX epilogue instruction is not an array with a layout: ",
+        instr.ToString()));
+  }
+  if (instr.opcode() == HloOpcode::kBitcast ||
+      instr.opcode() == HloOpcode::kReshape) {
+    const Shape& operand_shape = instr.operand(0)->shape();
+    if (!operand_shape.IsArray() || !operand_shape.has_layout() ||
+        !ShapeUtil::ReshapeIsBitcast(operand_shape, instr.shape())) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("hipBLASLt MX epilogue changes the element order: ",
+                       instr.ToString()));
+    }
+    return absl::OkStatus();
+  }
+  if (!instr.IsElementwise() || instr.operand_count() == 0 ||
+      instr.has_called_computations() || instr.HasSideEffect()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("hipBLASLt MX epilogue instruction is not elementwise: ",
+                     instr.ToString()));
+  }
+  for (const HloInstruction* operand : instr.operands()) {
+    if (!operand->shape().IsArray() ||
+        !ShapeUtil::SameDimensions(operand->shape(), instr.shape())) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "hipBLASLt MX epilogue instruction changes the dimensions: ",
+          instr.ToString()));
+    }
+  }
+  return absl::OkStatus();
+}
+
+// Analyzes `fusion`, a Triton GEMM fusion around `scaled_dot`, for lowering
+// with `scale_mode`. Returns an InvalidArgument error that names the reason if
+// the fusion cannot be lowered.
+absl::StatusOr<MxFusionStructure> AnalyzeMxScaledDotFusion(
+    const HloInstruction& fusion, const HloInstruction& scaled_dot,
+    se::gpu::ScaleMode scale_mode) {
+  // ReshapeIsBitcast compares element order, not element storage width.
+  // Eliding the operand path must not reinterpret byte-stored FP4 as packed
+  // nibbles, including when an intermediate shape changes storage width.
+  auto validate_fp4_storage = [scale_mode](const Shape& shape) -> absl::Status {
+    if (scale_mode == se::gpu::ScaleMode::kBlockScaling32x8 &&
+        shape.element_type() == F4E2M1FN &&
+        (!shape.has_layout() || shape.layout().element_size_in_bits() != 4)) {
+      return absl::InvalidArgumentError(
+          "Pre-swizzled FP4 operands require packed E(4) storage throughout "
+          "the operand path");
+    }
+    return absl::OkStatus();
+  };
+
+  const HloComputation* fused = fusion.fused_instructions_computation();
+  MxFusionStructure structure;
+  // The operand parameters and the instructions between them and the
+  // scaled-dot, all of which the lowering elides.
+  absl::flat_hash_set<const HloInstruction*> operand_paths;
+  // Walk back from each scaled-dot operand to the fusion parameter it comes
+  // from. The fusion's external operands may have a different rank than the
+  // scaled-dot operands: when quantization happens in-graph the operand is in
+  // block-scaled [..., K/block, block] form and is only flattened to [..., K]
+  // by a bitcast/reshape inside the fusion. Only such trivial rank-changing
+  // ops are allowed on the path, and each instruction on it must have a single
+  // user, so that no data or scale value reaches the epilogue.
+  for (int64_t dot_index = 0; dot_index < 4; ++dot_index) {
+    const HloInstruction* cur = scaled_dot.operand(dot_index);
+    while (true) {
+      ABSL_RETURN_IF_ERROR(validate_fp4_storage(cur->shape()));
+      if (cur->user_count() != 1) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "The path to scaled-dot operand ", dot_index,
+            " has an instruction with several users: ", cur->ToString()));
+      }
+      if (!operand_paths.insert(cur).second) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Several scaled-dot operands come from ", cur->ToString()));
+      }
+      if (cur->opcode() == HloOpcode::kParameter) {
+        break;
+      }
+      if (cur->opcode() != HloOpcode::kBitcast &&
+          cur->opcode() != HloOpcode::kReshape) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Unexpected op between fusion parameter and scaled-dot: ",
+            cur->ToString()));
+      }
+      // The whole path is elided. Equal endpoint shapes do not make that safe:
+      // an intermediate bitcast followed by a materializing reshape can change
+      // the byte order and still restore the same shape.
+      if (cur->opcode() == HloOpcode::kReshape &&
+          !ShapeUtil::ReshapeIsBitcast(cur->operand(0)->shape(),
+                                       cur->shape())) {
+        return absl::InvalidArgumentError(
+            "hipBLASLt MX lowering cannot discard a materializing reshape");
+      }
+      cur = cur->operand(0);
+    }
+    const HloInstruction* ext = fusion.operand(cur->parameter_number());
+    ABSL_RETURN_IF_ERROR(validate_fp4_storage(ext->shape()));
+    const Shape& inner_shape = scaled_dot.operand(dot_index)->shape();
+    if (scale_mode == se::gpu::ScaleMode::kBlockScaling32x8 &&
+        !ShapeUtil::Equal(ext->shape(), inner_shape) &&
+        !ShapeUtil::ReshapeIsBitcast(ext->shape(), inner_shape)) {
+      return absl::InvalidArgumentError(
+          "Pre-swizzled MX operands require layout-preserving reshapes");
+    }
+    structure.dot_parameter_numbers[dot_index] = cur->parameter_number();
+  }
+
+  // Every other instruction belongs to the epilogue. It cannot feed the
+  // scaled-dot, whose operand paths start at parameters, so it consumes only
+  // the scaled-dot result, the other parameters and other epilogue values.
+  const HloInstruction* root = fused->root_instruction();
+  if (root != &scaled_dot && scaled_dot.user_count() == 0) {
+    return absl::InvalidArgumentError(
+        "The scaled-dot result does not reach the fusion root");
+  }
+  for (const HloInstruction* instr : fused->MakeInstructionPostOrder()) {
+    if (instr == &scaled_dot || operand_paths.contains(instr)) {
+      continue;
+    }
+    if (instr != root && instr->user_count() == 0) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Unused instruction in the scaled-dot fusion: ", instr->ToString()));
+    }
+    if (instr->opcode() == HloOpcode::kParameter) {
+      structure.epilogue_parameter_numbers.push_back(instr->parameter_number());
+      continue;
+    }
+    ABSL_RETURN_IF_ERROR(CheckMxEpilogueInstruction(*instr));
+    structure.epilogue.push_back(instr);
+  }
+  absl::c_sort(structure.epilogue_parameter_numbers);
+  return structure;
+}
+
+// Builds the loop fusion that runs the epilogue of the scaled-dot fusion
+// `fusion` on `gemm_result`, the result of the GEMM that replaces the
+// scaled-dot. Its parameters are the GEMM result and then the operands of
+// `fusion` that feed only the epilogue, in their order in `fusion`. Its body is
+// a clone of the epilogue with the scaled-dot replaced by parameter 0, so its
+// root has the shape and layout of the root of `fusion`.
+absl::StatusOr<HloInstruction*> CreateMxEpilogueFusion(
+    HloInstruction& fusion, const HloInstruction& scaled_dot,
+    const MxFusionStructure& structure, HloInstruction* gemm_result) {
+  const HloComputation* fused = fusion.fused_instructions_computation();
+  HloComputation::Builder builder("hipblaslt_mx_epilogue");
+  absl::flat_hash_map<const HloInstruction*, HloInstruction*> clones;
+  clones[&scaled_dot] = builder.AddInstruction(
+      HloInstruction::CreateParameter(0, scaled_dot.shape(), "gemm_result"));
+  std::vector<HloInstruction*> operands = {gemm_result};
+  for (int64_t parameter_number : structure.epilogue_parameter_numbers) {
+    const HloInstruction* parameter =
+        fused->parameter_instruction(parameter_number);
+    clones[parameter] = builder.AddInstruction(
+        HloInstruction::CreateParameter(static_cast<int64_t>(operands.size()),
+                                        parameter->shape(), parameter->name()));
+    operands.push_back(fusion.mutable_operand(parameter_number));
+  }
+  for (const HloInstruction* instr : structure.epilogue) {
+    std::vector<HloInstruction*> new_operands;
+    new_operands.reserve(instr->operand_count());
+    for (const HloInstruction* operand : instr->operands()) {
+      new_operands.push_back(clones.at(operand));
+    }
+    clones[instr] = builder.AddInstruction(
+        instr->CloneWithNewOperands(instr->shape(), new_operands));
+  }
+  TF_RET_CHECK(clones.contains(fused->root_instruction()));
+  HloComputation* computation = fusion.GetModule()->AddEmbeddedComputation(
+      builder.Build(clones.at(fused->root_instruction())));
+  computation->SetExecutionThread(fusion.parent()->execution_thread());
+  // ApplyConfig names the fusion after the replacement, which would give it
+  // the name of `fusion` because both are fusions.
+  return fusion.parent()->AddInstruction(HloInstruction::CreateFusion(
+      fusion.shape(), HloInstruction::FusionKind::kLoop, operands,
+      computation));
+}
+
+// Replaces `fusion` by `result`. The control predecessors of `fusion` become
+// predecessors of `gemm`, which `result` depends on, and its control
+// successors become successors of `result`.
+absl::Status ReplaceMxScaledDotFusion(HloInstruction& fusion,
+                                      HloInstruction* gemm,
+                                      HloInstruction* result) {
+  ABSL_RETURN_IF_ERROR(fusion.CopyAllControlDepsTo(gemm, result));
+  ABSL_RETURN_IF_ERROR(fusion.DropAllControlDeps());
+  ABSL_ASSIGN_OR_RETURN(bool replaced,
+                        fusion.parent()->ReplaceInstruction(
+                            &fusion, result, /*preserve_sharding=*/false,
+                            /*relay_control_dependency=*/true));
+  if (!replaced) {
+    return absl::InternalError(absl::StrCat(
+        "hipBLASLt MX lowering could not replace ", fusion.name()));
+  }
+  return absl::OkStatus();
 }
 
 // Decides whether `gemm` is an FP8-output __cublas$lt$matmul$f8, without amax
@@ -539,6 +773,17 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
     std::vector<std::unique_ptr<BackendConfig>> configs;
     for (MxScaleLayout layout : layouts) {
       ABSL_ASSIGN_OR_RETURN(gemm_config_or->scale_mode, MxScaleMode(layout));
+      // Offer only configs that ApplyConfig can lower.
+      absl::Status lowerable =
+          AnalyzeMxScaledDotFusion(instr, *scaled_dot,
+                                   gemm_config_or->scale_mode)
+              .status();
+      if (!lowerable.ok()) {
+        VLOG(2) << "hipBLASLt MX: cannot lower " << instr.name()
+                << " with scale layout " << layout << ": "
+                << lowerable.message();
+        continue;
+      }
       auto plan_or =
           blas_lt->GetMatmulPlan(*gemm_config_or, BlasLt::Epilogue::kDefault);
       if (!plan_or.ok()) {
@@ -649,6 +894,15 @@ HipblasLtBackend::GetDefaultConfig(const HloInstruction& instr) {
       return absl::InvalidArgumentError(
           "The requested hipBLASLt MX scale layout is not supported");
     }
+    // The default config must be one that ApplyConfig can lower.
+    if (!IsValidMxScaledDot(scaled_dot)) {
+      return absl::InvalidArgumentError(
+          "hipBLASLt does not support this MX scaled-dot");
+    }
+    ABSL_ASSIGN_OR_RETURN(se::gpu::ScaleMode scale_mode,
+                          MxScaleMode(layouts.front()));
+    ABSL_RETURN_IF_ERROR(
+        AnalyzeMxScaledDotFusion(instr, *scaled_dot, scale_mode).status());
     gemm_key->set_mx_scale_layout(layouts.front());
     gemm_key->set_autotune_workspace_size(GemmConfig::kGFX950Workspace);
   } else if (instr.shape().IsTuple() && !instr.shape().tuple_shapes().empty()) {
@@ -718,91 +972,35 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
   if (const auto* scaled_dot = GetScaledDotFromFusion(instr)) {
     ABSL_ASSIGN_OR_RETURN(se::gpu::ScaleMode scale_mode,
                           MxScaleMode(gemm_key.mx_scale_layout()));
+    if (!IsValidMxScaledDot(scaled_dot)) {
+      return absl::InvalidArgumentError(
+          "hipBLASLt does not support this MX scaled-dot");
+    }
     if (scale_mode == se::gpu::ScaleMode::kBlockScaling32x8 &&
-        (!IsValidMxScaledDot(scaled_dot) ||
-         !CanUseHipblasLtScale32x8(
-              *scaled_dot,
-              target_config().device_description.gpu_compute_capability())
-              .IsAllowed())) {
+        !CanUseHipblasLtScale32x8(
+             *scaled_dot,
+             target_config().device_description.gpu_compute_capability())
+             .IsAllowed()) {
       return absl::InvalidArgumentError(
           "The cached hipBLASLt 32x8 scale configuration is not supported");
     }
-    HloComputation* fused = instr.fused_instructions_computation();
     HloComputation* parent = instr.parent();
+    ABSL_ASSIGN_OR_RETURN(
+        MxFusionStructure structure,
+        AnalyzeMxScaledDotFusion(instr, *scaled_dot, scale_mode));
 
-    TF_RET_CHECK(instr.operand_count() == 4);
-    // The scaled-dot must be the root of the fusion, otherwise we would drop
-    // any instructions that consume the scaled-dot result.
-    TF_RET_CHECK(scaled_dot == fused->root_instruction())
-        << "Scaled-dot is not the root of the fusion; lowering to hipBLASLt "
-           "matmul would drop instructions: "
-        << fused->root_instruction()->ToString();
-
-    // ReshapeIsBitcast compares element order, not element storage width.
-    // Eliding the operand path must not reinterpret byte-stored FP4 as packed
-    // nibbles, including when an intermediate shape changes storage width.
-    auto validate_fp4_storage = [scale_mode](const Shape& shape) -> absl::Status {
-      if (scale_mode == se::gpu::ScaleMode::kBlockScaling32x8 &&
-          shape.element_type() == F4E2M1FN &&
-          (!shape.has_layout() || shape.layout().element_size_in_bits() != 4)) {
-        return absl::InvalidArgumentError(
-            "Pre-swizzled FP4 operands require packed E(4) storage throughout "
-            "the operand path");
-      }
-      return absl::OkStatus();
-    };
-
-    // Walk forward from each fusion parameter to the scaled-dot operand it
-    // feeds. The fusion's external operands may have a different rank than the
-    // scaled-dot operands: when quantization happens in-graph the operand is in
-    // block-scaled [..., K/block, block] form and is only flattened to [..., K]
-    // by a bitcast/reshape inside the fusion. Only such trivial rank-changing
-    // ops are allowed on the path.
-    absl::InlinedVector<HloInstruction*, 4> operands(4, nullptr);
-    for (HloInstruction* param : fused->parameter_instructions()) {
-      ABSL_RETURN_IF_ERROR(validate_fp4_storage(param->shape()));
-      const HloInstruction* cur = param;
-      while (cur->user_count() == 1 && cur->users()[0] != scaled_dot) {
-        HloInstruction* user = cur->users()[0];
-        TF_RET_CHECK(user->opcode() == HloOpcode::kBitcast ||
-                     user->opcode() == HloOpcode::kReshape)
-            << "Unexpected op between fusion parameter and scaled-dot: "
-            << user->ToString();
-        ABSL_RETURN_IF_ERROR(validate_fp4_storage(user->shape()));
-        // The whole path is elided below. Equal endpoint shapes do not make
-        // that safe: an intermediate bitcast followed by a materializing
-        // reshape can change the byte order and still restore the same shape.
-        if (user->opcode() == HloOpcode::kReshape &&
-            !ShapeUtil::ReshapeIsBitcast(cur->shape(), user->shape())) {
-          return absl::InvalidArgumentError(
-              "hipBLASLt MX lowering cannot discard a materializing reshape");
-        }
-        cur = user;
-      }
-      TF_RET_CHECK(cur->user_count() == 1 && cur->users()[0] == scaled_dot)
-          << "Fusion parameter " << param->parameter_number()
-          << " does not feed directly into the scaled-dot.";
-
-      int64_t dot_index = scaled_dot->operand_index(cur);
+    // The operand paths are elided: each external operand is bitcast to the
+    // shape of the scaled-dot operand it feeds.
+    absl::InlinedVector<HloInstruction*, 4> operands;
+    for (int64_t dot_index = 0; dot_index < 4; ++dot_index) {
+      HloInstruction* ext =
+          instr.mutable_operand(structure.dot_parameter_numbers[dot_index]);
       const Shape& inner_shape = scaled_dot->operand(dot_index)->shape();
-      HloInstruction* ext = instr.mutable_operand(param->parameter_number());
-      ABSL_RETURN_IF_ERROR(validate_fp4_storage(ext->shape()));
       if (!ShapeUtil::Equal(ext->shape(), inner_shape)) {
-        if (scale_mode == se::gpu::ScaleMode::kBlockScaling32x8 &&
-            !ShapeUtil::ReshapeIsBitcast(ext->shape(), inner_shape)) {
-          return absl::InvalidArgumentError(
-              "Pre-swizzled MX operands require layout-preserving reshapes");
-        }
         ext = parent->AddInstruction(
             HloInstruction::CreateBitcast(inner_shape, ext));
       }
-      TF_RET_CHECK(operands[dot_index] == nullptr)
-          << "Multiple fusion parameters feed scaled-dot operand " << dot_index;
-      operands[dot_index] = ext;
-    }  // for
-    for (HloInstruction* op : operands) {
-      TF_RET_CHECK(op != nullptr)
-          << "Not all scaled-dot operands are fed by a fusion parameter.";
+      operands.push_back(ext);
     }
     if (scale_mode == se::gpu::ScaleMode::kBlockScaling32x8) {
       ABSL_ASSIGN_OR_RETURN(operands[2],
@@ -834,7 +1032,29 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
     ABSL_RETURN_IF_ERROR(custom_call->set_backend_config(gpu_backend_config));
     HloInstruction* gte = parent->AddInstruction(
         HloInstruction::CreateGetTupleElement(result_shape, custom_call, 0));
-    return parent->ReplaceInstruction(&instr, gte);
+    if (structure.epilogue.empty()) {
+      return ReplaceMxScaledDotFusion(instr, custom_call, gte);
+    }
+    if (structure.EpilogueIsBitcast()) {
+      // Reinterpreting the GEMM result needs no kernel.
+      HloInstruction* result =
+          ShapeUtil::Equal(gte->shape(), instr.shape())
+              ? gte
+              : parent->AddInstruction(
+                    HloInstruction::CreateBitcast(instr.shape(), gte));
+      return ReplaceMxScaledDotFusion(instr, custom_call, result);
+    }
+    // The instructions that consume the scaled-dot result run after the GEMM.
+    ABSL_ASSIGN_OR_RETURN(
+        HloInstruction * epilogue,
+        CreateMxEpilogueFusion(instr, *scaled_dot, structure, gte));
+    // The replacement renames a fusion that replaces a fusion to the old name.
+    const std::string epilogue_name = absl::StrCat(instr.name(), "_epilogue");
+    HloModule* module = instr.GetModule();
+    ABSL_RETURN_IF_ERROR(
+        ReplaceMxScaledDotFusion(instr, custom_call, epilogue));
+    module->SetAndUniquifyInstrName(epilogue, epilogue_name);
+    return absl::OkStatus();
   }
   if (IsCublasLtGroupedMatmul(instr)) {
     ABSL_ASSIGN_OR_RETURN(GpuBackendConfig gpu_config,

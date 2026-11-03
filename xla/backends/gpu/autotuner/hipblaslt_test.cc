@@ -27,15 +27,18 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/codegen_backend.h"
+#include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/testlib/filecheck.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/testlib/verified_hlo_module.h"
 #include "xla/layout.h"
 #include "xla/layout_util.h"
 #include "xla/service/compiler.h"
@@ -725,6 +728,418 @@ TEST_F(HipblasLtPreswizzledScaleTest,
   debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
       DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_PRESWIZZLED_32X8);
   EXPECT_NE(linear_version, backend_.version());
+}
+
+// Scaled-dot fusions with the epilogues that GemmFusionV2 fuses in a Llama
+// layer, with the extra BF16 parameters first: a residual add, and the
+// accumulation of an activation gradient with two others.
+const char kScaledDotResidualFusionHlo[] = R"(
+HloModule ScaledDotResidualFusion
+fusion_dot {
+  r0 = bf16[1,64,96]{2,1,0} parameter(0)
+  a = $0[1,64,512]{2,1,0$1} parameter(1)
+  b = $0[1,96,512]{2,1,0$1} parameter(2)
+  sa = f8e8m0fnu[1,64,16]{2,1,0} parameter(3)
+  sb = f8e8m0fnu[1,96,16]{2,1,0} parameter(4)
+  dot = bf16[1,64,96]{2,1,0} scaled-dot(a, b, sa, sb),
+      lhs_batch_dims={0}, lhs_contracting_dims={2},
+      rhs_batch_dims={0}, rhs_contracting_dims={2}
+  r0_f32 = f32[1,64,96]{2,1,0} convert(r0)
+  dot_f32 = f32[1,64,96]{2,1,0} convert(dot)
+  sum0 = f32[1,64,96]{2,1,0} add(r0_f32, dot_f32)
+  ROOT out = bf16[1,64,96]{2,1,0} convert(sum0)
+}
+ENTRY main {
+  r0 = bf16[1,64,96]{2,1,0} parameter(0)
+  a = $0[1,64,512]{2,1,0$1} parameter(1)
+  b = $0[1,96,512]{2,1,0$1} parameter(2)
+  sa = f8e8m0fnu[1,64,16]{2,1,0} parameter(3)
+  sb = f8e8m0fnu[1,96,16]{2,1,0} parameter(4)
+  ROOT fusion = bf16[1,64,96]{2,1,0} fusion(r0, a, b, sa, sb), kind=kCustom,
+      calls=fusion_dot, backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
+})";
+
+const char kScaledDotAccumulationFusionHlo[] = R"(
+HloModule ScaledDotAccumulationFusion
+fusion_dot {
+  r0 = bf16[1,64,96]{2,1,0} parameter(0)
+  r1 = bf16[1,64,96]{2,1,0} parameter(1)
+  a = $0[1,64,512]{2,1,0$1} parameter(2)
+  b = $0[1,96,512]{2,1,0$1} parameter(3)
+  sa = f8e8m0fnu[1,64,16]{2,1,0} parameter(4)
+  sb = f8e8m0fnu[1,96,16]{2,1,0} parameter(5)
+  dot = bf16[1,64,96]{2,1,0} scaled-dot(a, b, sa, sb),
+      lhs_batch_dims={0}, lhs_contracting_dims={2},
+      rhs_batch_dims={0}, rhs_contracting_dims={2}
+  dot_f32 = f32[1,64,96]{2,1,0} convert(dot)
+  r1_f32 = f32[1,64,96]{2,1,0} convert(r1)
+  sum1 = f32[1,64,96]{2,1,0} add(dot_f32, r1_f32)
+  r0_f32 = f32[1,64,96]{2,1,0} convert(r0)
+  sum0 = f32[1,64,96]{2,1,0} add(sum1, r0_f32)
+  ROOT out = bf16[1,64,96]{2,1,0} convert(sum0)
+}
+ENTRY main {
+  r0 = bf16[1,64,96]{2,1,0} parameter(0)
+  r1 = bf16[1,64,96]{2,1,0} parameter(1)
+  a = $0[1,64,512]{2,1,0$1} parameter(2)
+  b = $0[1,96,512]{2,1,0$1} parameter(3)
+  sa = f8e8m0fnu[1,64,16]{2,1,0} parameter(4)
+  sb = f8e8m0fnu[1,96,16]{2,1,0} parameter(5)
+  ROOT fusion = bf16[1,64,96]{2,1,0} fusion(r0, r1, a, b, sa, sb),
+      kind=kCustom, calls=fusion_dot,
+      backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
+})";
+
+// The parameter is {FP4 data, number of extra BF16 parameters}.
+class HipblasLtMxEpilogueTest
+    : public HipblasLtPreswizzledScaleTest,
+      public ::testing::WithParamInterface<std::tuple<bool, int>> {
+ protected:
+  bool fp4() const { return std::get<0>(GetParam()); }
+  int num_addends() const { return std::get<1>(GetParam()); }
+  std::string Hlo() const {
+    return absl::Substitute(
+        num_addends() == 1 ? kScaledDotResidualFusionHlo
+                           : kScaledDotAccumulationFusionHlo,
+        fp4() ? "f4e2m1fn" : "f8e4m3fn", fp4() ? ":E(4)" : "");
+  }
+};
+
+TEST_P(HipblasLtMxEpilogueTest, OffersBothScaleLayouts) {
+  debug_options_.set_xla_gpu_blas_max_algorithms(4);
+  debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
+      DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_AUTO);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(Hlo()));
+  ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> configs,
+                       backend_.GetSupportedConfigs(
+                           *module->entry_computation()->root_instruction()));
+  bool has_linear = false;
+  bool has_32x8 = false;
+  for (const auto& config : configs) {
+    has_linear |= config->gemm().mx_scale_layout() ==
+                  HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR;
+    has_32x8 |= config->gemm().mx_scale_layout() ==
+                HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8;
+  }
+  EXPECT_TRUE(has_linear);
+  EXPECT_TRUE(has_32x8);
+}
+
+TEST_P(HipblasLtMxEpilogueTest, MovesEpilogueAfterTheGemm) {
+  for (auto layout : {HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR,
+                      HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8}) {
+    SCOPED_TRACE(::testing::Message() << "layout=" << layout);
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                         ParseAndReturnVerifiedModule(Hlo()));
+    HloComputation* entry = module->entry_computation();
+    Shape fusion_shape = entry->root_instruction()->shape();
+    BackendConfig config;
+    config.mutable_gemm()->set_autotune_workspace_size(64 * 1024 * 1024);
+    config.mutable_gemm()->set_mx_scale_layout(layout);
+    ASSERT_THAT(backend_.ApplyConfig(*entry->root_instruction(), config),
+                absl_testing::IsOk());
+    EXPECT_THAT(module->Verify(), absl_testing::IsOk());
+
+    // The root is a loop fusion of the GEMM result and the extra parameters.
+    const HloInstruction* epilogue = entry->root_instruction();
+    ASSERT_EQ(epilogue->opcode(), HloOpcode::kFusion);
+    EXPECT_EQ(epilogue->fusion_kind(), HloInstruction::FusionKind::kLoop);
+    EXPECT_THAT(epilogue->name(), ::testing::StartsWith("fusion_epilogue"));
+    EXPECT_TRUE(ShapeUtil::Equal(epilogue->shape(), fusion_shape));
+    ASSERT_EQ(epilogue->operand_count(), 1 + num_addends());
+    for (int addend = 0; addend < num_addends(); ++addend) {
+      EXPECT_EQ(epilogue->operand(1 + addend),
+                entry->parameter_instruction(addend));
+    }
+    const HloInstruction* gte = epilogue->operand(0);
+    ASSERT_EQ(gte->opcode(), HloOpcode::kGetTupleElement);
+    const HloInstruction* call = gte->operand(0);
+    ASSERT_EQ(call->opcode(), HloOpcode::kCustomCall);
+    EXPECT_EQ(call->custom_call_target(), "__cublas$lt$matmul$mx");
+    ASSERT_EQ(call->operand_count(), 4);
+    ASSERT_OK_AND_ASSIGN(GpuBackendConfig gpu_config,
+                         call->backend_config<GpuBackendConfig>());
+    EXPECT_EQ(gpu_config.gemm_backend_config().scale_mode(),
+              layout == HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR ? 2 : 3);
+
+    // The data and scales feed only the GEMM, the scales through the swizzle
+    // fusions under 32x8.
+    for (int operand = 0; operand < 4; ++operand) {
+      const HloInstruction* parameter =
+          entry->parameter_instruction(num_addends() + operand);
+      ASSERT_EQ(parameter->user_count(), 1);
+      if (operand >= 2 &&
+          layout == HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8) {
+        EXPECT_EQ(call->operand(operand)->opcode(), HloOpcode::kFusion);
+        EXPECT_EQ(call->operand(operand)->operand(0), parameter);
+        EXPECT_EQ(parameter->users()[0], call->operand(operand));
+      } else {
+        EXPECT_EQ(call->operand(operand), parameter);
+      }
+    }
+
+    // The body takes the GEMM result in place of the scaled-dot and applies
+    // the converts and adds; no data or scale reaches it.
+    const HloComputation* body = epilogue->fused_instructions_computation();
+    ASSERT_EQ(body->num_parameters(), 1 + num_addends());
+    EXPECT_TRUE(ShapeUtil::Equal(body->parameter_instruction(0)->shape(),
+                                 call->shape().tuple_shapes(0)));
+    EXPECT_TRUE(
+        ShapeUtil::Equal(body->root_instruction()->shape(), fusion_shape));
+    EXPECT_EQ(body->root_instruction()->opcode(), HloOpcode::kConvert);
+    int num_adds = 0;
+    for (const HloInstruction* instr : body->instructions()) {
+      EXPECT_NE(instr->opcode(), HloOpcode::kScaledDot);
+      EXPECT_THAT(instr->shape().element_type(), ::testing::AnyOf(BF16, F32));
+      num_adds += instr->opcode() == HloOpcode::kAdd;
+    }
+    EXPECT_EQ(num_adds, num_addends());
+  }
+}
+
+// Every config that GetSupportedConfigs offers can be applied, which is what
+// filtering the configs with the lowering's analysis promises.
+TEST_P(HipblasLtMxEpilogueTest, AppliesEverySupportedConfig) {
+  debug_options_.set_xla_gpu_blas_max_algorithms(4);
+  debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
+      DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_AUTO);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(Hlo()));
+  ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> configs,
+                       backend_.GetSupportedConfigs(
+                           *module->entry_computation()->root_instruction()));
+  bool has_linear = false;
+  bool has_32x8 = false;
+  for (const std::unique_ptr<BackendConfig>& config : configs) {
+    SCOPED_TRACE(config->ShortDebugString());
+    has_linear |= config->gemm().mx_scale_layout() ==
+                  HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR;
+    has_32x8 |= config->gemm().mx_scale_layout() ==
+                HipblasLtBackendConfig::MX_SCALE_LAYOUT_HIPBLASLT_32X8;
+    // A fresh copy of the module for each config.
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> copy,
+                         ParseAndReturnVerifiedModule(Hlo()));
+    EXPECT_THAT(backend_.ApplyConfig(
+                    *copy->entry_computation()->root_instruction(), *config),
+                absl_testing::IsOk());
+    EXPECT_THAT(copy->Verify(), absl_testing::IsOk());
+  }
+  EXPECT_TRUE(has_linear);
+  EXPECT_TRUE(has_32x8);
+}
+
+TEST_P(HipblasLtMxEpilogueTest, CompilesWithEpilogue) {
+  for (auto policy :
+       {DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_LINEAR,
+        DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_PRESWIZZLED_32X8}) {
+    SCOPED_TRACE(::testing::Message() << "policy=" << policy);
+    debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(policy);
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                         ParseAndReturnVerifiedModule(Hlo()));
+    HloInstruction* fusion = module->entry_computation()->root_instruction();
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackendConfig> config,
+                         backend_.GetDefaultConfig(*fusion));
+    EXPECT_THAT(backend_.Compile(*fusion, *config), absl_testing::IsOk());
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MxEpilogues, HipblasLtMxEpilogueTest,
+    ::testing::Combine(::testing::Bool(), ::testing::Values(1, 2)),
+    [](const ::testing::TestParamInfo<std::tuple<bool, int>>& info) {
+      return absl::StrCat(std::get<0>(info.param) ? "Fp4" : "Fp8", "With",
+                          std::get<1>(info.param), "Addends");
+    });
+
+// A scaled-dot fusion whose root <<ROOT>> of shape <<SHAPE>> changes the shape
+// of the scaled-dot result.
+const char kScaledDotShapeChangingEpilogueHlo[] = R"(
+HloModule ScaledDotShapeChangingEpilogue
+fusion_dot {
+  a = f8e4m3fn[1,64,512]{2,1,0} parameter(0)
+  b = f8e4m3fn[1,96,512]{2,1,0} parameter(1)
+  sa = f8e8m0fnu[1,64,16]{2,1,0} parameter(2)
+  sb = f8e8m0fnu[1,96,16]{2,1,0} parameter(3)
+  dot = bf16[1,64,96]{2,1,0} scaled-dot(a, b, sa, sb),
+      lhs_batch_dims={0}, lhs_contracting_dims={2},
+      rhs_batch_dims={0}, rhs_contracting_dims={2}
+  ROOT out = <<SHAPE>> <<ROOT>>
+}
+ENTRY main {
+  a = f8e4m3fn[1,64,512]{2,1,0} parameter(0)
+  b = f8e4m3fn[1,96,512]{2,1,0} parameter(1)
+  sa = f8e8m0fnu[1,64,16]{2,1,0} parameter(2)
+  sb = f8e8m0fnu[1,96,16]{2,1,0} parameter(3)
+  ROOT fusion = <<SHAPE>> fusion(a, b, sa, sb), kind=kCustom,
+      calls=fusion_dot, backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
+})";
+
+TEST_F(HipblasLtScaledDotTest, RefusesNonElementwiseEpilogue) {
+  debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
+      DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_AUTO);
+  // {shape, root}
+  for (auto [shape, root] :
+       {std::tuple{"bf16[1,96,64]{2,1,0}",
+                   "transpose(dot), dimensions={0,2,1}"},
+        std::tuple{"bf16[1,64,96,2]{3,2,1,0}",
+                   "broadcast(dot), dimensions={0,1,2}"}}) {
+    SCOPED_TRACE(root);
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                         ParseAndReturnVerifiedModule(absl::StrReplaceAll(
+                             kScaledDotShapeChangingEpilogueHlo,
+                             {{"<<SHAPE>>", shape}, {"<<ROOT>>", root}})));
+    HloInstruction* fusion = module->entry_computation()->root_instruction();
+    EXPECT_THAT(backend_.GetSupportedConfigs(*fusion),
+                absl_testing::IsOkAndHolds(testing::IsEmpty()));
+    EXPECT_THAT(backend_.GetDefaultConfig(*fusion),
+                absl_testing::StatusIs(absl::StatusCode::kInvalidArgument));
+    BackendConfig config;
+    config.mutable_gemm()->set_mx_scale_layout(
+        HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR);
+    EXPECT_THAT(
+        backend_.ApplyConfig(*fusion, config),
+        absl_testing::StatusIs(absl::StatusCode::kInvalidArgument,
+                               ::testing::HasSubstr("not elementwise")));
+    EXPECT_EQ(module->entry_computation()->root_instruction(), fusion);
+  }
+}
+
+// An epilogue that only bitcasts the [1,M,N] result to [M,N] needs no kernel.
+TEST_F(HipblasLtScaledDotTest, BitcastsResultWithoutEpilogueFusion) {
+  for (absl::string_view root : {"bitcast(dot)", "reshape(dot)"}) {
+    SCOPED_TRACE(root);
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<VerifiedHloModule> module,
+        ParseAndReturnVerifiedModule(absl::StrReplaceAll(
+            kScaledDotShapeChangingEpilogueHlo,
+            {{"<<SHAPE>>", "bf16[64,96]{1,0}"}, {"<<ROOT>>", root}})));
+    HloComputation* entry = module->entry_computation();
+    BackendConfig config;
+    config.mutable_gemm()->set_autotune_workspace_size(64 * 1024 * 1024);
+    config.mutable_gemm()->set_mx_scale_layout(
+        HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR);
+    ASSERT_THAT(backend_.ApplyConfig(*entry->root_instruction(), config),
+                absl_testing::IsOk());
+    EXPECT_THAT(module->Verify(), absl_testing::IsOk());
+
+    // The entry holds the four parameters, the custom call, its result and
+    // the bitcast of the result, and no fusion.
+    const HloInstruction* result = entry->root_instruction();
+    ASSERT_EQ(result->opcode(), HloOpcode::kBitcast);
+    EXPECT_TRUE(ShapeUtil::Equal(
+        result->shape(),
+        ShapeUtil::MakeShapeWithDenseLayout(BF16, {64, 96}, {1, 0})));
+    const HloInstruction* gte = result->operand(0);
+    ASSERT_EQ(gte->opcode(), HloOpcode::kGetTupleElement);
+    const HloInstruction* call = gte->operand(0);
+    ASSERT_EQ(call->opcode(), HloOpcode::kCustomCall);
+    EXPECT_EQ(call->custom_call_target(), "__cublas$lt$matmul$mx");
+    for (int operand = 0; operand < 4; ++operand) {
+      EXPECT_EQ(call->operand(operand), entry->parameter_instruction(operand));
+    }
+    EXPECT_EQ(entry->instruction_count(), 7);
+    for (const HloInstruction* instr : entry->instructions()) {
+      EXPECT_NE(instr->opcode(), HloOpcode::kFusion) << instr->ToString();
+    }
+  }
+}
+
+// An FP8 scaled-dot fusion over [1,64,64] operands, so that the data have the
+// dimensions of the result. Each case of RefusesFusionStructure supplies the
+// fused computation's body, the operands of the fusion, the shape of `a` and
+// the result shape.
+const char kMxFusionStructureHlo[] = R"(
+HloModule MxFusionStructure
+fusion_dot {
+<<BODY>>
+}
+ENTRY main {
+  a = <<A>> parameter(0)
+  b = f8e4m3fn[1,64,64]{2,1,0} parameter(1)
+  sa = f8e8m0fnu[1,64,2]{2,1,0} parameter(2)
+  sb = f8e8m0fnu[1,64,2]{2,1,0} parameter(3)
+  ROOT fusion = <<RESULT>> fusion(<<OPERANDS>>), kind=kCustom,
+      calls=fusion_dot, backend_config={"fusion_backend_config":{"kind":"__triton_gemm"}}
+})";
+
+TEST_F(HipblasLtScaledDotTest, RefusesFusionStructure) {
+  debug_options_.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
+      DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_AUTO);
+  constexpr absl::string_view kParams = R"(
+  b = f8e4m3fn[1,64,64]{2,1,0} parameter(1)
+  sa = f8e8m0fnu[1,64,2]{2,1,0} parameter(2)
+  sb = f8e8m0fnu[1,64,2]{2,1,0} parameter(3))";
+  constexpr absl::string_view kDims =
+      "lhs_batch_dims={0}, lhs_contracting_dims={2}, "
+      "rhs_batch_dims={0}, rhs_contracting_dims={2}";
+  struct Case {
+    absl::string_view name;
+    absl::string_view a_shape;
+    absl::string_view body;
+    absl::string_view operands;
+    absl::string_view result_shape;
+    absl::string_view error;
+  };
+  const Case kCases[] = {
+      {"data parameter also feeds the epilogue", "f8e4m3fn[1,64,64]{2,1,0}",
+       R"(
+  a = f8e4m3fn[1,64,64]{2,1,0} parameter(0)<<PARAMS>>
+  dot = bf16[1,64,64]{2,1,0} scaled-dot(a, b, sa, sb), <<DIMS>>
+  a_bf16 = bf16[1,64,64]{2,1,0} convert(a)
+  ROOT out = bf16[1,64,64]{2,1,0} add(dot, a_bf16))",
+       "a, b, sa, sb", "bf16[1,64,64]{2,1,0}", "several users"},
+      {"one parameter feeds two operands", "f8e4m3fn[1,64,64]{2,1,0}", R"(
+  a = f8e4m3fn[1,64,64]{2,1,0} parameter(0)
+  sa = f8e8m0fnu[1,64,2]{2,1,0} parameter(1)
+  sb = f8e8m0fnu[1,64,2]{2,1,0} parameter(2)
+  ROOT dot = bf16[1,64,64]{2,1,0} scaled-dot(a, a, sa, sb), <<DIMS>>)",
+       "a, sa, sb", "bf16[1,64,64]{2,1,0}", "Several scaled-dot operands"},
+      {"operand path value has two users", "f8e4m3fn[64,64]{1,0}", R"(
+  a = f8e4m3fn[64,64]{1,0} parameter(0)<<PARAMS>>
+  a_3d = f8e4m3fn[1,64,64]{2,1,0} bitcast(a)
+  dot = bf16[1,64,64]{2,1,0} scaled-dot(a_3d, b, sa, sb), <<DIMS>>
+  a_bf16 = bf16[1,64,64]{2,1,0} convert(a_3d)
+  ROOT out = bf16[1,64,64]{2,1,0} add(dot, a_bf16))",
+       "a, b, sa, sb", "bf16[1,64,64]{2,1,0}", "several users"},
+      {"transposing reshape on an operand path", "f8e4m3fn[64,64]{0,1}", R"(
+  a = f8e4m3fn[64,64]{0,1} parameter(0)<<PARAMS>>
+  a_3d = f8e4m3fn[1,64,64]{2,1,0} reshape(a)
+  ROOT dot = bf16[1,64,64]{2,1,0} scaled-dot(a_3d, b, sa, sb), <<DIMS>>)",
+       "a, b, sa, sb", "bf16[1,64,64]{2,1,0}", "materializing reshape"},
+      {"slice in the epilogue", "f8e4m3fn[1,64,64]{2,1,0}", R"(
+  a = f8e4m3fn[1,64,64]{2,1,0} parameter(0)<<PARAMS>>
+  dot = bf16[1,64,64]{2,1,0} scaled-dot(a, b, sa, sb), <<DIMS>>
+  ROOT out = bf16[1,64,32]{2,1,0} slice(dot), slice={[0:1], [0:64], [0:32]})",
+       "a, b, sa, sb", "bf16[1,64,32]{2,1,0}", "not elementwise"},
+  };
+  for (const Case& c : kCases) {
+    SCOPED_TRACE(c.name);
+    std::string body = absl::StrReplaceAll(
+        c.body, {{"<<PARAMS>>", kParams}, {"<<DIMS>>", kDims}});
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<VerifiedHloModule> module,
+        ParseAndReturnVerifiedModule(absl::StrReplaceAll(
+            kMxFusionStructureHlo, {{"<<BODY>>", body},
+                                    {"<<A>>", c.a_shape},
+                                    {"<<OPERANDS>>", c.operands},
+                                    {"<<RESULT>>", c.result_shape}})));
+    HloInstruction* fusion = module->entry_computation()->root_instruction();
+    const std::string before = module->ToString();
+    EXPECT_THAT(backend_.GetSupportedConfigs(*fusion),
+                absl_testing::IsOkAndHolds(testing::IsEmpty()));
+    EXPECT_THAT(backend_.GetDefaultConfig(*fusion),
+                absl_testing::StatusIs(absl::StatusCode::kInvalidArgument,
+                                       ::testing::HasSubstr(c.error)));
+    BackendConfig config;
+    config.mutable_gemm()->set_autotune_workspace_size(64 * 1024 * 1024);
+    config.mutable_gemm()->set_mx_scale_layout(
+        HipblasLtBackendConfig::MX_SCALE_LAYOUT_LINEAR);
+    EXPECT_THAT(backend_.ApplyConfig(*fusion, config),
+                absl_testing::StatusIs(absl::StatusCode::kInvalidArgument,
+                                       ::testing::HasSubstr(c.error)));
+    EXPECT_EQ(module->ToString(), before);
+  }
 }
 
 }  // namespace

@@ -22,8 +22,10 @@ limitations under the License.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status_matchers.h"
+#include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
+#include "absl/types/span.h"
 #include "xla/backends/autotuner/backends.pb.h"
 #include "xla/backends/gpu/tests/hlo_pjrt_gpu_test_base.h"
 #include "xla/error_spec.h"
@@ -35,6 +37,7 @@ limitations under the License.
 #include "xla/literal.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/shape.h"
+#include "xla/types.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
 
@@ -329,6 +332,127 @@ TEST_F(MxScaledDotExecutionTest, PreswizzledMxFp8MatchesDequantizedReference) {
 
 TEST_F(MxScaledDotExecutionTest, PreswizzledMxFp4MatchesDequantizedReference) {
   RunPreswizzledCorrectnessTest(/*fp4=*/true);
+}
+
+// A residual add after the scaled-dot, which GemmFusionV2 fuses into the
+// scaled-dot fusion. hipBLASLt runs the GEMM and a loop fusion runs the add.
+constexpr absl::string_view kMxFp8ResidualHlo = R"(
+HloModule mx_fp8_residual_test
+ENTRY main {
+  a = f8e4m3fn[1,64,512]{2,1,0} parameter(0)
+  b = f8e4m3fn[1,96,512]{2,1,0} parameter(1)
+  sa = f8e8m0fnu[1,64,16]{2,1,0} parameter(2)
+  sb = f8e8m0fnu[1,96,16]{2,1,0} parameter(3)
+  residual = bf16[1,64,96]{2,1,0} parameter(4)
+  dot = bf16[1,64,96]{2,1,0} scaled-dot(a, b, sa, sb),
+      lhs_batch_dims={0}, lhs_contracting_dims={2},
+      rhs_batch_dims={0}, rhs_contracting_dims={2}
+  ROOT sum = bf16[1,64,96]{2,1,0} add(dot, residual)
+})";
+
+TEST_F(MxScaledDotExecutionTest,
+       MxFp8ResidualEpilogueMatchesDequantizedReference) {
+  const auto* rocm =
+      device_description().gpu_compute_capability().rocm_compute_capability();
+  if (rocm == nullptr || !rocm->gfx9_mi350()) {
+    GTEST_SKIP() << "Pre-swizzled scale tests require gfx950";
+  }
+  // {scale layout policy, expected scale_mode}
+  for (auto [layout, scale_mode] :
+       {std::pair{DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_LINEAR, 2},
+        std::pair{DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_PRESWIZZLED_32X8,
+                  3}}) {
+    SCOPED_TRACE(::testing::Message() << "layout=" << layout);
+    HloModuleConfig ref_config = GetModuleConfigForTest();
+    ref_config.mutable_debug_options()
+        .set_xla_gpu_experimental_scaled_dot_with_triton(false);
+    ref_config.mutable_debug_options().set_xla_gpu_enable_triton_gemm(false);
+    auto reference_or = GetOptimizedModule(kMxFp8ResidualHlo, ref_config);
+    ASSERT_THAT(reference_or, absl_testing::IsOk());
+    auto reference = std::move(reference_or).value();
+
+    HloModuleConfig hipblaslt_config = GetModuleConfigForTest();
+    DebugOptions& options = hipblaslt_config.mutable_debug_options();
+    options.set_xla_gpu_experimental_scaled_dot_with_triton(true);
+    options.set_xla_gpu_enable_triton_gemm(true);
+    options.set_xla_gpu_blas_max_algorithms(4);
+    options.set_xla_autotuner_preferred_backend(autotuner::HIPBLASLT);
+    options.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(layout);
+    auto hipblaslt_or = GetOptimizedModule(kMxFp8ResidualHlo, hipblaslt_config);
+    ASSERT_THAT(hipblaslt_or, absl_testing::IsOk());
+    auto hipblaslt = std::move(hipblaslt_or).value();
+    // Follow live operands from the result to the MX call.
+    const HloInstruction* mx_call = nullptr;
+    std::vector<const HloInstruction*> pending{
+        hipblaslt->entry_computation()->root_instruction()};
+    while (!pending.empty()) {
+      const HloInstruction* instruction = pending.back();
+      pending.pop_back();
+      if (instruction->opcode() == HloOpcode::kCustomCall &&
+          instruction->custom_call_target() == "__cublas$lt$matmul$mx") {
+        mx_call = instruction;
+        break;
+      }
+      for (const HloInstruction* operand : instruction->operands()) {
+        pending.push_back(operand);
+      }
+    }
+    ASSERT_NE(mx_call, nullptr) << hipblaslt->ToString();
+    auto config_or = mx_call->backend_config<GpuBackendConfig>();
+    ASSERT_THAT(config_or, absl_testing::IsOk());
+    auto config = std::move(config_or).value();
+    ASSERT_EQ(config.gemm_backend_config().scale_mode(), scale_mode);
+    // The add was fused into the scaled-dot fusion and split off by the
+    // hipBLASLt lowering, so the GEMM result feeds its epilogue fusion.
+    const HloInstruction* epilogue = nullptr;
+    for (const HloInstruction* result : mx_call->users()) {
+      for (const HloInstruction* user : result->users()) {
+        if (user->opcode() == HloOpcode::kFusion &&
+            absl::StrContains(user->name(), "_epilogue")) {
+          epilogue = user;
+        }
+      }
+    }
+    ASSERT_NE(epilogue, nullptr) << hipblaslt->ToString();
+
+    // Exactly representable data and power-of-two scales as above, and a
+    // residual in [-1, 1].
+    std::vector<Literal> inputs;
+    inputs.reserve(5);
+    for (int operand = 0; operand < 4; ++operand) {
+      const Shape& shape = hipblaslt->entry_computation()
+                               ->parameter_instruction(operand)
+                               ->shape();
+      inputs.emplace_back(shape);
+      auto* bytes = static_cast<uint8_t*>(inputs.back().untyped_data());
+      int64_t rank = shape.dimensions().size();
+      int64_t rows = shape.dimensions(rank - 2);
+      int64_t cols = shape.dimensions(rank - 1);
+      for (int64_t r = 0; r < rows; ++r) {
+        for (int64_t c = 0; c < cols; ++c) {
+          if (operand < 2) {
+            bytes[r * cols + c] = (0x28 + (r * 17 + c * 11 + operand) % 17) |
+                                  (((r + c) & 1) << 7);
+          } else {
+            bytes[r * cols + c] = 125 + (r * 7 + c * 11 + operand) % 5;
+          }
+        }
+      }
+    }
+    inputs.emplace_back(
+        hipblaslt->entry_computation()->parameter_instruction(4)->shape());
+    ASSERT_THAT(
+        inputs.back().Populate<bfloat16>([](absl::Span<const int64_t> index) {
+          return bfloat16(
+              static_cast<float>((index[1] * 5 + index[2] * 3) % 9 - 4) / 4.0f);
+        }),
+        absl_testing::IsOk());
+    // The GEMM result is rounded to BF16 before the add on both paths.
+    EXPECT_TRUE(RunAndCompareTwoModules(
+        std::move(hipblaslt), std::move(reference),
+        {&inputs[0], &inputs[1], &inputs[2], &inputs[3], &inputs[4]},
+        ErrorSpec(/*aabs=*/1e-2, /*arel=*/1e-2), /*run_hlo_passes=*/false));
+  }
 }
 
 }  // namespace
