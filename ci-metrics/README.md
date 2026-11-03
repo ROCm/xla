@@ -71,8 +71,55 @@ For this nightly previous day to current timestamp is used as time window
 | `fetch_attempts.py` | Fetches earlier attempts of re-run PR runs; `collect.py` only stores the latest attempt, and a failed first attempt is already a signal. | `attempts.jsonl` |
 | `sample_logs.py` | Downloads a random sample of job logs and parses bazel's `Executed X out of Y tests` and `Elapsed time / Critical Path` lines. | `logs.jsonl` |
 | `metrics_lib.py` | `REPOS` (the repo/lane config) plus shared definitions: how a step maps to a phase, the time zone. Every CI naming convention lives here. | - |
-| `report.py` | Computes all statistics (`build()`), assembles them into one dict (`report_data()`) and renders the template with it (`render()`). | `pr_lookup.json` (cache), `report.json` with `--json` |
-| `templates/report.md.j2` | The entire document: headings, prose, tables, markup. | - |
+| `report.py` | Computes all statistics (`build()`) and fills the templates (`render()`). | `pr_lookup.json` (cache) |
+| `templates/*.md` | The document structure: `report.md` (whole report), `repo_section.md` (one repo), `same_commit.md`. | - |
+| `trends.py` | Rolls *every* published snapshot up into one day-by-day series for the web dashboard. Calls `report.build()`, so it adds no definitions of its own. | `trends.json` |
+| `site/*` | The dashboard: `index.html`, `app.js`, `styles.css`. Plain SVG, no dependencies. | - |
+
+## The trend dashboard
+
+The Markdown report covers one 24h window. `trends.py` answers the other
+question -- what changed over the last fortnight -- and
+[`ci_metrics_pages.yml`](../.github/workflows/ci_metrics_pages.yml) publishes it
+to <https://rocm.github.io/xla/ci-metrics/> after every nightly.
+
+```bash
+git clone --branch ci-metrics-data --depth 1 <repo> /tmp/ci-data
+python3 trends.py --data /tmp/ci-data/data --out site/trends.json
+python3 -m http.server -d site 8000     # then open localhost:8000
+```
+
+GitHub Pages serves one deployment per repository, and a deployment replaces
+the whole site, so **both** Pages workflows -- `scaling_book_pages.yml` and
+`ci_metrics_pages.yml` -- build **both** sections through the shared
+[`build-pages-site`](../.github/actions/build-pages-site/action.yml) action.
+A workflow that published only its own half would delete the other. The two are
+serialised by the `pages` concurrency group.
+
+Two things about the snapshots shape the output:
+
+- **They overlap, unevenly.** The nightly collects the previous 24h, but it is
+  also run by hand, so six snapshots landed on 2026-10-29 (94-99% the same
+  commits) against one on 2026-10-26. Plotting one point per snapshot would
+  chart how often the collector ran. Instead every snapshot is pooled, commits
+  are deduplicated by `(lane, head sha)`, and each commit is bucketed by its
+  own arrival time, in the same CDT the report uses.
+- **Some days are only partly covered.** A day the snapshots do not fully cover
+  is marked `complete: false` and drawn provisionally rather than dropped, so a
+  half-collected day never reads as a sudden improvement. Nightlies drift by a
+  few minutes, so gaps under `GAP_TOLERANCE` are not treated as missing data.
+
+`PHASE_GROUPS` folds the nine `PHASES` into seven for the stacked chart (seven
+is the point past which adjacent colours stop being tellable apart); the groups
+still cover `PHASES` exactly, and an `assert` fails if a phase is ever added
+without being placed in one. The stack uses **means**, not medians: medians of
+the parts would not sum to the median of the whole.
+
+Low-sample days are kept but drawn hollow: weekends really do fall to a handful
+of commits, where a p90 is one slow run. The count is in every tooltip.
+
+As the data branch grows (~14 MB a night), `--window-days N` limits the read to
+recent snapshots, which also allows a narrower sparse checkout in CI.
 
 ## How the numbers are defined
 

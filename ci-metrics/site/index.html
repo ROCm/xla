@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROCm CI metrics &mdash; trends</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="viz-root">
+
+  <header class="page-head">
+    <div class="head-main">
+      <h1>ROCm CI metrics</h1>
+      <p class="sub" id="subtitle">Loading&hellip;</p>
+    </div>
+    <button type="button" id="theme" class="ghost" aria-label="Switch colour theme">Theme</button>
+  </header>
+
+  <p class="lede">
+    Presubmit CI health for the ROCm and NV lanes of <code>openxla/xla</code> and
+    <code>jax-ml/jax</code>, day by day. Every figure is the one
+    <a href="https://github.com/ROCm/xla/tree/ci-metrics-reports">the nightly Markdown report</a>
+    defines &mdash; this view only adds the time axis.
+  </p>
+
+  <!-- One filter row, above everything it scopes. -->
+  <div class="filters" role="group" aria-label="Chart filters">
+    <div class="filter">
+      <span class="filter-label" id="lane-label">Lanes</span>
+      <div class="chips" id="lane-chips" role="group" aria-labelledby="lane-label"></div>
+    </div>
+    <div class="filter">
+      <span class="filter-label" id="pct-label">Percentile</span>
+      <div class="chips" id="pct-chips" role="group" aria-labelledby="pct-label">
+        <button type="button" class="chip on" data-pct="p50" aria-pressed="true">Median (p50)</button>
+        <button type="button" class="chip" data-pct="p90" aria-pressed="false">Tail (p90)</button>
+      </div>
+    </div>
+    <div class="filter grow">
+      <span class="filter-label" id="table-label">Data</span>
+      <div class="chips" role="group" aria-labelledby="table-label">
+        <button type="button" class="chip" id="table-toggle" aria-pressed="false">Show table</button>
+      </div>
+    </div>
+  </div>
+
+  <section class="kpis" id="kpis" aria-label="Current time to signal by lane"></section>
+
+  <section class="card">
+    <h2>Time to signal</h2>
+    <p class="note">Commit pushed &rarr; last job of the lane reports. <span id="ttl-stat"></span></p>
+    <div class="plot" id="chart-ttl"></div>
+  </section>
+
+  <section class="card">
+    <h2>Queue wait for a runner</h2>
+    <p class="note">How long the critical job sat between being created and starting.</p>
+    <div class="plot" id="chart-queue"></div>
+  </section>
+
+  <section class="card">
+    <h2>Where the time goes</h2>
+    <p class="note">
+      Mean seconds per commit, split into the phases every second belongs to. Means, not
+      medians &mdash; medians of the parts would not add up to the whole. One panel per lane.
+    </p>
+    <div class="legend" id="phase-legend"></div>
+    <div class="small-multiples" id="chart-phases"></div>
+  </section>
+
+  <section class="card">
+    <h2>Commits reaching a signal</h2>
+    <p class="note">Distinct head commits per day. Weekends are genuinely quiet, not missing data.</p>
+    <div class="plot" id="chart-volume"></div>
+  </section>
+
+  <section class="card">
+    <h2>Share of commits where the whole lane passed</h2>
+    <p class="note">
+      Every job in the lane succeeded. Lane-wide and therefore volatile &mdash; a single
+      broken job takes the whole commit out, so low-volume days swing hard.
+    </p>
+    <div class="plot" id="chart-pass"></div>
+  </section>
+
+  <section class="card" id="table-card" hidden>
+    <h2>Data table</h2>
+    <p class="note">Every plotted value, as text.</p>
+    <div class="table-wrap" id="table-host"></div>
+  </section>
+
+  <footer class="page-foot">
+    <p>
+      Built by <code>ci-metrics/trends.py</code> from the
+      <a href="https://github.com/ROCm/xla/tree/ci-metrics-data"><code>ci-metrics-data</code></a>
+      branch. <span id="provenance"></span>
+    </p>
+  </footer>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>
