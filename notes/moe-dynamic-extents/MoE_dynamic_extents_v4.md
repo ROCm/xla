@@ -125,7 +125,7 @@ Here n is a kernel argument, not a value in the body, and the result is typed `<
 - *Attach it as metadata.* After `DynamicPadder` has made shapes static, record on the fusion instruction that dimension 0 of its operand and result is bounded by a named scalar operand, for example in `OpMetadata` (`xla/xla_data.proto`) or a frontend attribute, and have the fusion emitter pass that operand as a kernel argument and bound its loop by it. Shapes stay static, so nothing else in the pipeline changes. This is the least invasive route to step 1.
 - *Keep the bounded shape alive.* Let `DynamicPadder` leave `<=N` on dimensions it can prove are a packed prefix, and teach `CalculateLaunchDimensions` and the elemental emitter to read the runtime size from the layout's `dynamic_shape_metadata_prefix_bytes_`, which `SliceToDynamic` already writes. More work, but the type then travels on its own, which is step 2.
 
-**A runnable pair.** JAX has no public API that emits `set-dimension-size`, so the example is hand-written HLO in the style of `xla/service/dynamic_padder_test.cc`. The branch `moe-dynamic-extent-hlo` of our openxla/xla clone adds `xla/service/dynamic_padder_moe_extent_test.cc` with both forms above on an `f32[8,2]` buffer, `n = 5`, and a test vector whose padding rows would contribute 5000 each if any consumer read them. Four tests: the masked and bounded forms both produce `[5, 5]`; after `DynamicPadder` the bounded form *is* the masked form (reduce operand is `select(iota < n, act, 0)`, every shape static, no `set-dimension-size` left); and with the bounded value as the entry result, n survives only in a `SliceToDynamic` custom call whose operand is a static `[8,2]` multiply. The tests are written to the existing pattern but not yet built or run.
+**A runnable pair.** JAX has no public API that emits `set-dimension-size`, so the example is hand-written HLO in the style of `xla/service/dynamic_padder_test.cc`. `xla/service/dynamic_padder_moe_extent_test.cc` on this branch holds both forms above on an `f32[8,2]` buffer with `n = 5`. The live rows are all ones, and the padding rows hold values large enough to distort the result visibly if any consumer read them (NaN would be the strictest choice, since it poisons any arithmetic). Four tests: the masked and bounded forms both reduce to the buffer contents `{5, 5}`; after `DynamicPadder` the bounded form *is* the masked form (reduce operand is `select(iota < n, act, 0)`, every shape static, no `set-dimension-size` left); and with the bounded value as the entry result, n survives only in a `SliceToDynamic` custom call whose operand is a static `[8,2]` multiply. The four tests pass on CPU and on gfx1201.
 
 ### The extent as a type
 
@@ -134,11 +134,11 @@ Ragged {
   data        # existing buffer
   capacity N  # static: allocation, layout, verification bound   (8 in the example)
   extent n    # device scalar; or offsets[0..G] for grouped rows (5 on rank 0)
-  invariants  # n <= N; offsets monotone and sum to n; n % A == 0
+  invariants  # n <= N; offsets monotone and sum to n; N % A == 0
 }
 ```
 
-This is XLA's bounded `bf16[<=N, H]` plus grouped offsets and declared invariants. The invariants are codegen information a mask cannot express: `n ≤ N` is the safety bound, the offsets relate expert slices to the enclosing value, and `n % A == 0` recovers aligned accesses. Differentiation is simple: writing a prefix of n rows transposes to reading one.
+This is XLA's bounded `bf16[<=N, H]` plus grouped offsets and declared invariants. The invariants are codegen information a mask cannot express: `n ≤ N` is the safety bound, the offsets relate expert slices to the enclosing value, and `N % A == 0` recovers aligned accesses. Differentiation is simple: writing a prefix of n rows transposes to reading one.
 
 **At the FFI boundary** the convention is opt-in. A handler that declares a plain buffer gets today's contract. One that declares a bounded buffer receives `{data, N, n}` and reports the n it wrote, in the same metadata slot `SliceToDynamic` uses. Only the grouped GEMM needs to adopt it; its consumers then stop being custom. On the JAX side this is a bounded result in `jax.ffi.ffi_call`, something like `<=N` on one dimension of `result_shape_dtypes`, so the type survives tracing.
 
@@ -295,6 +295,14 @@ Each thread decides once; because a thread's elements lie in one row and a wavef
 | 1/4 | 3.44× (3.14 to 3.73) | 8 to 28% slower |
 | 1/8 | 5.91× (5.58 to 6.62) | 20 to 43% slower |
 
-The guard is free when every row is live. All 110 masked-versus-guarded pairs agree on rows below `n`. The remaining gap to the static ideal is entirely the empty blocks under the static grid, 0.31 to 0.33 µs per thousand blocks on the large grids, a 43 µs floor for a 131072-block grid and 144 µs for 458752 blocks; it grows relative to the work as `n` shrinks, which is the cost that step 2, a grid that follows `n`, would remove. Live-row bandwidth at a quarter live is 479 to 566 GB/s against 607 to 618 GB/s for the full-capacity kernels. Configurations whose live set fits the card's 64 MB Infinity Cache run from cache and show up to 20×; they are reported separately. The bounded type through `DynamicPadder` remains the worst option: the body still runs the full capacity every iteration, plus a `SliceToDynamic` copy of 211 to 873 µs at the loop boundary.
+Cost of the empty grid, prototype kernel with `n = 0` so every block exits at the guard:
+
+| capacity N | cost |
+|---|---:|
+| 1,000 blocks | 0.32 µs |
+| 131,072 blocks | 43 µs |
+| 458,752 blocks | 144 µs |
+
+The guard is free when every row is live. All 110 masked-versus-guarded pairs agree on rows below `n`. The remaining gap to the static ideal is entirely the empty blocks under the static grid. The overhead scales with buffer capacity and is constant with respect to live fraction. As useful work decreases with smaller n, the relative cost of this overhead increases. Step 2, a grid that follows n, would eliminate this overhead. Live-row bandwidth at a quarter live is 479 to 566 GB/s against 607 to 618 GB/s for the full-capacity kernels. Configurations whose live set fits the card's 64 MB Infinity Cache run from cache and show up to 20×; they are reported separately. The bounded type through `DynamicPadder` remains the worst option: the body still runs the full capacity every iteration, plus a `SliceToDynamic` copy of 211 to 873 µs at the loop boundary.
 
 **Left out on purpose.** No bounded-shape plumbing through `DynamicPadder` and no frontend attribute, so step 2 of the suggested approach is not exercised; no change to the grid size; single-output `kLoop` fusions rooted at the `select` only, no reductions or multi-output fusions; no per-element predicate inside the loop, which would break the vectorised 4-element loads; CPU emitter untouched; no MI-series numbers. The bf16-output body was measured as bf16 storage with f32 math, because an f32-carried loop fuses the convert back into the root and breaks the matcher.
