@@ -18,10 +18,12 @@ limitations under the License.
 #include <functional>
 #include <iterator>
 #include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/function_ref.h"
 #include "absl/log/check.h"
@@ -36,6 +38,7 @@ limitations under the License.
 #include "tsl/platform/errors.h"
 #include "tsl/platform/statusor.h"
 #include "xla/comparison_util.h"
+#include "xla/frontend_attributes.h"
 #include "xla/hlo/builder/xla_builder.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/dynamic_parameter_binding.h"
@@ -71,6 +74,159 @@ namespace {
 auto* dynamic_padding_gauge = tsl::monitoring::Gauge<bool, 0>::New(
     "/tensorflow/core/use_dynamic_padding_gauge",
     "Tracks if dynamic padder is used.");
+
+constexpr absl::string_view kValidPrefixCustomCallTarget = "xla.valid_prefix";
+
+bool IsValidPrefixMarker(const HloInstruction& instruction) {
+  return instruction.opcode() == HloOpcode::kCustomCall &&
+         instruction.custom_call_target() == kValidPrefixCustomCallTarget;
+}
+
+bool PreservesValidPrefix(const HloInstruction& user, int64_t operand_index) {
+  const Shape& input = user.operand(operand_index)->shape();
+  const Shape& output = user.shape();
+  if (!input.IsArray() || input.dimensions().empty() || !output.IsArray() ||
+      output.dimensions().empty() ||
+      input.dimensions(0) != output.dimensions(0)) {
+    return false;
+  }
+
+  if (user.IsElementwise()) {
+    return input.dimensions() == output.dimensions();
+  }
+
+  switch (user.opcode()) {
+    case HloOpcode::kCopy:
+    case HloOpcode::kReshape:
+      return operand_index == 0;
+    case HloOpcode::kBroadcast:
+      return operand_index == 0 && !user.dimensions().empty() &&
+             user.dimensions(0) == 0;
+    default:
+      return false;
+  }
+}
+
+// Records the dimension-0 extent through operation classes with a proven
+// transfer rule. Multiple distinct extents reaching one value are deliberately
+// retained as a conflict, so no codegen contract is attached downstream.
+void AnnotateValidPrefixExtents(HloComputation* computation) {
+  using ExtentIds = absl::flat_hash_set<std::string>;
+  absl::flat_hash_map<HloInstruction*, ExtentIds> extents;
+  absl::flat_hash_map<std::string, HloInstruction*> extent_sources;
+  std::vector<HloInstruction*> worklist;
+
+  for (HloInstruction* instruction :
+       computation->MakeInstructionPostOrder()) {
+    const bool set_dimension_size =
+        instruction->opcode() == HloOpcode::kSetDimensionSize &&
+        instruction->dimension() == 0 &&
+        instruction->shape().is_dynamic_dimension(0);
+    const bool marker = IsValidPrefixMarker(*instruction);
+    if ((!set_dimension_size && !marker) || instruction->operand_count() != 2 ||
+        !instruction->shape().IsArray() ||
+        instruction->shape().dimensions().empty() ||
+        instruction->operand(1)->shape() != ShapeUtil::MakeShape(S32, {})) {
+      continue;
+    }
+    // Values bounded by the same scalar have the same extent.
+    std::string id = absl::StrCat(instruction->operand(1)->unique_id());
+    extents[instruction].insert(id);
+    extent_sources.emplace(id, instruction->mutable_operand(1));
+    worklist.push_back(instruction);
+  }
+
+  while (!worklist.empty()) {
+    HloInstruction* instruction = worklist.back();
+    worklist.pop_back();
+    const ExtentIds instruction_extents = extents.at(instruction);
+    for (HloInstruction* user : instruction->users()) {
+      bool preserves = false;
+      for (int64_t i = 0; i < user->operand_count(); ++i) {
+        preserves |= user->operand(i) == instruction &&
+                     PreservesValidPrefix(*user, i);
+      }
+      if (!preserves) {
+        continue;
+      }
+      ExtentIds& user_extents = extents[user];
+      size_t old_size = user_extents.size();
+      user_extents.insert(instruction_extents.begin(),
+                          instruction_extents.end());
+      if (user_extents.size() != old_size) {
+        worklist.push_back(user);
+      }
+    }
+  }
+
+  absl::flat_hash_set<std::string> used_extents;
+  for (auto& [instruction, ids] : extents) {
+    if (instruction->opcode() == HloOpcode::kSetDimensionSize ||
+        IsValidPrefixMarker(*instruction) ||
+        ids.size() != 1) {
+      continue;
+    }
+    instruction->set_frontend_attribute(kXlaValidPrefixExtentId, *ids.begin());
+    used_extents.insert(*ids.begin());
+  }
+  for (const std::string& id : used_extents) {
+    HloInstruction* extent = extent_sources.at(id);
+    extent->set_frontend_attribute(kXlaValidPrefixExtentSource, id);
+    // DynamicPadder immediately runs DCE after removing set-dimension-size.
+    extent->set_frontend_attribute("xla_allow_dce_side_effecting_op", "false");
+  }
+}
+
+absl::StatusOr<bool> RemoveValidPrefixMarkers(
+    HloComputation* computation) {
+  bool changed = false;
+  for (HloInstruction* instruction :
+       computation->MakeInstructionPostOrder()) {
+    if (!IsValidPrefixMarker(*instruction)) {
+      continue;
+    }
+    ABSL_RETURN_IF_ERROR(
+        computation
+            ->ReplaceInstruction(instruction, instruction->mutable_operand(0),
+                                 /*preserve_sharding=*/false,
+                                 /*relay_control_dependency=*/false,
+                                 /*remove_unused_operands=*/false)
+            .status());
+    changed = true;
+  }
+  return changed;
+}
+
+void PropagateValidPrefixExtentSources(HloComputation* computation) {
+  using ExtentIds = absl::flat_hash_set<std::string>;
+  const Shape extent_shape = ShapeUtil::MakeShape(S32, {});
+  absl::flat_hash_map<HloInstruction*, ExtentIds> extents;
+  for (HloInstruction* instruction :
+       computation->MakeInstructionPostOrder()) {
+    ExtentIds& instruction_extents = extents[instruction];
+    std::optional<std::string> id =
+        instruction->get_frontend_attribute(kXlaValidPrefixExtentSource);
+    if (id.has_value()) {
+      instruction_extents.insert(*id);
+    }
+    if (!instruction->IsElementwise() || instruction->shape() != extent_shape) {
+      continue;
+    }
+    for (HloInstruction* operand : instruction->operands()) {
+      auto operand_extents = extents.find(operand);
+      if (operand_extents != extents.end()) {
+        instruction_extents.insert(operand_extents->second.begin(),
+                                   operand_extents->second.end());
+      }
+    }
+    if (instruction_extents.size() == 1) {
+      instruction->set_frontend_attribute(kXlaValidPrefixExtentSource,
+                                          *instruction_extents.begin());
+    } else if (extents[instruction].size() > 1) {
+      instruction->erase_frontend_attribute(kXlaValidPrefixExtentSource);
+    }
+  }
+}
 
 // ChooseIdentityValue looks at the instruction's operand, returns a
 // identity value which, when padded, doesn't change the result of the
@@ -2133,7 +2289,8 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
         }
         if (instruction->opcode() == HloOpcode::kSetDimensionSize ||
             instruction->opcode() == HloOpcode::kGetDimensionSize ||
-            instruction->IsCustomCall("SetBound")) {
+            instruction->IsCustomCall("SetBound") ||
+            IsValidPrefixMarker(*instruction)) {
           return true;
         }
       }
@@ -2298,6 +2455,15 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
     }
   }
 
+  // Capture valid-prefix associations before dynamic-to-static conversion
+  // disconnects set-dimension-size from extent-preserving users.
+  for (HloComputation* computation :
+       module->computations(execution_threads)) {
+    AnnotateValidPrefixExtents(computation);
+    ABSL_ASSIGN_OR_RETURN(bool c, RemoveValidPrefixMarkers(computation));
+    changed |= c;
+  }
+
   // There are ops that only support dynamic lowering and ops that only support
   // static lowering, add dynamic<->static tensor conversion around the boundary
   // between those ops, as well as the root instruction.
@@ -2352,6 +2518,16 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
 
       ABSL_ASSIGN_OR_RETURN(c, ReplaceSetBound(instruction));
       changed |= c;
+    }
+  }
+
+  // Dynamic shape removal can add scalar clamps between n and its consumers.
+  // Preserve the source marker through those s32 elementwise chains so later
+  // fusion formation cannot hide the extent source.
+  for (HloComputation* computation :
+       module->computations(execution_threads)) {
+    if (call_graph->CanReach(module->entry_computation(), computation)) {
+      PropagateValidPrefixExtentSources(computation);
     }
   }
 

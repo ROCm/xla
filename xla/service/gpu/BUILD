@@ -64,6 +64,21 @@ tf_proto_library(
     ],
 )
 
+cc_library(
+    name = "valid_prefix_extent",
+    srcs = ["valid_prefix_extent.cc"],
+    hdrs = ["valid_prefix_extent.h"],
+    deps = [
+        ":backend_configs_cc",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
 xla_cc_test(
     name = "backend_configs_test",
     srcs = ["backend_configs_test.cc"],
@@ -1871,6 +1886,7 @@ cc_library(
         "//xla/backends/gpu/transforms:topk_splitter",
         "//xla/backends/gpu/transforms:tree_reduction_rewriter",
         "//xla/backends/gpu/transforms:triton_fusion_numerics_verifier",
+        "//xla/backends/gpu/transforms:valid_prefix_extent_rewriter",
         "//xla/backends/gpu/transforms:windowed_einsum_handler",
         "//xla/backends/gpu/transforms/collectives:all_gather_dynamic_slice_simplifier",
         "//xla/backends/gpu/transforms/collectives:all_gather_major_dimension_rewriter",

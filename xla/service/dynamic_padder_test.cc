@@ -31,6 +31,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/error_spec.h"
+#include "xla/frontend_attributes.h"
 #include "xla/hlo/builder/xla_builder.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -2450,6 +2451,66 @@ ENTRY main {
   Literal expected = LiteralUtil::CreateR1<int32_t>({4, 0, 2});
 
   EXPECT_EQ(result, expected);
+}
+
+TEST_F(DynamicPadderTest, PreservesValidPrefixAssociation) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+HloModule ValidPrefixAssociation
+
+ENTRY main {
+  data = f32[8,4] parameter(0)
+  n = s32[] parameter(1)
+  bounded = f32[<=8,4] set-dimension-size(data, n), dimensions={0}
+  ROOT result = f32[<=8,4] exponential(bounded)
+}
+)")
+                    .value();
+
+  DynamicPadder pass;
+  ASSERT_TRUE(pass.Run(module.get()).value());
+
+  HloInstruction* result = module->entry_computation()->root_instruction();
+  ASSERT_TRUE(
+      result->get_frontend_attribute(kXlaValidPrefixExtentId).has_value());
+  EXPECT_EQ(result->get_frontend_attribute(kXlaValidPrefixExtentId),
+            module->entry_computation()
+                ->parameter_instruction(1)
+                ->get_frontend_attribute(kXlaValidPrefixExtentSource));
+}
+
+TEST_F(DynamicPadderTest, ValidPrefixMarkerSeedsAssociation) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+HloModule ValidPrefixMarker
+
+add {
+  lhs = s32[] parameter(0)
+  rhs = s32[] parameter(1)
+  ROOT sum = s32[] add(lhs, rhs)
+}
+
+ENTRY main {
+  data = f32[8,4] parameter(0)
+  group_sizes = s32[2] parameter(1)
+  zero = s32[] constant(0)
+  n = s32[] reduce(group_sizes, zero), dimensions={0}, to_apply=add
+  marker = f32[8,4] custom-call(data, n),
+      custom_call_target="xla.valid_prefix"
+  ROOT result = f32[8,4] exponential(marker)
+}
+)")
+                    .value();
+
+  DynamicPadder pass;
+  ASSERT_TRUE(pass.Run(module.get()).value());
+
+  HloInstruction* result = module->entry_computation()->root_instruction();
+  EXPECT_THAT(result, op::Exp(op::Parameter(0)));
+  ASSERT_TRUE(
+      result->get_frontend_attribute(kXlaValidPrefixExtentId).has_value());
+  HloInstruction* n = FindInstruction(module.get(), "n");
+  ASSERT_NE(n, nullptr);
+  EXPECT_EQ(result->get_frontend_attribute(kXlaValidPrefixExtentId),
+            n->get_frontend_attribute(kXlaValidPrefixExtentSource));
 }
 
 namespace op = xla::testing::opcode_matchers;

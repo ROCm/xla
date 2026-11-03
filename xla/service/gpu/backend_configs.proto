@@ -284,6 +284,14 @@ message DynamicSliceConfig {
   }
 }
 
+message ValidPrefixExtentConfig {
+  // Fusion operand containing the s32 scalar valid-prefix row count.
+  int64 operand_index = 1;
+
+  // Output dimension bounded by operand_index.
+  int64 dimension = 2;
+}
+
 // Next id: 9
 message FusionBackendConfig {
   // kLoop, kInput, or kOutput (from HloInstruction::FusionKind), or your own
@@ -457,7 +465,7 @@ enum DeviceType {
 }
 
 // Generic backend config for XLA:GPU
-// Next-Id: 19
+// Next-Id: 20
 message GpuBackendConfig {
   // Specifies which operation queue the current instruction will run on.
   // A backend may have multiple operation queues to run instructions
@@ -494,6 +502,11 @@ message GpuBackendConfig {
 
     DynamicSliceConfig dynamic_slice_config = 18;
   }
+
+  // Bounds a prefix of one fusion output dimension without changing its
+  // physical shape. This is outside backend_config so emitter selection does
+  // not discard it.
+  ValidPrefixExtentConfig valid_prefix_extent = 19;
 
   // This attribute instructs the latency-hiding scheduler to
   // schedule this particular instruction to the earliest position.
