@@ -88,6 +88,39 @@ ENTRY AddRaggedDotsFunc {
   EXPECT_TRUE(RunAndCompare(hlo_text, ErrorSpec{1e-4, 1e-5}));
 }
 
+TEST_F(GroupedGemmRewriteTest, DynamicExtentReachesGroupedGemmEpilogue) {
+  const char* hlo_text = R"(
+HloModule DynamicGroupedGemm
+
+add {
+  lhs = s32[] parameter(0)
+  rhs = s32[] parameter(1)
+  ROOT sum = s32[] add(lhs, rhs)
+}
+
+ENTRY main {
+  input = f16[64,9]{1,0} parameter(0)
+  weights = f16[2,9,8]{2,1,0} parameter(1)
+  group_sizes = s32[2]{0} parameter(2)
+  zero = s32[] constant(0)
+  n = s32[] reduce(group_sizes, zero), dimensions={0}, to_apply=add
+  grouped_gemm = f16[64,8]{1,0} ragged-dot(input, weights, group_sizes),
+      lhs_contracting_dims={1}, rhs_contracting_dims={1},
+      lhs_ragged_dims={0}, rhs_group_dims={0}
+  bounded = f16[64,8]{1,0} custom-call(grouped_gemm, n),
+      custom_call_target="xla.valid_prefix"
+  ROOT epilogue = f16[64,8]{1,0} exponential(bounded)
+}
+)";
+  MatchOptimizedHlo(hlo_text,
+                    R"(
+                    ; CHECK: custom_call_target="__cublas$lt$groupedMatmul"
+                    ; CHECK: kind=kLoop
+                    ; CHECK-SAME: valid_prefix_extent
+                    ; CHECK-NOT: compare(
+                    )");
+}
+
 TEST_F(GroupedGemmRewriteTest, CustomCallTargetGroupedGemmLargeGroupCount600) {
   // Test with 600 groups (> 256) to test single batch processing in grid-stride
   // loop Sum of group sizes: 600 * 4 = 2400 (matches p0 first dim)
