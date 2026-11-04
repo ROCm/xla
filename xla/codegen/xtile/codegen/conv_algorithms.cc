@@ -82,7 +82,7 @@ TensorValue MaybeTranspose(mlir::ImplicitLocOpBuilder& b, TensorValue input,
 }
 
 TensorValue EmitReshape(mlir::ImplicitLocOpBuilder& b, TensorValue input,
-                             ArrayRef<int64_t> new_shape) {
+                        ArrayRef<int64_t> new_shape) {
   auto output_type =
       mlir::RankedTensorType::get(new_shape, input.getType().getElementType());
   return mlir::cast<TensorValue>(
