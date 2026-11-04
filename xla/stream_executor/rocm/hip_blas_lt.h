@@ -17,6 +17,7 @@ limitations under the License.
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -25,20 +26,15 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
-#include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
 #include "rocm/include/hipblaslt/hipblaslt.h"
 #include "rocm/rocm_config.h"
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
 #include "xla/stream_executor/rocm/hip_blas_utils.h"
+#include "xla/stream_executor/rocm/hipblaslt_ext_shim.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/types.h"
-
-namespace hipblaslt_ext {
-class GroupedGemm;
-struct UserArguments;
-}  // namespace hipblaslt_ext
 
 namespace stream_executor {
 
@@ -186,7 +182,10 @@ class BlasLt : public gpu::BlasLt {
     const BlasLt& blas_lt_;
     gpu::GroupedGemmConfig cfg_;
     Epilogue epilogue_ = Epilogue::kDefault;
-    std::unique_ptr<hipblaslt_ext::GroupedGemm> grouped_gemm_;
+    // Set by DoInitialize; GetAlgorithms queries hipBLASLt with it.
+    XlaHipblasLtProblemType problem_type_{};
+    std::unique_ptr<XlaHipblasLtGroupedGemm, void (*)(XlaHipblasLtGroupedGemm*)>
+        grouped_gemm_{nullptr, XlaHipblasLtGroupedGemmDestroy};
     mutable std::optional<hipblasLtMatmulAlgo_t> algorithm_;
     mutable bool algorithm_dirty_ = false;
     mutable DeviceAddressBase saved_address_workspace_{};
