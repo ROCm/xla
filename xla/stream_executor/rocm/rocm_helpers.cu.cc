@@ -21,7 +21,7 @@ limitations under the License.
 #include <cstdint>
 #include <hipcub/hipcub.hpp>  // NOLINT
 
-#include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
+#include "rocm/include/hipblaslt/hipblaslt-ext-grouped-gemm.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
 
 namespace stream_executor {
@@ -197,7 +197,7 @@ __device__ __forceinline__ void copy_shared_to_global(void* shared_src,
 template <typename T>
 __launch_bounds__(BLOCK_SIZE) __global__
     void SetUserArgsKernelRaggedInNonContractingDim(
-        hipblaslt_ext::UserArguments* dest_args, const void* a, const void* b,
+        hipblasLtExtUserArguments_t* dest_args, const void* a, const void* b,
         const void* c, void* d, const void* bias, const void* group_sizes,
         uint8_t log2_byte_width_elem_a, uint8_t log2_byte_width_elem_b,
         uint8_t log2_byte_width_elem_c, uint8_t log2_byte_width_elem_d,
@@ -220,7 +220,7 @@ __launch_bounds__(BLOCK_SIZE) __global__
   // Dynamic shared memory for UserArguments array
   extern __shared__ uint8_t shared_mem[];
   auto* sharedUserArgs =
-      reinterpret_cast<hipblaslt_ext::UserArguments*>(shared_mem);
+      reinterpret_cast<hipblasLtExtUserArguments_t*>(shared_mem);
 
   // Last thread initialize cumulative offset
   // No need to syncthread here as this variable will be
@@ -332,7 +332,7 @@ __launch_bounds__(BLOCK_SIZE) __global__
     }
 
     // Copy from shared memory to global memory
-    size_t total_bytes = batch_size * sizeof(hipblaslt_ext::UserArguments);
+    size_t total_bytes = batch_size * sizeof(hipblasLtExtUserArguments_t);
     copy_shared_to_global(sharedUserArgs, &dest_args[batch_start], total_bytes);
     // Synchronize before next iteration to ensure copy is complete
     __barrier(__CLK_LOCAL_MEM_FENCE | __CLK_GLOBAL_MEM_FENCE);
@@ -342,7 +342,7 @@ __launch_bounds__(BLOCK_SIZE) __global__
 template <typename T>
 __launch_bounds__(BLOCK_SIZE) __global__
     void SetUserArgsKernelRaggedInContractingDim(
-        hipblaslt_ext::UserArguments* dest_args, const void* a, const void* b,
+        hipblasLtExtUserArguments_t* dest_args, const void* a, const void* b,
         const void* c, void* d, const void* bias, const void* group_sizes,
         uint8_t log2_byte_width_elem_a, uint8_t log2_byte_width_elem_b,
         uint8_t log2_byte_width_elem_c, uint8_t log2_byte_width_elem_d,
@@ -365,7 +365,7 @@ __launch_bounds__(BLOCK_SIZE) __global__
   // Dynamic shared memory for UserArguments array
   extern __shared__ uint8_t shared_mem[];
   auto* sharedUserArgs =
-      reinterpret_cast<hipblaslt_ext::UserArguments*>(shared_mem);
+      reinterpret_cast<hipblasLtExtUserArguments_t*>(shared_mem);
 
   // Last thread initialize cumulative offset
   // No need to syncthread here as this variable will be
@@ -464,7 +464,7 @@ __launch_bounds__(BLOCK_SIZE) __global__
     }
 
     // Copy from shared memory to global memory
-    size_t total_bytes = batch_size * sizeof(hipblaslt_ext::UserArguments);
+    size_t total_bytes = batch_size * sizeof(hipblasLtExtUserArguments_t);
     copy_shared_to_global(sharedUserArgs, &dest_args[batch_start], total_bytes);
     // Synchronize before next iteration to ensure copy is complete
     __barrier(__CLK_LOCAL_MEM_FENCE | __CLK_GLOBAL_MEM_FENCE);
@@ -473,7 +473,7 @@ __launch_bounds__(BLOCK_SIZE) __global__
 
 template <typename T>
 __launch_bounds__(BLOCK_SIZE) __global__ void SetUserArgsKernelRaggedInBatchDim(
-    hipblaslt_ext::UserArguments* dest_args, const void* a, const void* b,
+    hipblasLtExtUserArguments_t* dest_args, const void* a, const void* b,
     const void* c, void* d, const void* bias, const void* group_sizes,
     uint8_t log2_byte_width_elem_a, uint8_t log2_byte_width_elem_b,
     uint8_t log2_byte_width_elem_c, uint8_t log2_byte_width_elem_d,
@@ -495,7 +495,7 @@ __launch_bounds__(BLOCK_SIZE) __global__ void SetUserArgsKernelRaggedInBatchDim(
   // Dynamic shared memory for UserArguments array
   extern __shared__ uint8_t shared_mem[];
   auto* sharedUserArgs =
-      reinterpret_cast<hipblaslt_ext::UserArguments*>(shared_mem);
+      reinterpret_cast<hipblasLtExtUserArguments_t*>(shared_mem);
 
   // Last thread initialize cumulative offset
   // No need to syncthread here as this variable will be
@@ -594,7 +594,7 @@ __launch_bounds__(BLOCK_SIZE) __global__ void SetUserArgsKernelRaggedInBatchDim(
     }
 
     // Copy from shared memory to global memory
-    size_t total_bytes = batch_size * sizeof(hipblaslt_ext::UserArguments);
+    size_t total_bytes = batch_size * sizeof(hipblasLtExtUserArguments_t);
     copy_shared_to_global(sharedUserArgs, &dest_args[batch_start], total_bytes);
     // Synchronize before next iteration to ensure copy is complete
     __barrier(__CLK_LOCAL_MEM_FENCE | __CLK_GLOBAL_MEM_FENCE);
@@ -647,11 +647,11 @@ void GroupGemmUpdateArgs(
 
   // Calculate dynamic shared memory size for UserArguments array
   size_t shared_mem_size =
-      min(block_sz, num_gemms) * sizeof(hipblaslt_ext::UserArguments);
+      min(block_sz, num_gemms) * sizeof(hipblasLtExtUserArguments_t);
 
   hipLaunchKernelGGL(
       kernel, dim3(1), dim3(block_sz), shared_mem_size, stream,
-      static_cast<hipblaslt_ext::UserArguments*>(args.opaque()), a.opaque(),
+      static_cast<hipblasLtExtUserArguments_t*>(args.opaque()), a.opaque(),
       b.opaque(), c.opaque(), d.opaque(), bias.opaque(), group_sizes.opaque(),
       log2_byte_width_elem_a, log2_byte_width_elem_b, log2_byte_width_elem_c,
       log2_byte_width_elem_d, stride_a, stride_b, c_stride_ragged_dim,

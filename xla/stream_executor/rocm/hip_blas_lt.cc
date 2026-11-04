@@ -31,7 +31,7 @@ limitations under the License.
 #include "absl/time/time.h"
 #include "rocm/include/hip/library_types.h"
 #include "rocm/include/hipblas/hipblas.h"
-#include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
+#include "rocm/include/hipblaslt/hipblaslt-ext-grouped-gemm.h"
 #include "rocm/include/hipblaslt/hipblaslt.h"
 #include "rocm/include/rocblas/internal/rocblas-types.h"
 #include "rocm/rocm_config.h"
@@ -124,6 +124,13 @@ template <typename T>
 absl::Status SetAttr(hipblasLtMatmulPreference_t handle,
                      hipblasLtMatmulPreferenceAttributes_t attr, T value) {
   return SET_ATTR(hipblasLtMatmulPreferenceSetAttribute, handle, attr, value);
+}
+
+// Index of `algo` in the loaded hipBLASLt, unique among its algorithms.
+absl::StatusOr<int> GetAlgorithmIndex(const hipblasLtMatmulAlgo_t& algo) {
+  int index = 0;
+  SE_HIPBLAS_RETURN_IF_ERROR(hipblasLtExtGetIndexFromAlgo(&algo, &index));
+  return index;
 }
 
 static absl::StatusOr<hipblasLtEpilogue_t> AsHipblasLtEpilogue(
@@ -796,7 +803,8 @@ absl::Status BlasLt::RegularMatmulPlan::ExecuteOnStream(
   if (profile_result != nullptr) {
     ABSL_ASSIGN_OR_RETURN(absl::Duration elapsed, timer->GetElapsedDuration());
     // set algorithm ID to be unique (otherwise it gets kDefaultAlgorithm ID)
-    profile_result->set_algorithm(hipblaslt_ext::getIndexFromAlgo(*algorithm_));
+    ABSL_ASSIGN_OR_RETURN(int algorithm_index, GetAlgorithmIndex(*algorithm_));
+    profile_result->set_algorithm(algorithm_index);
     profile_result->set_is_valid(true);
     profile_result->set_elapsed_time_in_ms(absl::ToDoubleMilliseconds(elapsed));
   }
@@ -806,21 +814,30 @@ absl::Status BlasLt::RegularMatmulPlan::ExecuteOnStream(
 auto BlasLt::GroupedMatmulPlan::GetAlgorithms(size_t max_algorithm_count,
                                               size_t max_workspace_size) const
     -> absl::StatusOr<std::vector<MatmulAlgorithm>> {
-  std::vector<hipblasLtMatmulHeuristicResult_t> heuristicResult;
-
   absl::MutexLock lock(blas_lt_.mu_);
 
   std::unique_ptr<ActivateContext> activation = blas_lt_.executor_->Activate();
 
-  auto problem = grouped_gemm_->getProblemTypes()[0];
+  TF_RET_CHECK(grouped_gemm_ != nullptr) << "Grouped GEMM is not initialized";
+  hipblasLtExtGemmProblemType_t problem;
+  SE_HIPBLAS_RETURN_IF_ERROR(
+      hipblasLtExtGroupedGemmGetProblemType(grouped_gemm_.get(), &problem));
 
-  grouped_gemm_->setMaxWorkspaceBytes(max_workspace_size);
+  SE_HIPBLAS_RETURN_IF_ERROR(hipblasLtExtGroupedGemmSetMaxWorkspaceBytes(
+      grouped_gemm_.get(), max_workspace_size));
 
-  SE_HIPBLAS_RETURN_IF_ERROR(hipblaslt_ext::getAllAlgos(
-      blas_lt_.handle_.get(), hipblaslt_ext::GemmType::HIPBLASLT_GROUPED_GEMM,
-      problem.getOpA(), problem.getOpB(), problem.getTypeA(),
-      problem.getTypeB(), problem.getTypeC(), problem.getTypeD(),
-      problem.getTypeCompute(), heuristicResult));
+  // The first call returns the number of algorithms, the second fills them in.
+  int algorithm_count = 0;
+  SE_HIPBLAS_RETURN_IF_ERROR(hipblasLtExtGetAllAlgos(
+      blas_lt_.handle_.get(), HIPBLASLT_EXT_GEMM_TYPE_GROUPED_GEMM, &problem,
+      /*requestedAlgoCount=*/0, /*heuristicResultsArray=*/nullptr,
+      &algorithm_count));
+  std::vector<hipblasLtMatmulHeuristicResult_t> heuristicResult(
+      algorithm_count);
+  SE_HIPBLAS_RETURN_IF_ERROR(hipblasLtExtGetAllAlgos(
+      blas_lt_.handle_.get(), HIPBLASLT_EXT_GEMM_TYPE_GROUPED_GEMM, &problem,
+      algorithm_count, heuristicResult.data(), &algorithm_count));
+  heuristicResult.resize(algorithm_count);
   VLOG(2) << "Total heuristics found: " << heuristicResult.size();
   std::vector<MatmulAlgorithm> algorithms;
   algorithms.reserve(max_algorithm_count);
@@ -830,7 +847,8 @@ auto BlasLt::GroupedMatmulPlan::GetAlgorithms(size_t max_algorithm_count,
     }
     size_t workspace_size = 0;
     if ((result.state == HIPBLAS_STATUS_SUCCESS) &&
-        (grouped_gemm_->isAlgoSupported(result.algo, workspace_size) ==
+        (hipblasLtExtGroupedGemmIsAlgoSupported(
+             grouped_gemm_.get(), &result.algo, &workspace_size) ==
          HIPBLAS_STATUS_SUCCESS)) {
       algorithms.push_back({result.algo, result.workspaceSize});
     }
@@ -887,8 +905,8 @@ absl::Status BlasLt::GroupedMatmulPlan::DoInitialize(
     }
   }
 
-  std::vector<hipblaslt_ext::GemmEpilogue> epilogues(cfg_.group_count);
-  std::vector<hipblaslt_ext::GemmInputs> inputs(cfg_.group_count);
+  std::vector<hipblasLtExtGemmEpilogue_t> epilogues(cfg_.group_count);
+  std::vector<hipblasLtExtGemmInputs_t> inputs(cfg_.group_count);
 
   // Convert the epilogue from the stored member variable
   ABSL_ASSIGN_OR_RETURN(auto hip_epilogue, AsHipblasLtEpilogue(epilogue));
@@ -899,40 +917,44 @@ absl::Status BlasLt::GroupedMatmulPlan::DoInitialize(
   static void* dummy_bias = reinterpret_cast<void*>(~0ULL);
 
   for (int64_t i = 0; i < cfg_.group_count; i++) {
-    epilogues[i].setMode(hip_epilogue);
+    SE_HIPBLAS_RETURN_IF_ERROR(hipblasLtExtGemmEpilogueInit(&epilogues[i]));
+    SE_HIPBLAS_RETURN_IF_ERROR(hipblasLtExtGemmInputsInit(&inputs[i]));
+    epilogues[i].mode = hip_epilogue;
     // Set bias data type and dummy bias pointer for bias epilogues
     if (epilogue == Epilogue::kBias || epilogue == Epilogue::kBiasThenReLU ||
         epilogue == Epilogue::kBiasThenGELU ||
         epilogue == Epilogue::kBiasThenSILU) {
-      epilogues[i].setBiasDataType(AsHipblasDataType(cfg_.type_d));
-      inputs[i].setBias(dummy_bias);
+      epilogues[i].biasDataType = AsHipblasDataType(cfg_.type_d);
+      inputs[i].bias = dummy_bias;
     }
-    inputs[i].setA(reinterpret_cast<void*>(~0ULL));
-    inputs[i].setB(reinterpret_cast<void*>(~0ULL));
-    inputs[i].setC(reinterpret_cast<void*>(~0ULL));
-    inputs[i].setD(reinterpret_cast<void*>(~0ULL));
-    inputs[i].setAlpha(static_cast<void*>(&salpha));
-    inputs[i].setBeta(static_cast<void*>(&sbeta));
+    inputs[i].a = reinterpret_cast<void*>(~0ULL);
+    inputs[i].b = reinterpret_cast<void*>(~0ULL);
+    inputs[i].c = reinterpret_cast<void*>(~0ULL);
+    inputs[i].d = reinterpret_cast<void*>(~0ULL);
+    inputs[i].alpha = &salpha;
+    inputs[i].beta = &sbeta;
   }
 
-  hipblaslt_ext::GemmProblemType problem(
+  const hipblasLtExtGemmProblemType_t problem{
       AsHipblasOperation(cfg_.trans_a), AsHipblasOperation(cfg_.trans_b),
       AsHipblasDataType(cfg_.type_a), AsHipblasDataType(cfg_.type_b),
       AsHipblasDataType(cfg_.type_c), AsHipblasDataType(cfg_.type_d),
-      AsHipblasComputeType(compute_type));
+      AsHipblasComputeType(compute_type)};
 
   absl::MutexLock lock(blas_lt_.mu_);
-  grouped_gemm_ = std::make_unique<hipblaslt_ext::GroupedGemm>(
-      blas_lt_.handle_.get(), problem.getOpA(), problem.getOpB(),
-      problem.getTypeA(), problem.getTypeB(), problem.getTypeC(),
-      problem.getTypeD(), problem.getTypeCompute());
+  hipblasLtExtGroupedGemm_t grouped_gemm = nullptr;
+  SE_HIPBLAS_RETURN_IF_ERROR(hipblasLtExtGroupedGemmCreate(
+      &grouped_gemm, blas_lt_.handle_.get(), &problem));
+  grouped_gemm_.reset(grouped_gemm);
 
   // Note that Matrices given to HipBlasLt Group-Gemm
   // are expected to be in COLUMN-MAJOR order.
 
-  SE_HIPBLAS_RETURN_IF_ERROR(grouped_gemm_->setProblem(
-      v_m, v_n, v_k, v_batch_count, v_lda, v_ldb, v_ldc, v_ldd, v_strideA,
-      v_strideB, v_strideC, v_strideD, epilogues, inputs, problem));
+  SE_HIPBLAS_RETURN_IF_ERROR(hipblasLtExtGroupedGemmSetProblem(
+      grouped_gemm_.get(), cfg_.group_count, v_m.data(), v_n.data(),
+      v_k.data(), v_batch_count.data(), v_lda.data(), v_ldb.data(),
+      v_ldc.data(), v_ldd.data(), v_strideA.data(), v_strideB.data(),
+      v_strideC.data(), v_strideD.data(), epilogues.data(), inputs.data()));
 
   // UserArgument is expecting specific code for activation and bias types.
   // These are defined by the hipBLASLt library during the problem
@@ -948,10 +970,10 @@ absl::Status BlasLt::GroupedMatmulPlan::DoInitialize(
 
   // Get default UserArguments from hipBLASLt and save required parameters
   auto default_ua =
-      std::make_unique<hipblaslt_ext::UserArguments[]>(cfg_.group_count);
+      std::make_unique<hipblasLtExtUserArguments_t[]>(cfg_.group_count);
   SE_HIPBLAS_RETURN_IF_ERROR(
-      grouped_gemm_->getDefaultValueForDeviceUserArguments(
-          static_cast<void*>(default_ua.get())));
+      hipblasLtExtGroupedGemmGetDefaultValueForDeviceUserArguments(
+          grouped_gemm_.get(), default_ua.get()));
   // The ragged-dot API enforce that activation and bias types are the same
   // for all the gemm operations.
   // We can therefore only retrieve/verify value of the first gemm op.
@@ -1003,9 +1025,10 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
   if (algorithm_dirty_ || !args.workspace.IsSameAs(saved_address_workspace_)) {
     void* addr_workspace = static_cast<void*>(
         static_cast<uint8_t*>(args.workspace.opaque()) +
-        sizeof(hipblaslt_ext::UserArguments) * cfg_.group_count);
-    SE_HIPBLAS_RETURN_IF_ERROR(
-        grouped_gemm_->initialize(*algorithm_, addr_workspace));
+        sizeof(hipblasLtExtUserArguments_t) * cfg_.group_count);
+    SE_HIPBLAS_RETURN_IF_ERROR(hipblasLtExtGroupedGemmInitialize(
+        grouped_gemm_.get(), &*algorithm_, addr_workspace,
+        /*useUserArgs=*/1, /*stream=*/nullptr));
     algorithm_dirty_ = false;
     saved_address_workspace_ = args.workspace;
   }
@@ -1093,14 +1116,15 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
       strideC1, strideC2, strideD1, strideD2, cfg_.ragged_mode,
       cfg_.group_count, activation_type_, bias_type_, has_matrix_bias);
 
-  SE_HIPBLAS_RETURN_IF_ERROR(
-      grouped_gemm_->run(d_userArgs.opaque(), hip_stream));
+  SE_HIPBLAS_RETURN_IF_ERROR(hipblasLtExtGroupedGemmRun(
+      grouped_gemm_.get(), d_userArgs.opaque(), hip_stream));
 
   // The profiling has not been tested yet
   if (profile_result != nullptr) {
     ABSL_ASSIGN_OR_RETURN(absl::Duration elapsed, timer->GetElapsedDuration());
     // set algorithm ID to be unique (otherwise it gets kDefaultAlgorithm ID)
-    profile_result->set_algorithm(hipblaslt_ext::getIndexFromAlgo(*algorithm_));
+    ABSL_ASSIGN_OR_RETURN(int algorithm_index, GetAlgorithmIndex(*algorithm_));
+    profile_result->set_algorithm(algorithm_index);
     profile_result->set_is_valid(true);
     profile_result->set_elapsed_time_in_ms(absl::ToDoubleMilliseconds(elapsed));
   }

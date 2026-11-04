@@ -25,7 +25,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
-#include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
+#include "rocm/include/hipblaslt/hipblaslt-ext-grouped-gemm.h"
 #include "rocm/include/hipblaslt/hipblaslt.h"
 #include "rocm/rocm_config.h"
 #include "xla/stream_executor/blas.h"
@@ -34,11 +34,6 @@ limitations under the License.
 #include "xla/stream_executor/rocm/hip_blas_utils.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/types.h"
-
-namespace hipblaslt_ext {
-class GroupedGemm;
-struct UserArguments;
-}  // namespace hipblaslt_ext
 
 namespace stream_executor {
 
@@ -186,7 +181,10 @@ class BlasLt : public gpu::BlasLt {
     const BlasLt& blas_lt_;
     gpu::GroupedGemmConfig cfg_;
     Epilogue epilogue_ = Epilogue::kDefault;
-    std::unique_ptr<hipblaslt_ext::GroupedGemm> grouped_gemm_;
+    // Created through hipBLASLt's C API, so no C++ standard library type
+    // crosses into hipBLASLt, which may use a different one than XLA.
+    Owned<hipblasLtExtGroupedGemm_t> grouped_gemm_{
+        nullptr, hipblasLtExtGroupedGemmDestroy};
     mutable std::optional<hipblasLtMatmulAlgo_t> algorithm_;
     mutable bool algorithm_dirty_ = false;
     mutable DeviceAddressBase saved_address_workspace_{};
