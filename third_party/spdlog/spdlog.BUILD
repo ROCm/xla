@@ -26,6 +26,14 @@ cc_library(
     hdrs = glob(["include/spdlog/**/*.h"]),
     defines = [
         "SPDLOG_FMT_EXTERNAL",
+        # ROCm's librocroller.so (loaded by hipBLASLt) bundles its own spdlog
+        # and exports its symbols unversioned. spdlog has no versioned inline
+        # namespace, so its calls bind to XLA's copy whenever the mangled name
+        # has no std:: types, mixing two builds of spdlog (and, under libc++,
+        # two standard libraries) on one object. Renaming the namespace keeps
+        # XLA's copy separate. Header names are not macro-expanded, so
+        # #include <spdlog/...> is unaffected.
+        "spdlog=xla_spdlog",
     ],
     features = ["-parse_headers"],
     includes = ["include"],

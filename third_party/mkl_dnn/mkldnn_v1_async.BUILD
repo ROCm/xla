@@ -159,6 +159,13 @@ _COPTS_LIST = select({
     "-UUSE_CBLAS",
     "-DDNNL_ENABLE_MAX_CPU_ISA",
     "-DDNNL_ENABLE_GRAPH_DUMP",
+    # oneDNN compiles its bundled spdlog (src/common/logging.cpp) under the
+    # plain spdlog namespace. ROCm's librocroller.so bundles spdlog too and
+    # exports it unversioned, so its calls bind to oneDNN's copy and crash when
+    # the two are built differently (e.g. libc++ vs libstdc++). spdlog is
+    # internal to oneDNN, so rename its namespace for oneDNN's sources only.
+    # Header names are not macro-expanded, so #include "spdlog/..." still works.
+    "-Dspdlog=onednn_spdlog",
 ] + tf_openmp_copts()
 
 _INCLUDES_LIST = [
