@@ -50,7 +50,7 @@ limitations under the License.
 
 namespace xla::gpu {
 
-using ::mori::collective::CollectivesFacade;
+using mori::ccl::CollectivesFacade;
 namespace {
 
 hipStream_t AsHipStream(se::Stream* stream) {
@@ -65,11 +65,10 @@ size_t ToMoriByteCount(PrimitiveType dtype, size_t count) {
   return count * primitive_util::BitWidth(dtype) / 8;
 }
 
-absl::StatusOr<::mori::collective::DataType> ToMoriDataType(
-    PrimitiveType dtype) {
+absl::StatusOr<mori::ccl::DataType> ToMoriDataType(PrimitiveType dtype) {
 #define MORI_TYPE_DISPATCH(x) \
   case x:                     \
-    return ::mori::collective::DataType::x;
+    return mori::ccl::DataType::x;
   switch (dtype) {
     MORI_TYPE_DISPATCH(F8E5M2)
     MORI_TYPE_DISPATCH(F8E4M3FN)
@@ -91,11 +90,10 @@ absl::StatusOr<::mori::collective::DataType> ToMoriDataType(
 }
 
 // Translate an XLA ReductionKind to the facade's reduction-op enum.
-absl::StatusOr<::mori::collective::ReduceOpKind> ToMoriReduceOp(
-    ReductionKind r) {
+absl::StatusOr<mori::ccl::ReduceOpKind> ToMoriReduceOp(ReductionKind r) {
 #define MORI_OP_DISPATCH(x) \
   case ReductionKind::x:    \
-    return ::mori::collective::ReduceOpKind::x;
+    return mori::ccl::ReduceOpKind::x;
   switch (r) {
     MORI_OP_DISPATCH(SUM)
     MORI_OP_DISPATCH(PRODUCT)

@@ -37,9 +37,9 @@ limitations under the License.
 #include "xla/stream_executor/device_address.h"
 #include "xla/xla_data.pb.h"
 
-namespace mori::collective {
+namespace mori::ccl {
 class CollectivesFacade;
-}  // namespace mori::collective
+}  // namespace mori::ccl
 
 namespace xla::gpu {
 
@@ -200,7 +200,7 @@ class MoriCommunicator : public GpuCommunicator {
       : cancel_(std::move(cancel)) {}
 
   // CollectivesFacade instance for this communicator's device
-  std::unique_ptr<mori::collective::CollectivesFacade> facade_;
+  std::unique_ptr<mori::ccl::CollectivesFacade> facade_;
   // Should all pending collectives cancel?
   std::shared_ptr<CancellationToken> cancel_;
   bool aborted_ = false;  // Has Abort() been called?
