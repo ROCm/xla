@@ -29,6 +29,7 @@ load(
     "//xla/stream_executor:build_defs.bzl",
     "stream_executor_friends",
 )
+load("//xla/stream_executor/rocm:libstdcxx_cc_library.bzl", "libstdcxx_cc_library")
 load("//xla/tests:build_defs.bzl", "xla_test")
 load(
     "//xla/tsl:tsl.bzl",
@@ -795,6 +796,53 @@ cc_library(
     ]),
 )
 
+# C interface to hipBLASLt's C++ extension API (hipblaslt-ext.hpp). The
+# implementation is built against libstdc++, like hipBLASLt itself, so that XLA
+# can call that API whichever standard library it is built against.
+cc_library(
+    name = "hipblaslt_ext_shim_header",
+    hdrs = ["hipblaslt_ext_shim.h"],
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = ["@local_config_rocm//rocm:rocm_headers"],
+)
+
+cc_library(
+    name = "hipblaslt_ext_shim_libstdcxx",
+    srcs = [
+        "hipblaslt_ext_shim.cc",
+        # Lets the shim link into libc++ code without libstdc++.so.
+        "hipblaslt_ext_shim_libstdcxx_helpers.cc",
+    ],
+    # Only export the C interface, not the libstdc++ template instantiations.
+    copts = [
+        "-fvisibility=hidden",
+        "-fvisibility-inlines-hidden",
+    ],
+    tags = [
+        "gpu",
+        # Only built through :hipblaslt_ext_shim, against libstdc++.
+        "manual",
+        "rocm-only",
+    ],
+    deps = [
+        ":hipblaslt_ext_shim_header",
+        "@local_config_rocm//rocm:hipblaslt",  # buildcleaner: keep
+        "@local_config_rocm//rocm:rocm_headers",
+    ],
+)
+
+libstdcxx_cc_library(
+    name = "hipblaslt_ext_shim",
+    dep = ":hipblaslt_ext_shim_libstdcxx",
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+)
+
 cc_library(
     name = "amdhipblaslt_plugin",
     srcs = ["hip_blas_lt.cc"],
@@ -809,6 +857,8 @@ cc_library(
     deps = [
         ":hip_blas_utils",
         ":hipblas_lt_header",
+        ":hipblaslt_ext_shim",  # buildcleaner: keep
+        ":hipblaslt_ext_shim_header",
         ":hipblaslt_if_static",  # buildcleaner: keep
         ":rocblas_plugin",
         ":rocm_executor",
@@ -878,6 +928,7 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":hipblaslt_ext_shim_header",
         "//xla:types",
         "//xla/stream_executor:blas",
         "//xla/stream_executor:device_address",
