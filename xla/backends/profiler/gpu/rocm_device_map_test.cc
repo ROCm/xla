@@ -17,6 +17,7 @@ limitations under the License.
 
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -204,6 +205,108 @@ TEST(BuildHipDeviceMapTest, LeavesTwoHipDevicesAtOneAddressUnmapped) {
 
   EXPECT_THAT(map.hip_device_of_agent, IsEmpty());
   EXPECT_THAT(SlotHandles(map), ElementsAre(kPlaceholder, kPlaceholder));
+}
+
+TEST(PciAddressFromLocationTest, DecodesKfdLocationId) {
+  EXPECT_EQ(PciAddressFromLocation(1, 0x65 << 8 | 0x02 << 3 | 0x1),
+            (PciAddress{1, 0x65, 0x02, 0x1}));
+}
+
+TEST(HasGpuPartitionsTest, GpusOnDistinctBusesAreNotPartitions) {
+  EXPECT_FALSE(HasGpuPartitions(EightGpuAgents()));
+}
+
+TEST(HasGpuPartitionsTest, GpusThatDifferOnlyInFunctionArePartitions) {
+  rocprofiler_agent_v0_t partition1 = GpuAgent(kHandle0 + 1, 0x05);
+  partition1.location_id |= 1;
+
+  EXPECT_TRUE(HasGpuPartitions({GpuAgent(kHandle0, 0x05), partition1}));
+}
+
+TEST(HasGpuPartitionsTest, GpusAtOneAddressArePartitions) {
+  // Partitions on kernels before Linux 6.12 share the whole address.
+  EXPECT_TRUE(HasGpuPartitions(
+      {GpuAgent(kHandle0, 0x05), GpuAgent(kHandle0 + 1, 0x05)}));
+}
+
+TEST(HasGpuPartitionsTest, GpusInDifferentDomainsAreNotPartitions) {
+  rocprofiler_agent_v0_t other_domain = GpuAgent(kHandle0 + 1, 0x05);
+  other_domain.domain = 1;
+
+  EXPECT_FALSE(HasGpuPartitions({GpuAgent(kHandle0, 0x05), other_domain}));
+}
+
+TEST(HasGpuPartitionsTest, IgnoresCpuAgents) {
+  // Both CPU agents report 0000:00:00.0.
+  EXPECT_FALSE(HasGpuPartitions({CpuAgent(kHandle0), CpuAgent(kHandle0 + 1),
+                                 GpuAgent(kHandle0 + 2, 0x05)}));
+}
+
+// A peer-copy record is (issuing GPU, other GPU); see ResolvePeerCopyGpus.
+constexpr uint64_t kG0 = kHandle0 + 2;
+constexpr uint64_t kG1 = kHandle0 + 3;
+constexpr uint64_t kG2 = kHandle0 + 4;
+
+// (source_agent, destination_agent, from_pointer_owners)
+using Gpus = std::tuple<uint64_t, std::optional<uint64_t>, bool>;
+
+Gpus Fields(const PeerCopyGpus& gpus) {
+  return {gpus.source_agent, gpus.destination_agent, gpus.from_pointer_owners};
+}
+
+TEST(ResolvePeerCopyGpusTest, TrustsOwnersWhenTheSourceIssued) {
+  EXPECT_EQ(Fields(ResolvePeerCopyGpus(kG0, kG1, kG0, kG1)),
+            Gpus(kG0, kG1, true));
+}
+
+TEST(ResolvePeerCopyGpusTest, TrustsOwnersWhenTheDestinationIssued) {
+  // Data G0 -> G1, issued on G1.
+  EXPECT_EQ(Fields(ResolvePeerCopyGpus(kG1, kG0, kG0, kG1)),
+            Gpus(kG0, kG1, true));
+}
+
+TEST(ResolvePeerCopyGpusTest, TrustsOwnersWhenAThirdGpuIssued) {
+  // Data G1 -> G2, issued on G0. G2 is not in the record.
+  EXPECT_EQ(Fields(ResolvePeerCopyGpus(kG0, kG1, kG1, kG2)),
+            Gpus(kG1, kG2, true));
+}
+
+TEST(ResolvePeerCopyGpusTest, DistrustsADestinationOwnerThatDisagrees) {
+  // The source issued, so the record's other GPU must be the destination.
+  EXPECT_EQ(Fields(ResolvePeerCopyGpus(kG0, kG1, kG0, kG2)),
+            Gpus(kG1, std::nullopt, false));
+}
+
+TEST(ResolvePeerCopyGpusTest, DistrustsAnUnknownDestinationOfTheIssuer) {
+  EXPECT_EQ(Fields(ResolvePeerCopyGpus(kG0, kG1, kG0, std::nullopt)),
+            Gpus(kG1, std::nullopt, false));
+}
+
+TEST(ResolvePeerCopyGpusTest, KeepsAKnownSourceWhenTheDestinationIsUnknown) {
+  // Data G0 -> ?, issued on G1.
+  EXPECT_EQ(Fields(ResolvePeerCopyGpus(kG1, kG0, kG0, std::nullopt)),
+            Gpus(kG0, std::nullopt, false));
+}
+
+TEST(ResolvePeerCopyGpusTest, DistrustsASourceOwnerOutsideTheRecord) {
+  EXPECT_EQ(Fields(ResolvePeerCopyGpus(kG0, kG1, kG2, kG1)),
+            Gpus(kG1, std::nullopt, false));
+}
+
+TEST(ResolvePeerCopyGpusTest, DistrustsAnUnknownSource) {
+  EXPECT_EQ(Fields(ResolvePeerCopyGpus(kG0, kG1, std::nullopt, kG1)),
+            Gpus(kG1, std::nullopt, false));
+}
+
+TEST(ResolvePeerCopyGpusTest, PutsACopyWithNoOwnersOnTheRecordsOtherGpu) {
+  // The other GPU is always one of the copy's two, even when a third issued.
+  EXPECT_EQ(Fields(ResolvePeerCopyGpus(kG0, kG1, std::nullopt, std::nullopt)),
+            Gpus(kG1, std::nullopt, false));
+}
+
+TEST(ResolvePeerCopyGpusTest, DistrustsEqualOwners) {
+  EXPECT_EQ(Fields(ResolvePeerCopyGpus(kG0, kG1, kG1, kG1)),
+            Gpus(kG1, std::nullopt, false));
 }
 
 }  // namespace

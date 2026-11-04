@@ -76,6 +76,7 @@ const char* GetRocmTracerEventTypeName(const RocmTracerEventType& type) {
     OO(MemcpyH2D)
     OO(MemcpyD2H)
     OO(MemcpyD2D)
+    OO(MemcpyP2P)
     OO(MemcpyOther)
     OO(MemoryAlloc)
     OO(MemoryFree)
