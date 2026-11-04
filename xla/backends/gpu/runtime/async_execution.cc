@@ -169,4 +169,15 @@ absl::Status AsyncExecution::Done(Thunk::ExecutionScopedState* state,
   return stream->WaitFor(es->event->get());
 }
 
+void AsyncExecution::AddCollective(CollectiveCommKey key) {
+  absl::MutexLock lock(mutex_);
+  collectives_.push_back(std::move(key));
+}
+
+std::vector<AsyncExecution::CollectiveCommKey> AsyncExecution::collectives()
+    const {
+  absl::MutexLock lock(mutex_);
+  return collectives_;
+}
+
 }  // namespace xla::gpu

@@ -93,6 +93,9 @@ class MoriCommunicator : public GpuCommunicator {
 
   absl::Status Barrier(const Executor& executor) final;
 
+  void SetAsync(bool is_async) final;
+  absl::Status AsyncDone(const Executor& executor) final;
+
   Future<> GroupExecute(absl::AnyInvocable<absl::Status() &&> group) final;
 
   Future<> AllReduce(se::DeviceAddressBase send_buffer,
@@ -201,6 +204,9 @@ class MoriCommunicator : public GpuCommunicator {
   // Should all pending collectives cancel?
   std::shared_ptr<CancellationToken> cancel_;
   bool aborted_ = false;  // Has Abort() been called?
+  // Do the following collective launches belong to an async start/done pair?
+  // Read by the Launch* methods, so Execute must run them synchronously.
+  bool is_async_ = false;
 };
 
 }  // namespace xla::gpu

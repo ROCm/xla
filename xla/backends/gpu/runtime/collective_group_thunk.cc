@@ -90,16 +90,18 @@ absl::Status CollectiveGroupThunk::ExecuteOnStream(
     return ExecuteGroup(params);
   }
   int64_t bytes = 0;
+  bool is_async = false;
   for (const std::unique_ptr<Thunk>& thunk : executor_.thunks()) {
     if (auto* collective = dynamic_cast<CollectiveThunk*>(thunk.get())) {
       bytes += collective->PayloadBytes();
+      is_async |= collective->is_async();
     }
   }
   // Collectives inside a group are launched at group end, so they are timed
   // as a whole rather than individually.
   return profiler->Time(*params.stream,
                         absl::StrCat(Thunk::KindToString(kind()), " (group)"),
-                        bytes, [&] {
+                        bytes, is_async, [&] {
                           CollectiveProfiler::NestedScope nested;
                           return ExecuteGroup(params);
                         });

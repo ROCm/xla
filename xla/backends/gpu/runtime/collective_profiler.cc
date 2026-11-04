@@ -68,6 +68,45 @@ std::string FormatBucket(int bucket) {
 double ToMs(absl::Duration d) { return absl::ToDoubleMilliseconds(d); }
 double ToUs(absl::Duration d) { return absl::ToDoubleMicroseconds(d); }
 
+double Share(absl::Duration part, absl::Duration whole) {
+  return whole > absl::ZeroDuration() ? 100.0 * absl::FDivDuration(part, whole)
+                                      : 0.0;
+}
+
+absl::Duration SumDurations(const CollectiveProfiler::PerKind& per_kind) {
+  absl::Duration total = absl::ZeroDuration();
+  for (const auto& [name, buckets] : per_kind) {
+    for (const auto& [bucket, stats] : buckets) total += stats.total;
+  }
+  return total;
+}
+
+void FormatPerKind(const CollectiveProfiler::PerKind& per_kind,
+                   absl::Duration grand_total, std::string& out) {
+  for (const auto& [name, buckets] : per_kind) {
+    CollectiveProfiler::Stats total;
+    for (const auto& [bucket, stats] : buckets) {
+      total.count += stats.count;
+      total.total += stats.total;
+      total.min = std::min(total.min, stats.min);
+      total.max = std::max(total.max, stats.max);
+    }
+    absl::StrAppendFormat(
+        &out, "%s: calls=%d total=%.3f ms (%.1f%%) avg=%.1f us\n", name,
+        total.count, ToMs(total.total), Share(total.total, grand_total),
+        ToUs(total.total) / std::max<int64_t>(total.count, 1));
+    for (const auto& [bucket, stats] : buckets) {
+      absl::StrAppendFormat(
+          &out,
+          "  %-22s calls=%-8d total=%10.3f ms  avg=%9.1f us  min=%9.1f us  "
+          "max=%9.1f us\n",
+          FormatBucket(bucket), stats.count, ToMs(stats.total),
+          ToUs(stats.total) / std::max<int64_t>(stats.count, 1),
+          ToUs(stats.min), ToUs(stats.max));
+    }
+  }
+}
+
 CollectiveProfiler* CreateFromEnv() {
   const char* env = std::getenv("XLA_GPU_COLLECTIVE_TIMING");
   if (env == nullptr || *env == '\0') return nullptr;
@@ -141,6 +180,7 @@ bool CollectiveProfiler::IsActive() { return !in_nested_scope && round_active; }
 
 absl::Status CollectiveProfiler::Time(stream_executor::Stream& stream,
                                       std::string name, int64_t bytes,
+                                      bool is_async,
                                       absl::FunctionRef<absl::Status()> fn) {
   int device_ordinal = stream.parent()->device_ordinal();
   if (!IsActive()) return fn();
@@ -166,7 +206,8 @@ absl::Status CollectiveProfiler::Time(stream_executor::Stream& stream,
   bool over_limit;
   {
     absl::MutexLock lock(state.mu);
-    state.pending.push_back(Pending{*std::move(timer), std::move(name), bytes});
+    state.pending.push_back(
+        Pending{*std::move(timer), std::move(name), bytes, is_async});
     over_limit = state.pending.size() > kMaxPendingPerDevice;
   }
   if (over_limit) Harvest(state, /*block_oldest=*/true);
@@ -176,7 +217,8 @@ absl::Status CollectiveProfiler::Time(stream_executor::Stream& stream,
 void CollectiveProfiler::Accumulate(const Pending& pending,
                                     absl::Duration duration) {
   absl::MutexLock lock(aggregates_mu_);
-  aggregates_[pending.name][SizeBucket(pending.bytes)].Add(duration);
+  PerKind& per_kind = pending.is_async ? aggregates_.async : aggregates_.sync;
+  per_kind[pending.name][SizeBucket(pending.bytes)].Add(duration);
 }
 
 void CollectiveProfiler::Harvest(DeviceState& state, bool block_oldest) {
@@ -230,35 +272,24 @@ std::string CollectiveProfiler::Format(const Aggregates& aggregates,
       "=====\n",
       num_devices, skip_rounds);
 
-  absl::Duration grand_total = absl::ZeroDuration();
-  for (const auto& [name, buckets] : aggregates) {
-    for (const auto& [bucket, stats] : buckets) grand_total += stats.total;
-  }
+  absl::Duration sync_total = SumDurations(aggregates.sync);
+  absl::Duration async_total = SumDurations(aggregates.async);
+  absl::Duration grand_total = sync_total + async_total;
 
-  for (const auto& [name, buckets] : aggregates) {
-    Stats total;
-    for (const auto& [bucket, stats] : buckets) {
-      total.count += stats.count;
-      total.total += stats.total;
-      total.min = std::min(total.min, stats.min);
-      total.max = std::max(total.max, stats.max);
-    }
-    double share = grand_total > absl::ZeroDuration()
-                       ? 100.0 * absl::FDivDuration(total.total, grand_total)
-                       : 0.0;
-    absl::StrAppendFormat(
-        &out, "%s: calls=%d total=%.3f ms (%.1f%%) avg=%.1f us\n", name,
-        total.count, ToMs(total.total), share,
-        ToUs(total.total) / std::max<int64_t>(total.count, 1));
-    for (const auto& [bucket, stats] : buckets) {
-      absl::StrAppendFormat(
-          &out,
-          "  %-22s calls=%-8d total=%10.3f ms  avg=%9.1f us  min=%9.1f us  "
-          "max=%9.1f us\n",
-          FormatBucket(bucket), stats.count, ToMs(stats.total),
-          ToUs(stats.total) / std::max<int64_t>(stats.count, 1),
-          ToUs(stats.min), ToUs(stats.max));
-    }
+  if (!aggregates.sync.empty()) {
+    absl::StrAppend(&out,
+                    "--- Sync collectives (compute stream, exposed) ---\n");
+    FormatPerKind(aggregates.sync, grand_total, out);
+    absl::StrAppendFormat(&out, "SYNC TOTAL: %.3f ms (%.1f%%)\n",
+                          ToMs(sync_total), Share(sync_total, grand_total));
+  }
+  if (!aggregates.async.empty()) {
+    absl::StrAppend(
+        &out,
+        "--- Async collectives (async stream, may overlap compute) ---\n");
+    FormatPerKind(aggregates.async, grand_total, out);
+    absl::StrAppendFormat(&out, "ASYNC TOTAL: %.3f ms (%.1f%%)\n",
+                          ToMs(async_total), Share(async_total, grand_total));
   }
   absl::StrAppendFormat(&out, "TOTAL: %.3f ms\n", ToMs(grand_total));
   if (pending > 0) {

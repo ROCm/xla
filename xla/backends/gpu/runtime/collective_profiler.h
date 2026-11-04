@@ -61,7 +61,14 @@ class CollectiveProfiler {
 
   // Collective name -> size bucket (-1 for zero bytes, otherwise k for sizes
   // in [2^k, 2^(k+1)) bytes) -> stats.
-  using Aggregates = std::map<std::string, std::map<int, Stats>>;
+  using PerKind = std::map<std::string, std::map<int, Stats>>;
+
+  // Collectives launched on the compute stream (`sync`) and inside async
+  // start/done scopes (`async`).
+  struct Aggregates {
+    PerKind sync;
+    PerKind async;
+  };
 
   // Returns the process-wide profiler, or nullptr if profiling is disabled.
   static CollectiveProfiler* Get();
@@ -91,10 +98,11 @@ class CollectiveProfiler {
   bool IsActive();
 
   // Times `fn` enqueuing a collective on `stream`. Records into the bucket
-  // `name` / `bytes`. If the profiler is inactive or timer creation fails,
-  // simply runs `fn`.
+  // `name` / `bytes` of the sync or async aggregates. If the profiler is
+  // inactive or timer creation fails, simply runs `fn`.
   absl::Status Time(stream_executor::Stream& stream, std::string name,
-                    int64_t bytes, absl::FunctionRef<absl::Status()> fn);
+                    int64_t bytes, bool is_async,
+                    absl::FunctionRef<absl::Status()> fn);
 
   // Called when a collective is recorded into a command buffer.
   void NoteCommandBufferRecord() {
@@ -134,6 +142,7 @@ class CollectiveProfiler {
     std::unique_ptr<stream_executor::EventBasedTimer> timer;
     std::string name;
     int64_t bytes;
+    bool is_async;
   };
 
   struct DeviceState {
