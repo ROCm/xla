@@ -220,10 +220,11 @@ skip this together unless one of them has to record: the graph was not recorded
 yet, cannot be replayed (warm-up, profiling, no persistent allocation indices
 yet), or a buffer of its collectives moved. The participants agree through a
 host rendezvous, so the flag applies only when all of them run in one process
-and execute the same executable. A recorded collective keeps the communicators
-it was recorded with, so cliques must not be re-created between executions.
-The flag saves work only if the buffers of the collectives stay in place between
-executions, for example with a fixed-address temp buffer allocator.
+and execute the same executable. A graph is dropped when a clique it was created
+with is abandoned or destroyed, so a re-created clique makes all participants
+record again. The flag saves work only if the buffers of the collectives stay in
+place between executions, for example with a fixed-address temp buffer
+allocator.
 
 ## Tune the trace cache
 

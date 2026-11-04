@@ -65,8 +65,8 @@ struct CommandBufferThunkOptions {
   // an update on initialization are recorded again only if a participant has
   // to: it has not recorded them yet, cannot replay them (warm-up, profiling,
   // no persistent allocation indices yet), or a buffer of these commands moved.
-  // A recorded collective keeps the communicators it was recorded with, so this
-  // assumes that cliques are not re-created between executions.
+  // A command buffer is dropped when a clique it was created with is abandoned
+  // or destroyed, so a re-created clique makes all participants record again.
   bool skip_unchanged_collectives = false;
 };
 

@@ -2882,10 +2882,10 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "persistent allocation indices yet), or a buffer of these collectives "
       "moved. Participants agree through a host rendezvous, so this applies "
       "only when all of them run in this process, and they must all execute "
-      "the same executable. A recorded collective keeps the communicators it "
-      "was recorded with, so cliques must not be re-created between "
-      "executions. Buffers only stay in place if temp buffers have a stable "
-      "address between executions."));
+      "the same executable. A command buffer is dropped when a clique it was "
+      "created with is abandoned or destroyed, so a re-created clique makes "
+      "all participants record again. Buffers only stay in place if temp "
+      "buffers have a stable address between executions."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_command_buffer_unroll_loops",
       bool_setter_for(&DebugOptions::set_xla_gpu_command_buffer_unroll_loops),
