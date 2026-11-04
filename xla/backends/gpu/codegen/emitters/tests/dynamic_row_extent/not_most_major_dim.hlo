@@ -1,0 +1,27 @@
+// RUN: env XLA_FLAGS=--xla_gpu_experimental_dynamic_row_extent=true \
+// RUN:   gpu_fusion_to_mlir %s | FileCheck %s
+
+// The mask runs along the minor dimension, so a thread's elements are not a
+// prefix of the bounded dimension and the pattern must not be guarded even
+// with the flag on.
+
+fusion {
+  x = f32[256,4096] parameter(0)
+  n = s32[] parameter(1)
+  iota = s32[256,4096] iota(), iota_dimension=1
+  n_b = s32[256,4096] broadcast(n), dimensions={}
+  mask = pred[256,4096] compare(iota, n_b), direction=LT
+  zero = f32[] constant(0)
+  zero_b = f32[256,4096] broadcast(zero), dimensions={}
+  act = f32[256,4096] multiply(x, x)
+  ROOT masked = f32[256,4096] select(mask, act, zero_b)
+}
+
+ENTRY entry {
+  x = f32[256,4096] parameter(0)
+  n = s32[] parameter(1)
+  ROOT fusion = f32[256,4096] fusion(x, n), kind=kLoop, calls=fusion
+}
+
+// CHECK:     xla.loop
+// CHECK-NOT: scf.if

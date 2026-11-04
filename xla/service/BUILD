@@ -3100,6 +3100,29 @@ cc_library(
     ],
 )
 
+xla_test(
+    name = "dynamic_padder_moe_extent_test",
+    srcs = ["dynamic_padder_moe_extent_test.cc"],
+    deps = [
+        ":dynamic_padder",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:test",
+        "//xla/hlo/testlib:test_helpers",
+        "//xla/hlo/transforms/simplifiers:algebraic_simplifier",
+        "//xla/hlo/transforms/simplifiers:hlo_dce",
+        "//xla/hlo/transforms/simplifiers:tuple_simplifier",
+        "//xla/hlo/utils:hlo_matchers",
+        "//xla/tests:hlo_test_base",
+        "//xla/tests:xla_internal_test_main",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
 # TODO(b/475838852): Re-enable once fixed.
 xla_test(
     name = "dynamic_padder_test",

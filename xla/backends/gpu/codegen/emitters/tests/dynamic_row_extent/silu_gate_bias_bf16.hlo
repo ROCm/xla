@@ -1,0 +1,43 @@
+// RUN: env XLA_FLAGS=--xla_gpu_experimental_dynamic_row_extent=true \
+// RUN:   gpu_fusion_to_mlir %s | FileCheck %s
+
+// A realistic MoE epilogue, silu(x) * gate + bias computed in f32 and stored
+// as bf16, with two capacity-sized inputs and the live row count n. The guard
+// is emitted once per thread, ahead of the loads of both x and gate.
+
+fusion {
+  x = bf16[4096,1024] parameter(0)
+  gate = bf16[4096,1024] parameter(1)
+  bias = bf16[1024] parameter(2)
+  n = s32[] parameter(3)
+  xf = f32[4096,1024] convert(x)
+  gf = f32[4096,1024] convert(gate)
+  bf = f32[1024] convert(bias)
+  sig = f32[4096,1024] logistic(xf)
+  silu = f32[4096,1024] multiply(xf, sig)
+  gated = f32[4096,1024] multiply(silu, gf)
+  bias_b = f32[4096,1024] broadcast(bf), dimensions={1}
+  act = f32[4096,1024] add(gated, bias_b)
+  out = bf16[4096,1024] convert(act)
+  iota = s32[4096,1024] iota(), iota_dimension=0
+  n_b = s32[4096,1024] broadcast(n), dimensions={}
+  mask = pred[4096,1024] compare(iota, n_b), direction=LT
+  zero = bf16[] constant(0)
+  zero_b = bf16[4096,1024] broadcast(zero), dimensions={}
+  ROOT masked = bf16[4096,1024] select(mask, out, zero_b)
+}
+
+ENTRY entry {
+  x = bf16[4096,1024] parameter(0)
+  gate = bf16[4096,1024] parameter(1)
+  bias = bf16[1024] parameter(2)
+  n = s32[] parameter(3)
+  ROOT fusion = bf16[4096,1024] fusion(x, gate, bias, n), kind=kLoop, calls=fusion
+}
+
+// CHECK:      tensor.extract %arg3[]
+// CHECK:      arith.cmpi slt
+// CHECK:      scf.if
+// CHECK:      xla.loop
+// CHECK:      tensor.extract %arg0
+// CHECK:      tensor.extract %arg1
