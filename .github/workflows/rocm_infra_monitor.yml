@@ -29,37 +29,24 @@ env:
   # The pipeline already tags each test step with its mode - "[single_gpu]",
   # "[multi_gpu]", "[rocm_cpu]" - so the mode tag is the marker.
   # TODO: enable when multigpu is green (set this to an empty value).
-  IGNORED_STEP_MARKER: '[multi_gpu]'
-  # Only jobs whose name matches this regex are reported at all. The nightly
-  # run holds more than what we monitor:
-  #   - It calls the sanitizers workflow as a reusable workflow, so its jobs
-  #     land in the same run under the "sanitizers / ..." prefix. They are
-  #     expected to be red and are tracked separately, so they are not infra
-  #     failures for us.
-  #   - Its XLA matrix also builds against the TheRock nightly tarball, in
-  #     "execute-xla-ut-nightly (therock_nightly, ...)". That tarball moves
-  #     every day, so the job is not expected to be green either.
-  # What is left, and what we monitor, is the XLA matrix on the pinned TheRock
-  # release - "(therock_release, ...)" and its BuildBuddy variant
-  # "(therock_release_bb, ...)", both matched by the one prefix below - plus
-  # the nightly JAX run, which is reusable too ("jax-upstream / ...").
-  MONITORED_JOB_PATTERN: '^(execute-xla-ut-nightly \(therock_release|jax-upstream)'
+  IGNORED_STEP_MARKER: "[multi_gpu]"
+  MONITORED_JOB_PATTERN: '^(execute-xla-ut-nightly \(therock_release|jax-upstream / (rocm-config$|JAX Upstream .*\(therock_release))'
 
 on:
   schedule:
     # Run every hour; each run checks everything that finished since the
     # previous successful run of this workflow, so nothing is missed or
     # reported twice.
-    - cron: '0 * * * *'
+    - cron: "0 * * * *"
   workflow_dispatch:
   pull_request:
     paths:
-      - '.github/workflows/rocm_infra_monitor.yml'
-      - 'build_tools/rocm/get_last_pipeline_run.sh'
-      - 'build_tools/rocm/get_monitoring_window.sh'
-      - 'build_tools/rocm/get_runs_since.sh'
-      - 'build_tools/rocm/collect_run_failures.sh'
-      - 'build_tools/rocm/create_infra_error_issue.sh'
+      - ".github/workflows/rocm_infra_monitor.yml"
+      - "build_tools/rocm/get_last_pipeline_run.sh"
+      - "build_tools/rocm/get_monitoring_window.sh"
+      - "build_tools/rocm/get_runs_since.sh"
+      - "build_tools/rocm/collect_run_failures.sh"
+      - "build_tools/rocm/create_infra_error_issue.sh"
 
 jobs:
   monitor:
