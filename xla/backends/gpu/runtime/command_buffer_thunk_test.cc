@@ -15,9 +15,6 @@ limitations under the License.
 
 #include "xla/backends/gpu/runtime/command_buffer_thunk.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <cstdint>
 #include <functional>
@@ -29,13 +26,19 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "absl/base/log_severity.h"
+#include "absl/log/globals.h"
+#include "absl/log/scoped_mock_log.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "tsl/profiler/lib/profiler_lock.h"
 #include "xla/backends/gpu/codegen/kernels/custom_kernel.h"
 #include "xla/backends/gpu/runtime/annotation.h"
 #include "xla/backends/gpu/runtime/command.h"
@@ -81,10 +84,12 @@ limitations under the License.
 #include "xla/stream_executor/stream_executor_address_allocator.h"
 #include "xla/stream_executor/stream_executor_memory_allocator.h"
 #include "xla/xla_data.pb.h"
+#include "tsl/profiler/lib/profiler_lock.h"
 
 namespace xla::gpu {
 using ::testing::ElementsAre;
 using ::testing::ElementsAreArray;
+using ::testing::FieldsAre;
 using ::testing::HasSubstr;
 using ::testing::IsEmpty;
 using ::testing::MatchesRegex;
@@ -199,6 +204,28 @@ class CountingDeviceToDeviceCopyThunk : public DeviceToDeviceCopyThunk {
   int* record_count_;
 };
 
+// A copy that requires an update on initialization, like a collective, and
+// optionally a warm-up.
+class CountingUpdateOnInitializeCopyThunk
+    : public CountingDeviceToDeviceCopyThunk {
+ public:
+  CountingUpdateOnInitializeCopyThunk(Thunk::ThunkInfo thunk_info,
+                                      const ShapedSlice& source_buffer,
+                                      const ShapedSlice& destination_buffer,
+                                      int64_t mem_size, int* record_count,
+                                      bool requires_warmup)
+      : CountingDeviceToDeviceCopyThunk(std::move(thunk_info), source_buffer,
+                                        destination_buffer, mem_size,
+                                        record_count),
+        requires_warmup_(requires_warmup) {}
+
+  bool requires_update_on_initialize() const override { return true; }
+  bool requires_warmup() const override { return requires_warmup_; }
+
+ private:
+  const bool requires_warmup_;
+};
+
 // Creates execute params with a valid persistent allocation indices span
 // (empty by default). Command buffer lowering is enabled only when the span
 // is valid; production code always passes a valid - possibly empty - span.
@@ -211,6 +238,225 @@ Thunk::ExecuteParams CreateExecuteParams(
       /*additional_compute_streams=*/{}, /*execution_scoped_state=*/nullptr,
       persistent_alloc_indices);
 }
+
+// How often a command was recorded after the initialization and after the
+// execution of a step.
+struct RecordCounts {
+  int after_initialize;
+  int after_execute;
+};
+
+// How RecordCountsPerStep builds its thunk: a command that requires an update
+// on initialization, like a collective, which copies one of two source buffers.
+struct Scenario {
+  bool skip_unchanged_collectives = true;
+  // Adds fallback thunks, which run in the steps that cannot use the command
+  // buffer.
+  bool fallback_thunks = false;
+  // Makes the first execution a warm-up that runs the fallback thunks. Needs
+  // `fallback_thunks`.
+  bool requires_warmup = false;
+  // Adds a command that does not require an update on initialization.
+  bool other_command = false;
+};
+
+struct Step {
+  // Which source buffer the command that requires an update on initialization
+  // copies.
+  int source = 0;
+  // Which source buffer the other command copies.
+  int other_source = 0;
+  // Whether persistent allocation indices are available. They are not while
+  // the VA remapping profiles. Needs `Scenario::fallback_thunks`.
+  bool persistent_alloc_indices = true;
+  // Whether a profiling session is active. Needs `Scenario::fallback_thunks`.
+  bool profiling = false;
+};
+
+// Initializes and executes the thunk of `scenario` once per step, with the
+// buffers of the step, and returns how often the command that requires an
+// update on initialization was recorded after each initialization and
+// execution. Checks every copy.
+absl::StatusOr<std::vector<RecordCounts>> RecordCountsPerStep(
+    const Scenario& scenario, absl::Span<const Step> steps) {
+  se::StreamExecutor* stream_executor = GpuExecutor();
+  ABSL_ASSIGN_OR_RETURN(auto stream, stream_executor->CreateStream());
+
+  constexpr int64_t kLength = 4;
+  constexpr int64_t kByteLength = sizeof(int32_t) * kLength;
+  Shape shape = ShapeUtil::MakeShape(S32, {kLength});
+  auto allocate =
+      [&](int32_t value) -> absl::StatusOr<se::DeviceAddress<int32_t>> {
+    se::DeviceAddress<int32_t> buffer =
+        stream_executor->AllocateArray<int32_t>(kLength, 0);
+    ABSL_RETURN_IF_ERROR(stream->Memset32(&buffer, value, kByteLength));
+    return buffer;
+  };
+  // Two source buffers and a destination buffer for each command. The value
+  // that a copy must produce is the value of its source buffer.
+  const std::vector<int32_t> source_values = {42, 7};
+  const std::vector<int32_t> other_source_values = {19, 23};
+  std::vector<se::DeviceAddress<int32_t>> sources;
+  std::vector<se::DeviceAddress<int32_t>> other_sources;
+  for (int i = 0; i < 2; ++i) {
+    ABSL_ASSIGN_OR_RETURN(sources.emplace_back(), allocate(source_values[i]));
+    ABSL_ASSIGN_OR_RETURN(other_sources.emplace_back(),
+                          allocate(other_source_values[i]));
+  }
+  se::DeviceAddress<int32_t> destination_buffer =
+      stream_executor->AllocateArray<int32_t>(kLength, 0);
+  se::DeviceAddress<int32_t> other_destination_buffer =
+      stream_executor->AllocateArray<int32_t>(kLength, 0);
+
+  BufferAllocation source(/*index=*/0, kByteLength, /*color=*/0);
+  BufferAllocation destination(/*index=*/1, kByteLength, /*color=*/0);
+  BufferAllocation other_source(/*index=*/2, kByteLength, /*color=*/0);
+  BufferAllocation other_destination(/*index=*/3, kByteLength, /*color=*/0);
+  auto copy_slices = [&](const BufferAllocation& from,
+                         const BufferAllocation& to) {
+    return std::make_pair(
+        ShapedSlice{BufferAllocation::Slice(&from, 0, kByteLength), shape},
+        ShapedSlice{BufferAllocation::Slice(&to, 0, kByteLength), shape});
+  };
+  const auto [source_slice, destination_slice] =
+      copy_slices(source, destination);
+  const auto [other_source_slice, other_destination_slice] =
+      copy_slices(other_source, other_destination);
+
+  int record_count = 0;
+  int other_record_count = 0;
+  CommandSequence commands;
+  commands.Emplace<CountingUpdateOnInitializeCopyThunk>(
+      Thunk::ThunkInfo(), source_slice, destination_slice, kByteLength,
+      &record_count, scenario.requires_warmup);
+  if (scenario.other_command) {
+    commands.Emplace<CountingDeviceToDeviceCopyThunk>(
+        Thunk::ThunkInfo(), other_source_slice, other_destination_slice,
+        kByteLength, &other_record_count);
+  }
+  ABSL_ASSIGN_OR_RETURN(
+      CommandExecutor executor,
+      CommandExecutor::Create(std::move(commands), serialize));
+
+  std::unique_ptr<SequentialThunk> fallback_thunks;
+  if (scenario.fallback_thunks) {
+    ThunkSequence thunks;
+    thunks.push_back(std::make_unique<DeviceToDeviceCopyThunk>(
+        Thunk::ThunkInfo(), source_slice, destination_slice, kByteLength));
+    if (scenario.other_command) {
+      thunks.push_back(std::make_unique<DeviceToDeviceCopyThunk>(
+          Thunk::ThunkInfo(), other_source_slice, other_destination_slice,
+          kByteLength));
+    }
+    fallback_thunks = std::make_unique<SequentialThunk>(Thunk::ThunkInfo(),
+                                                        std::move(thunks));
+  }
+  CommandBufferThunkOptions options;
+  options.skip_unchanged_collectives = scenario.skip_unchanged_collectives;
+  CommandBufferThunk thunk(std::move(executor), Thunk::ThunkInfo(),
+                           /*devices_in_process=*/1, std::move(fallback_thunks),
+                           options);
+
+  stream_executor::StreamExecutorAddressAllocator allocator(stream_executor);
+  ServiceExecutableRunOptions run_options;
+  // No persistent allocations, as for the temp buffers of the default
+  // allocator.
+  std::vector<BufferAllocation::Index> persistent_alloc_indices;
+  std::vector<RecordCounts> record_counts;
+  for (const Step& step : steps) {
+    BufferAllocations allocations(
+        {sources[step.source], destination_buffer,
+         other_sources[step.other_source], other_destination_buffer},
+        /*device_ordinal=*/0, &allocator);
+    tsl::profiler::ProfilerLock profiler_lock;
+    if (step.profiling) {
+      ABSL_ASSIGN_OR_RETURN(profiler_lock,
+                            tsl::profiler::ProfilerLock::Acquire());
+    }
+    Thunk::InitializeParams initialize_params;
+    initialize_params.executor = stream_executor;
+    initialize_params.buffer_allocations = &allocations;
+    initialize_params.stream = stream.get();
+    if (step.persistent_alloc_indices) {
+      initialize_params.persistent_alloc_indices =
+          absl::MakeConstSpan(persistent_alloc_indices);
+    }
+    ABSL_RETURN_IF_ERROR(thunk.Initialize(initialize_params));
+    const int record_count_after_initialize = record_count;
+
+    ABSL_RETURN_IF_ERROR(stream->MemZero(&destination_buffer, kByteLength));
+    ABSL_RETURN_IF_ERROR(
+        stream->MemZero(&other_destination_buffer, kByteLength));
+    Thunk::ExecuteParams execute_params =
+        step.persistent_alloc_indices
+            ? CreateExecuteParams(run_options, allocations, stream.get(),
+                                  persistent_alloc_indices)
+            : Thunk::ExecuteParams::Create(run_options, allocations,
+                                           stream.get(), stream.get(), nullptr,
+                                           nullptr, nullptr);
+    ABSL_RETURN_IF_ERROR(thunk.ExecuteOnStream(execute_params));
+
+    std::vector<int32_t> result(kLength, 0);
+    ABSL_RETURN_IF_ERROR(
+        stream->Memcpy(result.data(), destination_buffer, kByteLength));
+    std::vector<int32_t> other_result(kLength, 0);
+    ABSL_RETURN_IF_ERROR(stream->Memcpy(other_result.data(),
+                                        other_destination_buffer, kByteLength));
+    ABSL_RETURN_IF_ERROR(stream->BlockHostUntilDone());
+    if (result != std::vector<int32_t>(kLength, source_values[step.source])) {
+      return absl::InternalError("Command buffer copied wrong values");
+    }
+    if (scenario.other_command &&
+        other_result != std::vector<int32_t>(
+                            kLength, other_source_values[step.other_source])) {
+      return absl::InternalError("Command buffer copied wrong other values");
+    }
+    record_counts.push_back({record_count_after_initialize, record_count});
+  }
+  return record_counts;
+}
+
+// Expects the decisions whether to skip the update on initialization to be
+// logged with `answers` ("yes" or "no: <reason>"), in this order. The decision
+// is private to the thunk, so its log is the only place to see it.
+void ExpectSkipDecisions(absl::ScopedMockLog& log,
+                         absl::Span<const absl::string_view> answers) {
+  ::testing::InSequence in_sequence;
+  for (absl::string_view answer : answers) {
+    EXPECT_CALL(log, Log(absl::LogSeverity::kInfo,
+                         ::testing::EndsWith("command_buffer_thunk.cc"),
+                         HasSubstr(absl::StrCat("update? ", answer))));
+  }
+}
+
+class SkipUnchangedCollectivesTest : public ::testing::Test {
+ protected:
+  SkipUnchangedCollectivesTest()
+      : old_vlog_level_(absl::SetVLogLevel("command_buffer_thunk", 3)) {}
+
+  ~SkipUnchangedCollectivesTest() override {
+    absl::SetVLogLevel("command_buffer_thunk", old_vlog_level_);
+  }
+
+  // Runs `steps` of `scenario` and expects the logged decisions `answers`.
+  absl::StatusOr<std::vector<RecordCounts>> RunExpectingDecisions(
+      const Scenario& scenario, absl::Span<const Step> steps,
+      absl::Span<const absl::string_view> answers) {
+    // Initialize the platform before capturing logs, as runtime_intrinsics_test
+    // does for its first run.
+    GpuExecutor();
+    absl::ScopedMockLog log(absl::MockLogDefault::kIgnoreUnexpected);
+    ExpectSkipDecisions(log, answers);
+    log.StartCapturingLogs();
+    absl::StatusOr<std::vector<RecordCounts>> record_counts =
+        RecordCountsPerStep(scenario, steps);
+    log.StopCapturingLogs();
+    return record_counts;
+  }
+
+ private:
+  const int old_vlog_level_;
+};
 
 }  // namespace
 
@@ -540,6 +786,81 @@ TEST(CommandBufferThunkTest,
   ASSERT_OK(thunk.ExecuteOnStream(params));
   ASSERT_OK(stream->BlockHostUntilDone());
   EXPECT_EQ(record_count, 2);
+}
+
+TEST_F(SkipUnchangedCollectivesTest,
+       RecordsUpdateOnInitializeCommandsOnEveryInitialization) {
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<RecordCounts> record_counts,
+      RunExpectingDecisions(
+          {.skip_unchanged_collectives = false},
+          {Step{.source = 0}, Step{.source = 0}, Step{.source = 1}},
+          {"no: skipping unchanged collectives is disabled",
+           "no: skipping unchanged collectives is disabled",
+           "no: skipping unchanged collectives is disabled"}));
+  EXPECT_THAT(record_counts,
+              ElementsAre(FieldsAre(1, 1), FieldsAre(2, 2), FieldsAre(3, 3)));
+}
+
+TEST_F(SkipUnchangedCollectivesTest,
+       SkipsInitializationUpdateUnlessSourceMoved) {
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<RecordCounts> record_counts,
+      RunExpectingDecisions(
+          {}, {Step{.source = 0}, Step{.source = 0}, Step{.source = 1}},
+          {"no: not recorded yet", "yes",
+           "no: a buffer of these commands moved"}));
+  // The move is recorded by the initialization, not left to the execution.
+  EXPECT_THAT(record_counts,
+              ElementsAre(FieldsAre(1, 1), FieldsAre(1, 1), FieldsAre(2, 2)));
+}
+
+TEST_F(SkipUnchangedCollectivesTest, IgnoresMovedBuffersOfOtherCommands) {
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<RecordCounts> record_counts,
+      RunExpectingDecisions({.other_command = true},
+                            {Step{.other_source = 0}, Step{.other_source = 0},
+                             Step{.other_source = 1}},
+                            {"no: not recorded yet", "yes", "yes"}));
+  // The other command is updated by the execution; the command that requires an
+  // update on initialization is not recorded again.
+  EXPECT_THAT(record_counts,
+              ElementsAre(FieldsAre(1, 1), FieldsAre(1, 1), FieldsAre(1, 1)));
+}
+
+TEST_F(SkipUnchangedCollectivesTest, RecordsOnlyAfterWarmUp) {
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<RecordCounts> record_counts,
+      RunExpectingDecisions(
+          {.fallback_thunks = true, .requires_warmup = true},
+          {Step{}, Step{}, Step{}},
+          {"no: not warmed up", "no: not recorded yet", "yes"}));
+  // The first execution is the warm-up of the fallback thunks.
+  EXPECT_THAT(record_counts,
+              ElementsAre(FieldsAre(0, 0), FieldsAre(1, 1), FieldsAre(1, 1)));
+}
+
+TEST_F(SkipUnchangedCollectivesTest, RecordsAfterProfiling) {
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<RecordCounts> record_counts,
+      RunExpectingDecisions({.fallback_thunks = true},
+                            {Step{.profiling = true}, Step{}, Step{}},
+                            {"no: command buffers are disabled for profiling",
+                             "no: not recorded yet", "yes"}));
+  EXPECT_THAT(record_counts,
+              ElementsAre(FieldsAre(0, 0), FieldsAre(1, 1), FieldsAre(1, 1)));
+}
+
+TEST_F(SkipUnchangedCollectivesTest, RecordsOnlyWithPersistentAllocIndices) {
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<RecordCounts> record_counts,
+      RunExpectingDecisions(
+          {.fallback_thunks = true},
+          {Step{.persistent_alloc_indices = false}, Step{}, Step{}},
+          {"no: persistent allocation indices are not available",
+           "no: not recorded yet", "yes"}));
+  EXPECT_THAT(record_counts,
+              ElementsAre(FieldsAre(0, 0), FieldsAre(1, 1), FieldsAre(1, 1)));
 }
 
 TEST(CommandBufferThunkTest, MemzeroThunk) {
