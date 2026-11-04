@@ -183,6 +183,10 @@ jobs:
             //xla/tools/multihost_hlo_runner:hlo_runner_main
 
       - name: Build and run rocm_latency_check_tool [${{ matrix.mode.name }}]
+        # The latency numbers characterise the ROCm runtime rather than the XLA
+        # tree, so measuring them once -- on the newest stack -- is enough; the
+        # release modes would only re-measure the same interconnect.
+        if: matrix.mode.name == 'therock_nightly'
         working-directory: perf-tools-src
         run: |
           mkdir -p "$RUNNER_TEMP/raw"
