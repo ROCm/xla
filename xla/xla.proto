@@ -2002,7 +2002,13 @@ message DebugOptions {
   // still share an allocation.
   optional bool xla_gpu_experimental_collective_allocation_no_packing = 564;
 
-  // Next id: 566
+  // If true, WhileLoopConstantSinking in the GPU simplification pipeline also
+  // sinks loop-invariant broadcasts of constants (e.g. zero buffers hoisted out
+  // of a scan body) into the while body and condition, so the loop no longer
+  // carries them as state buffers and the consumers can fuse the broadcast.
+  optional bool xla_gpu_enable_while_loop_sink_broadcast_constants = 567;
+
+  // Next id: 568
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

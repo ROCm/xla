@@ -1006,7 +1006,9 @@ absl::Status RunOptimizationPasses(
                                              gpu_version);
     pipeline.AddPass<SortSimplifier>();
     pipeline.AddPass<TupleSimplifier>();
-    pipeline.AddPass<WhileLoopConstantSinking>();
+    pipeline.AddPass<WhileLoopConstantSinking>(
+        /*sink_broadcast_of_constants=*/debug_options
+            .xla_gpu_enable_while_loop_sink_broadcast_constants());
     pipeline.AddPass<WhileLoopSimplifier>();
     pipeline.AddPass<SliceSinker>();
 

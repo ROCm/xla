@@ -88,6 +88,8 @@ limitations under the License.
 #include "xla/service/llvm_ir/llvm_command_line_options.h"
 #include "xla/service/pattern_matcher.h"
 #include "xla/service/xla_debug_info_manager.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
 #include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/device_description.h"
@@ -710,6 +712,81 @@ ENTRY main {
       while_op->while_body()->root_instruction()->operand(1);
   EXPECT_EQ(operand_1->opcode(), HloOpcode::kCopy);
   EXPECT_EQ(operand_1->operand(0)->opcode(), HloOpcode::kAllGatherDone);
+}
+
+// Counts the f32[128,128] buffers the while loop carries in its state.
+int64_t CountCarriedBuffers(const HloModule& module) {
+  const HloInstruction* while_op = nullptr;
+  for (const HloComputation* computation : module.computations()) {
+    for (const HloInstruction* instruction : computation->instructions()) {
+      if (instruction->opcode() == HloOpcode::kWhile) {
+        while_op = instruction;
+      }
+    }
+  }
+  if (while_op == nullptr) {
+    return -1;
+  }
+  int64_t count = 0;
+  for (const Shape& element : while_op->shape().tuple_shapes()) {
+    if (ShapeUtil::Compatible(element,
+                              ShapeUtil::MakeShape(F32, {128, 128}))) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+TEST_F(GpuCompilerTest, SinksBroadcastOfConstantIntoWhileLoopWithFlag) {
+  // `zeros` is a loop-invariant broadcast of a constant, as JAX produces when
+  // it hoists a zero buffer out of a scan body. With the flag, the loop stops
+  // carrying it; without, it stays in the loop state.
+  const absl::string_view hlo_string = R"(
+HloModule sink_broadcast
+
+condition {
+  state = (s32[], s32[], f32[128,128], f32[128,128]) parameter(0)
+  i = s32[] get-tuple-element(state), index=0
+  n = s32[] get-tuple-element(state), index=1
+  ROOT lt = pred[] compare(i, n), direction=LT
+}
+
+body {
+  state = (s32[], s32[], f32[128,128], f32[128,128]) parameter(0)
+  i = s32[] get-tuple-element(state), index=0
+  n = s32[] get-tuple-element(state), index=1
+  acc = f32[128,128] get-tuple-element(state), index=2
+  zeros = f32[128,128] get-tuple-element(state), index=3
+  one = s32[] constant(1)
+  next_i = s32[] add(i, one)
+  e = f32[128,128] exponential(acc)
+  next_acc = f32[128,128] maximum(e, zeros)
+  ROOT out = (s32[], s32[], f32[128,128], f32[128,128]) tuple(next_i, n, next_acc, zeros)
+}
+
+ENTRY main {
+  n = s32[] parameter(0)
+  x = f32[128,128] parameter(1)
+  zero_i = s32[] constant(0)
+  zero_f = f32[] constant(0)
+  zeros = f32[128,128] broadcast(zero_f), dimensions={}
+  init = (s32[], s32[], f32[128,128], f32[128,128]) tuple(zero_i, n, x, zeros)
+  loop = (s32[], s32[], f32[128,128], f32[128,128]) while(init), condition=condition, body=body
+  ROOT result = f32[128,128] get-tuple-element(loop), index=2
+}
+)";
+  HloModuleConfig config = GetModuleConfigForTest();
+  config.mutable_debug_options()
+      .set_xla_gpu_enable_while_loop_sink_broadcast_constants(false);
+  ASSERT_OK_AND_ASSIGN(auto default_module_and_executable,
+                       GetOptimizedModuleForExecutable(hlo_string, config));
+  EXPECT_EQ(CountCarriedBuffers(*default_module_and_executable.first), 2);
+
+  config.mutable_debug_options()
+      .set_xla_gpu_enable_while_loop_sink_broadcast_constants(true);
+  ASSERT_OK_AND_ASSIGN(auto sunk_module_and_executable,
+                       GetOptimizedModuleForExecutable(hlo_string, config));
+  EXPECT_EQ(CountCarriedBuffers(*sunk_module_and_executable.first), 1);
 }
 
 TEST_F(GpuCompilerTest,
