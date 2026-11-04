@@ -1834,6 +1834,7 @@ xla_test(
     backends = [
         "gpu",
     ],
+    tags = ["cuda-only"],
     deps = [
         ":multi_process_gpu_test_base",
         ":multi_process_gpu_test_main",
@@ -1948,6 +1949,7 @@ xla_test(
     backends = [
         "gpu",
     ],
+    tags = ["cuda-only"],
     deps = [
         ":multi_process_gpu_test_base",
         ":multi_process_gpu_test_main",
