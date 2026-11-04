@@ -1,0 +1,1927 @@
+From 6dd22919138af830711ed4fb5b792482139b8eb0 Mon Sep 17 00:00:00 2001
+From: Domenic Nutile <domenic.nutile@gmail.com>
+Date: Tue, 8 Sep 2026 12:07:09 -0400
+Subject: [PATCH] [AMDGPU] Restrict DPP combine from performing bad
+ transformations when handling certain REV insts that use Src1 as the DPP
+ operand (#216835)
+
+This issue was originally discovered due to a benchmark failure in the
+downstream. The REV subtractions have always worked this way, and the
+REV shift operands worked this way before GFX11
+---
+ llvm/lib/Target/AMDGPU/GCNDPPCombine.cpp      |   12 +
+ llvm/lib/Target/AMDGPU/SIInstrInfo.cpp        |   37 +
+ llvm/lib/Target/AMDGPU/SIInstrInfo.h          |   11 +
+ llvm/test/CodeGen/AMDGPU/dpp_combine.mir      |   17 +-
+ .../test/CodeGen/AMDGPU/dpp_combine_gfx11.mir |   30 +-
+ .../CodeGen/AMDGPU/dpp_combine_rev_opcode.ll  | 1503 +++++++++++++++++
+ .../CodeGen/AMDGPU/dpp_combine_rev_opcode.mir |  183 ++
+ 7 files changed, 1775 insertions(+), 18 deletions(-)
+ create mode 100644 llvm/test/CodeGen/AMDGPU/dpp_combine_rev_opcode.ll
+ create mode 100644 llvm/test/CodeGen/AMDGPU/dpp_combine_rev_opcode.mir
+
+diff --git a/llvm/lib/Target/AMDGPU/GCNDPPCombine.cpp b/llvm/lib/Target/AMDGPU/GCNDPPCombine.cpp
+index 931e4aec604f..bcfccd98ada0 100644
+--- a/llvm/lib/Target/AMDGPU/GCNDPPCombine.cpp
++++ b/llvm/lib/Target/AMDGPU/GCNDPPCombine.cpp
+@@ -745,6 +745,18 @@ bool GCNDPPCombine::combineDPPMov(MachineInstr &MovMI) const {
+       break;
+     }
+ 
++    // We have to be careful to prevent trying to fold into the first source
++    // operand of instructions that apply DPP to the second source operand.
++    // This could be directly, or when folding into an instruction that will
++    // get commuted into one.
++    int FoldedOp =
++        (Use == Src0) ? static_cast<int>(OrigOp) : TII->commuteOpcode(OrigOp);
++    if (FoldedOp < 0 || TII->isSrc1DPPRevOpcode(*ST, FoldedOp)) {
++      LLVM_DEBUG(
++          dbgs() << "  failed: Use operand cannot have DPP applied to it\n");
++      break;
++    }
++
+     if (!ST->hasFeature(AMDGPU::FeatureDPALU_DPP) &&
+         AMDGPU::isDPALU_DPP32BitOpc(OrigOp)) {
+       LLVM_DEBUG(dbgs() << "  " << OrigMI
+diff --git a/llvm/lib/Target/AMDGPU/SIInstrInfo.cpp b/llvm/lib/Target/AMDGPU/SIInstrInfo.cpp
+index e143f345b208..b852be30568b 100644
+--- a/llvm/lib/Target/AMDGPU/SIInstrInfo.cpp
++++ b/llvm/lib/Target/AMDGPU/SIInstrInfo.cpp
+@@ -150,6 +150,43 @@ bool SIInstrInfo::isReMaterializableImpl(
+   return TargetInstrInfo::isReMaterializableImpl(MI);
+ }
+ 
++bool SIInstrInfo::isSrc1DPPRevOpcode(const GCNSubtarget &ST, uint32_t Opcode) {
++  switch (Opcode) {
++  // v_subrev_u16 (gfx9)
++  case AMDGPU::V_SUBREV_U16_e32:
++  case AMDGPU::V_SUBREV_U16_e64:
++  // v_subrev_u32 (gfx9) / v_subrev_nc_u32 (gfx10+)
++  case AMDGPU::V_SUBREV_U32_e32:
++  case AMDGPU::V_SUBREV_U32_e64:
++  // v_subrev_co_u32
++  case AMDGPU::V_SUBREV_CO_U32_e32:
++  case AMDGPU::V_SUBREV_CO_U32_e64:
++  // v_subbrev_u32 (gfx9) / v_subrev_co_ci_u32 (gfx10+)
++  case AMDGPU::V_SUBBREV_U32_e32:
++  case AMDGPU::V_SUBBREV_U32_e64:
++    return true;
++  // REV shift opcodes worked this way before GFX11, verified on hardware
++  case AMDGPU::V_ASHRREV_I16_e32:
++  case AMDGPU::V_ASHRREV_I16_e64:
++  case AMDGPU::V_ASHRREV_I32_e32:
++  case AMDGPU::V_ASHRREV_I32_e64:
++  case AMDGPU::V_ASHRREV_I64_e64:
++  case AMDGPU::V_LSHLREV_B16_e32:
++  case AMDGPU::V_LSHLREV_B16_e64:
++  case AMDGPU::V_LSHLREV_B32_e32:
++  case AMDGPU::V_LSHLREV_B32_e64:
++  case AMDGPU::V_LSHLREV_B64_e64:
++  case AMDGPU::V_LSHRREV_B16_e32:
++  case AMDGPU::V_LSHRREV_B16_e64:
++  case AMDGPU::V_LSHRREV_B32_e32:
++  case AMDGPU::V_LSHRREV_B32_e64:
++  case AMDGPU::V_LSHRREV_B64_e64:
++    return !ST.hasGFX11Insts();
++  default:
++    return false;
++  }
++}
++
+ // Returns true if the result of a VALU instruction depends on exec.
+ bool SIInstrInfo::resultDependsOnExec(const MachineInstr &MI) const {
+   assert(isVALU(MI, /*AllowLDSDMA=*/true));
+diff --git a/llvm/lib/Target/AMDGPU/SIInstrInfo.h b/llvm/lib/Target/AMDGPU/SIInstrInfo.h
+index 475005062630..aebfc1436e65 100644
+--- a/llvm/lib/Target/AMDGPU/SIInstrInfo.h
++++ b/llvm/lib/Target/AMDGPU/SIInstrInfo.h
+@@ -921,6 +921,17 @@ public:
+ 
+   bool isDPP(uint32_t Opcode) const { return SIInstrFlags::isDPP(get(Opcode)); }
+ 
++  // Some opcodes use Src1 for DPP instead of Src0, because the sequencer
++  // transforms them and reverse the order of their operands at runtime.
++  //
++  // Documentation is incomplete on which instructions are effected, so
++  // the implementation is derived from experimentation.
++  //
++  // Listed as target-independent pseudos; the per-subtarget MC opcodes
++  // (V_SUBREV_NC_U32_e32_gfx11 and friends) are all reached through these.
++  // Defined out of line because GCNSubtarget is incomplete here.
++  static bool isSrc1DPPRevOpcode(const GCNSubtarget &ST, uint32_t Opcode);
++
+   static bool isTRANS(const MachineInstr &MI) {
+     return SIInstrFlags::isTRANS(MI);
+   }
+diff --git a/llvm/test/CodeGen/AMDGPU/dpp_combine.mir b/llvm/test/CodeGen/AMDGPU/dpp_combine.mir
+index 140a509bcbc3..fe9d6864c5d5 100644
+--- a/llvm/test/CodeGen/AMDGPU/dpp_combine.mir
++++ b/llvm/test/CodeGen/AMDGPU/dpp_combine.mir
+@@ -257,7 +257,8 @@ body: |
+ # GCN: %7:vgpr_32 = V_AND_B32_dpp %1, %0, %1, 1, 15, 14, 0, implicit $exec
+ # GCN: %10:vgpr_32 = V_MAX_I32_dpp %1, %0, %1, 1, 14, 15, 0, implicit $exec
+ # GCN: %13:vgpr_32 = V_MIN_I32_dpp %1, %0, %1, 1, 15, 14, 0, implicit $exec
+-# GCN: %16:vgpr_32 = V_SUBREV_CO_U32_dpp %1, %0, %1, 1, 14, 15, 0, implicit-def $vcc, implicit $exec
++# GCN: %15:vgpr_32 = V_MOV_B32_dpp %14, %0, 1, 14, 15, 0, implicit $exec
++# GCN-NEXT: %16:vgpr_32 = V_SUB_CO_U32_e32 %1, %15, implicit-def $vcc, implicit $exec
+ # GCN: %19:vgpr_32 = V_ADD_CO_U32_e32 5, %18, implicit-def $vcc, implicit $exec
+ name: dpp_commute
+ tracksRegLiveness: true
+@@ -377,9 +378,10 @@ body:             |
+ 
+ # tests on sequences of dpp consumers
+ # GCN-LABEL: name: dpp_seq
+-# GCN: %4:vgpr_32 = V_ADD_CO_U32_dpp %1, %0, %1, 1, 14, 15, 0, implicit-def $vcc, implicit $exec
+-# GCN: %5:vgpr_32 = V_SUBREV_CO_U32_dpp %1, %0, %1, 1, 14, 15, 0, implicit-def $vcc, implicit $exec
+-# GCN: %6:vgpr_32 = V_OR_B32_dpp %1, %0, %1, 1, 14, 15, 0, implicit $exec
++# GCN: %3:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 14, 15, 0, implicit $exec
++# GCN-NEXT: %4:vgpr_32 = V_ADD_CO_U32_e32 %3, %1, implicit-def $vcc, implicit $exec
++# GCN-NEXT: %5:vgpr_32 = V_SUB_CO_U32_e32 %1, %3, implicit-def $vcc, implicit $exec
++# GCN-NEXT: %6:vgpr_32 = V_OR_B32_e32 %3, %1, implicit $exec
+ # broken sequence:
+ # GCN: %7:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 14, 15, 0, implicit $exec
+ 
+@@ -405,9 +407,10 @@ body: |
+ 
+ # tests on sequences of dpp consumers followed by control flow
+ # GCN-LABEL: name: dpp_seq_cf
+-# GCN: %4:vgpr_32 = V_ADD_CO_U32_dpp %1, %0, %1, 1, 14, 15, 0, implicit-def $vcc, implicit $exec
+-# GCN: %5:vgpr_32 = V_SUBREV_CO_U32_dpp %1, %0, %1, 1, 14, 15, 0, implicit-def $vcc, implicit $exec
+-# GCN: %6:vgpr_32 = V_OR_B32_dpp %1, %0, %1, 1, 14, 15, 0, implicit $exec
++# GCN: %3:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 14, 15, 0, implicit $exec
++# GCN-NEXT: %4:vgpr_32 = V_ADD_CO_U32_e32 %3, %1, implicit-def $vcc, implicit $exec
++# GCN-NEXT: %5:vgpr_32 = V_SUB_CO_U32_e32 %1, %3, implicit-def $vcc, implicit $exec
++# GCN-NEXT: %6:vgpr_32 = V_OR_B32_e32 %3, %1, implicit $exec
+ 
+ name: dpp_seq_cf
+ tracksRegLiveness: true
+diff --git a/llvm/test/CodeGen/AMDGPU/dpp_combine_gfx11.mir b/llvm/test/CodeGen/AMDGPU/dpp_combine_gfx11.mir
+index b7c884c7995e..4fbcc9581f2b 100644
+--- a/llvm/test/CodeGen/AMDGPU/dpp_combine_gfx11.mir
++++ b/llvm/test/CodeGen/AMDGPU/dpp_combine_gfx11.mir
+@@ -5,9 +5,13 @@
+ ---
+ 
+ # GCN-LABEL: name: vop3
+-# GCN: %6:vgpr_32, %7:sreg_32_xm0_xexec = V_SUBBREV_U32_e64_dpp %3, %0, %1, %5, 1, 1, 15, 15, 1, implicit $exec
+-# GCN: %8:vgpr_32 = V_CVT_PK_U8_F32_e64_dpp %3, 4, %0, 2, %2, 2, %1, 1, 1, 15, 15, 1, implicit $mode, implicit $exec
+-# GCN: %10:vgpr_32 = V_MED3_F32_e64 0, %9, 0, %0, 0, 12345678, 0, 0, implicit $mode, implicit $exec
++# V_SUBBREV is a Src1-DPP opcode, so %4 cannot be folded into it. That rolls
++# back the whole group sharing %4, including the V_CVT_PK_U8_F32 use.
++# GCN: %4:vgpr_32 = V_MOV_B32_dpp %3, %0, 1, 15, 15, 1, implicit $exec
++# GCN: %6:vgpr_32, %7:sreg_32_xm0_xexec = V_SUBBREV_U32_e64 %4, %1, %5, 1, implicit $exec
++# GCN-NEXT: %8:vgpr_32 = V_CVT_PK_U8_F32_e64 4, %4, 2, %2, 2, %1, 1, implicit $mode, implicit $exec
++# GCN: %9:vgpr_32 = V_MOV_B32_dpp %3, %1, 1, 15, 15, 1, implicit $exec
++# GCN-NEXT: %10:vgpr_32 = V_MED3_F32_e64 0, %9, 0, %0, 0, 12345678, 0, 0, implicit $mode, implicit $exec
+ # GFX_NO_SRC1_SGPR: %12:vgpr_32 = V_MED3_F32_e64 0, %11, 0, 2, 0, %7, 0, 0, implicit $mode, implicit $exec
+ # GFX_SRC1_SGPR: %12:vgpr_32 = V_MED3_F32_e64_dpp %3, 0, %1, 0, 2, 0, %7, 0, 0, 1, 15, 15, 1, implicit $mode, implicit $exec
+ name: vop3
+@@ -172,7 +176,8 @@ body: |
+ # GCN: %7:vgpr_32 = V_AND_B32_dpp %1, %0, %1, 1, 15, 14, 0, implicit $exec
+ # GCN: %10:vgpr_32 = V_MAX_I32_dpp %1, %0, %1, 1, 14, 15, 0, implicit $exec
+ # GCN: %13:vgpr_32 = V_MIN_I32_dpp %1, %0, %1, 1, 15, 14, 0, implicit $exec
+-# GCN: %16:vgpr_32 = V_SUBREV_U32_dpp %1, %0, %1, 1, 14, 15, 0, implicit $exec
++# GCN: %15:vgpr_32 = V_MOV_B32_dpp %14, %0, 1, 14, 15, 0, implicit $exec
++# GCN-NEXT: %16:vgpr_32 = V_SUB_U32_e64 %1, %15, 0, implicit $exec
+ name: dpp_commute_shrink
+ tracksRegLiveness: true
+ body:             |
+@@ -234,7 +239,8 @@ body:             |
+ # GCN-LABEL: name: dpp_commute_e64
+ # GCN: %4:vgpr_32  = V_MUL_U32_U24_e64_dpp %1, %0, %1, 1, 1, 14, 15, 0, implicit $exec
+ # GCN: %7:vgpr_32 = V_FMA_F32_e64_dpp %5, 2, %0, 1, %1, 2, %1, 1, 2, 1, 15, 15, 1, implicit $mode, implicit $exec
+-# GCN: %10:vgpr_32 = V_SUBREV_U32_e64_dpp %1, %0, %1, 1, 1, 14, 15, 0, implicit $exec
++# GCN: %9:vgpr_32 = V_MOV_B32_dpp %8, %0, 1, 14, 15, 0, implicit $exec
++# GCN-NEXT: %10:vgpr_32 = V_SUB_U32_e64 %1, %9, 1, implicit $exec
+ # GCN: %13:vgpr_32, %14:sreg_32_xm0_xexec = V_ADD_CO_U32_e64_dpp %1, %0, %1, 0, 1, 14, 15, 0, implicit $exec
+ # GCN: %17:vgpr_32, %18:sreg_32_xm0_xexec = V_ADD_CO_U32_e64 5, %16, 0, implicit $exec
+ name: dpp_commute_e64
+@@ -330,9 +336,10 @@ body:             |
+ 
+ # tests on sequences of dpp consumers
+ # GCN-LABEL: name: dpp_seq
+-# GCN: %4:vgpr_32 = V_ADD_U32_dpp %1, %0, %1, 1, 14, 15, 0,  implicit $exec
+-# GCN: %5:vgpr_32 = V_SUBREV_U32_dpp %1, %0, %1, 1, 14, 15, 0,  implicit $exec
+-# GCN: %6:vgpr_32 = V_OR_B32_dpp %1, %0, %1, 1, 14, 15, 0, implicit $exec
++# GCN: %3:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 14, 15, 0, implicit $exec
++# GCN-NEXT: %4:vgpr_32 = V_ADD_U32_e32 %3, %1, implicit $exec
++# GCN-NEXT: %5:vgpr_32 = V_SUB_U32_e32 %1, %3, implicit $exec
++# GCN-NEXT: %6:vgpr_32 = V_OR_B32_e32 %3, %1, implicit $exec
+ # broken sequence:
+ # GCN: %7:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 14, 15, 0, implicit $exec
+ 
+@@ -358,9 +365,10 @@ body: |
+ 
+ # tests on sequences of dpp consumers followed by control flow
+ # GCN-LABEL: name: dpp_seq_cf
+-# GCN: %4:vgpr_32 = V_ADD_U32_dpp %1, %0, %1, 1, 14, 15, 0, implicit $exec
+-# GCN: %5:vgpr_32 = V_SUBREV_U32_dpp %1, %0, %1, 1, 14, 15, 0, implicit $exec
+-# GCN: %6:vgpr_32 = V_OR_B32_dpp %1, %0, %1, 1, 14, 15, 0, implicit $exec
++# GCN: %3:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 14, 15, 0, implicit $exec
++# GCN-NEXT: %4:vgpr_32 = V_ADD_U32_e32 %3, %1, implicit $exec
++# GCN-NEXT: %5:vgpr_32 = V_SUB_U32_e32 %1, %3, implicit $exec
++# GCN-NEXT: %6:vgpr_32 = V_OR_B32_e32 %3, %1, implicit $exec
+ 
+ name: dpp_seq_cf
+ tracksRegLiveness: true
+diff --git a/llvm/test/CodeGen/AMDGPU/dpp_combine_rev_opcode.ll b/llvm/test/CodeGen/AMDGPU/dpp_combine_rev_opcode.ll
+new file mode 100644
+index 000000000000..d414f265ad8a
+--- /dev/null
++++ b/llvm/test/CodeGen/AMDGPU/dpp_combine_rev_opcode.ll
+@@ -0,0 +1,1503 @@
++; NOTE: Assertions have been autogenerated by utils/update_llc_test_checks.py UTC_ARGS: --version 6
++; RUN: llc -mtriple=amdgpu8.02 < %s | FileCheck -check-prefix=GFX8 %s
++; RUN: llc -mtriple=amdgpu9.00 < %s | FileCheck -check-prefix=GFX9 %s
++; RUN: llc -mtriple=amdgpu10.10 < %s | FileCheck -check-prefix=GFX10 %s
++; RUN: llc -mtriple=amdgpu10.30 < %s | FileCheck -check-prefix=GFX1030 %s
++; RUN: llc -mtriple=amdgpu11.00 < %s | FileCheck -check-prefix=GFX11 %s
++; RUN: llc -mtriple=amdgpu12.00 < %s | FileCheck -check-prefix=GFX12 %s
++
++; End to end coverage for the opcodes whose operands the sequencer reverses at
++; runtime, so that DPP is applied to src1 instead of src0. Folding a DPP mov
++; into src0 of one of those, either directly or by commuting a use into one, has
++; to be rejected.
++
++; The DPP value is src1 of the subtract, so folding it would require commuting
++; into v_subrev_u32/v_sub_nc_u32's REV form. Must stay a separate v_mov_b32_dpp.
++; On gfx8 the subtract carries, so this is v_subrev_u32's carry out form.
++define amdgpu_kernel void @dpp_sub_u32_rev(ptr addrspace(1) %arg, i32 %in) {
++; GFX8-LABEL: dpp_sub_u32_rev:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX8-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX8-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v1, s1
++; GFX8-NEXT:    v_add_u32_e32 v0, vcc, s0, v0
++; GFX8-NEXT:    v_addc_u32_e32 v1, vcc, 0, v1, vcc
++; GFX8-NEXT:    flat_load_dword v2, v[0:1]
++; GFX8-NEXT:    v_mov_b32_e32 v3, s2
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    s_nop 0
++; GFX8-NEXT:    v_mov_b32_dpp v3, v2 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    v_sub_u32_e32 v2, vcc, v2, v3
++; GFX8-NEXT:    flat_store_dword v[0:1], v2
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_sub_u32_rev:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX9-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX9-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX9-NEXT:    v_mov_b32_e32 v2, s2
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    s_nop 0
++; GFX9-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    v_sub_u32_e32 v1, v1, v2
++; GFX9-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_sub_u32_rev:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_clause 0x1
++; GFX10-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX10-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX10-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX10-NEXT:    v_mov_b32_e32 v2, s2
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    v_sub_nc_u32_e32 v1, v1, v2
++; GFX10-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_sub_u32_rev:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_clause 0x1
++; GFX1030-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX1030-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX1030-NEXT:    v_mov_b32_e32 v2, s2
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    v_sub_nc_u32_e32 v1, v1, v2
++; GFX1030-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_sub_u32_rev:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_clause 0x1
++; GFX11-NEXT:    s_load_b64 s[0:1], s[4:5], 0x24
++; GFX11-NEXT:    s_load_b32 s2, s[4:5], 0x2c
++; GFX11-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_4) | instid1(VALU_DEP_1)
++; GFX11-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX11-NEXT:    v_mov_b32_e32 v2, s2
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX11-NEXT:    v_sub_nc_u32_e32 v1, v1, v2
++; GFX11-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_sub_u32_rev:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b96 s[0:2], s[4:5], 0x24
++; GFX12-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_4) | instid1(VALU_DEP_1)
++; GFX12-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX12-NEXT:    v_mov_b32_e32 v2, s2
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX12-NEXT:    v_sub_nc_u32_e32 v1, v1, v2
++; GFX12-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds i32, ptr addrspace(1) %arg, i32 %id
++  %load = load i32, ptr addrspace(1) %gep
++  %dpp = call i32 @llvm.amdgcn.update.dpp.i32(i32 %in, i32 %load, i32 1, i32 15, i32 15, i1 true)
++  %sub = sub i32 %load, %dpp
++  store i32 %sub, ptr addrspace(1) %gep
++  ret void
++}
++
++; The DPP value is already src0, so no commute is needed and the fold is legal.
++define amdgpu_kernel void @dpp_sub_u32(ptr addrspace(1) %arg, i32 %in) {
++; GFX8-LABEL: dpp_sub_u32:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX8-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v1, s1
++; GFX8-NEXT:    v_add_u32_e32 v0, vcc, s0, v0
++; GFX8-NEXT:    v_addc_u32_e32 v1, vcc, 0, v1, vcc
++; GFX8-NEXT:    flat_load_dword v2, v[0:1]
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    s_nop 0
++; GFX8-NEXT:    v_sub_u32_dpp v2, vcc, v2, v2 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    flat_store_dword v[0:1], v2
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_sub_u32:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX9-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    s_nop 0
++; GFX9-NEXT:    v_sub_u32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_sub_u32:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX10-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_sub_nc_u32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_sub_u32:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_sub_nc_u32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_sub_u32:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_load_b64 s[0:1], s[4:5], 0x24
++; GFX11-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX11-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    v_sub_nc_u32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_sub_u32:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b96 s[0:2], s[4:5], 0x24
++; GFX12-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX12-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_sub_nc_u32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds i32, ptr addrspace(1) %arg, i32 %id
++  %load = load i32, ptr addrspace(1) %gep
++  %dpp = call i32 @llvm.amdgcn.update.dpp.i32(i32 %in, i32 %load, i32 1, i32 15, i32 15, i1 true)
++  %sub = sub i32 %dpp, %load
++  store i32 %sub, ptr addrspace(1) %gep
++  ret void
++}
++
++; Same for the 16 bit subtract, which is v_subrev_u16 on gfx9.
++define amdgpu_kernel void @dpp_sub_u16_rev(ptr addrspace(1) %arg, i16 %in) {
++; GFX8-LABEL: dpp_sub_u16_rev:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX8-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX8-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v1, s1
++; GFX8-NEXT:    v_add_u32_e32 v0, vcc, s0, v0
++; GFX8-NEXT:    v_addc_u32_e32 v1, vcc, 0, v1, vcc
++; GFX8-NEXT:    flat_load_ushort v2, v[0:1]
++; GFX8-NEXT:    v_mov_b32_e32 v3, s2
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    s_nop 0
++; GFX8-NEXT:    v_mov_b32_dpp v3, v2 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    v_sub_u16_e32 v2, v2, v3
++; GFX8-NEXT:    flat_store_short v[0:1], v2
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_sub_u16_rev:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX9-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX9-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX9-NEXT:    v_mov_b32_e32 v2, s2
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    s_nop 0
++; GFX9-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    v_sub_u16_e32 v1, v1, v2
++; GFX9-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_sub_u16_rev:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_clause 0x1
++; GFX10-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX10-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX10-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX10-NEXT:    v_mov_b32_e32 v2, s2
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    v_sub_nc_u16 v1, v1, v2
++; GFX10-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_sub_u16_rev:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_clause 0x1
++; GFX1030-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX1030-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX1030-NEXT:    v_mov_b32_e32 v2, s2
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    v_sub_nc_u16 v1, v1, v2
++; GFX1030-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_sub_u16_rev:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_clause 0x1
++; GFX11-NEXT:    s_load_b64 s[0:1], s[4:5], 0x24
++; GFX11-NEXT:    s_load_b32 s2, s[4:5], 0x2c
++; GFX11-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_3) | instid1(VALU_DEP_1)
++; GFX11-NEXT:    v_dual_mov_b32 v2, s2 :: v_dual_lshlrev_b32 v1, 1, v0
++; GFX11-NEXT:    global_load_d16_b16 v0, v1, s[0:1]
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    v_mov_b32_dpp v2, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    v_sub_nc_u16 v0.l, v0.l, v2.l
++; GFX11-NEXT:    global_store_b16 v1, v0, s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_sub_u16_rev:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b96 s[0:2], s[4:5], 0x24
++; GFX12-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_3) | instid1(VALU_DEP_1)
++; GFX12-NEXT:    v_dual_mov_b32 v2, s2 :: v_dual_lshlrev_b32 v1, 1, v0
++; GFX12-NEXT:    global_load_d16_b16 v0, v1, s[0:1]
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_mov_b32_dpp v2, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    v_sub_nc_u16 v0.l, v0.l, v2.l
++; GFX12-NEXT:    global_store_b16 v1, v0, s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds i16, ptr addrspace(1) %arg, i32 %id
++  %load = load i16, ptr addrspace(1) %gep
++  %dpp = call i16 @llvm.amdgcn.update.dpp.i16(i16 %in, i16 %load, i32 1, i32 15, i32 15, i1 true)
++  %sub = sub i16 %load, %dpp
++  store i16 %sub, ptr addrspace(1) %gep
++  ret void
++}
++
++; The 64 bit subtract covers the carry out and carry in halves, which would
++; commute into v_subrev_co_u32 and v_subbrev_u32 (v_subrev_co_ci_u32 on gfx10+).
++define amdgpu_kernel void @dpp_sub_i64_rev(ptr addrspace(1) %arg, i64 %in) {
++; GFX8-LABEL: dpp_sub_i64_rev:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx4 s[0:3], s[4:5], 0x24
++; GFX8-NEXT:    v_lshlrev_b32_e32 v0, 3, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v1, s1
++; GFX8-NEXT:    v_add_u32_e32 v0, vcc, s0, v0
++; GFX8-NEXT:    v_addc_u32_e32 v1, vcc, 0, v1, vcc
++; GFX8-NEXT:    flat_load_dwordx2 v[2:3], v[0:1]
++; GFX8-NEXT:    v_mov_b32_e32 v5, s2
++; GFX8-NEXT:    v_mov_b32_e32 v4, s3
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    v_mov_b32_dpp v5, v2 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    v_mov_b32_dpp v4, v3 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    v_sub_u32_e32 v2, vcc, v2, v5
++; GFX8-NEXT:    v_subb_u32_e32 v3, vcc, v3, v4, vcc
++; GFX8-NEXT:    flat_store_dwordx2 v[0:1], v[2:3]
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_sub_i64_rev:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx4 s[0:3], s[4:5], 0x24
++; GFX9-NEXT:    v_lshlrev_b32_e32 v2, 3, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_dwordx2 v[0:1], v2, s[0:1]
++; GFX9-NEXT:    v_mov_b32_e32 v4, s2
++; GFX9-NEXT:    v_mov_b32_e32 v3, s3
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    v_mov_b32_dpp v4, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    v_mov_b32_dpp v3, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    v_sub_co_u32_e32 v0, vcc, v0, v4
++; GFX9-NEXT:    v_subb_co_u32_e32 v1, vcc, v1, v3, vcc
++; GFX9-NEXT:    global_store_dwordx2 v2, v[0:1], s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_sub_i64_rev:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_load_dwordx4 s[0:3], s[4:5], 0x24
++; GFX10-NEXT:    v_lshlrev_b32_e32 v2, 3, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_dwordx2 v[0:1], v2, s[0:1]
++; GFX10-NEXT:    v_mov_b32_e32 v3, s2
++; GFX10-NEXT:    v_mov_b32_e32 v4, s3
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_mov_b32_dpp v3, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    v_mov_b32_dpp v4, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    v_sub_co_u32 v0, vcc_lo, v0, v3
++; GFX10-NEXT:    v_sub_co_ci_u32_e32 v1, vcc_lo, v1, v4, vcc_lo
++; GFX10-NEXT:    global_store_dwordx2 v2, v[0:1], s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_sub_i64_rev:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_load_dwordx4 s[0:3], s[4:5], 0x24
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v2, 3, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_dwordx2 v[0:1], v2, s[0:1]
++; GFX1030-NEXT:    v_mov_b32_e32 v3, s2
++; GFX1030-NEXT:    v_mov_b32_e32 v4, s3
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_mov_b32_dpp v3, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    v_mov_b32_dpp v4, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    v_sub_co_u32 v0, vcc_lo, v0, v3
++; GFX1030-NEXT:    v_sub_co_ci_u32_e64 v1, null, v1, v4, vcc_lo
++; GFX1030-NEXT:    global_store_dwordx2 v2, v[0:1], s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_sub_i64_rev:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_load_b128 s[0:3], s[4:5], 0x24
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    v_dual_mov_b32 v3, s2 :: v_dual_and_b32 v0, 0x3ff, v0
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX11-NEXT:    v_lshlrev_b32_e32 v2, 3, v0
++; GFX11-NEXT:    v_mov_b32_e32 v4, s3
++; GFX11-NEXT:    global_load_b64 v[0:1], v2, s[0:1]
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    v_mov_b32_dpp v3, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    v_mov_b32_dpp v4, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_2) | instskip(NEXT) | instid1(VALU_DEP_1)
++; GFX11-NEXT:    v_sub_co_u32 v0, vcc_lo, v0, v3
++; GFX11-NEXT:    v_sub_co_ci_u32_e64 v1, null, v1, v4, vcc_lo
++; GFX11-NEXT:    global_store_b64 v2, v[0:1], s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_sub_i64_rev:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b128 s[0:3], s[4:5], 0x24
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    v_dual_mov_b32 v3, s2 :: v_dual_and_b32 v0, 0x3ff, v0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX12-NEXT:    v_lshlrev_b32_e32 v2, 3, v0
++; GFX12-NEXT:    v_mov_b32_e32 v4, s3
++; GFX12-NEXT:    global_load_b64 v[0:1], v2, s[0:1]
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_mov_b32_dpp v3, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    v_mov_b32_dpp v4, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_2) | instskip(NEXT) | instid1(VALU_DEP_1)
++; GFX12-NEXT:    v_sub_co_u32 v0, vcc_lo, v0, v3
++; GFX12-NEXT:    v_sub_co_ci_u32_e64 v1, null, v1, v4, vcc_lo
++; GFX12-NEXT:    global_store_b64 v2, v[0:1], s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds i64, ptr addrspace(1) %arg, i32 %id
++  %load = load i64, ptr addrspace(1) %gep
++  %dpp = call i64 @llvm.amdgcn.update.dpp.i64(i64 %in, i64 %load, i32 1, i32 15, i32 15, i1 true)
++  %sub = sub i64 %load, %dpp
++  store i64 %sub, ptr addrspace(1) %gep
++  ret void
++}
++
++; Float subtracts are implemented as an add with a negate modifier rather than
++; with reversed operands, so v_subrev_f32 still takes the DPP fold.
++define amdgpu_kernel void @dpp_fsub_f32(ptr addrspace(1) %arg, float %in) {
++; GFX8-LABEL: dpp_fsub_f32:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX8-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v1, s1
++; GFX8-NEXT:    v_add_u32_e32 v0, vcc, s0, v0
++; GFX8-NEXT:    v_addc_u32_e32 v1, vcc, 0, v1, vcc
++; GFX8-NEXT:    flat_load_dword v2, v[0:1]
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    s_nop 0
++; GFX8-NEXT:    v_subrev_f32_dpp v2, v2, v2 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    flat_store_dword v[0:1], v2
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_fsub_f32:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX9-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    s_nop 0
++; GFX9-NEXT:    v_subrev_f32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_fsub_f32:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX10-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_subrev_f32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_fsub_f32:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_subrev_f32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_fsub_f32:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_load_b64 s[0:1], s[4:5], 0x24
++; GFX11-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX11-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    v_subrev_f32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_fsub_f32:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b96 s[0:2], s[4:5], 0x24
++; GFX12-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX12-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_subrev_f32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds float, ptr addrspace(1) %arg, i32 %id
++  %load = load float, ptr addrspace(1) %gep
++  %dpp = call float @llvm.amdgcn.update.dpp.f32(float %in, float %load, i32 1, i32 15, i32 15, i1 true)
++  %sub = fsub float %load, %dpp
++  store float %sub, ptr addrspace(1) %gep
++  ret void
++}
++
++; Same for v_subrev_f16.
++define amdgpu_kernel void @dpp_fsub_f16(ptr addrspace(1) %arg, half %in) {
++; GFX8-LABEL: dpp_fsub_f16:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX8-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v1, s1
++; GFX8-NEXT:    v_add_u32_e32 v0, vcc, s0, v0
++; GFX8-NEXT:    v_addc_u32_e32 v1, vcc, 0, v1, vcc
++; GFX8-NEXT:    flat_load_ushort v2, v[0:1]
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    s_nop 0
++; GFX8-NEXT:    v_subrev_f16_dpp v2, v2, v2 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    flat_store_short v[0:1], v2
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_fsub_f16:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX9-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    s_nop 0
++; GFX9-NEXT:    v_subrev_f16_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_fsub_f16:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX10-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_subrev_f16_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_fsub_f16:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_subrev_f16_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_fsub_f16:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_clause 0x1
++; GFX11-NEXT:    s_load_b64 s[0:1], s[4:5], 0x24
++; GFX11-NEXT:    s_load_b32 s2, s[4:5], 0x2c
++; GFX11-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_3) | instid1(VALU_DEP_1)
++; GFX11-NEXT:    v_dual_mov_b32 v2, s2 :: v_dual_lshlrev_b32 v1, 1, v0
++; GFX11-NEXT:    global_load_d16_b16 v0, v1, s[0:1]
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    v_mov_b32_dpp v2, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    v_sub_f16_e32 v0.l, v0.l, v2.l
++; GFX11-NEXT:    global_store_b16 v1, v0, s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_fsub_f16:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b96 s[0:2], s[4:5], 0x24
++; GFX12-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_3) | instid1(VALU_DEP_1)
++; GFX12-NEXT:    v_dual_mov_b32 v2, s2 :: v_dual_lshlrev_b32 v1, 1, v0
++; GFX12-NEXT:    global_load_d16_b16 v0, v1, s[0:1]
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_mov_b32_dpp v2, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    v_sub_f16_e32 v0.l, v0.l, v2.l
++; GFX12-NEXT:    global_store_b16 v1, v0, s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds half, ptr addrspace(1) %arg, i32 %id
++  %load = load half, ptr addrspace(1) %gep
++  %dpp = call half @llvm.amdgcn.update.dpp.f16(half %in, half %load, i32 1, i32 15, i32 15, i1 true)
++  %sub = fsub half %load, %dpp
++  store half %sub, ptr addrspace(1) %gep
++  ret void
++}
++
++; The shift amount is src0 of v_lshlrev_b32, so the DPP mov would be folded
++; straight into the operand the sequencer swaps away. Rejected before gfx11,
++; where the shift REV opcodes stopped reversing their operands.
++define amdgpu_kernel void @dpp_shl_amount(ptr addrspace(1) %arg, i32 %in) {
++; GFX8-LABEL: dpp_shl_amount:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX8-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX8-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v1, s1
++; GFX8-NEXT:    v_add_u32_e32 v0, vcc, s0, v0
++; GFX8-NEXT:    v_addc_u32_e32 v1, vcc, 0, v1, vcc
++; GFX8-NEXT:    flat_load_dword v2, v[0:1]
++; GFX8-NEXT:    v_mov_b32_e32 v3, s2
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    s_nop 0
++; GFX8-NEXT:    v_mov_b32_dpp v3, v2 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    v_lshlrev_b32_e32 v2, v3, v2
++; GFX8-NEXT:    flat_store_dword v[0:1], v2
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_shl_amount:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX9-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX9-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX9-NEXT:    v_mov_b32_e32 v2, s2
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    s_nop 0
++; GFX9-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    v_lshlrev_b32_e32 v1, v2, v1
++; GFX9-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_shl_amount:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_clause 0x1
++; GFX10-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX10-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX10-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX10-NEXT:    v_mov_b32_e32 v2, s2
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    v_lshlrev_b32_e32 v1, v2, v1
++; GFX10-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_shl_amount:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_clause 0x1
++; GFX1030-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX1030-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX1030-NEXT:    v_mov_b32_e32 v2, s2
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v1, v2, v1
++; GFX1030-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_shl_amount:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_load_b64 s[0:1], s[4:5], 0x24
++; GFX11-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX11-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    v_lshlrev_b32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_shl_amount:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b96 s[0:2], s[4:5], 0x24
++; GFX12-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX12-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_lshlrev_b32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds i32, ptr addrspace(1) %arg, i32 %id
++  %load = load i32, ptr addrspace(1) %gep
++  %dpp = call i32 @llvm.amdgcn.update.dpp.i32(i32 %in, i32 %load, i32 1, i32 15, i32 15, i1 true)
++  %shl = shl i32 %load, %dpp
++  store i32 %shl, ptr addrspace(1) %gep
++  ret void
++}
++
++; Same for v_lshrrev_b32.
++define amdgpu_kernel void @dpp_lshr_amount(ptr addrspace(1) %arg, i32 %in) {
++; GFX8-LABEL: dpp_lshr_amount:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX8-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX8-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v1, s1
++; GFX8-NEXT:    v_add_u32_e32 v0, vcc, s0, v0
++; GFX8-NEXT:    v_addc_u32_e32 v1, vcc, 0, v1, vcc
++; GFX8-NEXT:    flat_load_dword v2, v[0:1]
++; GFX8-NEXT:    v_mov_b32_e32 v3, s2
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    s_nop 0
++; GFX8-NEXT:    v_mov_b32_dpp v3, v2 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    v_lshrrev_b32_e32 v2, v3, v2
++; GFX8-NEXT:    flat_store_dword v[0:1], v2
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_lshr_amount:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX9-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX9-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX9-NEXT:    v_mov_b32_e32 v2, s2
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    s_nop 0
++; GFX9-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    v_lshrrev_b32_e32 v1, v2, v1
++; GFX9-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_lshr_amount:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_clause 0x1
++; GFX10-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX10-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX10-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX10-NEXT:    v_mov_b32_e32 v2, s2
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    v_lshrrev_b32_e32 v1, v2, v1
++; GFX10-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_lshr_amount:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_clause 0x1
++; GFX1030-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX1030-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX1030-NEXT:    v_mov_b32_e32 v2, s2
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    v_lshrrev_b32_e32 v1, v2, v1
++; GFX1030-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_lshr_amount:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_load_b64 s[0:1], s[4:5], 0x24
++; GFX11-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX11-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    v_lshrrev_b32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_lshr_amount:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b96 s[0:2], s[4:5], 0x24
++; GFX12-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX12-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_lshrrev_b32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds i32, ptr addrspace(1) %arg, i32 %id
++  %load = load i32, ptr addrspace(1) %gep
++  %dpp = call i32 @llvm.amdgcn.update.dpp.i32(i32 %in, i32 %load, i32 1, i32 15, i32 15, i1 true)
++  %shr = lshr i32 %load, %dpp
++  store i32 %shr, ptr addrspace(1) %gep
++  ret void
++}
++
++; Same for v_ashrrev_i32.
++define amdgpu_kernel void @dpp_ashr_amount(ptr addrspace(1) %arg, i32 %in) {
++; GFX8-LABEL: dpp_ashr_amount:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX8-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX8-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v1, s1
++; GFX8-NEXT:    v_add_u32_e32 v0, vcc, s0, v0
++; GFX8-NEXT:    v_addc_u32_e32 v1, vcc, 0, v1, vcc
++; GFX8-NEXT:    flat_load_dword v2, v[0:1]
++; GFX8-NEXT:    v_mov_b32_e32 v3, s2
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    s_nop 0
++; GFX8-NEXT:    v_mov_b32_dpp v3, v2 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    v_ashrrev_i32_e32 v2, v3, v2
++; GFX8-NEXT:    flat_store_dword v[0:1], v2
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_ashr_amount:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX9-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX9-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX9-NEXT:    v_mov_b32_e32 v2, s2
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    s_nop 0
++; GFX9-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    v_ashrrev_i32_e32 v1, v2, v1
++; GFX9-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_ashr_amount:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_clause 0x1
++; GFX10-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX10-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX10-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX10-NEXT:    v_mov_b32_e32 v2, s2
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    v_ashrrev_i32_e32 v1, v2, v1
++; GFX10-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_ashr_amount:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_clause 0x1
++; GFX1030-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX1030-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX1030-NEXT:    v_mov_b32_e32 v2, s2
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    v_ashrrev_i32_e32 v1, v2, v1
++; GFX1030-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_ashr_amount:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_load_b64 s[0:1], s[4:5], 0x24
++; GFX11-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX11-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    v_ashrrev_i32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_ashr_amount:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b96 s[0:2], s[4:5], 0x24
++; GFX12-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX12-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_ashrrev_i32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds i32, ptr addrspace(1) %arg, i32 %id
++  %load = load i32, ptr addrspace(1) %gep
++  %dpp = call i32 @llvm.amdgcn.update.dpp.i32(i32 %in, i32 %load, i32 1, i32 15, i32 15, i1 true)
++  %shr = ashr i32 %load, %dpp
++  store i32 %shr, ptr addrspace(1) %gep
++  ret void
++}
++
++; Same for the 16 bit shift, v_lshlrev_b16.
++define amdgpu_kernel void @dpp_shl_i16_amount(ptr addrspace(1) %arg, i16 %in) {
++; GFX8-LABEL: dpp_shl_i16_amount:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX8-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX8-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v1, s1
++; GFX8-NEXT:    v_add_u32_e32 v0, vcc, s0, v0
++; GFX8-NEXT:    v_addc_u32_e32 v1, vcc, 0, v1, vcc
++; GFX8-NEXT:    flat_load_ushort v2, v[0:1]
++; GFX8-NEXT:    v_mov_b32_e32 v3, s2
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    s_nop 0
++; GFX8-NEXT:    v_mov_b32_dpp v3, v2 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    v_lshlrev_b16_e32 v2, v3, v2
++; GFX8-NEXT:    flat_store_short v[0:1], v2
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_shl_i16_amount:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX9-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX9-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX9-NEXT:    v_mov_b32_e32 v2, s2
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    s_nop 0
++; GFX9-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    v_lshlrev_b16_e32 v1, v2, v1
++; GFX9-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_shl_i16_amount:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_clause 0x1
++; GFX10-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX10-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX10-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX10-NEXT:    v_mov_b32_e32 v2, s2
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    v_lshlrev_b16 v1, v2, v1
++; GFX10-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_shl_i16_amount:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_clause 0x1
++; GFX1030-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX1030-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX1030-NEXT:    v_mov_b32_e32 v2, s2
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    v_lshlrev_b16 v1, v2, v1
++; GFX1030-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_shl_i16_amount:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_clause 0x1
++; GFX11-NEXT:    s_load_b64 s[0:1], s[4:5], 0x24
++; GFX11-NEXT:    s_load_b32 s2, s[4:5], 0x2c
++; GFX11-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_3) | instid1(VALU_DEP_1)
++; GFX11-NEXT:    v_dual_mov_b32 v2, s2 :: v_dual_lshlrev_b32 v1, 1, v0
++; GFX11-NEXT:    global_load_d16_b16 v0, v1, s[0:1]
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    v_mov_b32_dpp v2, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    v_lshlrev_b16 v0.l, v2.l, v0.l
++; GFX11-NEXT:    global_store_b16 v1, v0, s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_shl_i16_amount:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b96 s[0:2], s[4:5], 0x24
++; GFX12-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_3) | instid1(VALU_DEP_1)
++; GFX12-NEXT:    v_dual_mov_b32 v2, s2 :: v_dual_lshlrev_b32 v1, 1, v0
++; GFX12-NEXT:    global_load_d16_b16 v0, v1, s[0:1]
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_mov_b32_dpp v2, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    v_lshlrev_b16 v0.l, v2.l, v0.l
++; GFX12-NEXT:    global_store_b16 v1, v0, s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds i16, ptr addrspace(1) %arg, i32 %id
++  %load = load i16, ptr addrspace(1) %gep
++  %dpp = call i16 @llvm.amdgcn.update.dpp.i16(i16 %in, i16 %load, i32 1, i32 15, i32 15, i1 true)
++  %shl = shl i16 %load, %dpp
++  store i16 %shl, ptr addrspace(1) %gep
++  ret void
++}
++
++; Same for v_lshrrev_b16.
++define amdgpu_kernel void @dpp_lshr_i16_amount(ptr addrspace(1) %arg, i16 %in) {
++; GFX8-LABEL: dpp_lshr_i16_amount:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX8-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX8-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v1, s1
++; GFX8-NEXT:    v_add_u32_e32 v0, vcc, s0, v0
++; GFX8-NEXT:    v_addc_u32_e32 v1, vcc, 0, v1, vcc
++; GFX8-NEXT:    flat_load_ushort v2, v[0:1]
++; GFX8-NEXT:    v_mov_b32_e32 v3, s2
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    s_nop 0
++; GFX8-NEXT:    v_mov_b32_dpp v3, v2 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    v_lshrrev_b16_e32 v2, v3, v2
++; GFX8-NEXT:    flat_store_short v[0:1], v2
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_lshr_i16_amount:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX9-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX9-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX9-NEXT:    v_mov_b32_e32 v2, s2
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    s_nop 0
++; GFX9-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    v_lshrrev_b16_e32 v1, v2, v1
++; GFX9-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_lshr_i16_amount:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_clause 0x1
++; GFX10-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX10-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX10-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX10-NEXT:    v_mov_b32_e32 v2, s2
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    v_lshrrev_b16 v1, v2, v1
++; GFX10-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_lshr_i16_amount:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_clause 0x1
++; GFX1030-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX1030-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX1030-NEXT:    v_mov_b32_e32 v2, s2
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    v_lshrrev_b16 v1, v2, v1
++; GFX1030-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_lshr_i16_amount:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_clause 0x1
++; GFX11-NEXT:    s_load_b64 s[0:1], s[4:5], 0x24
++; GFX11-NEXT:    s_load_b32 s2, s[4:5], 0x2c
++; GFX11-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_3) | instid1(VALU_DEP_1)
++; GFX11-NEXT:    v_dual_mov_b32 v2, s2 :: v_dual_lshlrev_b32 v1, 1, v0
++; GFX11-NEXT:    global_load_d16_b16 v0, v1, s[0:1]
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    v_mov_b32_dpp v2, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    v_lshrrev_b16 v0.l, v2.l, v0.l
++; GFX11-NEXT:    global_store_b16 v1, v0, s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_lshr_i16_amount:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b96 s[0:2], s[4:5], 0x24
++; GFX12-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_3) | instid1(VALU_DEP_1)
++; GFX12-NEXT:    v_dual_mov_b32 v2, s2 :: v_dual_lshlrev_b32 v1, 1, v0
++; GFX12-NEXT:    global_load_d16_b16 v0, v1, s[0:1]
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_mov_b32_dpp v2, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    v_lshrrev_b16 v0.l, v2.l, v0.l
++; GFX12-NEXT:    global_store_b16 v1, v0, s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds i16, ptr addrspace(1) %arg, i32 %id
++  %load = load i16, ptr addrspace(1) %gep
++  %dpp = call i16 @llvm.amdgcn.update.dpp.i16(i16 %in, i16 %load, i32 1, i32 15, i32 15, i1 true)
++  %shr = lshr i16 %load, %dpp
++  store i16 %shr, ptr addrspace(1) %gep
++  ret void
++}
++
++; Same for v_ashrrev_i16.
++define amdgpu_kernel void @dpp_ashr_i16_amount(ptr addrspace(1) %arg, i16 %in) {
++; GFX8-LABEL: dpp_ashr_i16_amount:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX8-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX8-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v1, s1
++; GFX8-NEXT:    v_add_u32_e32 v0, vcc, s0, v0
++; GFX8-NEXT:    v_addc_u32_e32 v1, vcc, 0, v1, vcc
++; GFX8-NEXT:    flat_load_ushort v2, v[0:1]
++; GFX8-NEXT:    v_mov_b32_e32 v3, s2
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    s_nop 0
++; GFX8-NEXT:    v_mov_b32_dpp v3, v2 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    v_ashrrev_i16_e32 v2, v3, v2
++; GFX8-NEXT:    flat_store_short v[0:1], v2
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_ashr_i16_amount:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX9-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX9-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX9-NEXT:    v_mov_b32_e32 v2, s2
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    s_nop 0
++; GFX9-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    v_ashrrev_i16_e32 v1, v2, v1
++; GFX9-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_ashr_i16_amount:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_clause 0x1
++; GFX10-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX10-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX10-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX10-NEXT:    v_mov_b32_e32 v2, s2
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    v_ashrrev_i16 v1, v2, v1
++; GFX10-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_ashr_i16_amount:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_clause 0x1
++; GFX1030-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX1030-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v0, 1, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_ushort v1, v0, s[0:1]
++; GFX1030-NEXT:    v_mov_b32_e32 v2, s2
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    v_ashrrev_i16 v1, v2, v1
++; GFX1030-NEXT:    global_store_short v0, v1, s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_ashr_i16_amount:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_clause 0x1
++; GFX11-NEXT:    s_load_b64 s[0:1], s[4:5], 0x24
++; GFX11-NEXT:    s_load_b32 s2, s[4:5], 0x2c
++; GFX11-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_3) | instid1(VALU_DEP_1)
++; GFX11-NEXT:    v_dual_mov_b32 v2, s2 :: v_dual_lshlrev_b32 v1, 1, v0
++; GFX11-NEXT:    global_load_d16_b16 v0, v1, s[0:1]
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    v_mov_b32_dpp v2, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    v_ashrrev_i16 v0.l, v2.l, v0.l
++; GFX11-NEXT:    global_store_b16 v1, v0, s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_ashr_i16_amount:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b96 s[0:2], s[4:5], 0x24
++; GFX12-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_3) | instid1(VALU_DEP_1)
++; GFX12-NEXT:    v_dual_mov_b32 v2, s2 :: v_dual_lshlrev_b32 v1, 1, v0
++; GFX12-NEXT:    global_load_d16_b16 v0, v1, s[0:1]
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_mov_b32_dpp v2, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    v_ashrrev_i16 v0.l, v2.l, v0.l
++; GFX12-NEXT:    global_store_b16 v1, v0, s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds i16, ptr addrspace(1) %arg, i32 %id
++  %load = load i16, ptr addrspace(1) %gep
++  %dpp = call i16 @llvm.amdgcn.update.dpp.i16(i16 %in, i16 %load, i32 1, i32 15, i32 15, i1 true)
++  %shr = ashr i16 %load, %dpp
++  store i16 %shr, ptr addrspace(1) %gep
++  ret void
++}
++
++; Same for the 64 bit shift, v_lshlrev_b64, on the subtargets that have 64 bit
++; DPP at all.
++define amdgpu_kernel void @dpp_shl_i64_amount(ptr addrspace(1) %arg, i32 %in) {
++; GFX8-LABEL: dpp_shl_i64_amount:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX8-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX8-NEXT:    v_lshlrev_b32_e32 v1, 3, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v2, s1
++; GFX8-NEXT:    v_add_u32_e32 v1, vcc, s0, v1
++; GFX8-NEXT:    v_addc_u32_e32 v2, vcc, 0, v2, vcc
++; GFX8-NEXT:    flat_load_dwordx2 v[3:4], v[1:2]
++; GFX8-NEXT:    v_mov_b32_e32 v5, s2
++; GFX8-NEXT:    s_nop 1
++; GFX8-NEXT:    v_mov_b32_dpp v5, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    v_lshlrev_b64 v[3:4], v5, v[3:4]
++; GFX8-NEXT:    flat_store_dwordx2 v[1:2], v[3:4]
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_shl_i64_amount:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX9-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX9-NEXT:    v_lshlrev_b32_e32 v3, 3, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_dwordx2 v[1:2], v3, s[0:1]
++; GFX9-NEXT:    v_mov_b32_e32 v4, s2
++; GFX9-NEXT:    s_nop 1
++; GFX9-NEXT:    v_mov_b32_dpp v4, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    v_lshlrev_b64 v[0:1], v4, v[1:2]
++; GFX9-NEXT:    global_store_dwordx2 v3, v[0:1], s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_shl_i64_amount:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_clause 0x1
++; GFX10-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX10-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX10-NEXT:    v_lshlrev_b32_e32 v3, 3, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_dwordx2 v[1:2], v3, s[0:1]
++; GFX10-NEXT:    v_mov_b32_e32 v4, s2
++; GFX10-NEXT:    v_mov_b32_dpp v4, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_lshlrev_b64 v[0:1], v4, v[1:2]
++; GFX10-NEXT:    global_store_dwordx2 v3, v[0:1], s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_shl_i64_amount:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_clause 0x1
++; GFX1030-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX1030-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v3, 3, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_dwordx2 v[1:2], v3, s[0:1]
++; GFX1030-NEXT:    v_mov_b32_e32 v4, s2
++; GFX1030-NEXT:    v_mov_b32_dpp v4, v0 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_lshlrev_b64 v[0:1], v4, v[1:2]
++; GFX1030-NEXT:    global_store_dwordx2 v3, v[0:1], s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_shl_i64_amount:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_load_b64 s[0:1], s[4:5], 0x24
++; GFX11-NEXT:    v_and_b32_e32 v2, 0x3ff, v0
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX11-NEXT:    v_lshlrev_b32_e32 v3, 3, v2
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    global_load_b64 v[0:1], v3, s[0:1]
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    _e64_dpp v[0:1], v2, v[0:1] quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    global_store_b64 v3, v[0:1], s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_shl_i64_amount:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b96 s[0:2], s[4:5], 0x24
++; GFX12-NEXT:    v_and_b32_e32 v2, 0x3ff, v0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX12-NEXT:    v_lshlrev_b32_e32 v3, 3, v2
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    global_load_b64 v[0:1], v3, s[0:1]
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_lshlrev_b64_dpp v[0:1], v2, v[0:1] quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    global_store_b64 v3, v[0:1], s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds i64, ptr addrspace(1) %arg, i32 %id
++  %load = load i64, ptr addrspace(1) %gep
++  %dpp = call i32 @llvm.amdgcn.update.dpp.i32(i32 %in, i32 %id, i32 1, i32 15, i32 15, i1 true)
++  %ext = zext i32 %dpp to i64
++  %shl = shl i64 %load, %ext
++  store i64 %shl, ptr addrspace(1) %gep
++  ret void
++}
++
++; The DPP value is the shifted operand rather than the shift amount, so it is
++; src1 of v_lshlrev_b32. There is no non-REV shift to commute into, so this
++; never folded to begin with.
++define amdgpu_kernel void @dpp_shl_value(ptr addrspace(1) %arg, i32 %in) {
++; GFX8-LABEL: dpp_shl_value:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX8-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX8-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v1, s1
++; GFX8-NEXT:    v_add_u32_e32 v0, vcc, s0, v0
++; GFX8-NEXT:    v_addc_u32_e32 v1, vcc, 0, v1, vcc
++; GFX8-NEXT:    flat_load_dword v2, v[0:1]
++; GFX8-NEXT:    v_mov_b32_e32 v3, s2
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    s_nop 0
++; GFX8-NEXT:    v_mov_b32_dpp v3, v2 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    v_lshlrev_b32_e32 v2, v2, v3
++; GFX8-NEXT:    flat_store_dword v[0:1], v2
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_shl_value:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX9-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX9-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX9-NEXT:    v_mov_b32_e32 v2, s2
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    s_nop 0
++; GFX9-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    v_lshlrev_b32_e32 v1, v1, v2
++; GFX9-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_shl_value:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_clause 0x1
++; GFX10-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX10-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX10-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX10-NEXT:    v_mov_b32_e32 v2, s2
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    v_lshlrev_b32_e32 v1, v1, v2
++; GFX10-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_shl_value:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_clause 0x1
++; GFX1030-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX1030-NEXT:    s_load_dword s2, s[4:5], 0x2c
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX1030-NEXT:    v_mov_b32_e32 v2, s2
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v1, v1, v2
++; GFX1030-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_shl_value:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_clause 0x1
++; GFX11-NEXT:    s_load_b64 s[0:1], s[4:5], 0x24
++; GFX11-NEXT:    s_load_b32 s2, s[4:5], 0x2c
++; GFX11-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_4) | instid1(VALU_DEP_1)
++; GFX11-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX11-NEXT:    v_mov_b32_e32 v2, s2
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX11-NEXT:    v_lshlrev_b32_e32 v1, v1, v2
++; GFX11-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_shl_value:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b96 s[0:2], s[4:5], 0x24
++; GFX12-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_4) | instid1(VALU_DEP_1)
++; GFX12-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX12-NEXT:    v_mov_b32_e32 v2, s2
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_mov_b32_dpp v2, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX12-NEXT:    v_lshlrev_b32_e32 v1, v1, v2
++; GFX12-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds i32, ptr addrspace(1) %arg, i32 %id
++  %load = load i32, ptr addrspace(1) %gep
++  %dpp = call i32 @llvm.amdgcn.update.dpp.i32(i32 %in, i32 %load, i32 1, i32 15, i32 15, i1 true)
++  %shl = shl i32 %dpp, %load
++  store i32 %shl, ptr addrspace(1) %gep
++  ret void
++}
++
++; Commuting into an opcode that is its own reverse keeps folding.
++define amdgpu_kernel void @dpp_add_u32(ptr addrspace(1) %arg, i32 %in) {
++; GFX8-LABEL: dpp_add_u32:
++; GFX8:       ; %bb.0:
++; GFX8-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX8-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX8-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX8-NEXT:    v_mov_b32_e32 v1, s1
++; GFX8-NEXT:    v_add_u32_e32 v0, vcc, s0, v0
++; GFX8-NEXT:    v_addc_u32_e32 v1, vcc, 0, v1, vcc
++; GFX8-NEXT:    flat_load_dword v2, v[0:1]
++; GFX8-NEXT:    s_waitcnt vmcnt(0)
++; GFX8-NEXT:    s_nop 0
++; GFX8-NEXT:    v_add_u32_dpp v2, vcc, v2, v2 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX8-NEXT:    flat_store_dword v[0:1], v2
++; GFX8-NEXT:    s_endpgm
++;
++; GFX9-LABEL: dpp_add_u32:
++; GFX9:       ; %bb.0:
++; GFX9-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX9-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX9-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX9-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX9-NEXT:    s_waitcnt vmcnt(0)
++; GFX9-NEXT:    s_nop 0
++; GFX9-NEXT:    v_add_u32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX9-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX9-NEXT:    s_endpgm
++;
++; GFX10-LABEL: dpp_add_u32:
++; GFX10:       ; %bb.0:
++; GFX10-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX10-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX10-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX10-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX10-NEXT:    s_waitcnt vmcnt(0)
++; GFX10-NEXT:    v_add_nc_u32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX10-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX10-NEXT:    s_endpgm
++;
++; GFX1030-LABEL: dpp_add_u32:
++; GFX1030:       ; %bb.0:
++; GFX1030-NEXT:    s_load_dwordx2 s[0:1], s[4:5], 0x24
++; GFX1030-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX1030-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX1030-NEXT:    global_load_dword v1, v0, s[0:1]
++; GFX1030-NEXT:    s_waitcnt vmcnt(0)
++; GFX1030-NEXT:    v_add_nc_u32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX1030-NEXT:    global_store_dword v0, v1, s[0:1]
++; GFX1030-NEXT:    s_endpgm
++;
++; GFX11-LABEL: dpp_add_u32:
++; GFX11:       ; %bb.0:
++; GFX11-NEXT:    s_load_b64 s[0:1], s[4:5], 0x24
++; GFX11-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX11-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX11-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
++; GFX11-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX11-NEXT:    s_waitcnt vmcnt(0)
++; GFX11-NEXT:    v_add_nc_u32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX11-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX11-NEXT:    s_endpgm
++;
++; GFX12-LABEL: dpp_add_u32:
++; GFX12:       ; %bb.0:
++; GFX12-NEXT:    s_load_b96 s[0:2], s[4:5], 0x24
++; GFX12-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
++; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1)
++; GFX12-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
++; GFX12-NEXT:    s_wait_kmcnt 0x0
++; GFX12-NEXT:    global_load_b32 v1, v0, s[0:1]
++; GFX12-NEXT:    s_wait_loadcnt 0x0
++; GFX12-NEXT:    v_add_nc_u32_dpp v1, v1, v1 quad_perm:[1,0,0,0] row_mask:0xf bank_mask:0xf bound_ctrl:1
++; GFX12-NEXT:    global_store_b32 v0, v1, s[0:1]
++; GFX12-NEXT:    s_endpgm
++  %id = tail call i32 @llvm.amdgcn.workitem.id.x()
++  %gep = getelementptr inbounds i32, ptr addrspace(1) %arg, i32 %id
++  %load = load i32, ptr addrspace(1) %gep
++  %dpp = call i32 @llvm.amdgcn.update.dpp.i32(i32 %in, i32 %load, i32 1, i32 15, i32 15, i1 true)
++  %add = add i32 %load, %dpp
++  store i32 %add, ptr addrspace(1) %gep
++  ret void
++}
++
++declare i32 @llvm.amdgcn.workitem.id.x()
+diff --git a/llvm/test/CodeGen/AMDGPU/dpp_combine_rev_opcode.mir b/llvm/test/CodeGen/AMDGPU/dpp_combine_rev_opcode.mir
+new file mode 100644
+index 000000000000..12f0a684a8e8
+--- /dev/null
++++ b/llvm/test/CodeGen/AMDGPU/dpp_combine_rev_opcode.mir
+@@ -0,0 +1,183 @@
++# RUN: llc -mtriple=amdgpu10.10 -run-pass=gcn-dpp-combine -verify-machineinstrs -o - %s | FileCheck --check-prefixes=CHECK,PRE-GFX11 %s
++# RUN: llc -mtriple=amdgpu10.30 -run-pass=gcn-dpp-combine -verify-machineinstrs -o - %s | FileCheck --check-prefixes=CHECK,PRE-GFX11 %s
++# RUN: llc -mtriple=amdgpu11.00 -run-pass=gcn-dpp-combine -verify-machineinstrs -o - %s | FileCheck --check-prefixes=CHECK,GFX11PLUS %s
++# RUN: llc -mtriple=amdgpu12.00 -run-pass=gcn-dpp-combine -verify-machineinstrs -o - %s | FileCheck --check-prefixes=CHECK,GFX11PLUS %s
++
++---
++# The DPP value is src1 of a subtract, so folding requires commuting
++# V_SUB_U32_e32 into V_SUBREV_U32_dpp, which is not allowed.
++
++# CHECK-LABEL: name: dpp_commute_to_rev_sub
++# CHECK: %3:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 15, 15, 1, implicit $exec
++# CHECK-NEXT: %4:vgpr_32 = V_SUB_U32_e32 %1, %3, implicit $exec
++
++name: dpp_commute_to_rev_sub
++tracksRegLiveness: true
++body: |
++  bb.0:
++    liveins: $vgpr0, $vgpr1
++    %0:vgpr_32 = COPY $vgpr0
++    %1:vgpr_32 = COPY $vgpr1
++    %2:vgpr_32 = IMPLICIT_DEF
++    %3:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 15, 15, 1, implicit $exec
++    %4:vgpr_32 = V_SUB_U32_e32 %1, %3, implicit $exec
++    S_NOP 0, implicit %4
++...
++
++---
++# Both sources of the subtract are the same register, so a mis-routed DPP
++# silently yields the negated result rather than an obviously wrong instruction.
++
++# CHECK-LABEL: name: dpp_commute_to_rev_sub_same_reg
++# CHECK: %2:vgpr_32 = V_MOV_B32_dpp %1, %0, 0, 15, 15, 1, implicit $exec
++# CHECK-NEXT: %3:vgpr_32 = V_SUB_U32_e32 %0, %2, implicit $exec
++
++name: dpp_commute_to_rev_sub_same_reg
++tracksRegLiveness: true
++body: |
++  bb.0:
++    liveins: $vgpr0
++    %0:vgpr_32 = COPY $vgpr0
++    %1:vgpr_32 = IMPLICIT_DEF
++    %2:vgpr_32 = V_MOV_B32_dpp %1, %0, 0, 15, 15, 1, implicit $exec
++    %3:vgpr_32 = V_SUB_U32_e32 %0, %2, implicit $exec
++    S_NOP 0, implicit %3
++...
++
++---
++# A DPP mov feeding src0 of a REV opcode directly is rejected the same way as
++# one that has to be commuted into it.
++
++# CHECK-LABEL: name: dpp_rev_sub_src0
++# CHECK: %3:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 15, 15, 1, implicit $exec
++# CHECK-NEXT: %4:vgpr_32 = V_SUBREV_U32_e32 %3, %1, implicit $exec
++
++name: dpp_rev_sub_src0
++tracksRegLiveness: true
++body: |
++  bb.0:
++    liveins: $vgpr0, $vgpr1
++    %0:vgpr_32 = COPY $vgpr0
++    %1:vgpr_32 = COPY $vgpr1
++    %2:vgpr_32 = IMPLICIT_DEF
++    %3:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 15, 15, 1, implicit $exec
++    %4:vgpr_32 = V_SUBREV_U32_e32 %3, %1, implicit $exec
++    S_NOP 0, implicit %4
++...
++
++---
++# The carry in subtract commutes into V_SUBBREV_U32 (V_SUBREV_CO_CI_U32 on
++# gfx10+), which is a REV opcode as well.
++
++# CHECK-LABEL: name: dpp_commute_to_rev_subb
++# CHECK: %4:vgpr_32 = V_MOV_B32_dpp %3, %0, 1, 15, 15, 1, implicit $exec
++# CHECK-NEXT: %5:vgpr_32, %6:sreg_32_xm0_xexec = V_SUBB_U32_e64 %1, %4, %2, 0, implicit $exec
++
++name: dpp_commute_to_rev_subb
++tracksRegLiveness: true
++body: |
++  bb.0:
++    liveins: $vgpr0, $vgpr1, $sgpr0
++    %0:vgpr_32 = COPY $vgpr0
++    %1:vgpr_32 = COPY $vgpr1
++    %2:sreg_32_xm0_xexec = COPY $sgpr0
++    %3:vgpr_32 = IMPLICIT_DEF
++    %4:vgpr_32 = V_MOV_B32_dpp %3, %0, 1, 15, 15, 1, implicit $exec
++    %5:vgpr_32, %6:sreg_32_xm0_xexec = V_SUBB_U32_e64 %1, %4, %2, 0, implicit $exec
++    S_NOP 0, implicit %5
++...
++
++---
++# The shift REV opcodes take the shift amount in src0, and reversed their
++# operands before GFX11.
++
++# CHECK-LABEL: name: dpp_rev_shift_src0
++# PRE-GFX11: %3:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 15, 15, 1, implicit $exec
++# PRE-GFX11-NEXT: %4:vgpr_32 = V_LSHLREV_B32_e32 %3, %1, implicit $exec
++# PRE-GFX11: %5:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 15, 15, 1, implicit $exec
++# PRE-GFX11-NEXT: %6:vgpr_32 = V_LSHRREV_B32_e32 %5, %1, implicit $exec
++# PRE-GFX11: %7:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 15, 15, 1, implicit $exec
++# PRE-GFX11-NEXT: %8:vgpr_32 = V_ASHRREV_I32_e32 %7, %1, implicit $exec
++# GFX11PLUS: %4:vgpr_32 = V_LSHLREV_B32_dpp %2, %0, %1, 1, 15, 15, 1, implicit $exec
++# GFX11PLUS: %6:vgpr_32 = V_LSHRREV_B32_dpp %2, %0, %1, 1, 15, 15, 1, implicit $exec
++# GFX11PLUS: %8:vgpr_32 = V_ASHRREV_I32_dpp %2, %0, %1, 1, 15, 15, 1, implicit $exec
++
++name: dpp_rev_shift_src0
++tracksRegLiveness: true
++body: |
++  bb.0:
++    liveins: $vgpr0, $vgpr1
++    %0:vgpr_32 = COPY $vgpr0
++    %1:vgpr_32 = COPY $vgpr1
++    %2:vgpr_32 = IMPLICIT_DEF
++    %3:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 15, 15, 1, implicit $exec
++    %4:vgpr_32 = V_LSHLREV_B32_e32 %3, %1, implicit $exec
++    %5:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 15, 15, 1, implicit $exec
++    %6:vgpr_32 = V_LSHRREV_B32_e32 %5, %1, implicit $exec
++    %7:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 15, 15, 1, implicit $exec
++    %8:vgpr_32 = V_ASHRREV_I32_e32 %7, %1, implicit $exec
++    S_NOP 0, implicit %4, implicit %6, implicit %8
++...
++
++---
++# Float subtracts are an add with a negate modifier rather than a real operand
++# reversal, so V_SUBREV_F32 still takes the fold.
++
++# CHECK-LABEL: name: dpp_commute_to_rev_sub_f32
++# CHECK: %4:vgpr_32 = V_SUBREV_F32_dpp %2, 0, %0, 0, %1, 1, 15, 15, 1, implicit $mode, implicit $exec
++
++name: dpp_commute_to_rev_sub_f32
++tracksRegLiveness: true
++body: |
++  bb.0:
++    liveins: $vgpr0, $vgpr1
++    %0:vgpr_32 = COPY $vgpr0
++    %1:vgpr_32 = COPY $vgpr1
++    %2:vgpr_32 = IMPLICIT_DEF
++    %3:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 15, 15, 1, implicit $exec
++    %4:vgpr_32 = V_SUB_F32_e32 %1, %3, implicit $mode, implicit $exec
++    S_NOP 0, implicit %4
++...
++
++---
++# Positive control: the DPP value is already src0 of a non-REV opcode, so no
++# commute is needed and the fold is legal.
++
++# CHECK-LABEL: name: dpp_no_commute_needed
++# CHECK: %4:vgpr_32 = V_SUB_U32_dpp %2, %0, %1, 1, 15, 15, 1, implicit $exec
++
++name: dpp_no_commute_needed
++tracksRegLiveness: true
++body: |
++  bb.0:
++    liveins: $vgpr0, $vgpr1
++    %0:vgpr_32 = COPY $vgpr0
++    %1:vgpr_32 = COPY $vgpr1
++    %2:vgpr_32 = IMPLICIT_DEF
++    %3:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 15, 15, 1, implicit $exec
++    %4:vgpr_32 = V_SUB_U32_e32 %3, %1, implicit $exec
++    S_NOP 0, implicit %4
++...
++
++---
++# Positive control: commuting an opcode that is its own reverse keeps the same
++# opcode, so it still folds.
++
++# CHECK-LABEL: name: dpp_commute_symmetric
++# CHECK: %4:vgpr_32 = V_ADD_U32_dpp %2, %0, %1, 1, 15, 15, 1, implicit $exec
++# CHECK: %6:vgpr_32 = V_OR_B32_dpp %2, %0, %1, 1, 15, 15, 1, implicit $exec
++
++name: dpp_commute_symmetric
++tracksRegLiveness: true
++body: |
++  bb.0:
++    liveins: $vgpr0, $vgpr1
++    %0:vgpr_32 = COPY $vgpr0
++    %1:vgpr_32 = COPY $vgpr1
++    %2:vgpr_32 = IMPLICIT_DEF
++    %3:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 15, 15, 1, implicit $exec
++    %4:vgpr_32 = V_ADD_U32_e32 %1, %3, implicit $exec
++    %5:vgpr_32 = V_MOV_B32_dpp %2, %0, 1, 15, 15, 1, implicit $exec
++    %6:vgpr_32 = V_OR_B32_e32 %1, %5, implicit $exec
++    S_NOP 0, implicit %4, implicit %6
++...
+-- 
+2.34.1
+
