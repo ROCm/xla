@@ -115,6 +115,7 @@ void PrintRocmTracerEvent(const RocmTracerEvent& event,
     case RocmTracerEventType::MemcpyD2H:
     case RocmTracerEventType::MemcpyH2D:
     case RocmTracerEventType::MemcpyD2D:
+    case RocmTracerEventType::MemcpyP2P:
       oss << ",num_bytes=" << event.memcpy_info.num_bytes;
       oss << ",destination=" << event.memcpy_info.destination;
       oss << ",async=" << event.memcpy_info.async;
@@ -248,14 +249,19 @@ void PerDeviceCollector::CreateXEvent(const RocmTracerEvent& event,
   } else if (event.type == RocmTracerEventType::MemcpyH2D ||
              event.type == RocmTracerEventType::MemcpyD2H ||
              event.type == RocmTracerEventType::MemcpyD2D ||
+             event.type == RocmTracerEventType::MemcpyP2P ||
              event.type == RocmTracerEventType::MemcpyOther) {
     VLOG(7) << "Add Memcpy stat";
     const auto& memcpy_info = event.memcpy_info;
     std::string memcpy_details = absl::StrCat(
         // TODO(rocm-profiler): we need to discover the memory kind similar
         // to CUDA
-        "kind:", "Unknown", " size:", memcpy_info.num_bytes,
-        " dest:", memcpy_info.destination, " async:", memcpy_info.async);
+        "kind:", "Unknown", " size:", memcpy_info.num_bytes);
+    // A peer copy placed without its owners has no known destination.
+    if (memcpy_info.destination != RocmTracerEvent::kInvalidDeviceId) {
+      absl::StrAppend(&memcpy_details, " dest:", memcpy_info.destination);
+    }
+    absl::StrAppend(&memcpy_details, " async:", memcpy_info.async);
     xevent.AddStatValue(
         *plane->GetOrCreateStatMetadata(
             GetStatTypeStr(StatType::kMemcpyDetails)),
@@ -769,6 +775,7 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
       case RocmTracerEventType::MemcpyD2H:
       case RocmTracerEventType::MemcpyH2D:
       case RocmTracerEventType::MemcpyD2D:
+      case RocmTracerEventType::MemcpyP2P:
       case RocmTracerEventType::MemcpyOther:
         api_event.memcpy_info = item.memcpy_info;
         aggregated_events.push_back(api_event);
@@ -826,6 +833,7 @@ std::vector<RocmTracerEvent> RocmTraceCollectorImpl::ApiActivityInfoExchange() {
         case RocmTracerEventType::MemcpyD2H:
         case RocmTracerEventType::MemcpyH2D:
         case RocmTracerEventType::MemcpyD2D:
+        case RocmTracerEventType::MemcpyP2P:
         case RocmTracerEventType::MemcpyOther:
           // activity_event.memcpy_info = api_event->memcpy_info;
           aggregated_events.push_back(activity_event);
