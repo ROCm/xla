@@ -253,6 +253,19 @@ struct BlasLt {
     virtual absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithms(
         size_t max_algorithm_count, size_t max_workspace_size) const = 0;
 
+    // Returns every algorithm the library has for this plan's problem within
+    // `max_workspace_size`, not only the ones its heuristic ranks highest. The
+    // list starts with what GetAlgorithms(`max_heuristic_count`) returns, in
+    // the same order. Only algorithms that GetBlasLtMatmulAlgorithm can
+    // describe are useful past that prefix, since their list position is not
+    // reproducible by GetAlgorithms.
+    virtual absl::StatusOr<std::vector<MatmulAlgorithm>>
+    GetAllSupportedAlgorithms(size_t max_heuristic_count,
+                              size_t max_workspace_size) const {
+      return absl::UnimplementedError(
+          "GetAllSupportedAlgorithms is not implemented for this platform.");
+    }
+
     // Converts `algorithm` into a `BlasLtMatmulAlgorithm` descriptor.
     virtual absl::StatusOr<BlasLtMatmulAlgorithm> GetBlasLtMatmulAlgorithm(
         const MatmulAlgorithm& algorithm) const {
