@@ -159,6 +159,8 @@ _COPTS_LIST = select({
     "-UUSE_CBLAS",
     "-DDNNL_ENABLE_MAX_CPU_ISA",
     "-DDNNL_ENABLE_GRAPH_DUMP",
+    # Keep oneDNN's bundled spdlog apart from other spdlog copies.
+    "-Dspdlog=onednn_spdlog",
 ] + tf_openmp_copts()
 
 _INCLUDES_LIST = [
