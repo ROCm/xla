@@ -16,10 +16,14 @@ limitations under the License.
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
+#include "absl/base/no_destructor.h"
+#include "absl/base/thread_annotations.h"
 #include "absl/log/log.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/synchronization/mutex.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/generic_memory_allocation.h"
@@ -51,20 +55,58 @@ namespace {
 // Requesting coherent, i.e. fine-grained, memory sidesteps all of that. It is
 // not sufficient by itself, since a load carrying no cache bits at all still
 // fails even with it, so the `volatile` below is doing the other half.
+//
+// The memory is pinned once and reused across timers rather than allocated for
+// every delay kernel. Pinning and unpinning host memory updates the GPU page
+// tables and invalidates its TLBs. On MI350X virtual functions that costs about
+// 1.5ms per timed run, and it delays kernel launches on the other partition of
+// the same GPU by tens of microseconds, distorting whatever is being timed
+// there. The pool only grows to the number of delay kernels in flight at once,
+// and its memory is never returned, like other process-lifetime caches.
+class CoherentSemaphorePool {
+ public:
+  static CoherentSemaphorePool& Get() {
+    static absl::NoDestructor<CoherentSemaphorePool> pool;
+    return *pool;
+  }
+
+  absl::StatusOr<void*> Acquire() {
+    {
+      absl::MutexLock lock(mu_);
+      if (!free_.empty()) {
+        void* ptr = free_.back();
+        free_.pop_back();
+        return ptr;
+      }
+    }
+    void* ptr = nullptr;
+    ABSL_RETURN_IF_ERROR(
+        ToStatus(hipHostMalloc(&ptr, sizeof(GpuSemaphoreState),
+                               hipHostMallocPortable | hipHostMallocCoherent),
+                 "Failed to allocate coherent host memory for the delay kernel "
+                 "semaphore"));
+    return ptr;
+  }
+
+  void Release(void* ptr) {
+    absl::MutexLock lock(mu_);
+    free_.push_back(ptr);
+  }
+
+ private:
+  absl::Mutex mu_;
+  std::vector<void*> free_ ABSL_GUARDED_BY(mu_);
+};
+
+// The memory goes back to the pool when the semaphore is destroyed. That is
+// safe because the delay kernel has finished by then: LaunchDelayKernel's
+// contract requires the caller to keep the semaphore alive until it has, and
+// LaunchDelayKernel resets the value before every launch.
 absl::StatusOr<GpuSemaphore> CreateCoherentSemaphore() {
-  void* ptr = nullptr;
-  ABSL_RETURN_IF_ERROR(
-      ToStatus(hipHostMalloc(&ptr, sizeof(GpuSemaphoreState),
-                             hipHostMallocPortable | hipHostMallocCoherent),
-               "Failed to allocate coherent host memory for the delay kernel "
-               "semaphore"));
+  ABSL_ASSIGN_OR_RETURN(void* ptr, CoherentSemaphorePool::Get().Acquire());
   return GpuSemaphore::Create(std::make_unique<GenericMemoryAllocation>(
       ptr, sizeof(GpuSemaphoreState), [](void* location, uint64_t size) {
-        hipError_t result = hipHostFree(location);
-        if (result != hipSuccess) {
-          LOG(ERROR) << "Failed to free delay kernel semaphore: "
-                     << ToString(result);
-        }
+        CoherentSemaphorePool::Get().Release(location);
       }));
 }
 

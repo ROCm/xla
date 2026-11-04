@@ -93,6 +93,50 @@ TEST_F(DelayKernelTest, HostReleaseStopsTheKernelBeforeItTimesOut) {
   EXPECT_EQ(event.PollForStatus(), Event::Status::kComplete);
 }
 
+// Every timed run launches a delay kernel, so its semaphore memory is pinned
+// once and reused rather than pinned and unpinned per launch. A reused
+// semaphore must start out holding the kernel again.
+TEST_F(DelayKernelTest, ReusesSemaphoreMemoryOnceTheKernelIsDone) {
+  WarmUp();
+
+  void* first_location = nullptr;
+  {
+    ASSERT_OK_AND_ASSIGN(GpuSemaphore semaphore,
+                         LaunchDelayKernel(stream_.get()));
+    first_location = semaphore.device().opaque();
+    *semaphore = GpuSemaphoreState::kRelease;
+    ASSERT_THAT(stream_->BlockHostUntilDone(), absl_testing::IsOk());
+  }
+
+  ASSERT_OK_AND_ASSIGN(GpuSemaphore semaphore,
+                       LaunchDelayKernel(stream_.get()));
+  EXPECT_EQ(semaphore.device().opaque(), first_location);
+  EXPECT_EQ(*semaphore, GpuSemaphoreState::kHold);
+  *semaphore = GpuSemaphoreState::kRelease;
+  ASSERT_THAT(stream_->BlockHostUntilDone(), absl_testing::IsOk());
+  EXPECT_EQ(*semaphore, GpuSemaphoreState::kRelease);
+}
+
+// Delay kernels in flight at the same time must not share a semaphore, or
+// releasing one would release the other.
+TEST_F(DelayKernelTest, ConcurrentDelayKernelsUseSeparateSemaphores) {
+  WarmUp();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Stream> other_stream,
+                       executor_->CreateStream(std::nullopt));
+
+  ASSERT_OK_AND_ASSIGN(GpuSemaphore first, LaunchDelayKernel(stream_.get()));
+  ASSERT_OK_AND_ASSIGN(GpuSemaphore second,
+                       LaunchDelayKernel(other_stream.get()));
+  EXPECT_NE(first.device().opaque(), second.device().opaque());
+
+  *first = GpuSemaphoreState::kRelease;
+  *second = GpuSemaphoreState::kRelease;
+  ASSERT_THAT(stream_->BlockHostUntilDone(), absl_testing::IsOk());
+  ASSERT_THAT(other_stream->BlockHostUntilDone(), absl_testing::IsOk());
+  EXPECT_EQ(*first, GpuSemaphoreState::kRelease);
+  EXPECT_EQ(*second, GpuSemaphoreState::kRelease);
+}
+
 // The other half of the contract. A host that never releases the kernel still
 // gets the stream back, and can tell that the measurement was compromised.
 TEST_F(DelayKernelTest, TimesOutWhenTheHostNeverReleasesIt) {
