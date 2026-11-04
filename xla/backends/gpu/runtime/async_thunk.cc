@@ -22,13 +22,20 @@ limitations under the License.
 #include <utility>
 #include <variant>
 
+#include "absl/algorithm/container.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
+#include "xla/backends/gpu/collectives/gpu_clique_key.h"
+#include "xla/backends/gpu/collectives/gpu_collectives.h"
+#include "xla/backends/gpu/collectives/gpu_communicator.h"
 #include "xla/backends/gpu/runtime/async_execution.h"
+#include "xla/backends/gpu/runtime/collective_cliques.h"
 #include "xla/backends/gpu/runtime/collective_params.h"
+#include "xla/backends/gpu/runtime/collective_thunk.h"
 #include "xla/backends/gpu/runtime/command.h"
 #include "xla/backends/gpu/runtime/execution_stream_id.h"
 #include "xla/backends/gpu/runtime/thunk.h"
@@ -39,6 +46,26 @@ limitations under the License.
 #include "xla/util.h"
 
 namespace xla::gpu {
+namespace {
+
+// Marks all collectives nested in `thunks` as async and registers them with
+// `async_execution`, so that the async-done can resolve their communicators.
+void RegisterNestedCollectives(ThunkSequence& thunks,
+                               AsyncExecution& async_execution) {
+  for (std::unique_ptr<Thunk>& thunk : thunks) {
+    thunk->Walk([&](Thunk* nested) {
+      auto* collective = dynamic_cast<CollectiveThunk*>(nested);
+      if (collective == nullptr) {
+        return;
+      }
+      collective->set_async(true);
+      async_execution.AddCollective(
+          {collective->collective_config(), collective->communication_id()});
+    });
+  }
+}
+
+}  // namespace
 
 //===----------------------------------------------------------------------===//
 // AsyncStartThunk
@@ -51,7 +78,9 @@ AsyncStartThunk::AsyncStartThunk(ThunkInfo thunk_info,
       execution_stream_id_(execution_stream_id),
       executor_(std::move(thunks)),
       async_execution_(std::make_shared<AsyncExecution>(this->thunk_info(),
-                                                        devices_per_host)) {}
+                                                        devices_per_host)) {
+  RegisterNestedCollectives(executor_.thunks(), *async_execution_);
+}
 
 AsyncStartThunk::AsyncStartThunk(
     ThunkInfo thunk_info, ExecutionStreamId execution_stream_id,
@@ -59,7 +88,9 @@ AsyncStartThunk::AsyncStartThunk(
     : Thunk(Thunk::kAsyncStart, std::move(thunk_info)),
       execution_stream_id_(execution_stream_id),
       executor_(std::move(thunks)),
-      async_execution_(std::move(async_execution)) {}
+      async_execution_(std::move(async_execution)) {
+  RegisterNestedCollectives(executor_.thunks(), *async_execution_);
+}
 
 std::string AsyncStartThunk::ToString(int indent) const {
   std::string indent_str(indent * 2, ' ');
@@ -155,7 +186,35 @@ std::string AsyncDoneThunk::ToString(int indent) const {
 }
 
 absl::Status AsyncDoneThunk::ExecuteOnStream(const ExecuteParams& params) {
-  return async_execution_->Done(params.execution_scoped_state, params.stream);
+  ABSL_RETURN_IF_ERROR(
+      async_execution_->Done(params.execution_scoped_state, params.stream));
+
+  if (params.collective_params == nullptr ||
+      params.collective_cliques == nullptr) {
+    return absl::OkStatus();
+  }
+
+  // Notify every distinct communicator used by collectives in this scope.
+  // Communicators that were not created (lookup fails) are skipped.
+  absl::InlinedVector<GpuCommunicator*, 2> notified;
+  for (const AsyncExecution::CollectiveCommKey& key :
+       async_execution_->collectives()) {
+    absl::StatusOr<GpuCliqueKey> clique_key = GetCollectiveGpuCliqueKey(
+        *params.collective_params, key.config, key.communication_id);
+    if (!clique_key.ok()) {
+      continue;
+    }
+    absl::StatusOr<GpuCommunicator*> comm = params.collective_cliques->GetComm(
+        *clique_key, params.collective_params->global_device_id);
+    if (!comm.ok() || *comm == nullptr ||
+        absl::c_linear_search(notified, *comm)) {
+      continue;
+    }
+    notified.push_back(*comm);
+    ABSL_RETURN_IF_ERROR(
+        (*comm)->AsyncDone(GpuCollectives::On(*params.stream)));
+  }
+  return absl::OkStatus();
 }
 
 absl::StatusOr<const se::CommandBuffer::Command*> AsyncDoneThunk::Record(

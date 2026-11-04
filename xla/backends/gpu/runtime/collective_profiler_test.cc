@@ -26,6 +26,7 @@ namespace xla::gpu {
 namespace {
 
 using ::testing::HasSubstr;
+using ::testing::Not;
 
 TEST(CollectiveProfilerTest, SizeBucket) {
   EXPECT_EQ(CollectiveProfiler::SizeBucket(0), -1);
@@ -49,18 +50,35 @@ TEST(CollectiveProfilerTest, StatsAdd) {
 
 TEST(CollectiveProfilerTest, Format) {
   CollectiveProfiler::Aggregates aggregates;
-  aggregates["kAllReduce"][20].Add(absl::Milliseconds(3));
-  aggregates["kAllReduce"][20].Add(absl::Milliseconds(1));
-  aggregates["kAllGather"][10].Add(absl::Milliseconds(4));
+  aggregates.sync["kAllReduce"][20].Add(absl::Milliseconds(3));
+  aggregates.sync["kAllReduce"][20].Add(absl::Milliseconds(1));
+  aggregates.async["kAllGather"][10].Add(absl::Milliseconds(4));
+  aggregates.async["kAllGather"][10].Add(absl::Milliseconds(8));
 
   std::string out = CollectiveProfiler::Format(aggregates, /*skip_rounds=*/5,
                                                /*num_devices=*/2, /*pending=*/0,
                                                /*command_buffer_records=*/0);
   EXPECT_THAT(out, HasSubstr("skipped first 5"));
-  EXPECT_THAT(out, HasSubstr("kAllReduce: calls=2 total=4.000 ms (50.0%)"));
+  EXPECT_THAT(out, HasSubstr("--- Sync collectives"));
+  EXPECT_THAT(out, HasSubstr("--- Async collectives"));
+  EXPECT_THAT(out, HasSubstr("kAllReduce: calls=2 total=4.000 ms (25.0%)"));
+  EXPECT_THAT(out, HasSubstr("kAllGather: calls=2 total=12.000 ms (75.0%)"));
   EXPECT_THAT(out, HasSubstr("[1 MiB, 2 MiB)"));
   EXPECT_THAT(out, HasSubstr("[1 KiB, 2 KiB)"));
-  EXPECT_THAT(out, HasSubstr("TOTAL: 8.000 ms"));
+  EXPECT_THAT(out, HasSubstr("SYNC TOTAL: 4.000 ms (25.0%)"));
+  EXPECT_THAT(out, HasSubstr("ASYNC TOTAL: 12.000 ms (75.0%)"));
+  EXPECT_THAT(out, HasSubstr("\nTOTAL: 16.000 ms"));
+}
+
+TEST(CollectiveProfilerTest, FormatSkipsEmptySection) {
+  CollectiveProfiler::Aggregates aggregates;
+  aggregates.sync["kAllReduce"][20].Add(absl::Milliseconds(2));
+
+  std::string out = CollectiveProfiler::Format(aggregates, /*skip_rounds=*/0,
+                                               /*num_devices=*/1, /*pending=*/0,
+                                               /*command_buffer_records=*/0);
+  EXPECT_THAT(out, HasSubstr("SYNC TOTAL: 2.000 ms (100.0%)"));
+  EXPECT_THAT(out, Not(HasSubstr("Async collectives")));
 }
 
 TEST(CollectiveProfilerTest, NestedScopeDisablesTiming) {

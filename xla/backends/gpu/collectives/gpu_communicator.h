@@ -227,6 +227,16 @@ class GpuCommunicator : public Communicator {
     return Unimplemented("Symmetric memory is not implemented");
   }
 
+  // Tells the communicator whether the following collective launches belong
+  // to an async start/done pair.
+  virtual void SetAsync(bool is_async) {}
+
+  // Called by the async-done of a scope that launched collectives on this
+  // communicator, after the compute stream waits for the start's event.
+  virtual absl::Status AsyncDone(const Executor& executor) {
+    return absl::OkStatus();
+  }
+
   absl::StatusOr<std::unique_ptr<SymmetricMemory>> CreateSymmetricMemory(
       se::DeviceAddressBase addr) {
     return CreateSymmetricMemory(addr, /*symmetric_window=*/false);

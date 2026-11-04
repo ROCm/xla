@@ -145,6 +145,11 @@ class CollectiveThunk : public Command {
 
   CommunicationId communication_id() const { return communication_id_; }
   CollectivesMode collectives_mode() const { return collectives_mode_; }
+  const CollectiveConfig& collective_config() const { return config(); }
+
+  // Marks this collective as launched inside an async start/done scope.
+  void set_async(bool is_async) { is_async_ = is_async; }
+  bool is_async() const { return is_async_; }
 
   // Returns the clique key used by this collective thunk at run time.
   absl::StatusOr<GpuCliqueKey> GetCliqueKey(const ExecuteParams& params) const;
@@ -230,6 +235,7 @@ class CollectiveThunk : public Command {
 
   CommunicationId communication_id_;
   CollectivesMode collectives_mode_;
+  bool is_async_ = false;
 
   // Device assignment is owned by PjRtExecutable and never changes between
   // thunk executions, and replica groups are baked into the thunk at compile
