@@ -33,12 +33,13 @@ set -e
 set -x
 
 N_BUILD_JOBS=$(grep -c ^processor /proc/cpuinfo)
-# If rocm-smi exists locally (it should) use it to find
-# out how many GPUs we have to test with.
-rocm-smi -i
-STATUS=$?
-if [ $STATUS -ne 0 ]; then TF_GPU_COUNT=1; else
-   TF_GPU_COUNT=$(rocm-smi -i|grep 'Device ID' |grep 'GPU' |wc -l)
+# JAX images provide amd-smi.
+command -v amd-smi >/dev/null 2>&1 || { echo "ERROR: amd-smi is required"; exit 1; }
+amd-smi list
+TF_GPU_COUNT=$(amd-smi list | grep -cE '^GPU:' || true)
+if [ "${TF_GPU_COUNT:-0}" -eq 0 ]; then
+  echo "ERROR: amd-smi list reported no GPUs"
+  exit 1
 fi
 if [[ $TF_GPU_COUNT -lt 4 ]]; then
     echo "Found only ${TF_GPU_COUNT} gpus, multi-gpu tests need atleast 4 gpus."
