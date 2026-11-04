@@ -18,15 +18,18 @@ limitations under the License.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <tuple>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
 #include "xla/autotuning.pb.h"
@@ -241,6 +244,67 @@ TEST_F(HipblasLtBackendTest, Compile) {
   absl::StatusOr<std::unique_ptr<Executable>> executable = backend_.Compile(
       *(module->entry_computation()->root_instruction()->operand(0)), *config);
   EXPECT_THAT(executable, absl_testing::IsOk());
+}
+
+TEST_F(HipblasLtBackendTest, GetSupportedConfigsWithAllSolutions) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> hlo_module,
+                       ParseAndReturnVerifiedModule(kHipblasLtCustomCallHlo));
+  const HloInstruction& gemm =
+      *hlo_module->entry_computation()->root_instruction()->operand(0);
+  ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> heuristic,
+                       backend_.GetSupportedConfigs(gemm));
+  for (const std::unique_ptr<BackendConfig>& config : heuristic) {
+    EXPECT_FALSE(config->gemm().has_algorithm_proto());
+  }
+
+  debug_options_.set_xla_gpu_hipblaslt_autotune_all_solutions(true);
+  ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> all,
+                       backend_.GetSupportedConfigs(gemm));
+  ASSERT_GT(all.size(), heuristic.size());
+  absl::flat_hash_set<int32_t> solutions;
+  for (int64_t i = 0; i < static_cast<int64_t>(all.size()); ++i) {
+    const AutotuneResult::GemmKey& key = all[i]->gemm();
+    EXPECT_EQ(key.algorithm(), i);
+    ASSERT_TRUE(key.algorithm_proto().has_hipblaslt()) << "at " << i;
+    EXPECT_NE(key.algorithm_proto().library_version(), 0);
+    EXPECT_TRUE(
+        solutions.insert(key.algorithm_proto().hipblaslt().solution_index())
+            .second)
+        << "at " << i;
+  }
+
+  // A solution outside the heuristic list is applied with its descriptor and
+  // compiles.
+  const BackendConfig& last = *all.back();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Executable> executable,
+                       backend_.Compile(gemm, last));
+  EXPECT_NE(executable, nullptr);
+  EXPECT_OK(backend_.ApplyConfig(*hlo_module->entry_computation()
+                                      ->root_instruction()
+                                      ->mutable_operands()
+                                      .at(0),
+                                 last));
+  EXPECT_THAT(
+      RunFileCheck(
+          hlo_module->ToString(),
+          absl::StrCat(
+              R"(CHECK: "selected_algorithm":")", all.size() - 1, R"(")",
+              R"(
+                              CHECK-SAME: "algorithm_proto":{"library_version":")",
+              last.gemm().algorithm_proto().library_version(),
+              R"(","hipblaslt":{"solution_index":)",
+              last.gemm().algorithm_proto().hipblaslt().solution_index())),
+      absl_testing::IsOkAndHolds(true));
+
+  // Applying a heuristic-only config drops a previously applied descriptor.
+  EXPECT_OK(backend_.ApplyConfig(*hlo_module->entry_computation()
+                                      ->root_instruction()
+                                      ->mutable_operands()
+                                      .at(0),
+                                 *heuristic.front()));
+  EXPECT_THAT(
+      RunFileCheck(hlo_module->ToString(), "CHECK-NOT: algorithm_proto"),
+      absl_testing::IsOkAndHolds(true));
 }
 
 const char kScaledDotFp8FusionHlo[] = R"(

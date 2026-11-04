@@ -37,6 +37,13 @@ absl::StatusOr<BlasLtMatmulAlgorithm> BlasLtMatmulAlgorithm::FromProto(
           /*algorithm=*/cublaslt,
       };
     }
+    case BlasLtMatmulAlgorithmProto::kHipblaslt:
+      return BlasLtMatmulAlgorithm{
+          /*library_version=*/proto.library_version(),
+          /*algorithm=*/
+          HipblasLtMatmulAlgorithm{
+              /*solution_index=*/proto.hipblaslt().solution_index()},
+      };
     case BlasLtMatmulAlgorithmProto::ALGORITHM_NOT_SET:
       return absl::InvalidArgumentError(
           "BlasLtMatmulAlgorithmProto does not have an algorithm set.");
@@ -51,6 +58,9 @@ BlasLtMatmulAlgorithmProto BlasLtMatmulAlgorithm::ToProto() const {
   if (const auto* cublaslt =
           std::get_if<cuda::CublasLtMatmulAlgorithm>(&algorithm)) {
     *proto.mutable_cublaslt() = cublaslt->ToProto();
+  } else if (const auto* hipblaslt =
+                 std::get_if<HipblasLtMatmulAlgorithm>(&algorithm)) {
+    proto.mutable_hipblaslt()->set_solution_index(hipblaslt->solution_index);
   }
   return proto;
 }

@@ -30,6 +30,7 @@ limitations under the License.
 #include "rocm/rocm_config.h"
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/gpu/blas_lt_matmul_algorithm.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
 #include "xla/stream_executor/rocm/hip_blas_utils.h"
 #include "xla/stream_executor/stream.h"
@@ -129,6 +130,21 @@ class BlasLt : public gpu::BlasLt {
     absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithms(
         size_t max_algorithm_count, size_t max_workspace_size) const override;
 
+    // The heuristic list followed by every other hipBLASLt solution that
+    // supports this problem (getAllAlgos + matmulIsAlgoSupported).
+    absl::StatusOr<std::vector<MatmulAlgorithm>> GetAllSupportedAlgorithms(
+        size_t max_heuristic_count, size_t max_workspace_size) const override;
+
+    // Describes an algorithm by its hipBLASLt solution index.
+    absl::StatusOr<gpu::BlasLtMatmulAlgorithm> GetBlasLtMatmulAlgorithm(
+        const MatmulAlgorithm& algorithm) const override;
+
+    // Looks the solution index up in the loaded library and checks that it
+    // supports this problem within `max_workspace_size`.
+    absl::StatusOr<MatmulAlgorithm> GetMatmulAlgorithm(
+        const gpu::BlasLtMatmulAlgorithm& algorithm,
+        size_t max_workspace_size) const override;
+
     absl::Status SetAlgorithm(const MatmulAlgorithm& algorithm) override {
       auto palgo = std::any_cast<hipblasLtMatmulAlgo_t>(&algorithm.opaque_algo);
       if (palgo == nullptr) {
@@ -140,6 +156,11 @@ class BlasLt : public gpu::BlasLt {
     }
 
    private:
+    // Sets the dummy bias / scale pointers hipBLASLt needs on the descriptor
+    // before it reports algorithms for bias or scaled problems. Requires
+    // blas_lt_.mu_.
+    absl::Status SetDummyPointersForAlgorithmQuery() const;
+
     const BlasLt& blas_lt_;
     MatmulDesc op_desc_;
     MatrixLayout a_desc_;

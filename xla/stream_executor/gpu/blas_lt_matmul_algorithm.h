@@ -26,11 +26,25 @@ limitations under the License.
 
 namespace stream_executor::gpu {
 
+// ROCm-specific serializable description of a `BlasLtMatmulAlgorithm`: the
+// index of a hipBLASLt solution in the loaded library.
+struct HipblasLtMatmulAlgorithm {
+  int32_t solution_index = 0;
+
+  bool operator==(const HipblasLtMatmulAlgorithm& other) const {
+    return solution_index == other.solution_index;
+  }
+  bool operator!=(const HipblasLtMatmulAlgorithm& other) const {
+    return !(*this == other);
+  }
+};
+
 // Platform-agnostic, serializable representation of a BlasLt matmul algorithm
 // (paired with the backend library version) for autotuning persistence and AOT
 // compilation.
 struct BlasLtMatmulAlgorithm {
-  using Algorithm = std::variant<cuda::CublasLtMatmulAlgorithm>;
+  using Algorithm =
+      std::variant<cuda::CublasLtMatmulAlgorithm, HipblasLtMatmulAlgorithm>;
 
   int64_t library_version = 0;
   Algorithm algorithm;

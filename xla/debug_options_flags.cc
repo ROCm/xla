@@ -231,6 +231,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_autotune_level(4);
   opts.set_xla_gpu_autotune_max_solutions(0);
   opts.set_xla_gpu_blas_max_algorithms(0);
+  opts.set_xla_gpu_hipblaslt_autotune_all_solutions(false);
   opts.set_xla_gpu_fusion_autotune_top_k_configs(1);
   opts.set_xla_cpu_multi_thread_eigen(true);
   opts.set_xla_enable_hlo_modules_upload(true);
@@ -1836,6 +1837,15 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "autotuning. Setting this to a lower value (e.g., 16 or 32) speeds up "
       "compilation at the cost of potentially missing the optimal algorithm. "
       "Setting to 0 uses the default (128 for most BLAS libraries)."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_hipblaslt_autotune_all_solutions",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_hipblaslt_autotune_all_solutions),
+      debug_options->xla_gpu_hipblaslt_autotune_all_solutions(),
+      "Autotune hipBLASLt GEMMs over every supported hipBLASLt solution, not "
+      "only the heuristic's top xla_gpu_blas_max_algorithms. The choice is "
+      "recorded by hipBLASLt solution index and needs the same hipBLASLt "
+      "library at run time."));
   flag_list->push_back(
       tsl::Flag("xla_gpu_fusion_autotune_top_k_configs",
                 int32_setter_for(

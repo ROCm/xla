@@ -48,6 +48,7 @@ limitations under the License.
 #include "xla/shape_util.h"
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/gpu/blas_lt_matmul_algorithm.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
 #include "xla/tools/hlo_decomposer.h"
 #include "xla/tsl/platform/errors.h"
@@ -416,8 +417,26 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
       max_algorithms = GemmConfig::kNumAlgorithms;
     }
 
-    ABSL_ASSIGN_OR_RETURN(std::vector<BlasLt::MatmulAlgorithm> algorithms,
-                          plan->GetAlgorithms(max_algorithms, workspace_size));
+    // With all solutions, configs past the heuristic list are only reachable
+    // through their solution index, so every config records it.
+    bool all_solutions =
+        debug_options().xla_gpu_hipblaslt_autotune_all_solutions();
+    std::vector<BlasLt::MatmulAlgorithm> algorithms;
+    if (all_solutions) {
+      absl::StatusOr<std::vector<BlasLt::MatmulAlgorithm>> all =
+          plan->GetAllSupportedAlgorithms(max_algorithms, workspace_size);
+      if (all.ok()) {
+        algorithms = *std::move(all);
+      } else if (absl::IsUnimplemented(all.status())) {
+        all_solutions = false;
+      } else {
+        return all.status();
+      }
+    }
+    if (!all_solutions) {
+      ABSL_ASSIGN_OR_RETURN(
+          algorithms, plan->GetAlgorithms(max_algorithms, workspace_size));
+    }
     int num_algorithms = algorithms.size();
     std::vector<std::unique_ptr<BackendConfig>> configs;
     configs.reserve(num_algorithms);
@@ -426,8 +445,15 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
       auto* gemm_key = config->mutable_gemm();
       gemm_key->set_algorithm(i);
       gemm_key->set_autotune_workspace_size(workspace_size);
+      if (all_solutions) {
+        ABSL_ASSIGN_OR_RETURN(se::gpu::BlasLtMatmulAlgorithm descriptor,
+                              plan->GetBlasLtMatmulAlgorithm(algorithms[i]));
+        *gemm_key->mutable_algorithm_proto() = descriptor.ToProto();
+      }
       configs.push_back(std::move(config));
     }
+    VLOG(1) << "hipBLASLt: " << num_algorithms << " configs for "
+            << instr.name() << (all_solutions ? " (all solutions)" : "");
     if (configs.empty()) {
       Decision can_unfuse = CanUnfuseFp8Output(instr);
       if (can_unfuse.IsForbidden()) {
@@ -630,6 +656,13 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
     backend_config.set_selected_algorithm(gemm_key.algorithm());
     backend_config.set_autotune_workspace_size(
         gemm_key.autotune_workspace_size());
+    // Assigning an empty submessage via mutable_algorithm_proto() would still
+    // mark has_algorithm_proto() true, so clear it explicitly when unset.
+    if (gemm_key.has_algorithm_proto()) {
+      *backend_config.mutable_algorithm_proto() = gemm_key.algorithm_proto();
+    } else {
+      backend_config.clear_algorithm_proto();
+    }
     ABSL_RETURN_IF_ERROR(instr.set_backend_config(std::move(gpu_config)));
 
     if (instr.shape().IsTuple() && !instr.shape().tuple_shapes().empty()) {

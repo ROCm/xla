@@ -23,10 +23,12 @@ limitations under the License.
 #include <vector>
 
 #include "absl/base/casts.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
 #include "rocm/include/hip/library_types.h"
@@ -41,6 +43,7 @@ limitations under the License.
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/event_based_timer.h"
+#include "xla/stream_executor/gpu/blas_lt_matmul_algorithm.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
 #include "xla/stream_executor/gpu/gpu_helpers.h"
 #include "xla/stream_executor/memory_allocation.h"
@@ -227,6 +230,62 @@ absl::Status BlasLt::Init() {
   return std::move(desc);
 }
 
+absl::Status BlasLt::RegularMatmulPlan::SetDummyPointersForAlgorithmQuery()
+    const {
+  // hipBlasLt requires setting the bias pointer (even a dummy one), otherwise
+  // no algorithms can be found for "bias epilogues". This is to be removed
+  // later when this limitation is gone.
+  if (op_desc_.has_bias_epilogue()) {
+    static int64_t dummy_pointer = 0xACEBALL;
+    ABSL_RETURN_IF_ERROR(SetAttr(
+        op_desc_.get(), HIPBLASLT_MATMUL_DESC_BIAS_POINTER, &dummy_pointer));
+  }
+
+  // hipBlasLt requires setting the a/b scale pointer (even a dummy one),
+  // otherwise no algorithms can be found for "a/b scaling". This is to be
+  // removed later when this limitation is gone.
+  switch (op_desc_.scale_mode()) {
+    case gpu::ScaleMode::kNone:
+      break;
+    case gpu::ScaleMode::kTensorScaling: {
+      static int64_t dummy_pointer = 0xACEBALL;
+      ABSL_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                   HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
+                                   &dummy_pointer));
+      ABSL_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                   HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
+                                   &dummy_pointer));
+      break;
+    }
+    case gpu::ScaleMode::kBlockScaling: {
+      static int64_t dummy_pointer = 0xACEBALL;
+      ABSL_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                   HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
+                                   &dummy_pointer));
+      ABSL_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
+                                   HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
+                                   &dummy_pointer));
+      hipblasLtMatmulMatrixScale_t mx_scale =
+          HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0;
+      ABSL_RETURN_IF_ERROR(SetAttr(
+          op_desc_.get(), HIPBLASLT_MATMUL_DESC_A_SCALE_MODE, mx_scale));
+      ABSL_RETURN_IF_ERROR(SetAttr(
+          op_desc_.get(), HIPBLASLT_MATMUL_DESC_B_SCALE_MODE, mx_scale));
+      break;
+    }
+  }
+
+  // hipBLASLt only returns algorithms that honor D_SCALE_POINTER if it is
+  // set before the heuristic query. Otherwise it may return algorithms that
+  // silently ignore the D scale at execution time.
+  if (has_d_scale_) {
+    static int64_t dummy_pointer = 0xACEBALL;
+    ABSL_RETURN_IF_ERROR(SetAttr(
+        op_desc_.get(), HIPBLASLT_MATMUL_DESC_D_SCALE_POINTER, &dummy_pointer));
+  }
+  return absl::OkStatus();
+}
+
 auto BlasLt::RegularMatmulPlan::GetAlgorithms(size_t max_algorithm_count,
                                               size_t max_workspace_size) const
     -> absl::StatusOr<std::vector<MatmulAlgorithm>> {
@@ -251,58 +310,7 @@ auto BlasLt::RegularMatmulPlan::GetAlgorithms(size_t max_algorithm_count,
     std::unique_ptr<ActivateContext> activation =
         blas_lt_.executor_->Activate();
 
-    // hipBlasLt requires setting the bias pointer (even a dummy one), otherwise
-    // no algorithms can be found for "bias epilogues". This is to be removed
-    // later when this limitation is gone.
-    if (op_desc_.has_bias_epilogue()) {
-      static int64_t dummy_pointer = 0xACEBALL;
-      ABSL_RETURN_IF_ERROR(SetAttr(
-          op_desc_.get(), HIPBLASLT_MATMUL_DESC_BIAS_POINTER, &dummy_pointer));
-    }
-
-    // hipBlasLt requires setting the a/b scale pointer (even a dummy one),
-    // otherwise no algorithms can be found for "a/b scaling". This is to be
-    // removed later when this limitation is gone.
-    switch (op_desc_.scale_mode()) {
-      case gpu::ScaleMode::kNone:
-        break;
-      case gpu::ScaleMode::kTensorScaling: {
-        static int64_t dummy_pointer = 0xACEBALL;
-        ABSL_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                     HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
-                                     &dummy_pointer));
-        ABSL_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                     HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
-                                     &dummy_pointer));
-        break;
-      }
-      case gpu::ScaleMode::kBlockScaling: {
-        static int64_t dummy_pointer = 0xACEBALL;
-        ABSL_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                     HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER,
-                                     &dummy_pointer));
-        ABSL_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                     HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER,
-                                     &dummy_pointer));
-        hipblasLtMatmulMatrixScale_t mx_scale =
-            HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0;
-        ABSL_RETURN_IF_ERROR(SetAttr(
-            op_desc_.get(), HIPBLASLT_MATMUL_DESC_A_SCALE_MODE, mx_scale));
-        ABSL_RETURN_IF_ERROR(SetAttr(
-            op_desc_.get(), HIPBLASLT_MATMUL_DESC_B_SCALE_MODE, mx_scale));
-        break;
-      }
-    }
-
-    // hipBLASLt only returns algorithms that honor D_SCALE_POINTER if it is
-    // set before the heuristic query. Otherwise it may return algorithms that
-    // silently ignore the D scale at execution time.
-    if (has_d_scale_) {
-      static int64_t dummy_pointer = 0xACEBALL;
-      ABSL_RETURN_IF_ERROR(SetAttr(op_desc_.get(),
-                                   HIPBLASLT_MATMUL_DESC_D_SCALE_POINTER,
-                                   &dummy_pointer));
-    }
+    ABSL_RETURN_IF_ERROR(SetDummyPointersForAlgorithmQuery());
 
     int found_algorithm_count = 0;
     auto error = hipblasLtMatmulAlgoGetHeuristic(
@@ -324,6 +332,127 @@ auto BlasLt::RegularMatmulPlan::GetAlgorithms(size_t max_algorithm_count,
     }
   }
   return algorithms;
+}
+
+auto BlasLt::RegularMatmulPlan::GetAllSupportedAlgorithms(
+    size_t max_heuristic_count, size_t max_workspace_size) const
+    -> absl::StatusOr<std::vector<MatmulAlgorithm>> {
+  ABSL_ASSIGN_OR_RETURN(std::vector<MatmulAlgorithm> algorithms,
+                        GetAlgorithms(max_heuristic_count, max_workspace_size));
+  absl::flat_hash_set<int> seen;
+  for (MatmulAlgorithm& algorithm : algorithms) {
+    seen.insert(hipblaslt_ext::getIndexFromAlgo(
+        std::any_cast<hipblasLtMatmulAlgo_t&>(algorithm.opaque_algo)));
+  }
+  const size_t num_heuristic = algorithms.size();
+
+  absl::MutexLock lock(blas_lt_.mu_);
+  TF_RET_CHECK(blas_lt_.handle_ != nullptr);
+  std::unique_ptr<ActivateContext> activation = blas_lt_.executor_->Activate();
+  ABSL_RETURN_IF_ERROR(SetDummyPointersForAlgorithmQuery());
+  ABSL_ASSIGN_OR_RETURN(
+      auto op_a, GetAttr<hipblasOperation_t>(op_desc_.get(),
+                                             HIPBLASLT_MATMUL_DESC_TRANSA));
+  ABSL_ASSIGN_OR_RETURN(
+      auto op_b, GetAttr<hipblasOperation_t>(op_desc_.get(),
+                                             HIPBLASLT_MATMUL_DESC_TRANSB));
+  std::vector<hipblasLtMatmulHeuristicResult_t> all;
+  SE_HIPBLAS_RETURN_IF_ERROR(hipblaslt_ext::getAllAlgos(
+      blas_lt_.handle_.get(), hipblaslt_ext::GemmType::HIPBLASLT_GEMM, op_a,
+      op_b, a_desc_.type(), b_desc_.type(), c_desc_.type(), d_desc_.type(),
+      op_desc_.compute_type(), all));
+  for (hipblasLtMatmulHeuristicResult_t& result : all) {
+    if (!seen.insert(hipblaslt_ext::getIndexFromAlgo(result.algo)).second) {
+      continue;
+    }
+    size_t workspace_size = 0;
+    if (hipblaslt_ext::matmulIsAlgoSupported(
+            blas_lt_.handle_.get(), op_desc_.get(), &alpha_[0], a_desc_.get(),
+            b_desc_.get(), &beta_[0], c_desc_.get(), d_desc_.get(), result.algo,
+            workspace_size) != HIPBLAS_STATUS_SUCCESS ||
+        workspace_size > max_workspace_size) {
+      continue;
+    }
+    algorithms.push_back({result.algo, workspace_size});
+  }
+  VLOG(1) << "hipBLASLt: " << num_heuristic << " heuristic and "
+          << algorithms.size() - num_heuristic << " further solutions of "
+          << all.size() << " support the problem";
+  return algorithms;
+}
+
+absl::StatusOr<gpu::BlasLtMatmulAlgorithm>
+BlasLt::RegularMatmulPlan::GetBlasLtMatmulAlgorithm(
+    const MatmulAlgorithm& algorithm) const {
+  const auto* algo =
+      std::any_cast<hipblasLtMatmulAlgo_t>(&algorithm.opaque_algo);
+  if (algo == nullptr) {
+    return absl::InternalError("Invalid algorithm type!");
+  }
+  hipblasLtMatmulAlgo_t copy = *algo;
+  int version = 0;
+  {
+    absl::MutexLock lock(blas_lt_.mu_);
+    TF_RET_CHECK(blas_lt_.handle_ != nullptr);
+    SE_HIPBLAS_RETURN_IF_ERROR(
+        hipblasLtGetVersion(blas_lt_.handle_.get(), &version));
+  }
+  return gpu::BlasLtMatmulAlgorithm{
+      /*library_version=*/version,
+      /*algorithm=*/
+      gpu::HipblasLtMatmulAlgorithm{
+          /*solution_index=*/hipblaslt_ext::getIndexFromAlgo(copy)},
+  };
+}
+
+absl::StatusOr<BlasLt::MatmulAlgorithm>
+BlasLt::RegularMatmulPlan::GetMatmulAlgorithm(
+    const gpu::BlasLtMatmulAlgorithm& algorithm,
+    size_t max_workspace_size) const {
+  const auto* hipblaslt =
+      std::get_if<gpu::HipblasLtMatmulAlgorithm>(&algorithm.algorithm);
+  if (hipblaslt == nullptr) {
+    return absl::InvalidArgumentError(
+        "BlasLtMatmulAlgorithm does not contain a hipBLASLt algorithm "
+        "descriptor.");
+  }
+  absl::MutexLock lock(blas_lt_.mu_);
+  TF_RET_CHECK(blas_lt_.handle_ != nullptr);
+  int version = 0;
+  SE_HIPBLAS_RETURN_IF_ERROR(
+      hipblasLtGetVersion(blas_lt_.handle_.get(), &version));
+  if (version != algorithm.library_version) {
+    return absl::FailedPreconditionError(absl::StrFormat(
+        "hipBLASLt solution %d was chosen with library version %d, but %d is "
+        "loaded",
+        hipblaslt->solution_index, algorithm.library_version, version));
+  }
+  std::unique_ptr<ActivateContext> activation = blas_lt_.executor_->Activate();
+  ABSL_RETURN_IF_ERROR(SetDummyPointersForAlgorithmQuery());
+  std::vector<int> indices = {hipblaslt->solution_index};
+  std::vector<hipblasLtMatmulHeuristicResult_t> results;
+  if (hipblaslt_ext::getAlgosFromIndex(blas_lt_.handle_.get(), indices,
+                                       results) != HIPBLAS_STATUS_SUCCESS ||
+      results.empty()) {
+    return absl::NotFoundError(absl::StrFormat("hipBLASLt has no solution %d",
+                                               hipblaslt->solution_index));
+  }
+  hipblasLtMatmulAlgo_t algo = results.front().algo;
+  size_t workspace_size = 0;
+  if (hipblaslt_ext::matmulIsAlgoSupported(
+          blas_lt_.handle_.get(), op_desc_.get(), &alpha_[0], a_desc_.get(),
+          b_desc_.get(), &beta_[0], c_desc_.get(), d_desc_.get(), algo,
+          workspace_size) != HIPBLAS_STATUS_SUCCESS) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("hipBLASLt solution %d does not support this problem",
+                        hipblaslt->solution_index));
+  }
+  if (workspace_size > max_workspace_size) {
+    return absl::ResourceExhaustedError(absl::StrFormat(
+        "hipBLASLt solution %d needs %d workspace bytes, %d available",
+        hipblaslt->solution_index, workspace_size, max_workspace_size));
+  }
+  return MatmulAlgorithm{algo, workspace_size};
 }
 
 absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetHipBlasLtMatmulPlan(

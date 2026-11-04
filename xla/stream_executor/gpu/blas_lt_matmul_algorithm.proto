@@ -22,9 +22,17 @@ import "xla/stream_executor/cuda/cublas_lt_matmul_algorithm.proto";
 option java_multiple_files = true;
 option java_outer_classname = "BlasLtMatmulAlgorithmOuter";
 
+// A hipBLASLt solution, identified by its index in the loaded hipBLASLt
+// library (hipblaslt_ext::getIndexFromAlgo). The index is only meaningful for
+// the library version it was taken from.
+message HipblasLtMatmulAlgorithmProto {
+  int32 solution_index = 1;
+}
+
 message BlasLtMatmulAlgorithmProto {
   int64 library_version = 1;
   oneof algorithm {
     stream_executor.cuda.CublasLtMatmulAlgorithmProto cublaslt = 2;
+    HipblasLtMatmulAlgorithmProto hipblaslt = 3;
   }
 }

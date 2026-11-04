@@ -2045,7 +2045,15 @@ message DebugOptions {
   // collective pipeliner.
   optional bool xla_gpu_enable_while_loop_duplicate_stack_elimination = 573;
 
-  // Next id: 574 (568 is used by a sibling branch)
+  // If true, the hipBLASLt GEMM autotuner times every hipBLASLt solution that
+  // supports a GEMM (hipblaslt_ext::getAllAlgos + matmulIsAlgoSupported), not
+  // only the heuristic's top `xla_gpu_blas_max_algorithms` (default 128). The
+  // chosen solution is recorded by its hipBLASLt solution index
+  // (`GemmBackendConfig.algorithm_proto`), so it is valid only with the same
+  // hipBLASLt library. Expect thousands of candidates per GEMM shape.
+  optional bool xla_gpu_hipblaslt_autotune_all_solutions = 568;
+
+  // Next id: 574
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

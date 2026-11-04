@@ -59,6 +59,29 @@ TEST(BlasLtMatmulAlgorithmTest, ProtoConversionAndEquality) {
   EXPECT_NE(original, modified);
 }
 
+TEST(BlasLtMatmulAlgorithmTest, HipblasLtProtoConversionAndEquality) {
+  BlasLtMatmulAlgorithm original{
+      /*library_version=*/100401,
+      /*algorithm=*/HipblasLtMatmulAlgorithm{/*solution_index=*/14826},
+  };
+
+  BlasLtMatmulAlgorithmProto proto = original.ToProto();
+  EXPECT_THAT(proto, EqualsProto(R"pb(
+                library_version: 100401
+                hipblaslt { solution_index: 14826 }
+              )pb"));
+  ASSERT_OK_AND_ASSIGN(BlasLtMatmulAlgorithm round_tripped,
+                       BlasLtMatmulAlgorithm::FromProto(proto));
+  EXPECT_EQ(original, round_tripped);
+
+  BlasLtMatmulAlgorithm other_solution = round_tripped;
+  other_solution.algorithm = HipblasLtMatmulAlgorithm{/*solution_index=*/13973};
+  EXPECT_NE(original, other_solution);
+  BlasLtMatmulAlgorithm cublaslt = round_tripped;
+  cublaslt.algorithm = cuda::CublasLtMatmulAlgorithm{};
+  EXPECT_NE(original, cublaslt);
+}
+
 TEST(BlasLtMatmulAlgorithmTest, EmptyAlgorithmOneofRejected) {
   BlasLtMatmulAlgorithmProto empty_proto;
   empty_proto.set_library_version(120800);
