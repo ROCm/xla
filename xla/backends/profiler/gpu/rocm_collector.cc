@@ -640,23 +640,19 @@ void RocmTraceCollectorImpl::Flush() {
           << " activity events, and aggregated them into "
           << aggregated_events.size() << " events.";
 
-  // device ids for GPUs filled in by roctracer are not zero indexed.
-  // They are offset by number of CPUs on the machine
-  uint32_t min_device_id = INT32_MAX;
-
-  for (const auto& event : aggregated_events) {
-    if (event.device_id < min_device_id) {
-      min_device_id = event.device_id;
-    }
-  }
-
+  // RocmTracer numbers rows by HIP device, so device_id is the plane index.
+  int num_dropped = 0;
   for (auto& event : aggregated_events) {
-    auto id = event.device_id - min_device_id;
-    if (id < num_gpus_) {
-      per_device_collector_[id].AddEvent(std::move(event));
+    if (event.device_id < static_cast<uint32_t>(num_gpus_)) {
+      per_device_collector_[event.device_id].AddEvent(std::move(event));
     } else {
       PrintRocmTracerEvent(event, ". Dropped due to invalid device ID!");
+      ++num_dropped;
     }
+  }
+  if (num_dropped > 0) {
+    LOG(WARNING) << "Dropped " << num_dropped
+                 << " events with no HIP device number.";
   }
 
   // Flush standalone events (e.g. ROCTX markers) directly — they have no
@@ -669,8 +665,8 @@ void RocmTraceCollectorImpl::Flush() {
   if (!standalone_events_.empty()) {
     if (num_gpus_ == 0) {
       LOG(WARNING) << "Dropping " << standalone_events_.size()
-                   << " standalone ROCTX events: no GPUs reported by "
-                      "rocprofiler, so no device plane exists to export them.";
+                   << " standalone ROCTX events: HIP numbers no GPU, so no "
+                      "device plane exists to export them.";
     } else {
       for (auto& event : standalone_events_) {
         per_device_collector_[0].AddEvent(std::move(event));
@@ -716,7 +712,9 @@ void RocmTraceCollectorImpl::Export(XSpace* space) {
     std::string name = GpuPlaneName(id);
     XPlaneBuilder device_plane(FindOrAddMutablePlaneWithName(space, name));
     device_plane.SetId(id);
-    if (id < static_cast<int>(gpu_agents_.size())) {
+    // A HIP device that matched no agent has a placeholder agent.
+    if (id < static_cast<int>(gpu_agents_.size()) &&
+        gpu_agents_[id].type == ROCPROFILER_AGENT_TYPE_GPU) {
       per_device_collector_[id].GetDeviceCapabilities(gpu_agents_[id],
                                                       &device_plane);
     }
