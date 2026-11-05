@@ -15,13 +15,12 @@ limitations under the License.
 
 #include "xla/service/dynamic_padder.h"
 
-#include <gmock/gmock.h>
-
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 
+#include <gmock/gmock.h>
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
@@ -31,6 +30,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/error_spec.h"
+#include "xla/frontend_attributes.h"
 #include "xla/hlo/builder/xla_builder.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -95,6 +95,17 @@ bool CustomCallDynamicDimensionInference(
   }
 
   return false;
+}
+
+HloInstruction* FindValidPrefixMarker(HloModule* module) {
+  for (HloComputation* computation : module->computations()) {
+    for (HloInstruction* instruction : computation->instructions()) {
+      if (instruction->IsCustomCall("xla.valid_prefix")) {
+        return instruction;
+      }
+    }
+  }
+  return nullptr;
 }
 
 class DynamicPadderTest : public HloTestBase {
@@ -2544,6 +2555,89 @@ ENTRY main {
   Literal expected = LiteralUtil::CreateR1<int32_t>({4, 0, 2});
 
   EXPECT_EQ(result, expected);
+}
+
+TEST_F(DynamicPadderTest, PreservesValidPrefixAssociation) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+HloModule ValidPrefixAssociation
+
+ENTRY main {
+  data = f32[8,4] parameter(0)
+  n = s32[] parameter(1)
+  bounded = f32[<=8,4] set-dimension-size(data, n), dimensions={0}
+  ROOT result = f32[<=8,4] exponential(bounded)
+}
+)")
+                    .value();
+
+  DynamicPadder pass;
+  ASSERT_TRUE(pass.Run(module.get()).value());
+
+  HloInstruction* marker = FindValidPrefixMarker(module.get());
+  ASSERT_NE(marker, nullptr);
+  EXPECT_EQ(marker->operand(1),
+            module->entry_computation()->parameter_instruction(1));
+}
+
+TEST_F(DynamicPadderTest, KeepsOriginalExtentInDataflow) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+HloModule ValidPrefixDerivedScalar
+
+ENTRY main {
+  data = f32[8,4] parameter(0)
+  n = s32[] parameter(1)
+  one = s32[] constant(1)
+  n_minus_one = s32[] subtract(n, one)
+  bounded = f32[<=8,4] set-dimension-size(data, n), dimensions={0}
+  result = f32[<=8,4] exponential(bounded)
+  ROOT tuple = (f32[<=8,4], s32[]) tuple(result, n_minus_one)
+}
+)")
+                    .value();
+
+  DynamicPadder pass;
+  ASSERT_TRUE(pass.Run(module.get()).value());
+
+  HloInstruction* n = FindInstruction(module.get(), "n");
+  HloInstruction* n_minus_one = FindInstruction(module.get(), "n_minus_one");
+  HloInstruction* marker = FindValidPrefixMarker(module.get());
+  ASSERT_NE(n, nullptr);
+  ASSERT_NE(n_minus_one, nullptr);
+  ASSERT_NE(marker, nullptr);
+  EXPECT_EQ(marker->operand(1), n);
+  EXPECT_NE(marker->operand(1), n_minus_one);
+}
+
+TEST_F(DynamicPadderTest, ValidPrefixMarkerSeedsAssociation) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+HloModule ValidPrefixMarker
+
+add {
+  lhs = s32[] parameter(0)
+  rhs = s32[] parameter(1)
+  ROOT sum = s32[] add(lhs, rhs)
+}
+
+ENTRY main {
+  data = f32[8,4] parameter(0)
+  group_sizes = s32[2] parameter(1)
+  zero = s32[] constant(0)
+  n = s32[] reduce(group_sizes, zero), dimensions={0}, to_apply=add
+  marker = f32[8,4] custom-call(data, n),
+      custom_call_target="xla.valid_prefix"
+  ROOT result = f32[8,4] exponential(marker)
+}
+)")
+                    .value();
+
+  DynamicPadder pass;
+  ASSERT_OK(pass.Run(module.get()).status());
+
+  HloInstruction* marker = FindValidPrefixMarker(module.get());
+  ASSERT_NE(marker, nullptr);
+  HloInstruction* n = FindInstruction(module.get(), "n");
+  ASSERT_NE(n, nullptr);
+  EXPECT_EQ(marker->operand(1), n);
 }
 
 namespace op = xla::testing::opcode_matchers;

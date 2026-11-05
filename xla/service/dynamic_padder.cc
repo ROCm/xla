@@ -18,10 +18,12 @@ limitations under the License.
 #include <functional>
 #include <iterator>
 #include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/function_ref.h"
 #include "absl/log/check.h"
@@ -33,8 +35,6 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/statusor.h"
 #include "xla/comparison_util.h"
 #include "xla/hlo/builder/xla_builder.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
@@ -63,6 +63,8 @@ limitations under the License.
 #include "xla/util.h"
 #include "xla/window_util.h"
 #include "xla/xla_data.pb.h"
+#include "tsl/platform/errors.h"
+#include "tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -228,7 +230,14 @@ absl::StatusOr<bool> ReplaceSetSize(HloInstruction* instr) {
       << "instruction operand shape " << instr->operand(0)->shape();
   HloInstruction* operand = instr->mutable_operand(0);
 
-  ABSL_RETURN_IF_ERROR(instr->ReplaceAllUsesWith(operand));
+  HloInstruction* replacement = operand;
+  if (instr->dimension() == 0) {
+    replacement =
+        instr->parent()->AddInstruction(HloInstruction::CreateCustomCall(
+            operand->shape(), {operand, instr->mutable_operand(1)},
+            "xla.valid_prefix"));
+  }
+  ABSL_RETURN_IF_ERROR(instr->ReplaceAllUsesWith(replacement));
   return true;
 }
 
@@ -2136,7 +2145,8 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
         }
         if (instruction->opcode() == HloOpcode::kSetDimensionSize ||
             instruction->opcode() == HloOpcode::kGetDimensionSize ||
-            instruction->IsCustomCall("SetBound")) {
+            instruction->IsCustomCall("SetBound") ||
+            instruction->IsCustomCall("xla.valid_prefix")) {
           return true;
         }
       }

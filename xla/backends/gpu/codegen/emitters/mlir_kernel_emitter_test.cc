@@ -286,6 +286,40 @@ TEST_F(MlirKernelFusionTest, ValidPrefixExtentBoundsLoopFusion) {
   EXPECT_TRUE(llvm_filecheck_result) << llvm_out;
 }
 
+TEST_F(MlirKernelFusionTest, ValidPrefixMarkerLowersAsIdentity) {
+  constexpr absl::string_view kValidPrefixModule = R"(
+    fused_computation {
+      %x = f32[8,4] parameter(0)
+      %n = s32[] parameter(1)
+      ROOT %bounded = f32[8,4] custom-call(%x, %n),
+        custom_call_target="xla.valid_prefix"
+    }
+
+    ENTRY main {
+      %x = f32[8,4] parameter(0)
+      %n = s32[] parameter(1)
+      ROOT %fusion = f32[8,4] fusion(%x, %n), kind=kLoop,
+        calls=fused_computation
+    })";
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                       ParseAndReturnVerifiedModule(kValidPrefixModule));
+  auto* fusion = Cast<HloFusionInstruction>(
+      module->entry_computation()->root_instruction());
+  HloFusionAnalysis analysis = HloFusionAnalysis::Create(*fusion, device_info_);
+  std::unique_ptr<MlirKernelEmitter> emitter =
+      std::make_unique<LoopFusion>(analysis);
+  ASSERT_OK_AND_ASSIGN(auto mlir_module, emitter->CreateMLIRModule(
+                                             mlir_context_, *fusion, "fusion",
+                                             /*buffer_assignment=*/nullptr));
+
+  std::string out;
+  llvm::raw_string_ostream stream(out);
+  stream << *mlir_module;
+  EXPECT_THAT(out, ::testing::HasSubstr("xla.loop"));
+  EXPECT_THAT(out, ::testing::Not(::testing::HasSubstr("xla.valid_prefix")));
+}
+
 TEST_F(MlirKernelFusionTest, CreateLLVMModuleRejectsUnsupportedFmaTypes) {
   auto check_rejected = [&](absl::string_view dtype,
                             const se::DeviceDescription& dev_info) {

@@ -1677,7 +1677,8 @@ HloInstructionIndexing ComputeOutputToInputAllGatherOpIndexing(
 HloInstructionIndexing ComputeOutputToInputIndexing(const HloInstruction* instr,
                                                     int output_id,
                                                     MLIRContext* mlir_context) {
-  if (HloInstruction::IsOpElementwise(instr->opcode()) ||
+  if (instr->IsCustomCall("xla.valid_prefix") ||
+      HloInstruction::IsOpElementwise(instr->opcode()) ||
       // Note: map has a `dimensions` attribute, but it does nothing. See
       // b/65689298.
       instr->opcode() == HloOpcode::kMap ||
