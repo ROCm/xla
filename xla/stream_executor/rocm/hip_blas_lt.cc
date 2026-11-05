@@ -811,31 +811,15 @@ auto BlasLt::GroupedMatmulPlan::GetAlgorithms(size_t max_algorithm_count,
   std::unique_ptr<ActivateContext> activation = blas_lt_.executor_->Activate();
 
   TF_RET_CHECK(grouped_gemm_ != nullptr) << "Grouped GEMM is not initialized";
-  XlaHipblasLtGroupedGemmSetMaxWorkspaceBytes(grouped_gemm_.get(),
-                                              max_workspace_size);
-
-  hipblasLtMatmulHeuristicResult_t* results = nullptr;
+  std::vector<hipblasLtMatmulHeuristicResult_t> results(max_algorithm_count);
   size_t result_count = 0;
-  hipblasStatus_t status = XlaHipblasLtGroupedGemmGetAllAlgos(
-      blas_lt_.handle_.get(), &problem_type_, &results, &result_count);
-  std::vector<hipblasLtMatmulHeuristicResult_t> heuristicResult(
-      results, results + result_count);
-  XlaHipblasLtFreeHeuristicResults(results);
-  SE_HIPBLAS_RETURN_IF_ERROR(status);
-  VLOG(2) << "Total heuristics found: " << heuristicResult.size();
+  SE_HIPBLAS_RETURN_IF_ERROR(XlaHipblasLtGroupedGemmGetAlgos(
+      grouped_gemm_.get(), max_workspace_size, results.data(), results.size(),
+      &result_count));
   std::vector<MatmulAlgorithm> algorithms;
-  algorithms.reserve(max_algorithm_count);
-  for (hipblasLtMatmulHeuristicResult_t& result : heuristicResult) {
-    if (algorithms.size() >= max_algorithm_count) {
-      break;
-    }
-    size_t workspace_size = 0;
-    if ((result.state == HIPBLAS_STATUS_SUCCESS) &&
-        (XlaHipblasLtGroupedGemmIsAlgoSupported(
-             grouped_gemm_.get(), &result.algo, &workspace_size) ==
-         HIPBLAS_STATUS_SUCCESS)) {
-      algorithms.push_back({result.algo, result.workspaceSize});
-    }
+  algorithms.reserve(result_count);
+  for (size_t i = 0; i < result_count; ++i) {
+    algorithms.push_back({results[i].algo, results[i].workspaceSize});
   }
 
   VLOG(2) << "Grouped GEMM algorithms found with epilogue "
@@ -857,89 +841,68 @@ absl::Status BlasLt::GroupedMatmulPlan::DoInitialize(
     }
   }
 
-  std::vector<int64_t> v_m(cfg_.group_count, cfg_.m),
-      v_n(cfg_.group_count, cfg_.n), v_k(cfg_.group_count, cfg_.k),
-      v_batch_count(cfg_.group_count, cfg_.batch_count),
-      v_lda(cfg_.group_count, cfg_.lhs_leading_dim_stride),
-      v_ldb(cfg_.group_count, cfg_.rhs_leading_dim_stride),
-      v_ldc(cfg_.group_count, cfg_.output_leading_dim_stride),
-      v_ldd(cfg_.group_count, cfg_.output_leading_dim_stride),
-      v_strideA(cfg_.group_count, batch_stride_a),
-      v_strideB(cfg_.group_count, batch_stride_b),
-      v_strideC(cfg_.group_count, (cfg_.m * cfg_.n)),
-      v_strideD(cfg_.group_count, (cfg_.m * cfg_.n));
-
-  switch (cfg_.ragged_mode) {
-    case gpu::RaggedDotMode::kRaggedNonContracting: {
-      if (cfg_.must_swap_operands) {
-        // ragged dimension in the n dimension
-        std::fill(v_n.begin() + 1, v_n.end(), 1);
-      } else {
-        std::fill(v_m.begin() + 1, v_m.end(), 1);
-      }
-      break;
-    }
-    case gpu::RaggedDotMode::kRaggedContracting: {
-      std::fill(v_k.begin() + 1, v_k.end(), 1);
-      break;
-    }
-    case gpu::RaggedDotMode::kRaggedBatch: {
-      std::fill(v_batch_count.begin() + 1, v_batch_count.end(), 1);
-      break;
-    }
-  }
-
-  std::vector<XlaHipblasLtEpilogue> epilogues(cfg_.group_count);
-  std::vector<XlaHipblasLtGemmInputs> inputs(cfg_.group_count);
-
-  // Convert the epilogue from the stored member variable
   ABSL_ASSIGN_OR_RETURN(auto hip_epilogue, AsHipblasLtEpilogue(epilogue));
+  const bool has_bias = epilogue == Epilogue::kBias ||
+                        epilogue == Epilogue::kBiasThenReLU ||
+                        epilogue == Epilogue::kBiasThenGELU ||
+                        epilogue == Epilogue::kBiasThenSILU;
 
-  float salpha = cfg_.alpha.real();
-  float sbeta = cfg_.beta;
-  // Dummy pointers for initialization; the real ones are set in the device
-  // user arguments by GroupGemmUpdateArgs.
-  const void* dummy_pointer = reinterpret_cast<const void*>(~0ULL);
-  const bool has_bias_epilogue = epilogue == Epilogue::kBias ||
-                                 epilogue == Epilogue::kBiasThenReLU ||
-                                 epilogue == Epilogue::kBiasThenGELU ||
-                                 epilogue == Epilogue::kBiasThenSILU;
-
-  for (int64_t i = 0; i < cfg_.group_count; i++) {
-    epilogues[i].mode = hip_epilogue;
-    // Set bias data type and dummy bias pointer for bias epilogues
-    if (has_bias_epilogue) {
-      epilogues[i].bias_data_type = AsHipblasDataType(cfg_.type_d);
-      epilogues[i].has_bias_data_type = 1;
-      inputs[i].bias = dummy_pointer;
-    }
-    inputs[i].a = dummy_pointer;
-    inputs[i].b = dummy_pointer;
-    inputs[i].c = dummy_pointer;
-    inputs[i].d = dummy_pointer;
-    inputs[i].alpha = &salpha;
-    inputs[i].beta = &sbeta;
-  }
-
-  absl::MutexLock lock(blas_lt_.mu_);
-  problem_type_ = XlaHipblasLtProblemType{
+  // Note that Matrices given to HipBlasLt Group-Gemm
+  // are expected to be in COLUMN-MAJOR order.
+  XlaHipblasLtGroupedGemmDesc desc{};
+  desc.type = XlaHipblasLtProblemType{
       AsHipblasOperation(cfg_.trans_a),  AsHipblasOperation(cfg_.trans_b),
       AsHipblasDataType(cfg_.type_a),    AsHipblasDataType(cfg_.type_b),
       AsHipblasDataType(cfg_.type_c),    AsHipblasDataType(cfg_.type_d),
       AsHipblasComputeType(compute_type)};
+  desc.group_count = cfg_.group_count;
+  XlaHipblasLtGemmShape& first = desc.first;
+  first.m = cfg_.m;
+  first.n = cfg_.n;
+  first.k = cfg_.k;
+  first.batch_count = cfg_.batch_count;
+  first.lda = cfg_.lhs_leading_dim_stride;
+  first.ldb = cfg_.rhs_leading_dim_stride;
+  first.ldc = cfg_.output_leading_dim_stride;
+  first.ldd = cfg_.output_leading_dim_stride;
+  first.stride_a = batch_stride_a;
+  first.stride_b = batch_stride_b;
+  first.stride_c = cfg_.m * cfg_.n;
+  first.stride_d = cfg_.m * cfg_.n;
+  // The sizes of the other groups are only placeholders: the real ones are set
+  // in the device user arguments by GroupGemmUpdateArgs.
+  desc.rest = desc.first;
+  switch (cfg_.ragged_mode) {
+    case gpu::RaggedDotMode::kRaggedNonContracting: {
+      if (cfg_.must_swap_operands) {
+        // ragged dimension in the n dimension
+        desc.rest.n = 1;
+      } else {
+        desc.rest.m = 1;
+      }
+      break;
+    }
+    case gpu::RaggedDotMode::kRaggedContracting: {
+      desc.rest.k = 1;
+      break;
+    }
+    case gpu::RaggedDotMode::kRaggedBatch: {
+      desc.rest.batch_count = 1;
+      break;
+    }
+  }
+  desc.epilogue = hip_epilogue;
+  desc.has_bias = has_bias ? 1 : 0;
+  desc.bias_type = AsHipblasDataType(cfg_.type_d);
+  desc.alpha = static_cast<float>(cfg_.alpha.real());
+  desc.beta = static_cast<float>(cfg_.beta);
+
+  absl::MutexLock lock(blas_lt_.mu_);
   XlaHipblasLtGroupedGemm* gemm = nullptr;
+  XlaHipblasLtUserArgsEpilogue default_ua{};
   SE_HIPBLAS_RETURN_IF_ERROR(XlaHipblasLtGroupedGemmCreate(
-      blas_lt_.handle_.get(), &problem_type_, &gemm));
+      blas_lt_.handle_.get(), &desc, &gemm, &default_ua));
   grouped_gemm_.reset(gemm);
-
-  // Note that Matrices given to HipBlasLt Group-Gemm
-  // are expected to be in COLUMN-MAJOR order.
-
-  SE_HIPBLAS_RETURN_IF_ERROR(XlaHipblasLtGroupedGemmSetProblem(
-      grouped_gemm_.get(), cfg_.group_count, v_m.data(), v_n.data(), v_k.data(),
-      v_batch_count.data(), v_lda.data(), v_ldb.data(), v_ldc.data(),
-      v_ldd.data(), v_strideA.data(), v_strideB.data(), v_strideC.data(),
-      v_strideD.data(), epilogues.data(), inputs.data()));
 
   // UserArgument is expecting specific code for activation and bias types.
   // These are defined by the hipBLASLt library during the problem
@@ -953,13 +916,10 @@ absl::Status BlasLt::GroupedMatmulPlan::DoInitialize(
   // code from the library defined UserArgument makes it more robust to
   // different versions of hipBLASLt.
 
-  // Get default UserArguments from hipBLASLt and save required parameters.
-  // The ragged-dot API enforce that activation and bias types are the same
-  // for all the gemm operations.
-  // We can therefore only retrieve/verify value of the first gemm op.
-  XlaHipblasLtUserArgsEpilogue default_ua{};
-  SE_HIPBLAS_RETURN_IF_ERROR(XlaHipblasLtGroupedGemmGetDefaultUserArgsEpilogue(
-      grouped_gemm_.get(), &default_ua));
+  // XlaHipblasLtGroupedGemmCreate returned the epilogue fields of the default
+  // UserArguments of the first gemm op. The ragged-dot API enforce that
+  // activation and bias types are the same for all the gemm operations, so
+  // those of the first one are enough.
   activation_type_ = default_ua.activation_type;
   bias_type_ = static_cast<int8_t>(default_ua.bias_type);
   // Verify that act0 and act1 are 0 as they are forced to 0 in the userarg

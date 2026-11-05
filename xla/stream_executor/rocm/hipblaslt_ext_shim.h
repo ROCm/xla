@@ -57,24 +57,36 @@ typedef struct {
   hipblasComputeType_t compute_type;
 } XlaHipblasLtProblemType;
 
-// The epilogue of one GEMM in a group.
+// Sizes and strides of one GEMM in a group.
 typedef struct {
-  hipblasLtEpilogue_t mode;
-  // Only used if has_bias_data_type is nonzero.
-  hipDataType bias_data_type;
-  int has_bias_data_type;
-} XlaHipblasLtEpilogue;
+  int64_t m;
+  int64_t n;
+  int64_t k;
+  int64_t batch_count;
+  int64_t lda;
+  int64_t ldb;
+  int64_t ldc;
+  int64_t ldd;
+  int64_t stride_a;
+  int64_t stride_b;
+  int64_t stride_c;
+  int64_t stride_d;
+} XlaHipblasLtGemmShape;
 
-// The input pointers of one GEMM in a group. NULL pointers are left unset.
+// A grouped GEMM whose GEMMs share everything but their shapes, and all but
+// the first share their shape too. The data pointers are not part of it: they
+// are passed to XlaHipblasLtGroupedGemmRun in the device user arguments.
 typedef struct {
-  const void* a;
-  const void* b;
-  const void* c;
-  const void* d;
-  const void* alpha;
-  const void* beta;
-  const void* bias;
-} XlaHipblasLtGemmInputs;
+  XlaHipblasLtProblemType type;
+  size_t group_count;
+  XlaHipblasLtGemmShape first;  // Group 0.
+  XlaHipblasLtGemmShape rest;   // Groups 1 to group_count - 1.
+  hipblasLtEpilogue_t epilogue;
+  int has_bias;
+  hipDataType bias_type;  // Only used if has_bias is nonzero.
+  float alpha;
+  float beta;
+} XlaHipblasLtGroupedGemmDesc;
 
 // The epilogue fields of hipblaslt_ext::UserArguments.
 typedef struct {
@@ -84,55 +96,26 @@ typedef struct {
   float act1;
 } XlaHipblasLtUserArgsEpilogue;
 
-// Creates a grouped GEMM for `problem_type`. `handle` must outlive it.
+// Creates a grouped GEMM for `desc` and returns the epilogue fields of its
+// first default device user arguments in `defaults`. `handle` must outlive it.
 XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t XlaHipblasLtGroupedGemmCreate(
-    hipblasLtHandle_t handle, const XlaHipblasLtProblemType* problem_type,
-    XlaHipblasLtGroupedGemm** gemm);
+    hipblasLtHandle_t handle, const XlaHipblasLtGroupedGemmDesc* desc,
+    XlaHipblasLtGroupedGemm** gemm, XlaHipblasLtUserArgsEpilogue* defaults);
 
 // Destroys `gemm`. NULL is allowed.
 XLA_HIPBLASLT_SHIM_EXPORT void XlaHipblasLtGroupedGemmDestroy(
     XlaHipblasLtGroupedGemm* gemm);
 
-// hipblaslt_ext::GroupedGemm::setProblem. Every array has `group_count`
-// elements; the problem type is the one given at creation.
-XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t XlaHipblasLtGroupedGemmSetProblem(
-    XlaHipblasLtGroupedGemm* gemm, size_t group_count, const int64_t* m,
-    const int64_t* n, const int64_t* k, const int64_t* batch_count,
-    const int64_t* lda, const int64_t* ldb, const int64_t* ldc,
-    const int64_t* ldd, const int64_t* stride_a, const int64_t* stride_b,
-    const int64_t* stride_c, const int64_t* stride_d,
-    const XlaHipblasLtEpilogue* epilogues,
-    const XlaHipblasLtGemmInputs* inputs);
-
-// hipblaslt_ext::getAllAlgos for grouped GEMM. On success, `*results` holds
-// `*count` results, to be freed with XlaHipblasLtFreeHeuristicResults.
-XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t XlaHipblasLtGroupedGemmGetAllAlgos(
-    hipblasLtHandle_t handle, const XlaHipblasLtProblemType* problem_type,
-    hipblasLtMatmulHeuristicResult_t** results, size_t* count);
-
-XLA_HIPBLASLT_SHIM_EXPORT void XlaHipblasLtFreeHeuristicResults(
-    hipblasLtMatmulHeuristicResult_t* results);
-
-// hipblaslt_ext::GemmInstance::setMaxWorkspaceBytes.
-XLA_HIPBLASLT_SHIM_EXPORT void XlaHipblasLtGroupedGemmSetMaxWorkspaceBytes(
-    XlaHipblasLtGroupedGemm* gemm, size_t workspace_bytes);
-
-// hipblaslt_ext::GemmInstance::isAlgoSupported. Updates `algo`.
-XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t
-XlaHipblasLtGroupedGemmIsAlgoSupported(XlaHipblasLtGroupedGemm* gemm,
-                                       hipblasLtMatmulAlgo_t* algo,
-                                       size_t* workspace_size);
+// Writes up to `capacity` heuristic results whose algorithms `gemm` supports
+// within `max_workspace_bytes` to `results`, and their number to `count`.
+XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t XlaHipblasLtGroupedGemmGetAlgos(
+    XlaHipblasLtGroupedGemm* gemm, size_t max_workspace_bytes,
+    hipblasLtMatmulHeuristicResult_t* results, size_t capacity, size_t* count);
 
 // hipblaslt_ext::GemmInstance::initialize with device user arguments.
 XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t XlaHipblasLtGroupedGemmInitialize(
     XlaHipblasLtGroupedGemm* gemm, const hipblasLtMatmulAlgo_t* algo,
     void* workspace);
-
-// The epilogue fields of the first GEMM's default user arguments
-// (hipblaslt_ext::GroupedGemm::getDefaultValueForDeviceUserArguments).
-XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t
-XlaHipblasLtGroupedGemmGetDefaultUserArgsEpilogue(
-    XlaHipblasLtGroupedGemm* gemm, XlaHipblasLtUserArgsEpilogue* epilogue);
 
 // hipblaslt_ext::GroupedGemm::run with device user arguments.
 XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t XlaHipblasLtGroupedGemmRun(

@@ -182,8 +182,6 @@ class BlasLt : public gpu::BlasLt {
     const BlasLt& blas_lt_;
     gpu::GroupedGemmConfig cfg_;
     Epilogue epilogue_ = Epilogue::kDefault;
-    // Set by DoInitialize; GetAlgorithms queries hipBLASLt with it.
-    XlaHipblasLtProblemType problem_type_{};
     std::unique_ptr<XlaHipblasLtGroupedGemm, void (*)(XlaHipblasLtGroupedGemm*)>
         grouped_gemm_{nullptr, XlaHipblasLtGroupedGemmDestroy};
     mutable std::optional<hipblasLtMatmulAlgo_t> algorithm_;
