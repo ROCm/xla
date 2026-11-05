@@ -796,22 +796,12 @@ cc_library(
     ]),
 )
 
-# C interface to hipBLASLt's C++ extension API (hipblaslt-ext.hpp). The
-# implementation is built against libstdc++, like hipBLASLt itself, so that XLA
-# can call that API whichever standard library it is built against.
-cc_library(
-    name = "hipblaslt_ext_shim_header",
-    hdrs = ["hipblaslt_ext_shim.h"],
-    tags = [
-        "gpu",
-        "rocm-only",
-    ],
-    deps = ["@local_config_rocm//rocm:rocm_headers"],
-)
-
 cc_library(
     name = "hipblaslt_ext_shim_libstdcxx",
-    srcs = ["hipblaslt_ext_shim.cc"],
+    srcs = [
+        "hipblaslt_ext_shim.cc",
+        "hipblaslt_ext_shim.h",
+    ],
     copts = [
         # The shim catches nothing; without exception handling it needs no
         # unwinder (libgcc_s) and fewer C++ runtime symbols.
@@ -830,7 +820,6 @@ cc_library(
     # Keep this to ROCm only: any other C++ dependency (Abseil, XLA, ...) would
     # be built a second time against libstdc++.
     deps = [
-        ":hipblaslt_ext_shim_header",
         "@local_config_rocm//rocm:hipblaslt",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocm_headers",
     ],
@@ -877,13 +866,20 @@ cc_import(
     ],
 )
 
+# C interface to hipBLASLt's C++ extension API (hipblaslt-ext.hpp). The
+# implementation is built against libstdc++, like hipBLASLt itself, so that XLA
+# can call that API whichever standard library it is built against.
 cc_library(
     name = "hipblaslt_ext_shim",
+    hdrs = ["hipblaslt_ext_shim.h"],
     tags = [
         "gpu",
         "rocm-only",
     ],
-    deps = [":hipblaslt_ext_shim_built_with_libstdcxx"] + select({
+    deps = [
+        ":hipblaslt_ext_shim_built_with_libstdcxx",
+        "@local_config_rocm//rocm:rocm_headers",
+    ] + select({
         # Builds against libstdc++ resolve the shim's libstdc++ symbols with
         # the toolchain's own libstdc++.
         "@rules_ml_toolchain//common:is_stdlib_libcxx": [
@@ -907,8 +903,7 @@ cc_library(
     deps = [
         ":hip_blas_utils",
         ":hipblas_lt_header",
-        ":hipblaslt_ext_shim",  # buildcleaner: keep
-        ":hipblaslt_ext_shim_header",
+        ":hipblaslt_ext_shim",
         ":hipblaslt_if_static",  # buildcleaner: keep
         ":rocblas_plugin",
         ":rocm_executor",
@@ -978,7 +973,7 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
-        ":hipblaslt_ext_shim_header",
+        ":hipblaslt_ext_shim",
         "//xla:types",
         "//xla/stream_executor:blas",
         "//xla/stream_executor:device_address",
