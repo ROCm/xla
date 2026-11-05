@@ -19,6 +19,7 @@ limitations under the License.
 #include <optional>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -77,6 +78,12 @@ namespace rocm {
 
 using ::xla::complex128;
 using ::xla::complex64;
+
+// Used here directly although hipBLASLt is built against libstdc++: as a POD
+// type, it has the same layout with any C++ standard library.
+static_assert(std::is_trivial_v<hipblaslt_ext::UserArguments> &&
+                  std::is_standard_layout_v<hipblaslt_ext::UserArguments>,
+              "hipblaslt_ext::UserArguments must be a POD type");
 
 void GroupGemmUpdateArgs(
     hipStream_t stream, DeviceAddressBase args, DeviceAddressBase a,
