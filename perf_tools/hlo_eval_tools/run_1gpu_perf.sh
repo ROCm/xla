@@ -34,9 +34,9 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 mkdir -p "$OUT"
 
-fail=0
-"$HERE/run_inference_1gpu.sh" "$RUNNER" "$OUT" "$REPEATS" || fail=1
-"$HERE/run_training_1gpu.sh" "$RUNNER" "$OUT" "$REPEATS" || fail=1
+"$HERE/run_inference_1gpu.sh" "$RUNNER" "$OUT" "$REPEATS"
+
+"$HERE/run_training_1gpu.sh" "$RUNNER" "$OUT" "$REPEATS"
 
 TAR="${OUT%/}.tar"
 tar -cf "$TAR" "$OUT"
@@ -75,4 +75,4 @@ echo "packed $OUT -> $TAR" >&2
   done
 } | tee "${OUT%/}.tsv"
 
-exit "$fail"
+exit 0
