@@ -23,9 +23,16 @@ For supported ROCm versions and GFX targets per release, see the [AMD ROCm compa
 
 | JAX Release | XLA Branch | JAX Branch |
 |-------------|------------|------------|
-| jax-ml/jax:main | [`openxla/xla:main`](https://github.com/openxla/xla) | [`jax-ml/jax:main`](https://github.com/jax-ml/jax) | 
+| jax-ml/jax:main | [`openxla/xla:main`](https://github.com/openxla/xla) | [`jax-ml/jax:main`](https://github.com/jax-ml/jax) |
+| jax-v0.12.0 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.12.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.12.0) | [`rocm-jaxlib-v0.12.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.12.0) |
 | jax-v0.11.2 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.11.2`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.11.2) | [`rocm-jaxlib-v0.11.2`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.11.2) |
 | jax-v0.11.1 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.11.1`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.11.1) | [`rocm-jaxlib-v0.11.1`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.11.1) |
+<details>
+
+<summary>Preceding released branches</summary>
+
+| JAX Release | XLA Branch | JAX Branch |
+|-------------|------------|------------|
 | jax-v0.11.0 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.11.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.11.0) | [`rocm-jaxlib-v0.11.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.11.0) |
 | jax-v0.10.2 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.10.2`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.10.2) | [`rocm-jaxlib-v0.10.2`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.10.2) |
 | jax-v0.10.1 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.10.1`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.10.1) | [`rocm-jaxlib-v0.10.1`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.10.1) |
@@ -42,6 +49,9 @@ For supported ROCm versions and GFX targets per release, see the [AMD ROCm compa
 | jax-v0.4.31 | [`rocm-jaxlib-v0.4.31-qa`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.4.31-qa) | [`rocm-jaxlib-v0.4.31-qa`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.4.31-qa) |
 | jax-v0.4.30 | [`rocm-jaxlib-v0.4.30-qa`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.4.30-qa) | [`rocm-jaxlib-v0.4.30-qa`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.4.30-qa) |
 | jax-v0.4.28 | [`rocm-jaxlib-v0.4.28-qa`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.4.28-qa) | [`rocm-jaxlib-v0.4.28-qa`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.4.28-qa) |
+
+</details>
+
 
 ## Recommended Docker Image && Build Instructions
 
