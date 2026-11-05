@@ -176,6 +176,12 @@ class BlasLt : public gpu::BlasLt {
     }
 
    private:
+    struct GroupedGemmDeleter {
+      void operator()(XlaHipblasLtGroupedGemm* gemm) const {
+        XlaHipblasLtGroupedGemmDestroy(gemm);
+      }
+    };
+
     absl::Status DoInitialize(blas::ComputationType compute_type,
                               Epilogue epilogue);
 
@@ -184,8 +190,7 @@ class BlasLt : public gpu::BlasLt {
     Epilogue epilogue_ = Epilogue::kDefault;
     // Set by DoInitialize; GetAlgorithms queries hipBLASLt with it.
     XlaHipblasLtProblemType problem_type_{};
-    std::unique_ptr<XlaHipblasLtGroupedGemm, void (*)(XlaHipblasLtGroupedGemm*)>
-        grouped_gemm_{nullptr, XlaHipblasLtGroupedGemmDestroy};
+    std::unique_ptr<XlaHipblasLtGroupedGemm, GroupedGemmDeleter> grouped_gemm_;
     mutable std::optional<hipblasLtMatmulAlgo_t> algorithm_;
     mutable bool algorithm_dirty_ = false;
     mutable DeviceAddressBase saved_address_workspace_{};
