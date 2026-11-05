@@ -36,7 +36,7 @@ load(
     "internal_visibility",
 )
 load("//xla/tsl/platform:build_config_root.bzl", "if_static")
-load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_binary", "cc_import", "cc_library")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -811,13 +811,13 @@ cc_library(
 
 cc_library(
     name = "hipblaslt_ext_shim_libstdcxx",
-    srcs = [
-        "hipblaslt_ext_shim.cc",
-        # Lets the shim link into libc++ code without libstdc++.so.
-        "hipblaslt_ext_shim_libstdcxx_helpers.cc",
-    ],
-    # Only export the C interface, not the libstdc++ template instantiations.
+    srcs = ["hipblaslt_ext_shim.cc"],
     copts = [
+        # The shim catches nothing; without exception handling it needs no
+        # unwinder (libgcc_s) and fewer C++ runtime symbols.
+        "-fno-exceptions",
+        # Only export the C interface, not the libstdc++ template
+        # instantiations.
         "-fvisibility=hidden",
         "-fvisibility-inlines-hidden",
     ],
@@ -837,12 +837,60 @@ cc_library(
 )
 
 libstdcxx_cc_library(
-    name = "hipblaslt_ext_shim",
+    name = "hipblaslt_ext_shim_built_with_libstdcxx",
     dep = ":hipblaslt_ext_shim_libstdcxx",
     tags = [
         "gpu",
         "rocm-only",
     ],
+)
+
+# Link-time stand-in for libstdc++.so.6 that resolves the shim's versioned
+# libstdc++ symbols in builds against libc++; see
+# hipblaslt_ext_shim_libstdcxx_stub.c. Never loaded at run time.
+cc_binary(
+    name = "libhipblaslt_ext_shim_libstdcxx_stub.so",
+    srcs = ["hipblaslt_ext_shim_libstdcxx_stub.c"],
+    additional_linker_inputs = ["hipblaslt_ext_shim_libstdcxx_stub.lds"],
+    # Uses its own version script, which defines libstdc++'s version nodes.
+    features = ["-rocm_global_symbol_version_script"],
+    linkopts = [
+        "-Wl,-soname,libstdc++.so.6",
+        "-Wl,--version-script,$(location hipblaslt_ext_shim_libstdcxx_stub.lds)",
+    ],
+    linkshared = True,
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+)
+
+cc_import(
+    name = "hipblaslt_ext_shim_libstdcxx_stub",
+    interface_library = ":libhipblaslt_ext_shim_libstdcxx_stub.so",
+    # Link against it, but never copy it: the real libstdc++ is used at run
+    # time.
+    system_provided = True,
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+)
+
+cc_library(
+    name = "hipblaslt_ext_shim",
+    tags = [
+        "gpu",
+        "rocm-only",
+    ],
+    deps = [":hipblaslt_ext_shim_built_with_libstdcxx"] + select({
+        # Builds against libstdc++ resolve the shim's libstdc++ symbols with
+        # the toolchain's own libstdc++.
+        "@rules_ml_toolchain//common:is_stdlib_libcxx": [
+            ":hipblaslt_ext_shim_libstdcxx_stub",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 cc_library(

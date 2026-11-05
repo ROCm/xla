@@ -29,6 +29,26 @@ limitations under the License.
 #error "hipblaslt_ext_shim.cc must be built against libstdc++."
 #endif
 
+// Bind the libstdc++ runtime functions used here to libstdc++.so.6 by symbol
+// version, also when this file is linked into code built against libc++:
+// unversioned, they could resolve to libc++'s runtime instead, mixing the two
+// (e.g. operator new from one, delete from the other). Versions are those of
+// the oldest libstdc++ in use (GCC 8), except where the symbol is newer.
+// hipblaslt_ext_shim_libstdcxx_stub.c lists the same symbols; keep them in
+// sync.
+#define XLA_LIBSTDCXX_SYMBOL(symbol, version) \
+  __asm__(".symver " #symbol ", " #symbol "@" version)
+XLA_LIBSTDCXX_SYMBOL(_Znwm, "GLIBCXX_3.4");
+XLA_LIBSTDCXX_SYMBOL(_ZdlPv, "GLIBCXX_3.4");
+XLA_LIBSTDCXX_SYMBOL(_ZdlPvm, "CXXABI_1.3.9");
+XLA_LIBSTDCXX_SYMBOL(_ZTVN10__cxxabiv117__class_type_infoE, "CXXABI_1.3");
+XLA_LIBSTDCXX_SYMBOL(_ZNSt8ios_base4InitC1Ev, "GLIBCXX_3.4");
+XLA_LIBSTDCXX_SYMBOL(_ZNSt8ios_base4InitD1Ev, "GLIBCXX_3.4");
+XLA_LIBSTDCXX_SYMBOL(_ZSt17__throw_bad_allocv, "GLIBCXX_3.4");
+XLA_LIBSTDCXX_SYMBOL(_ZSt20__throw_length_errorPKc, "GLIBCXX_3.4");
+// Only referenced with GCC 11+ headers.
+XLA_LIBSTDCXX_SYMBOL(_ZSt28__throw_bad_array_new_lengthv, "GLIBCXX_3.4.29");
+
 struct XlaHipblasLtGroupedGemm {
   XlaHipblasLtGroupedGemm(hipblasLtHandle_t handle,
                           const XlaHipblasLtProblemType& problem)
