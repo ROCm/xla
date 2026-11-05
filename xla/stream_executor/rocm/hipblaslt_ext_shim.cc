@@ -17,8 +17,6 @@ limitations under the License.
 
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -146,33 +144,19 @@ hipblasStatus_t XlaHipblasLtGroupedGemmSetProblem(
 
 hipblasStatus_t XlaHipblasLtGroupedGemmGetAllAlgos(
     hipblasLtHandle_t handle, const XlaHipblasLtProblemType* problem_type,
-    hipblasLtMatmulHeuristicResult_t** results, size_t* count) {
-  if (problem_type == nullptr || results == nullptr || count == nullptr) {
+    XlaHipblasLtHeuristicResultsCallback callback, void* context) {
+  if (problem_type == nullptr || callback == nullptr) {
     return HIPBLAS_STATUS_INVALID_VALUE;
   }
-  *results = nullptr;
-  *count = 0;
   const XlaHipblasLtProblemType& p = *problem_type;
-  std::vector<hipblasLtMatmulHeuristicResult_t> found;
+  std::vector<hipblasLtMatmulHeuristicResult_t> results;
   hipblasStatus_t status = hipblaslt_ext::getAllAlgos(
       handle, hipblaslt_ext::GemmType::HIPBLASLT_GROUPED_GEMM, p.op_a, p.op_b,
-      p.type_a, p.type_b, p.type_c, p.type_d, p.compute_type, found);
-  if (status != HIPBLAS_STATUS_SUCCESS || found.empty()) {
-    return status;
+      p.type_a, p.type_b, p.type_c, p.type_d, p.compute_type, results);
+  if (status == HIPBLAS_STATUS_SUCCESS) {
+    callback(context, results.data(), results.size());
   }
-  const size_t bytes = found.size() * sizeof(hipblasLtMatmulHeuristicResult_t);
-  *results = static_cast<hipblasLtMatmulHeuristicResult_t*>(std::malloc(bytes));
-  if (*results == nullptr) {
-    return HIPBLAS_STATUS_ALLOC_FAILED;
-  }
-  std::memcpy(*results, found.data(), bytes);
-  *count = found.size();
-  return HIPBLAS_STATUS_SUCCESS;
-}
-
-void XlaHipblasLtFreeHeuristicResults(
-    hipblasLtMatmulHeuristicResult_t* results) {
-  std::free(results);
+  return status;
 }
 
 void XlaHipblasLtGroupedGemmSetMaxWorkspaceBytes(XlaHipblasLtGroupedGemm* gemm,

@@ -94,12 +94,6 @@ void GroupGemmUpdateArgs(
     int8_t bias_type, bool has_matrix_bias);
 namespace {
 
-struct HeuristicResultsDeleter {
-  void operator()(hipblasLtMatmulHeuristicResult_t* results) const {
-    XlaHipblasLtFreeHeuristicResults(results);
-  }
-};
-
 // Upper bound for the heuristic query only, never allocated. Generous on
 // purpose: a low ceiling would hide complex kernels that need scratch and
 // divert the matmul to rocBLAS.
@@ -823,21 +817,22 @@ auto BlasLt::GroupedMatmulPlan::GetAlgorithms(size_t max_algorithm_count,
   XlaHipblasLtGroupedGemmSetMaxWorkspaceBytes(grouped_gemm_.get(),
                                               max_workspace_size);
 
-  hipblasLtMatmulHeuristicResult_t* raw_results = nullptr;
-  size_t result_count = 0;
-  hipblasStatus_t status = XlaHipblasLtGroupedGemmGetAllAlgos(
-      blas_lt_.handle_.get(), &problem_type_, &raw_results, &result_count);
-  std::unique_ptr<hipblasLtMatmulHeuristicResult_t[], HeuristicResultsDeleter>
-      results(raw_results);
-  SE_HIPBLAS_RETURN_IF_ERROR(status);
-  VLOG(2) << "Total heuristics found: " << result_count;
+  std::vector<hipblasLtMatmulHeuristicResult_t> heuristicResult;
+  SE_HIPBLAS_RETURN_IF_ERROR(XlaHipblasLtGroupedGemmGetAllAlgos(
+      blas_lt_.handle_.get(), &problem_type_,
+      [](void* context, const hipblasLtMatmulHeuristicResult_t* results,
+         size_t count) {
+        static_cast<std::vector<hipblasLtMatmulHeuristicResult_t>*>(context)
+            ->assign(results, results + count);
+      },
+      &heuristicResult));
+  VLOG(2) << "Total heuristics found: " << heuristicResult.size();
   std::vector<MatmulAlgorithm> algorithms;
   algorithms.reserve(max_algorithm_count);
-  for (size_t i = 0; i < result_count; ++i) {
+  for (hipblasLtMatmulHeuristicResult_t& result : heuristicResult) {
     if (algorithms.size() >= max_algorithm_count) {
       break;
     }
-    hipblasLtMatmulHeuristicResult_t& result = results[i];
     size_t workspace_size = 0;
     if ((result.state == HIPBLAS_STATUS_SUCCESS) &&
         (XlaHipblasLtGroupedGemmIsAlgoSupported(
