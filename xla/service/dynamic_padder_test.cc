@@ -97,6 +97,17 @@ bool CustomCallDynamicDimensionInference(
   return false;
 }
 
+HloInstruction* FindValidPrefixMarker(HloModule* module) {
+  for (HloComputation* computation : module->computations()) {
+    for (HloInstruction* instruction : computation->instructions()) {
+      if (instruction->IsCustomCall("xla.valid_prefix")) {
+        return instruction;
+      }
+    }
+  }
+  return nullptr;
+}
+
 class DynamicPadderTest : public HloTestBase {
  protected:
   DynamicPadderTest() { module_ = CreateNewVerifiedModule(); }
@@ -2562,16 +2573,13 @@ ENTRY main {
   DynamicPadder pass;
   ASSERT_TRUE(pass.Run(module.get()).value());
 
-  HloInstruction* result = module->entry_computation()->root_instruction();
-  ASSERT_TRUE(
-      result->get_frontend_attribute(kXlaValidPrefixExtentId).has_value());
-  EXPECT_EQ(result->get_frontend_attribute(kXlaValidPrefixExtentId),
-            module->entry_computation()
-                ->parameter_instruction(1)
-                ->get_frontend_attribute(kXlaValidPrefixExtentSource));
+  HloInstruction* marker = FindValidPrefixMarker(module.get());
+  ASSERT_NE(marker, nullptr);
+  EXPECT_EQ(marker->operand(1),
+            module->entry_computation()->parameter_instruction(1));
 }
 
-TEST_F(DynamicPadderTest, DoesNotPropagateExtentSourceToDerivedScalars) {
+TEST_F(DynamicPadderTest, KeepsOriginalExtentInDataflow) {
   auto module = ParseAndReturnVerifiedModule(R"(
 HloModule ValidPrefixDerivedScalar
 
@@ -2592,12 +2600,12 @@ ENTRY main {
 
   HloInstruction* n = FindInstruction(module.get(), "n");
   HloInstruction* n_minus_one = FindInstruction(module.get(), "n_minus_one");
+  HloInstruction* marker = FindValidPrefixMarker(module.get());
   ASSERT_NE(n, nullptr);
   ASSERT_NE(n_minus_one, nullptr);
-  EXPECT_TRUE(
-      n->get_frontend_attribute(kXlaValidPrefixExtentSource).has_value());
-  EXPECT_FALSE(n_minus_one->get_frontend_attribute(kXlaValidPrefixExtentSource)
-                   .has_value());
+  ASSERT_NE(marker, nullptr);
+  EXPECT_EQ(marker->operand(1), n);
+  EXPECT_NE(marker->operand(1), n_minus_one);
 }
 
 TEST_F(DynamicPadderTest, ValidPrefixMarkerSeedsAssociation) {
@@ -2623,16 +2631,13 @@ ENTRY main {
                     .value();
 
   DynamicPadder pass;
-  ASSERT_TRUE(pass.Run(module.get()).value());
+  ASSERT_OK(pass.Run(module.get()).status());
 
-  HloInstruction* result = module->entry_computation()->root_instruction();
-  EXPECT_THAT(result, op::Exp(op::Parameter(0)));
-  ASSERT_TRUE(
-      result->get_frontend_attribute(kXlaValidPrefixExtentId).has_value());
+  HloInstruction* marker = FindValidPrefixMarker(module.get());
+  ASSERT_NE(marker, nullptr);
   HloInstruction* n = FindInstruction(module.get(), "n");
   ASSERT_NE(n, nullptr);
-  EXPECT_EQ(result->get_frontend_attribute(kXlaValidPrefixExtentId),
-            n->get_frontend_attribute(kXlaValidPrefixExtentSource));
+  EXPECT_EQ(marker->operand(1), n);
 }
 
 namespace op = xla::testing::opcode_matchers;

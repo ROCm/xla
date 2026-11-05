@@ -44,13 +44,6 @@ bool DoesPdlLaunch(const HloInstruction&);
 inline constexpr absl::string_view kXlaNoInvariantOperands =
     "xla.no_invariant_operands";
 
-// Transient semantic attributes carrying a bounded dimension-0 prefix extent
-// from DynamicPadder to GPU fusion formation.
-inline constexpr absl::string_view kXlaValidPrefixExtentId =
-    "xla.valid_prefix_extent_id";
-inline constexpr absl::string_view kXlaValidPrefixExtentSource =
-    "xla.valid_prefix_extent_source";
-
 // Returns a set of operand indices that should not be assumed invariant.
 absl::flat_hash_set<int> NonInvariantOperands(const HloInstruction&);
 

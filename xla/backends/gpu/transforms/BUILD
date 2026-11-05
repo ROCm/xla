@@ -3136,9 +3136,6 @@ cc_library(
     srcs = ["valid_prefix_extent_rewriter.cc"],
     hdrs = ["valid_prefix_extent_rewriter.h"],
     deps = [
-        "//xla:comparison_util",
-        "//xla:frontend_attributes",
-        "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/pass:hlo_pass",
@@ -3158,7 +3155,6 @@ xla_cc_test(
     srcs = ["valid_prefix_extent_rewriter_test.cc"],
     deps = [
         ":valid_prefix_extent_rewriter",
-        "//xla:frontend_attributes",
         "//xla:shape_util",
         "//xla/hlo/analysis:symbolic_map",
         "//xla/hlo/ir:hlo",

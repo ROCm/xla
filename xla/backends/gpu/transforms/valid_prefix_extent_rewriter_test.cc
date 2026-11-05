@@ -26,7 +26,6 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "mlir/IR/MLIRContext.h"
-#include "xla/frontend_attributes.h"
 #include "xla/hlo/analysis/symbolic_expr.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -117,28 +116,25 @@ ENTRY main {
 
 TEST_F(ValidPrefixExtentRewriterTest,
        DynamicPadderAssociationSurvivesGpuFusionPipeline) {
-  auto run_bridge = [&](absl::string_view hlo, bool expect_annotation)
+  auto run_bridge = [&](absl::string_view hlo)
       -> absl::StatusOr<std::unique_ptr<HloModule>> {
     ABSL_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(hlo));
     DynamicPadder dynamic_padder;
     ABSL_RETURN_IF_ERROR(dynamic_padder.Run(module.get()).status());
-    if (expect_annotation) {
-      bool found_annotation = false;
-      for (HloComputation* computation : module->computations()) {
-        for (HloInstruction* instruction : computation->instructions()) {
-          found_annotation |= instruction->frontend_attributes().map().contains(
-              kXlaValidPrefixExtentId);
-        }
+    bool found_marker = false;
+    for (HloComputation* computation : module->computations()) {
+      for (HloInstruction* instruction : computation->instructions()) {
+        found_marker |= instruction->IsCustomCall("xla.valid_prefix");
       }
-      if (!found_annotation) {
-        return absl::InternalError(absl::StrCat(
-            "DynamicPadder lost valid-prefix metadata:\n", module->ToString()));
-      }
+    }
+    if (!found_marker) {
+      return absl::InternalError(absl::StrCat(
+          "DynamicPadder lost valid-prefix dataflow:\n", module->ToString()));
     }
 
     auto shape_size = [](const Shape& shape) {
-      return ShapeUtil::ByteSizeOf(shape);
+      return ShapeUtil::ByteSizeOf(shape, /*pointer_size=*/8);
     };
     ABSL_RETURN_IF_ERROR(FusionPipeline(module->config().debug_options(),
                                         shape_size, &alias_info_,
@@ -180,7 +176,7 @@ ENTRY main {
 }
 )";
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                       run_bridge(kSupported, /*expect_annotation=*/true));
+                       run_bridge(kSupported));
 
   ASSERT_OK_AND_ASSIGN(HloInstruction * valid_prefix_fusion,
                        find_valid_prefix_fusion(module.get()));
@@ -212,7 +208,7 @@ ENTRY main {
 }
 )";
   ASSERT_OK_AND_ASSIGN(
-      module, run_bridge(kStructuralTransfers, /*expect_annotation=*/true));
+      module, run_bridge(kStructuralTransfers));
   ASSERT_OK_AND_ASSIGN(valid_prefix_fusion,
                        find_valid_prefix_fusion(module.get()));
   ASSERT_NE(valid_prefix_fusion, nullptr) << module->ToString();
@@ -230,8 +226,7 @@ ENTRY main {
   ROOT result = f32[<=8,4] exponential(sum)
 }
 )";
-  ASSERT_OK_AND_ASSIGN(module,
-                       run_bridge(kSharedExtent, /*expect_annotation=*/true));
+  ASSERT_OK_AND_ASSIGN(module, run_bridge(kSharedExtent));
   ASSERT_OK_AND_ASSIGN(valid_prefix_fusion,
                        find_valid_prefix_fusion(module.get()));
   ASSERT_NE(valid_prefix_fusion, nullptr) << module->ToString();
@@ -250,8 +245,7 @@ ENTRY main {
   ROOT result = f32[<=8,4] exponential(sum)
 }
 )";
-  ASSERT_OK_AND_ASSIGN(
-      module, run_bridge(kUnequalExtents, /*expect_annotation=*/false));
+  ASSERT_OK_AND_ASSIGN(module, run_bridge(kUnequalExtents));
   ASSERT_OK_AND_ASSIGN(valid_prefix_fusion,
                        find_valid_prefix_fusion(module.get()));
   EXPECT_EQ(valid_prefix_fusion, nullptr);
@@ -267,8 +261,7 @@ ENTRY main {
   ROOT result = f32[4,<=8] transpose(negated), dimensions={1,0}
 }
 )";
-  ASSERT_OK_AND_ASSIGN(module, run_bridge(kUnsupported,
-                                          /*expect_annotation=*/true));
+  ASSERT_OK_AND_ASSIGN(module, run_bridge(kUnsupported));
   ASSERT_OK_AND_ASSIGN(valid_prefix_fusion,
                        find_valid_prefix_fusion(module.get()));
   EXPECT_EQ(valid_prefix_fusion, nullptr);
@@ -280,7 +273,10 @@ HloModule GroupedGemmConsumesValidPrefix
 
 fused_computation {
   x = f32[8,4] parameter(0)
-  ROOT negated = f32[8,4] negate(x)
+  n = s32[] parameter(1)
+  bounded = f32[8,4] custom-call(x, n),
+    custom_call_target="xla.valid_prefix"
+  ROOT negated = f32[8,4] negate(bounded)
 }
 
 ENTRY main {
@@ -288,7 +284,7 @@ ENTRY main {
   weights = f32[2,4,4] parameter(1)
   group_sizes = s32[2] parameter(2)
   n = s32[] parameter(3)
-  epilogue = f32[8,4] fusion(data), kind=kLoop,
+  epilogue = f32[8,4] fusion(data, n), kind=kLoop,
     calls=fused_computation
   ROOT grouped = f32[8,4] custom-call(epilogue, weights, group_sizes),
     custom_call_target="__cublas$lt$groupedMatmul"
@@ -298,13 +294,8 @@ ENTRY main {
                        ParseAndReturnVerifiedModule(kHlo));
   HloInstruction* fusion =
       module->entry_computation()->GetInstructionWithName("epilogue");
-  HloInstruction* extent =
-      module->entry_computation()->GetInstructionWithName("n");
   ASSERT_NE(fusion, nullptr);
-  ASSERT_NE(extent, nullptr);
-  fusion->set_frontend_attribute(kXlaValidPrefixExtentId, "extent");
-  extent->set_frontend_attribute(kXlaValidPrefixExtentSource, "extent");
-
+  HloInstruction* extent = fusion->mutable_operand(1);
   ValidPrefixExtentRewriter rewriter;
   ASSERT_OK_AND_ASSIGN(bool changed, rewriter.Run(module.get()));
   EXPECT_TRUE(changed);
@@ -320,13 +311,16 @@ HloModule OrdinaryConsumer
 
 fused_computation {
   x = f32[8,4] parameter(0)
-  ROOT negated = f32[8,4] negate(x)
+  n = s32[] parameter(1)
+  bounded = f32[8,4] custom-call(x, n),
+    custom_call_target="xla.valid_prefix"
+  ROOT negated = f32[8,4] negate(bounded)
 }
 
 ENTRY main {
   data = f32[8,4] parameter(0)
   n = s32[] parameter(1)
-  epilogue = f32[8,4] fusion(data), kind=kLoop, calls=fused_computation
+  epilogue = f32[8,4] fusion(data, n), kind=kLoop, calls=fused_computation
   ROOT result = f32[8,4] custom-call(epilogue),
     custom_call_target="unknown"
 }
@@ -335,23 +329,13 @@ ENTRY main {
                        ParseAndReturnVerifiedModule(kHlo));
   HloInstruction* fusion =
       module->entry_computation()->GetInstructionWithName("epilogue");
-  HloInstruction* extent =
-      module->entry_computation()->GetInstructionWithName("n");
   ASSERT_NE(fusion, nullptr);
-  ASSERT_NE(extent, nullptr);
-  fusion->set_frontend_attribute(kXlaValidPrefixExtentId, "extent");
-  extent->set_frontend_attribute(kXlaValidPrefixExtentSource, "extent");
-
   ValidPrefixExtentRewriter rewriter;
   ASSERT_OK_AND_ASSIGN(bool changed, rewriter.Run(module.get()));
-  EXPECT_TRUE(changed);
+  EXPECT_FALSE(changed);
   ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> contract,
                        GetValidPrefixExtent(*fusion));
   EXPECT_FALSE(contract.has_value());
-  EXPECT_FALSE(
-      fusion->get_frontend_attribute(kXlaValidPrefixExtentId).has_value());
-  EXPECT_FALSE(
-      extent->get_frontend_attribute(kXlaValidPrefixExtentSource).has_value());
 }
 
 }  // namespace

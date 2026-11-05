@@ -146,10 +146,38 @@ bool IsFusibleBitcast(const HloInstruction& instr) {
          hlo_instruction_utils::KeepsBitwidth(instr);
 }
 
+bool IsValidPrefixExtentProducer(const HloInstruction& producer,
+                                 const HloInstruction& consumer) {
+  if (consumer.IsCustomCall("xla.valid_prefix")) {
+    return consumer.operand_count() == 2 && consumer.operand(1) == &producer;
+  }
+  if (consumer.opcode() != HloOpcode::kFusion) {
+    return false;
+  }
+  for (int64_t i = 0; i < consumer.operand_count(); ++i) {
+    if (consumer.operand(i) != &producer) {
+      continue;
+    }
+    for (const HloInstruction* user : consumer.fused_parameter(i)->users()) {
+      if (user->IsCustomCall("xla.valid_prefix") &&
+          user->operand_count() == 2 &&
+          user->operand(1) == consumer.fused_parameter(i)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 bool IsFusible(const HloInstruction& instr) {
   // Side-effecting operations are not fusible.
   if (!instr.IsFusible()) {
     return false;
+  }
+
+  // Prototype: preserve the valid-prefix marker as real fusion dataflow.
+  if (instr.IsCustomCall("xla.valid_prefix")) {
+    return true;
   }
 
   // Element-wise operations are always fusible.
@@ -1014,6 +1042,11 @@ class PriorityFusionQueue {
     if (producer == producer->parent()->root_instruction()) {
       return FusionDecision::Forbid(
           "not fusing into the output of the root instruction");
+    }
+
+    if (IsValidPrefixExtentProducer(*producer, *consumer)) {
+      return FusionDecision::Forbid(
+          "valid-prefix extent must remain a fusion operand");
     }
 
     if (!IsFusible(*producer)) {

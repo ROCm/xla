@@ -36,7 +36,6 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/comparison_util.h"
-#include "xla/frontend_attributes.h"
 #include "xla/hlo/builder/xla_builder.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/dynamic_parameter_binding.h"
@@ -74,124 +73,6 @@ namespace {
 auto* dynamic_padding_gauge = tsl::monitoring::Gauge<bool, 0>::New(
     "/tensorflow/core/use_dynamic_padding_gauge",
     "Tracks if dynamic padder is used.");
-
-constexpr absl::string_view kValidPrefixCustomCallTarget = "xla.valid_prefix";
-
-bool IsValidPrefixMarker(const HloInstruction& instruction) {
-  return instruction.opcode() == HloOpcode::kCustomCall &&
-         instruction.custom_call_target() == kValidPrefixCustomCallTarget;
-}
-
-bool PreservesValidPrefix(const HloInstruction& user, int64_t operand_index) {
-  const Shape& input = user.operand(operand_index)->shape();
-  const Shape& output = user.shape();
-  if (!input.IsArray() || input.dimensions().empty() || !output.IsArray() ||
-      output.dimensions().empty() ||
-      input.dimensions(0) != output.dimensions(0)) {
-    return false;
-  }
-
-  if (user.IsElementwise()) {
-    return input.dimensions() == output.dimensions();
-  }
-
-  switch (user.opcode()) {
-    case HloOpcode::kCopy:
-    case HloOpcode::kReshape:
-      return operand_index == 0;
-    case HloOpcode::kBroadcast:
-      return operand_index == 0 && !user.dimensions().empty() &&
-             user.dimensions(0) == 0;
-    default:
-      return false;
-  }
-}
-
-// Records the dimension-0 extent through operation classes with a proven
-// transfer rule. Multiple distinct extents reaching one value are deliberately
-// retained as a conflict, so no codegen contract is attached downstream.
-void AnnotateValidPrefixExtents(HloComputation* computation) {
-  using ExtentIds = absl::flat_hash_set<std::string>;
-  absl::flat_hash_map<HloInstruction*, ExtentIds> extents;
-  absl::flat_hash_map<std::string, HloInstruction*> extent_sources;
-  std::vector<HloInstruction*> worklist;
-
-  for (HloInstruction* instruction : computation->MakeInstructionPostOrder()) {
-    const bool set_dimension_size =
-        instruction->opcode() == HloOpcode::kSetDimensionSize &&
-        instruction->dimension() == 0 &&
-        instruction->shape().is_dynamic_dimension(0);
-    const bool marker = IsValidPrefixMarker(*instruction);
-    if ((!set_dimension_size && !marker) || instruction->operand_count() != 2 ||
-        !instruction->shape().IsArray() ||
-        instruction->shape().dimensions().empty() ||
-        instruction->operand(1)->shape() != ShapeUtil::MakeShape(S32, {})) {
-      continue;
-    }
-    // Values bounded by the same scalar have the same extent.
-    std::string id = absl::StrCat(instruction->operand(1)->unique_id());
-    extents[instruction].insert(id);
-    extent_sources.emplace(id, instruction->mutable_operand(1));
-    worklist.push_back(instruction);
-  }
-
-  while (!worklist.empty()) {
-    HloInstruction* instruction = worklist.back();
-    worklist.pop_back();
-    const ExtentIds instruction_extents = extents.at(instruction);
-    for (HloInstruction* user : instruction->users()) {
-      bool preserves = false;
-      for (int64_t i = 0; i < user->operand_count(); ++i) {
-        preserves |=
-            user->operand(i) == instruction && PreservesValidPrefix(*user, i);
-      }
-      if (!preserves) {
-        continue;
-      }
-      ExtentIds& user_extents = extents[user];
-      size_t old_size = user_extents.size();
-      user_extents.insert(instruction_extents.begin(),
-                          instruction_extents.end());
-      if (user_extents.size() != old_size) {
-        worklist.push_back(user);
-      }
-    }
-  }
-
-  absl::flat_hash_set<std::string> used_extents;
-  for (auto& [instruction, ids] : extents) {
-    if (instruction->opcode() == HloOpcode::kSetDimensionSize ||
-        IsValidPrefixMarker(*instruction) || ids.size() != 1) {
-      continue;
-    }
-    instruction->set_frontend_attribute(kXlaValidPrefixExtentId, *ids.begin());
-    used_extents.insert(*ids.begin());
-  }
-  for (const std::string& id : used_extents) {
-    HloInstruction* extent = extent_sources.at(id);
-    extent->set_frontend_attribute(kXlaValidPrefixExtentSource, id);
-    // DynamicPadder immediately runs DCE after removing set-dimension-size.
-    extent->set_frontend_attribute("xla_allow_dce_side_effecting_op", "false");
-  }
-}
-
-absl::StatusOr<bool> RemoveValidPrefixMarkers(HloComputation* computation) {
-  bool changed = false;
-  for (HloInstruction* instruction : computation->MakeInstructionPostOrder()) {
-    if (!IsValidPrefixMarker(*instruction)) {
-      continue;
-    }
-    ABSL_RETURN_IF_ERROR(
-        computation
-            ->ReplaceInstruction(instruction, instruction->mutable_operand(0),
-                                 /*preserve_sharding=*/false,
-                                 /*relay_control_dependency=*/false,
-                                 /*remove_unused_operands=*/false)
-            .status());
-    changed = true;
-  }
-  return changed;
-}
 
 // ChooseIdentityValue looks at the instruction's operand, returns a
 // identity value which, when padded, doesn't change the result of the
@@ -349,7 +230,13 @@ absl::StatusOr<bool> ReplaceSetSize(HloInstruction* instr) {
       << "instruction operand shape " << instr->operand(0)->shape();
   HloInstruction* operand = instr->mutable_operand(0);
 
-  ABSL_RETURN_IF_ERROR(instr->ReplaceAllUsesWith(operand));
+  HloInstruction* replacement = operand;
+  if (instr->dimension() == 0) {
+    replacement = instr->parent()->AddInstruction(HloInstruction::CreateCustomCall(
+        operand->shape(), {operand, instr->mutable_operand(1)},
+        "xla.valid_prefix"));
+  }
+  ABSL_RETURN_IF_ERROR(instr->ReplaceAllUsesWith(replacement));
   return true;
 }
 
@@ -2099,8 +1986,6 @@ absl::StatusOr<HloInstruction*> DynamicShapeRemovingVisitor::ConvertToDynamic(
         dimension_size = inst->AddInstruction(HloInstruction::CreateConstant(
             LiteralUtil::CreateR0<int32_t>(subshape.dimensions(i))));
       } else {
-        std::optional<std::string> valid_prefix_extent =
-            dimension_size->get_frontend_attribute(kXlaValidPrefixExtentSource);
         // Clamp the size to [0, bound]: nothing validates the size operand
         // of set-dimension-size, and SliceToDynamic uses it as an unchecked
         // copy bound.
@@ -2112,10 +1997,6 @@ absl::StatusOr<HloInstruction*> DynamicShapeRemovingVisitor::ConvertToDynamic(
         dimension_size = inst->AddInstruction(HloInstruction::CreateTernary(
             dimension_size->shape(), HloOpcode::kClamp, zero, dimension_size,
             bound));
-        if (valid_prefix_extent.has_value()) {
-          dimension_size->set_frontend_attribute(kXlaValidPrefixExtentSource,
-                                                 *valid_prefix_extent);
-        }
       }
       slice_operand.push_back(dimension_size);
     }
@@ -2264,7 +2145,7 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
         if (instruction->opcode() == HloOpcode::kSetDimensionSize ||
             instruction->opcode() == HloOpcode::kGetDimensionSize ||
             instruction->IsCustomCall("SetBound") ||
-            IsValidPrefixMarker(*instruction)) {
+            instruction->IsCustomCall("xla.valid_prefix")) {
           return true;
         }
       }
@@ -2427,14 +2308,6 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
         }
       }
     }
-  }
-
-  // Capture valid-prefix associations before dynamic-to-static conversion
-  // disconnects set-dimension-size from extent-preserving users.
-  for (HloComputation* computation : module->computations(execution_threads)) {
-    AnnotateValidPrefixExtents(computation);
-    ABSL_ASSIGN_OR_RETURN(bool c, RemoveValidPrefixMarkers(computation));
-    changed |= c;
   }
 
   // There are ops that only support dynamic lowering and ops that only support
