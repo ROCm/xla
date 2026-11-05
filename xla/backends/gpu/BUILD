@@ -339,6 +339,7 @@ cc_library(
         "//xla/service:compiled_module",
         "//xla/service:compiler",
         "//xla/service:cpu_gpu_shape_verifier",
+        "//xla/service:custom_call_target_registry",
         "//xla/service:decision",
         "//xla/service:device_assignment",
         "//xla/service:dump",
