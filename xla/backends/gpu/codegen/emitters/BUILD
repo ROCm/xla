@@ -186,6 +186,7 @@ xla_cc_test(
     srcs = ["mlir_kernel_emitter_test.cc"],
     tags = ["gpu"],
     deps = [
+        ":loop",
         ":mlir_kernel_emitter",
         "//xla:xla_proto_cc",
         "//xla/backends/gpu/codegen:cubin_custom_kernel_compiler",
@@ -276,6 +277,7 @@ cc_library(
         "//xla/service/gpu:gpu_fusible",
         "//xla/service/gpu:hlo_fusion_analysis",
         "//xla/service/gpu:launch_dimensions",
+        "//xla/service/gpu:valid_prefix_extent",
         "//xla/tsl/platform:statusor",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",

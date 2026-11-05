@@ -16,6 +16,8 @@ limitations under the License.
 #ifndef XLA_CODEGEN_EMITTERS_LOOP_KERNEL_EMITTER_H_
 #define XLA_CODEGEN_EMITTERS_LOOP_KERNEL_EMITTER_H_
 
+#include <cstdint>
+#include <optional>
 #include <string>
 
 #include "absl/status/status.h"
@@ -37,17 +39,23 @@ limitations under the License.
 
 namespace xla::emitters {
 
+struct LoopFusionValidPrefixExtent {
+  int64_t operand_index;
+  int64_t capacity;
+};
+
 // Generic loop fusion.
 class LoopFusionKernelEmitter final : public KernelEmitter<MlirKernelSource> {
  public:
-  LoopFusionKernelEmitter(mlir::MLIRContext& mlir_context,
-                          const HloFusionInstruction& fusion,
-                          const HloFusionSpec& fusion_spec,
-                          const BufferAssignment* buffer_assignment,
-                          KernelArguments::BufferAlignment buffer_alignment,
-                          WorkDimensions work_dimensions,
-                          absl::string_view entry_function_name,
-                          BackendKind backend_kind);
+  LoopFusionKernelEmitter(
+      mlir::MLIRContext& mlir_context, const HloFusionInstruction& fusion,
+      const HloFusionSpec& fusion_spec,
+      const BufferAssignment* buffer_assignment,
+      KernelArguments::BufferAlignment buffer_alignment,
+      WorkDimensions work_dimensions, absl::string_view entry_function_name,
+      BackendKind backend_kind,
+      std::optional<LoopFusionValidPrefixExtent> valid_prefix_extent =
+          std::nullopt);
 
   absl::string_view name() const final { return "loop_fusion_kernel_emitter"; }
   absl::StatusOr<KernelDefinition> EmitKernelDefinition() override;
@@ -78,6 +86,7 @@ class LoopFusionKernelEmitter final : public KernelEmitter<MlirKernelSource> {
   WorkDimensions work_dimensions_;
   std::string entry_function_name_;
   BackendKind backend_kind_;
+  std::optional<LoopFusionValidPrefixExtent> valid_prefix_extent_;
 };
 
 }  // namespace xla::emitters
