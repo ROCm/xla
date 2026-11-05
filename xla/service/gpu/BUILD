@@ -65,6 +65,34 @@ tf_proto_library(
     ],
 )
 
+cc_library(
+    name = "valid_prefix_extent",
+    srcs = ["valid_prefix_extent.cc"],
+    hdrs = ["valid_prefix_extent.h"],
+    deps = [
+        ":backend_configs_cc",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+xla_cc_test(
+    name = "valid_prefix_extent_test",
+    srcs = ["valid_prefix_extent_test.cc"],
+    deps = [
+        ":valid_prefix_extent",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
+        "//xla/hlo/testlib:test",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 xla_cc_test(
     name = "backend_configs_test",
     srcs = ["backend_configs_test.cc"],
