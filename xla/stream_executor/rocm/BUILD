@@ -827,6 +827,8 @@ cc_library(
         "manual",
         "rocm-only",
     ],
+    # Keep this to ROCm only: any other C++ dependency (Abseil, XLA, ...) would
+    # be built a second time against libstdc++.
     deps = [
         ":hipblaslt_ext_shim_header",
         "@local_config_rocm//rocm:hipblaslt",  # buildcleaner: keep

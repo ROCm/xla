@@ -96,14 +96,17 @@ XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t XlaHipblasLtGroupedGemmSetProblem(
     const XlaHipblasLtEpilogue* epilogues,
     const XlaHipblasLtGemmInputs* inputs);
 
-// hipblaslt_ext::getAllAlgos for grouped GEMM. On success, `*results` holds
-// `*count` results, to be freed with XlaHipblasLtFreeHeuristicResults.
+// Receives the results of XlaHipblasLtGroupedGemmGetAllAlgos. `results` is only
+// valid during the call.
+typedef void (*XlaHipblasLtHeuristicResultsCallback)(
+    void* context, const hipblasLtMatmulHeuristicResult_t* results,
+    size_t count);
+
+// hipblaslt_ext::getAllAlgos for grouped GEMM. On success, calls
+// `callback(context, results, count)` once with all results.
 XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t XlaHipblasLtGroupedGemmGetAllAlgos(
     hipblasLtHandle_t handle, const XlaHipblasLtProblemType* problem_type,
-    hipblasLtMatmulHeuristicResult_t** results, size_t* count);
-
-XLA_HIPBLASLT_SHIM_EXPORT void XlaHipblasLtFreeHeuristicResults(
-    hipblasLtMatmulHeuristicResult_t* results);
+    XlaHipblasLtHeuristicResultsCallback callback, void* context);
 
 // hipblaslt_ext::GemmInstance::setMaxWorkspaceBytes.
 XLA_HIPBLASLT_SHIM_EXPORT void XlaHipblasLtGroupedGemmSetMaxWorkspaceBytes(
