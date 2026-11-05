@@ -198,26 +198,12 @@ hipblasStatus_t XlaHipblasLtGroupedGemmInitialize(
   return gemm->gemm.initialize(*algo, workspace);
 }
 
-hipblasStatus_t XlaHipblasLtGroupedGemmGetDefaultUserArgsEpilogue(
-    XlaHipblasLtGroupedGemm* gemm, XlaHipblasLtUserArgsEpilogue* epilogue) {
-  if (gemm == nullptr || epilogue == nullptr) {
+hipblasStatus_t XlaHipblasLtGroupedGemmGetDefaultValueForDeviceUserArguments(
+    XlaHipblasLtGroupedGemm* gemm, void* host_user_args) {
+  if (gemm == nullptr || host_user_args == nullptr) {
     return HIPBLAS_STATUS_INVALID_VALUE;
   }
-  const size_t gemm_count = gemm->gemm.getGemmCount();
-  if (gemm_count == 0) {
-    return HIPBLAS_STATUS_INVALID_VALUE;
-  }
-  std::vector<hipblaslt_ext::UserArguments> user_args(gemm_count);
-  hipblasStatus_t status =
-      gemm->gemm.getDefaultValueForDeviceUserArguments(user_args.data());
-  if (status != HIPBLAS_STATUS_SUCCESS) {
-    return status;
-  }
-  epilogue->activation_type = user_args[0].activationType;
-  epilogue->bias_type = user_args[0].biasType;
-  epilogue->act0 = user_args[0].act0;
-  epilogue->act1 = user_args[0].act1;
-  return HIPBLAS_STATUS_SUCCESS;
+  return gemm->gemm.getDefaultValueForDeviceUserArguments(host_user_args);
 }
 
 hipblasStatus_t XlaHipblasLtGroupedGemmRun(XlaHipblasLtGroupedGemm* gemm,
@@ -227,10 +213,6 @@ hipblasStatus_t XlaHipblasLtGroupedGemmRun(XlaHipblasLtGroupedGemm* gemm,
     return HIPBLAS_STATUS_INVALID_VALUE;
   }
   return gemm->gemm.run(device_user_args, stream);
-}
-
-size_t XlaHipblasLtUserArgumentsSize(void) {
-  return sizeof(hipblaslt_ext::UserArguments);
 }
 
 int XlaHipblasLtGetIndexFromAlgo(const hipblasLtMatmulAlgo_t* algo) {
