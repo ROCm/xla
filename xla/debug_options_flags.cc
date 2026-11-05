@@ -466,6 +466,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_nccl_blocking_communicators(true);
   opts.set_xla_gpu_nccl_split_share(true);
   opts.set_xla_gpu_enable_while_loop_sink_broadcast_constants(false);
+  opts.set_xla_gpu_dynamic_slice_fusion_legacy_custom_calls(false);
   opts.set_xla_gpu_nccl_collective_max_nchannels(0);
   opts.set_xla_gpu_nccl_p2p_max_nchannels(0);
   opts.set_xla_gpu_multi_streamed_windowed_einsum(true);
@@ -3057,6 +3058,13 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "Whether WhileLoopConstantSinking in the GPU simplification pipeline "
       "also sinks loop-invariant broadcasts of constants into while loops, "
       "so the loops stop carrying them as state buffers."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_dynamic_slice_fusion_legacy_custom_calls",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_dynamic_slice_fusion_legacy_custom_calls),
+      debug_options->xla_gpu_dynamic_slice_fusion_legacy_custom_calls(),
+      "Whether dynamic slice fusion also fuses slices into legacy (non "
+      "typed-FFI) custom calls registered for the platform."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_nccl_split_share",
       bool_setter_for(&DebugOptions::set_xla_gpu_nccl_split_share),

@@ -267,6 +267,7 @@ limitations under the License.
 #include "xla/service/cpu/cpu_aot_compilation_result.h"
 #include "xla/service/cpu/executable.pb.h"
 #include "xla/service/cpu_gpu_shape_verifier.h"
+#include "xla/service/custom_call_target_registry.h"
 #include "xla/service/debug/unstable_reduction_detector.h"
 #include "xla/service/device_assignment.h"
 #include "xla/service/dump.h"
@@ -1716,6 +1717,26 @@ bool IsFfiCustomCall(const HloInstruction* hlo, se::Platform::Id platform_id) {
       .ok();
 }
 
+// A legacy (API_VERSION_ORIGINAL or _STATUS_RETURNING) custom call whose target
+// is registered for this platform. Its thunk reads operand and result
+// addresses from the buffer assignment, so dynamic slice fusion can hand it
+// slices of larger buffers like it does for typed FFI handlers.
+bool IsLegacyCustomCall(const HloInstruction* hlo,
+                        se::Platform::Id platform_id) {
+  auto* custom_call = DynCast<HloCustomCallInstruction>(hlo);
+  if (custom_call == nullptr) {
+    return false;
+  }
+  CustomCallApiVersion api_version = custom_call->api_version();
+  if (api_version != CustomCallApiVersion::API_VERSION_ORIGINAL &&
+      api_version != CustomCallApiVersion::API_VERSION_STATUS_RETURNING) {
+    return false;
+  }
+  return CustomCallTargetRegistry::Global()->Lookup(
+             custom_call->custom_call_target(),
+             std::string(platform_id->ToName())) != nullptr;
+}
+
 absl::Status RunDynamicSliceFusionPasses(HloModule* hlo_module,
                                          se::Platform::Id platform_id,
                                          CompilationStats* compilation_stats) {
@@ -1730,9 +1751,15 @@ absl::Status RunDynamicSliceFusionPasses(HloModule* hlo_module,
 
   if (opts.xla_gpu_enable_dynamic_slice_fusion()) {
     DynamicSliceFusionRewriterV2::Options opts;
-    opts.predicate = [platform_id](const HloInstruction* instr) {
+    const bool legacy_custom_calls =
+        hlo_module->config()
+            .debug_options()
+            .xla_gpu_dynamic_slice_fusion_legacy_custom_calls();
+    opts.predicate = [platform_id,
+                      legacy_custom_calls](const HloInstruction* instr) {
       return IsNonFusedCublasLtMatmul(*instr) ||
-             IsFfiCustomCall(instr, platform_id);
+             IsFfiCustomCall(instr, platform_id) ||
+             (legacy_custom_calls && IsLegacyCustomCall(instr, platform_id));
     };
     pipeline.AddPass<DynamicSliceFusionRewriterV2>(platform_id,
                                                    std::move(opts));

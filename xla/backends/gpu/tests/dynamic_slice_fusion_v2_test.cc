@@ -23,6 +23,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/base/casts.h"
+#include "absl/base/no_destructor.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/strings/str_format.h"
@@ -31,8 +32,15 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/while_loop.h"
 #include "xla/backends/gpu/tests/hlo_pjrt_gpu_test_base.h"
 #include "xla/ffi/ffi.h"
+#include "xla/hlo/ir/hlo_computation.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/literal.h"
 #include "xla/literal_util.h"
+#include "xla/service/custom_call_status.h"
+#include "xla/service/custom_call_target_registry.h"
+#include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/shape_util.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/stream.h"
@@ -1810,6 +1818,144 @@ TEST_F(DynamicSliceFusionV2Test, OutputToOperandAliasingInPlaceSameBuffer) {
                                                /*run_hlo_passes=*/false));
   EXPECT_TRUE(LiteralTestUtil::Equal(expected, result));
 }
+
+
+// Legacy (API_VERSION_STATUS_RETURNING) custom call that records the device
+// addresses it is called with and does no device work.
+std::vector<std::pair<uintptr_t, uintptr_t>>& LegacyRecordedAddresses() {
+  static absl::NoDestructor<std::vector<std::pair<uintptr_t, uintptr_t>>>
+      addresses;
+  return *addresses;
+}
+
+static void LegacyRecordAddresses(void* /*stream*/, void** buffers,
+                                  const char* /*opaque*/,
+                                  size_t /*opaque_len*/,
+                                  XlaCustomCallStatus* status) {
+  LegacyRecordedAddresses().emplace_back(
+      reinterpret_cast<uintptr_t>(buffers[0]),
+      reinterpret_cast<uintptr_t>(buffers[1]));
+  XlaCustomCallStatusSetSuccess(status);
+}
+
+XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("__xla_test$$legacy_record_addresses",
+                                         LegacyRecordAddresses, "CUDA");
+XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("__xla_test$$legacy_record_addresses",
+                                         LegacyRecordAddresses, "ROCM");
+
+// A layer scan over a stacked [4, 256] input: each iteration slices row i,
+// passes it to a legacy custom call and writes the result into row i of a
+// stacked output. Compiled with the full pipeline.
+constexpr char kLegacyCustomCallScan[] = R"(
+  HloModule test
+
+  body {
+    param = (s32[], f32[4,256], f32[4,256]) parameter(0)
+    i = s32[] get-tuple-element(param), index=0
+    in = f32[4,256] get-tuple-element(param), index=1
+    out = f32[4,256] get-tuple-element(param), index=2
+    zero = s32[] constant(0)
+    row = f32[1,256] dynamic-slice(in, i, zero), dynamic_slice_sizes={1,256}
+    row_1d = f32[256] reshape(row)
+    call = f32[256] custom-call(row_1d),
+      custom_call_target="__xla_test$$legacy_record_addresses",
+      api_version=API_VERSION_STATUS_RETURNING
+    call_2d = f32[1,256] reshape(call)
+    updated = f32[4,256] dynamic-update-slice(out, call_2d, i, zero)
+    one = s32[] constant(1)
+    next_i = s32[] add(i, one)
+    ROOT tuple = (s32[], f32[4,256], f32[4,256]) tuple(next_i, in, updated)
+  }
+
+  cond {
+    param = (s32[], f32[4,256], f32[4,256]) parameter(0)
+    i = s32[] get-tuple-element(param), index=0
+    limit = s32[] constant(4)
+    ROOT cmp = pred[] compare(i, limit), direction=LT
+  }
+
+  ENTRY main {
+    in = f32[4,256] parameter(0)
+    zero = s32[] constant(0)
+    out = f32[4,256] broadcast(f32[] constant(0)), dimensions={}
+    init = (s32[], f32[4,256], f32[4,256]) tuple(zero, in, out)
+    while = (s32[], f32[4,256], f32[4,256])
+      while(init), condition=cond, body=body
+    ROOT result = f32[4,256] get-tuple-element(while), index=2
+  }
+)";
+
+class DynamicSliceFusionLegacyCustomCallTest
+    : public HloPjRtGpuTestBase,
+      public ::testing::WithParamInterface<bool> {
+ protected:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions debug_options = HloPjRtGpuTestBase::GetDebugOptionsForTest();
+    debug_options.set_xla_gpu_dynamic_slice_fusion_legacy_custom_calls(
+        GetParam());
+    debug_options.set_xla_gpu_enable_while_loop_unrolling(
+        DebugOptions::WHILE_LOOP_UNROLLING_NO_UNROLL);
+    debug_options.set_xla_gpu_experimental_dynamic_slice_fusion_verify_offsets(
+        true);
+    return debug_options;
+  }
+};
+
+TEST_P(DynamicSliceFusionLegacyCustomCallTest, FusesOnlyWhenEnabled) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> optimized,
+                       GetOptimizedModule(kLegacyCustomCallScan));
+  bool fused = false;
+  for (const HloComputation* computation : optimized->computations()) {
+    for (const HloInstruction* instr : computation->instructions()) {
+      if (instr->opcode() != HloOpcode::kFusion) {
+        continue;
+      }
+      auto config = instr->backend_config<GpuBackendConfig>();
+      if (!config.ok() ||
+          config->fusion_backend_config().custom_fusion_config().name() !=
+              "dynamic_slice_fusion") {
+        continue;
+      }
+      for (const HloInstruction* fused_instr :
+           instr->fused_instructions_computation()->instructions()) {
+        fused |= fused_instr->opcode() == HloOpcode::kCustomCall &&
+                 fused_instr->custom_call_target() ==
+                     "__xla_test$$legacy_record_addresses";
+      }
+    }
+  }
+  EXPECT_EQ(fused, GetParam()) << optimized->ToString();
+}
+
+TEST_P(DynamicSliceFusionLegacyCustomCallTest, CallSeesSlicesOfStackedBuffers) {
+  Literal input = LiteralUtil::CreateFullWithDescendingLayout<float>(
+      {4, 256}, 1.0f);
+  LegacyRecordedAddresses().clear();
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(kLegacyCustomCallScan));
+  ASSERT_OK(
+      Execute(std::move(module), {&input}, /*run_hlo_passes=*/true).status());
+
+  const std::vector<std::pair<uintptr_t, uintptr_t>>& calls =
+      LegacyRecordedAddresses();
+  ASSERT_EQ(calls.size(), 4);
+  if (!GetParam()) {
+    return;
+  }
+  // Fused: the call reads row i of the stacked input and writes row i of the
+  // stacked output in place, 1 KiB (one f32[256] row) apart per iteration.
+  for (int64_t i = 1; i < calls.size(); ++i) {
+    EXPECT_EQ(calls[i].first - calls[0].first, i * 1024) << i;
+    EXPECT_EQ(calls[i].second - calls[0].second, i * 1024) << i;
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(LegacyCustomCalls,
+                         DynamicSliceFusionLegacyCustomCallTest,
+                         ::testing::Bool(),
+                         [](const ::testing::TestParamInfo<bool>& info) {
+                           return info.param ? "Enabled" : "Disabled";
+                         });
 
 }  // namespace
 }  // namespace xla::gpu
