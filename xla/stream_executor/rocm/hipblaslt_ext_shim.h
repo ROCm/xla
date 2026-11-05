@@ -76,14 +76,6 @@ typedef struct {
   const void* bias;
 } XlaHipblasLtGemmInputs;
 
-// The epilogue fields of hipblaslt_ext::UserArguments.
-typedef struct {
-  int32_t activation_type;
-  int32_t bias_type;
-  float act0;
-  float act1;
-} XlaHipblasLtUserArgsEpilogue;
-
 // Creates a grouped GEMM for `problem_type`. `handle` must outlive it.
 XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t XlaHipblasLtGroupedGemmCreate(
     hipblasLtHandle_t handle, const XlaHipblasLtProblemType* problem_type,
@@ -128,18 +120,16 @@ XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t XlaHipblasLtGroupedGemmInitialize(
     XlaHipblasLtGroupedGemm* gemm, const hipblasLtMatmulAlgo_t* algo,
     void* workspace);
 
-// The epilogue fields of the first GEMM's default user arguments
-// (hipblaslt_ext::GroupedGemm::getDefaultValueForDeviceUserArguments).
+// hipblaslt_ext::GroupedGemm::getDefaultValueForDeviceUserArguments: writes
+// one hipblaslt_ext::UserArguments per GEMM to the host buffer
+// `host_user_args`.
 XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t
-XlaHipblasLtGroupedGemmGetDefaultUserArgsEpilogue(
-    XlaHipblasLtGroupedGemm* gemm, XlaHipblasLtUserArgsEpilogue* epilogue);
+XlaHipblasLtGroupedGemmGetDefaultValueForDeviceUserArguments(
+    XlaHipblasLtGroupedGemm* gemm, void* host_user_args);
 
 // hipblaslt_ext::GroupedGemm::run with device user arguments.
 XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t XlaHipblasLtGroupedGemmRun(
     XlaHipblasLtGroupedGemm* gemm, void* device_user_args, hipStream_t stream);
-
-// sizeof(hipblaslt_ext::UserArguments).
-XLA_HIPBLASLT_SHIM_EXPORT size_t XlaHipblasLtUserArgumentsSize(void);
 
 // hipblaslt_ext::getIndexFromAlgo.
 XLA_HIPBLASLT_SHIM_EXPORT int XlaHipblasLtGetIndexFromAlgo(

@@ -31,6 +31,9 @@ limitations under the License.
 #include "absl/time/time.h"
 #include "rocm/include/hip/library_types.h"
 #include "rocm/include/hipblas/hipblas.h"
+// Only for UserArguments: call other hipblaslt-ext.hpp APIs through
+// hipblaslt_ext_shim.h, as they pass libstdc++ types.
+#include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
 #include "rocm/include/hipblaslt/hipblaslt.h"
 #include "rocm/include/rocblas/internal/rocblas-types.h"
 #include "rocm/rocm_config.h"
@@ -953,23 +956,25 @@ absl::Status BlasLt::GroupedMatmulPlan::DoInitialize(
   // code from the library defined UserArgument makes it more robust to
   // different versions of hipBLASLt.
 
-  // Get default UserArguments from hipBLASLt and save required parameters.
+  // Get default UserArguments from hipBLASLt and save required parameters
+  auto default_ua =
+      std::make_unique<hipblaslt_ext::UserArguments[]>(cfg_.group_count);
+  SE_HIPBLAS_RETURN_IF_ERROR(
+      XlaHipblasLtGroupedGemmGetDefaultValueForDeviceUserArguments(
+          grouped_gemm_.get(), static_cast<void*>(default_ua.get())));
   // The ragged-dot API enforce that activation and bias types are the same
   // for all the gemm operations.
   // We can therefore only retrieve/verify value of the first gemm op.
-  XlaHipblasLtUserArgsEpilogue default_ua{};
-  SE_HIPBLAS_RETURN_IF_ERROR(XlaHipblasLtGroupedGemmGetDefaultUserArgsEpilogue(
-      grouped_gemm_.get(), &default_ua));
-  activation_type_ = default_ua.activation_type;
-  bias_type_ = static_cast<int8_t>(default_ua.bias_type);
+  activation_type_ = default_ua[0].activationType;
+  bias_type_ = default_ua[0].biasType;
   // Verify that act0 and act1 are 0 as they are forced to 0 in the userarg
   // update kernels
-  TF_RET_CHECK(default_ua.act0 == 0.0f)
+  TF_RET_CHECK(default_ua[0].act0 == 0.0f)
       << "Expected act0 == 0 in hipBLASLt default UserArguments, got "
-      << default_ua.act0;
-  TF_RET_CHECK(default_ua.act1 == 0.0f)
+      << default_ua[0].act0;
+  TF_RET_CHECK(default_ua[0].act1 == 0.0f)
       << "Expected act1 == 0 in hipBLASLt default UserArguments, got "
-      << default_ua.act1;
+      << default_ua[0].act1;
   return absl::OkStatus();
 }
 
@@ -1006,9 +1011,9 @@ absl::Status BlasLt::GroupedMatmulPlan::ExecuteOnStream(
 
   // The first chunk of the workspace is reserved for userargs.
   if (algorithm_dirty_ || !args.workspace.IsSameAs(saved_address_workspace_)) {
-    void* addr_workspace =
-        static_cast<void*>(static_cast<uint8_t*>(args.workspace.opaque()) +
-                           XlaHipblasLtUserArgumentsSize() * cfg_.group_count);
+    void* addr_workspace = static_cast<void*>(
+        static_cast<uint8_t*>(args.workspace.opaque()) +
+        sizeof(hipblaslt_ext::UserArguments) * cfg_.group_count);
     SE_HIPBLAS_RETURN_IF_ERROR(XlaHipblasLtGroupedGemmInitialize(
         grouped_gemm_.get(), &*algorithm_, addr_workspace));
     algorithm_dirty_ = false;
