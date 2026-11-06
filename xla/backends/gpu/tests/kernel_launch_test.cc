@@ -96,5 +96,35 @@ TEST_F(KernelLaunchTest, ValidPrefixExtentBoundsLoopFusion) {
   }
 }
 
+TEST_F(KernelLaunchTest, ValidPrefixExtentDoesNotReuseUnboundedKernel) {
+  const char* hlo_text = R"(
+    HloModule ValidPrefixExtentKernelReuse
+
+    fused_computation {
+      x = f32[8,4] parameter(0)
+      n = s32[] parameter(1)
+      rows = s32[8,4] iota(), iota_dimension=0
+      broadcast_n = s32[8,4] broadcast(n), dimensions={}
+      is_live = pred[8,4] compare(rows, broadcast_n), direction=LT
+      squared = f32[8,4] multiply(x, x)
+      ROOT result = f32[8,4] select(is_live, squared, x)
+    }
+
+    ENTRY main {
+      x = f32[8,4] parameter(0)
+      n = s32[] constant(3)
+      bounded = f32[8,4] fusion(x, n), kind=kLoop,
+        calls=fused_computation,
+        backend_config={"fusion_backend_config":{"kind":"kLoop"},"valid_prefix_extent":{"operand_index":"1","dimension":"0"}}
+      unbounded = f32[8,4] fusion(x, n), kind=kLoop,
+        calls=fused_computation,
+        backend_config={"fusion_backend_config":{"kind":"kLoop"}}
+      ROOT result = (f32[8,4], f32[8,4]) tuple(bounded, unbounded)
+    }
+  )";
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(hlo_text, ErrorSpec{1e-5, 1e-5}));
+}
+
 }  // namespace
 }  // namespace xla::gpu

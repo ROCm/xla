@@ -227,15 +227,16 @@ TEST_F(MlirKernelFusionTest, ValidPrefixExtentBoundsLoopFusion) {
   HloFusionAnalysis analysis = HloFusionAnalysis::Create(*fusion, device_info_);
   std::unique_ptr<MlirKernelEmitter> emitter =
       std::make_unique<LoopFusion>(analysis);
-  ASSERT_OK_AND_ASSIGN(auto mlir_module, emitter->CreateMLIRModule(
-                                             mlir_context_, *fusion, "fusion",
-                                             /*buffer_assignment=*/nullptr));
+  ASSERT_OK_AND_ASSIGN(
+      mlir::OwningOpRef<mlir::ModuleOp> mlir_module,
+      emitter->CreateMLIRModule(mlir_context_, *fusion, "fusion",
+                                /*buffer_assignment=*/nullptr));
 
   std::string out;
   llvm::raw_string_ostream stream(out);
   stream << *mlir_module;
 
-  ASSERT_OK_AND_ASSIGN(auto filecheck_result, RunFileCheck(out, R"(
+  ASSERT_OK_AND_ASSIGN(bool filecheck_result, RunFileCheck(out, R"(
     // CHECK-LABEL: func.func @fusion(
     // CHECK:      %[[EXTENT_I32:.*]] = tensor.extract %arg1[]
     // CHECK:      %[[EXTENT_INDEX:.*]] = arith.index_cast %[[EXTENT_I32]]
@@ -273,7 +274,7 @@ TEST_F(MlirKernelFusionTest, ValidPrefixExtentBoundsLoopFusion) {
   std::string llvm_out;
   llvm::raw_string_ostream llvm_stream(llvm_out);
   llvm_stream << *llvm_module.getModuleUnlocked();
-  ASSERT_OK_AND_ASSIGN(auto llvm_filecheck_result, RunFileCheck(llvm_out, R"(
+  ASSERT_OK_AND_ASSIGN(bool llvm_filecheck_result, RunFileCheck(llvm_out, R"(
     // CHECK-LABEL: define void @fusion(
     // CHECK: %[[EXTENT:.*]] = load i32, ptr
     // CHECK: %[[ACTIVE:.*]] = icmp

@@ -85,7 +85,6 @@ limitations under the License.
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Transforms/Passes.h"
 #include "stablehlo/transforms/Passes.h"
-#include "tsl/platform/platform.h"
 #include "xla/backends/gpu/codegen/emitters/ir/xla_gpu_ops.h"
 #include "xla/backends/gpu/codegen/emitters/transforms/passes.h"
 #include "xla/backends/gpu/codegen/fusion_emitter.h"
@@ -131,6 +130,7 @@ limitations under the License.
 #include "xla/service/gpu/launch_dimensions.h"
 #include "xla/service/gpu/llvm_gpu_backend/ptx_version_util.h"
 #include "xla/service/gpu/target_util.h"
+#include "xla/service/gpu/valid_prefix_extent.h"
 #include "xla/service/llvm_ir/llvm_util.h"
 #include "xla/shape.h"
 #include "xla/status_macros.h"
@@ -142,6 +142,7 @@ limitations under the License.
 #include "xla/tsl/framework/mlir/status_scoped_diagnostic_handler.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
+#include "tsl/platform/platform.h"
 
 namespace xla::gpu {
 namespace {
@@ -418,13 +419,21 @@ AsyncThunkSequence MlirKernelFusion::Emit(
     IrEmitterContext& ir_emitter_context,
     const HloFusionInstruction& fusion) const {
   VLOG(4) << "Fusion: " << fusion.fused_instructions_computation()->ToString();
+  ABSL_ASSIGN_OR_RETURN(std::optional<ValidPrefixExtent> valid_prefix_extent,
+                        GetValidPrefixExtent(fusion));
+  std::string discriminator = "MlirKernelFusion";
+  if (valid_prefix_extent.has_value()) {
+    absl::StrAppend(&discriminator,
+                    ":valid_prefix=", valid_prefix_extent->operand_index, ":",
+                    valid_prefix_extent->dimension, ":",
+                    valid_prefix_extent->capacity);
+  }
   ABSL_ASSIGN_OR_RETURN(
       emitters::KernelArguments args,
       emitters::KernelArguments::Create(ir_emitter_context.buffer_assignment(),
                                         GetDefaultBufferAlignment(), &fusion));
   auto [future_entry, cached] = ir_emitter_context.kernel_cache().GetWithStatus(
-      fusion.fused_instructions_computation(), args.args(),
-      /*discriminator=*/"MlirKernelFusion",
+      fusion.fused_instructions_computation(), args.args(), discriminator,
       [&]() -> xla::Future<KernelReuseCache::Entry> {
         std::string kernel_name = ir_emitter_context.GetSanitizedUniqueName(
             std::string(fusion.name()));
