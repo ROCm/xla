@@ -33,7 +33,9 @@ limitations under the License.
 #include "tsl/platform/errors.h"
 #include "tsl/platform/logging.h"
 #include "tsl/platform/statusor.h"
+#include "xla/hlo/analysis/hlo_dataflow_analysis.h"
 #include "xla/hlo/ir/hlo_clone_context.h"
+#include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/while_util.h"
 #include "xla/shape_util.h"
@@ -65,6 +67,51 @@ absl::Status ReplaceUsesWhileKeepingLoopInvariance(
   }
 
   return absl::OkStatus();
+}
+
+// Whether no use of `instr` in its computation, other than operand `skip_index`
+// of `skip_user`, could fuse a broadcast in its place: every use is an operand
+// that the user updates in place (e.g. dynamic-update-slice or scatter operand
+// 0) or an operand of a custom call. Bitcasts, reshapes, transposes, copies and
+// converts are looked through: after sinking, the simplifier folds them into
+// the broadcast.
+bool NoUseCanFuseBroadcast(const HloInstruction* instr,
+                           const HloInstruction* skip_user,
+                           int64_t skip_index) {
+  for (const HloInstruction* user : instr->users()) {
+    switch (user->opcode()) {
+      case HloOpcode::kBitcast:
+      case HloOpcode::kReshape:
+      case HloOpcode::kTranspose:
+      case HloOpcode::kCopy:
+      case HloOpcode::kConvert:
+        if (!NoUseCanFuseBroadcast(user, /*skip_user=*/nullptr,
+                                   /*skip_index=*/-1)) {
+          return false;
+        }
+        continue;
+      case HloOpcode::kCustomCall:
+        continue;
+      default:
+        break;
+    }
+    const auto in_place_pairs =
+        HloDataflowAnalysis::GetInPlaceInputOutputPairs(user);
+    for (int64_t i = 0, e = user->operand_count(); i < e; ++i) {
+      if (user->operand(i) != instr || (user == skip_user && i == skip_index)) {
+        continue;
+      }
+      const bool in_place =
+          absl::c_any_of(in_place_pairs, [&](const auto& pair) {
+            return pair.first.operand_number == i &&
+                   pair.first.operand_index.empty();
+          });
+      if (!in_place) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 HloInstruction* CloneHelper(const HloInstruction* instruction,
@@ -111,6 +158,20 @@ absl::StatusOr<bool> WhileLoopConstantSinking::TrySinkingConstantsIntoWhileLoop(
         (!sink_broadcast_of_constants_ ||
          invariant_value.opcode() != HloOpcode::kBroadcast ||
          invariant_value.operand(0)->opcode() != HloOpcode::kConstant)) {
+      continue;
+    }
+
+    // A broadcast that no use in the body can fuse would become a broadcast
+    // kernel in every iteration. Keep it in the carry instead: a custom call
+    // reads the carried buffer as is, and copy insertion gives each in-place
+    // user a copy of it.
+    if (skip_unfusible_broadcasts_ &&
+        invariant_value.opcode() == HloOpcode::kBroadcast &&
+        invariant_body_gte->user_count() > 1 &&
+        NoUseCanFuseBroadcast(invariant_body_gte,
+                              while_body->root_instruction(), index)) {
+      VLOG(2) << "Not sinking " << invariant_value.ToShortString() << " into "
+              << while_body->name() << ": no use in the body can fuse it";
       continue;
     }
 

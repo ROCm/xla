@@ -2014,7 +2014,15 @@ message DebugOptions {
   // become offsets into the sliced buffers instead of separate copies.
   optional bool xla_gpu_dynamic_slice_fusion_legacy_custom_calls = 569;
 
-  // Next id: 570 (568 is used by a sibling branch)
+  // With xla_gpu_enable_while_loop_sink_broadcast_constants, keep a broadcast
+  // of a constant in the loop state when no use of it in the body can fuse it:
+  // every use is an operand updated in place (dynamic-update-slice or scatter
+  // operand 0) or a custom-call operand. Sinking it would add a broadcast
+  // kernel to every iteration, where a custom call reads the carried buffer
+  // and an in-place user needs a copy of the same size.
+  optional bool xla_gpu_while_loop_sink_broadcast_skip_unfusible = 570;
+
+  // Next id: 571 (568 is used by a sibling branch)
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

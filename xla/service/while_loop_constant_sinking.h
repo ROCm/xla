@@ -50,10 +50,19 @@ namespace xla {
 //
 class WhileLoopConstantSinking : public HloModulePass {
  public:
+  // With `skip_unfusible_broadcasts`, a broadcast of a constant is not sunk
+  // when no use of it in the body could fuse it: every use, possibly through
+  // bitcasts, reshapes, transposes, copies and converts, is an operand that
+  // its user updates in place (e.g. operand 0 of a dynamic-update-slice or a
+  // scatter) or an operand of a custom call. Sinking would only add a
+  // broadcast kernel to every iteration, where a custom call reads the carried
+  // buffer as is and an in-place user needs a copy of the same size.
   explicit WhileLoopConstantSinking(bool sink_broadcast_of_constants = false,
-                                    bool sink_only_scalar_constants = false)
+                                    bool sink_only_scalar_constants = false,
+                                    bool skip_unfusible_broadcasts = false)
       : sink_broadcast_of_constants_(sink_broadcast_of_constants),
-        sink_only_scalar_constants_(sink_only_scalar_constants) {}
+        sink_only_scalar_constants_(sink_only_scalar_constants),
+        skip_unfusible_broadcasts_(skip_unfusible_broadcasts) {}
 
   ~WhileLoopConstantSinking() override = default;
 
@@ -71,6 +80,7 @@ class WhileLoopConstantSinking : public HloModulePass {
 
   const bool sink_broadcast_of_constants_;
   const bool sink_only_scalar_constants_;
+  const bool skip_unfusible_broadcasts_;
 };
 }  // namespace xla
 

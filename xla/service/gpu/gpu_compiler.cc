@@ -1009,7 +1009,10 @@ absl::Status RunOptimizationPasses(
     pipeline.AddPass<TupleSimplifier>();
     pipeline.AddPass<WhileLoopConstantSinking>(
         /*sink_broadcast_of_constants=*/debug_options
-            .xla_gpu_enable_while_loop_sink_broadcast_constants());
+            .xla_gpu_enable_while_loop_sink_broadcast_constants(),
+        /*sink_only_scalar_constants=*/false,
+        /*skip_unfusible_broadcasts=*/debug_options
+            .xla_gpu_while_loop_sink_broadcast_skip_unfusible());
     pipeline.AddPass<WhileLoopSimplifier>();
     pipeline.AddPass<SliceSinker>();
 
