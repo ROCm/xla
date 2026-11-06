@@ -49,36 +49,32 @@ XLA_LIBSTDCXX_SYMBOL(_ZSt20__throw_length_errorPKc, "GLIBCXX_3.4");
 // Only referenced with GCC 11+ headers.
 XLA_LIBSTDCXX_SYMBOL(_ZSt28__throw_bad_array_new_lengthv, "GLIBCXX_3.4.29");
 
-struct XlaHipblasLtExt_GroupedGemm {
-  XlaHipblasLtExt_GroupedGemm(hipblasLtHandle_t handle,
-                              const XlaHipblasLtExt_ProblemType& problem)
-      : gemm(handle, problem.op_a, problem.op_b, problem.type_a, problem.type_b,
-             problem.type_c, problem.type_d, problem.compute_type) {}
-
-  hipblaslt_ext::GroupedGemm gemm;
-};
-
 namespace {
 
 std::vector<int64_t> ToVector(const int64_t* values, size_t count) {
   return std::vector<int64_t>(values, values + count);
 }
 
+// The problem type given to the constructor.
+hipblaslt_ext::GemmProblemType GetProblemType(
+    hipblaslt_ext::GroupedGemm& gemm) {
+  return gemm.getProblemTypes()[0];
+}
+
 }  // namespace
 
 extern "C" {
 
-XlaHipblasLtExt_GroupedGemm* XlaHipblasLtExt_GroupedGemmCreate(
-    hipblasLtHandle_t handle, const XlaHipblasLtExt_ProblemType& problem_type) {
-  return new XlaHipblasLtExt_GroupedGemm(handle, problem_type);
-}
-
-void XlaHipblasLtExt_GroupedGemmDestroy(XlaHipblasLtExt_GroupedGemm* gemm) {
-  delete gemm;
+hipblaslt_ext::GroupedGemm* XlaHipblasLtExt_GroupedGemmCreate(
+    hipblasLtHandle_t handle, hipblasOperation_t op_a, hipblasOperation_t op_b,
+    hipDataType type_a, hipDataType type_b, hipDataType type_c,
+    hipDataType type_d, hipblasComputeType_t compute_type) {
+  return new hipblaslt_ext::GroupedGemm(handle, op_a, op_b, type_a, type_b,
+                                        type_c, type_d, compute_type);
 }
 
 hipblasStatus_t XlaHipblasLtExt_GroupedGemmSetProblem(
-    XlaHipblasLtExt_GroupedGemm& gemm, size_t group_count, const int64_t* m,
+    hipblaslt_ext::GroupedGemm& gemm, size_t group_count, const int64_t* m,
     const int64_t* n, const int64_t* k, const int64_t* batch_count,
     const int64_t* lda, const int64_t* ldb, const int64_t* ldc,
     const int64_t* ldd, const int64_t* stride_a, const int64_t* stride_b,
@@ -101,67 +97,30 @@ hipblasStatus_t XlaHipblasLtExt_GroupedGemmSetProblem(
   std::vector<int64_t> v_stride_b = ToVector(stride_b, group_count);
   std::vector<int64_t> v_stride_c = ToVector(stride_c, group_count);
   std::vector<int64_t> v_stride_d = ToVector(stride_d, group_count);
-
   std::vector<hipblaslt_ext::GemmEpilogue> v_epilogues(epilogues,
                                                        epilogues + group_count);
   std::vector<hipblaslt_ext::GemmInputs> v_inputs(inputs, inputs + group_count);
 
-  // The problem type given to the constructor, as hipBLASLt's own setProblem
-  // overloads without problem type pass it.
-  std::vector<hipblaslt_ext::GemmProblemType> problem_types =
-      gemm.gemm.getProblemTypes();
-  return gemm.gemm.setProblem(v_m, v_n, v_k, v_batch, v_lda, v_ldb, v_ldc,
-                              v_ldd, v_stride_a, v_stride_b, v_stride_c,
-                              v_stride_d, v_epilogues, v_inputs,
-                              problem_types[0]);
+  // Like hipBLASLt's own setProblem overloads without problem type.
+  hipblaslt_ext::GemmProblemType problem_type = GetProblemType(gemm);
+  return gemm.setProblem(v_m, v_n, v_k, v_batch, v_lda, v_ldb, v_ldc, v_ldd,
+                         v_stride_a, v_stride_b, v_stride_c, v_stride_d,
+                         v_epilogues, v_inputs, problem_type);
 }
 
 hipblasStatus_t XlaHipblasLtExt_GroupedGemmGetAllAlgos(
-    hipblasLtHandle_t handle, const XlaHipblasLtExt_ProblemType& p,
+    hipblasLtHandle_t handle, hipblaslt_ext::GroupedGemm& gemm,
     XlaHipblasLtExt_HeuristicResultsCallback callback, void* context) {
+  hipblaslt_ext::GemmProblemType p = GetProblemType(gemm);
   std::vector<hipblasLtMatmulHeuristicResult_t> results;
   hipblasStatus_t status = hipblaslt_ext::getAllAlgos(
-      handle, hipblaslt_ext::GemmType::HIPBLASLT_GROUPED_GEMM, p.op_a, p.op_b,
-      p.type_a, p.type_b, p.type_c, p.type_d, p.compute_type, results);
+      handle, hipblaslt_ext::GemmType::HIPBLASLT_GROUPED_GEMM, p.getOpA(),
+      p.getOpB(), p.getTypeA(), p.getTypeB(), p.getTypeC(), p.getTypeD(),
+      p.getTypeCompute(), results);
   if (status == HIPBLAS_STATUS_SUCCESS) {
     callback(context, results.data(), results.size());
   }
   return status;
-}
-
-void XlaHipblasLtExt_GroupedGemmSetMaxWorkspaceBytes(
-    XlaHipblasLtExt_GroupedGemm& gemm, size_t workspace_bytes) {
-  gemm.gemm.setMaxWorkspaceBytes(workspace_bytes);
-}
-
-hipblasStatus_t XlaHipblasLtExt_GroupedGemmIsAlgoSupported(
-    XlaHipblasLtExt_GroupedGemm& gemm, hipblasLtMatmulAlgo_t& algo,
-    size_t& workspace_size) {
-  return gemm.gemm.isAlgoSupported(algo, workspace_size);
-}
-
-hipblasStatus_t XlaHipblasLtExt_GroupedGemmInitialize(
-    XlaHipblasLtExt_GroupedGemm& gemm, const hipblasLtMatmulAlgo_t& algo,
-    void* workspace) {
-  return gemm.gemm.initialize(algo, workspace);
-}
-
-hipblasStatus_t
-XlaHipblasLtExt_GroupedGemmGetDefaultValueForDeviceUserArguments(
-    XlaHipblasLtExt_GroupedGemm& gemm, void* host_user_args) {
-  return gemm.gemm.getDefaultValueForDeviceUserArguments(host_user_args);
-}
-
-hipblasStatus_t XlaHipblasLtExt_GroupedGemmRun(
-    XlaHipblasLtExt_GroupedGemm& gemm, void* device_user_args,
-    hipStream_t stream) {
-  return gemm.gemm.run(device_user_args, stream);
-}
-
-int XlaHipblasLtExt_GetIndexFromAlgo(const hipblasLtMatmulAlgo_t& algo) {
-  // hipblaslt_ext::getIndexFromAlgo takes a non-const reference.
-  hipblasLtMatmulAlgo_t copy = algo;
-  return hipblaslt_ext::getIndexFromAlgo(copy);
 }
 
 }  // extern "C"

@@ -26,6 +26,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
+#include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
 #include "rocm/include/hipblaslt/hipblaslt.h"
 #include "rocm/rocm_config.h"
 #include "xla/stream_executor/blas.h"
@@ -176,22 +177,14 @@ class BlasLt : public gpu::BlasLt {
     }
 
    private:
-    struct GroupedGemmDeleter {
-      void operator()(XlaHipblasLtExt_GroupedGemm* gemm) const {
-        XlaHipblasLtExt_GroupedGemmDestroy(gemm);
-      }
-    };
-
     absl::Status DoInitialize(blas::ComputationType compute_type,
                               Epilogue epilogue);
 
     const BlasLt& blas_lt_;
     gpu::GroupedGemmConfig cfg_;
     Epilogue epilogue_ = Epilogue::kDefault;
-    // Set by DoInitialize; GetAlgorithms queries hipBLASLt with it.
-    XlaHipblasLtExt_ProblemType problem_type_{};
-    std::unique_ptr<XlaHipblasLtExt_GroupedGemm, GroupedGemmDeleter>
-        grouped_gemm_;
+    // Created by XlaHipblasLtExt_GroupedGemmCreate, see hipblaslt_ext_shim.h.
+    std::unique_ptr<hipblaslt_ext::GroupedGemm> grouped_gemm_;
     mutable std::optional<hipblasLtMatmulAlgo_t> algorithm_;
     mutable bool algorithm_dirty_ = false;
     mutable DeviceAddressBase saved_address_workspace_{};
