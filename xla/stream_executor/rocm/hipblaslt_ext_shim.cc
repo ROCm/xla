@@ -106,31 +106,15 @@ hipblasStatus_t XlaHipblasLtExt_GroupedGemmSetProblem(
   std::vector<hipblaslt_ext::GemmInputs> v_inputs(group_count);
   for (size_t i = 0; i < group_count; ++i) {
     v_epilogues[i].setMode(epilogues[i].mode);
-    if (epilogues[i].has_bias_data_type != 0) {
-      v_epilogues[i].setBiasDataType(epilogues[i].bias_data_type);
-    }
+    v_epilogues[i].setBiasDataType(epilogues[i].bias_data_type);
     const XlaHipblasLtExt_GemmInputs& in = inputs[i];
-    if (in.a != nullptr) {
-      v_inputs[i].setA(in.a);
-    }
-    if (in.b != nullptr) {
-      v_inputs[i].setB(in.b);
-    }
-    if (in.c != nullptr) {
-      v_inputs[i].setC(in.c);
-    }
-    if (in.d != nullptr) {
-      v_inputs[i].setD(in.d);
-    }
-    if (in.alpha != nullptr) {
-      v_inputs[i].setAlpha(in.alpha);
-    }
-    if (in.beta != nullptr) {
-      v_inputs[i].setBeta(in.beta);
-    }
-    if (in.bias != nullptr) {
-      v_inputs[i].setBias(in.bias);
-    }
+    v_inputs[i].setA(in.a);
+    v_inputs[i].setB(in.b);
+    v_inputs[i].setC(in.c);
+    v_inputs[i].setD(in.d);
+    v_inputs[i].setAlpha(in.alpha);
+    v_inputs[i].setBeta(in.beta);
+    v_inputs[i].setBias(in.bias);
   }
 
   // The problem type given to the constructor, as hipBLASLt's own setProblem
