@@ -2580,6 +2580,7 @@ cc_library(
     deps = [
         "//xla:shape_util",
         "//xla:util",
+        "//xla/hlo/analysis:hlo_dataflow_analysis",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/pass:hlo_pass",
         "//xla/hlo/pass:hlo_pass_registry",
@@ -2612,6 +2613,10 @@ xla_cc_test(
         "//xla/hlo/testlib:test",
         "//xla/hlo/utils:hlo_matchers",
         "//xla/tests:xla_internal_test_main",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest",
     ],
 )

@@ -17,6 +17,13 @@ limitations under the License.
 
 #include <gmock/gmock.h>
 
+#include <string>
+#include <utility>
+
+#include "absl/status/status_macros.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_replace.h"
+#include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
@@ -200,6 +207,136 @@ ENTRY entry {
   ASSERT_NE(while_instr->original_value(), nullptr);
   EXPECT_TRUE(
       while_instr->original_value()->IsCompatibleWith(while_instr->shape()));
+}
+
+// A scan-like loop whose loop-invariant zero buffer `z` is used in the body as
+// the buffer of an in-place update; ZBUF_USE stands for those uses.
+constexpr absl::string_view kInPlaceUseTemplate = R"(
+HloModule ModuleWithWhile
+
+add_s32 {
+  a = s32[] parameter(0)
+  b = s32[] parameter(1)
+  ROOT r = s32[] add(a, b)
+}
+
+body {
+  p_body = (s32[], s32[8], s32[8]) parameter(0)
+  i = s32[] get-tuple-element(p_body), index=0
+  z = s32[8] get-tuple-element(p_body), index=1
+  acc = s32[8] get-tuple-element(p_body), index=2
+  one = s32[] constant(1)
+  i1 = s32[] add(i, one)
+  upd = s32[1] broadcast(i), dimensions={}
+  ZBUF_USE
+  acc1 = s32[8] add(acc, use)
+  ROOT root = (s32[], s32[8], s32[8]) tuple(i1, z, acc1)
+}
+
+condition {
+  p_cond = (s32[], s32[8], s32[8]) parameter(0)
+  i = s32[] get-tuple-element(p_cond), index=0
+  n = s32[] constant(4)
+  ROOT result = pred[] compare(i, n), direction=LT
+}
+
+ENTRY entry {
+  acc0 = s32[8] parameter(0)
+  zero = s32[] constant(0)
+  zeros = s32[8] broadcast(zero), dimensions={}
+  while_init = (s32[], s32[8], s32[8]) tuple(zero, zeros, acc0)
+  ROOT while = (s32[], s32[8], s32[8]) while(while_init), condition=condition, body=body
+}
+)";
+
+// Runs the pass with broadcast sinking on, with and without the in-place
+// guard, on the template with `use` and returns whether each run changed the
+// module.
+class WhileLoopConstantSinkingInPlaceTest
+    : public HloHardwareIndependentTestBase {
+ protected:
+  absl::StatusOr<std::pair<bool, bool>> SinkWithAndWithoutGuard(
+      absl::string_view use) {
+    const std::string hlo =
+        absl::StrReplaceAll(kInPlaceUseTemplate, {{"ZBUF_USE", use}});
+    ABSL_ASSIGN_OR_RETURN(auto guarded, ParseAndReturnVerifiedModule(hlo));
+    ABSL_ASSIGN_OR_RETURN(auto unguarded, ParseAndReturnVerifiedModule(hlo));
+    ABSL_ASSIGN_OR_RETURN(
+        bool with_guard,
+        WhileLoopConstantSinking(/*sink_broadcast_of_constants=*/true,
+                                 /*sink_only_scalar_constants=*/false,
+                                 /*skip_unfusible_broadcasts=*/true)
+            .Run(guarded.get()));
+    ABSL_ASSIGN_OR_RETURN(
+        bool without_guard,
+        WhileLoopConstantSinking(/*sink_broadcast_of_constants=*/true,
+                                 /*sink_only_scalar_constants=*/false,
+                                 /*skip_unfusible_broadcasts=*/false)
+            .Run(unguarded.get()));
+    return std::make_pair(with_guard, without_guard);
+  }
+};
+
+TEST_F(WhileLoopConstantSinkingInPlaceTest,
+       KeepBroadcastUsedOnlyAsDynamicUpdateSliceBuffer) {
+  ASSERT_OK_AND_ASSIGN(
+      auto changed,
+      SinkWithAndWithoutGuard("use = s32[8] dynamic-update-slice(z, upd, i)"));
+  EXPECT_EQ(changed, std::make_pair(false, true));
+}
+
+TEST_F(WhileLoopConstantSinkingInPlaceTest,
+       KeepBroadcastUsedOnlyAsScatterOperand) {
+  ASSERT_OK_AND_ASSIGN(auto changed, SinkWithAndWithoutGuard(R"(
+  idx = s32[1,1] reshape(upd)
+  use = s32[8] scatter(z, idx, upd), update_window_dims={},
+      inserted_window_dims={0}, scatter_dims_to_operand_dims={0},
+      index_vector_dim=1, to_apply=add_s32)"));
+  EXPECT_EQ(changed, std::make_pair(false, true));
+}
+
+TEST_F(WhileLoopConstantSinkingInPlaceTest,
+       KeepBroadcastUsedInPlaceThroughReshapes) {
+  ASSERT_OK_AND_ASSIGN(auto changed, SinkWithAndWithoutGuard(R"(
+  z2 = s32[2,4] reshape(z)
+  z1 = s32[8] reshape(z2)
+  use = s32[8] dynamic-update-slice(z1, upd, i))"));
+  EXPECT_EQ(changed, std::make_pair(false, true));
+}
+
+TEST_F(WhileLoopConstantSinkingInPlaceTest, KeepBroadcastReadByACustomCall) {
+  ASSERT_OK_AND_ASSIGN(
+      auto changed,
+      SinkWithAndWithoutGuard(
+          R"(use = s32[8] custom-call(z), custom_call_target="kernel")"));
+  EXPECT_EQ(changed, std::make_pair(false, true));
+}
+
+TEST_F(WhileLoopConstantSinkingInPlaceTest, SinkBroadcastWithAFusibleUse) {
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(absl::StrReplaceAll(
+                           kInPlaceUseTemplate, {{"ZBUF_USE", R"(
+  dus = s32[8] dynamic-update-slice(z, upd, i)
+  use = s32[8] add(dus, z))"}})));
+  ASSERT_OK_AND_ASSIGN(bool changed, WhileLoopConstantSinking(
+                                         /*sink_broadcast_of_constants=*/true,
+                                         /*sink_only_scalar_constants=*/false,
+                                         /*skip_unfusible_broadcasts=*/true)
+                                         .Run(module.get()));
+  ASSERT_TRUE(changed);
+  HloInstruction* add = module->GetComputationWithName("body.sunk")
+                            ->root_instruction()
+                            ->mutable_operand(2)
+                            ->mutable_operand(1);
+  EXPECT_THAT(add, op::Add(op::DynamicUpdateSlice(op::Broadcast(), _, _),
+                           op::Broadcast()));
+}
+
+TEST_F(WhileLoopConstantSinkingInPlaceTest, SinkBroadcastUsedAsUpdate) {
+  ASSERT_OK_AND_ASSIGN(auto changed, SinkWithAndWithoutGuard(R"(
+  zs = s32[1] slice(z), slice={[0:1]}
+  use = s32[8] dynamic-update-slice(acc, zs, i))"));
+  EXPECT_EQ(changed, std::make_pair(true, true));
 }
 
 TEST_F(WhileLoopConstantSinkingTest, KeepConstantsLoopInvariant) {
