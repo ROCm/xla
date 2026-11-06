@@ -1,0 +1,12 @@
+{
+  "timestamp": "2026-11-06T02:15:27Z",
+  "commit": "aa0b39",
+  "xla_sha": "aa0b399578c0199c8ae2533db975b359275552cc",
+  "repository": "openxla/xla",
+  "workflow_run": "42149112348",
+  "modes": [
+    "therock_nightly",
+    "therock_release_10.0",
+    "therock_release_10.1"
+  ]
+}
