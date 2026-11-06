@@ -33,7 +33,6 @@ limitations under the License.
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
 #include "xla/stream_executor/rocm/hip_blas_utils.h"
-#include "xla/stream_executor/rocm/hipblaslt_ext_shim.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/types.h"
 
