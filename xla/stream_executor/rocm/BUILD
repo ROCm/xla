@@ -872,11 +872,12 @@ cc_library(
         ":hipblaslt_ext_shim_built_with_libstdcxx",
         "@local_config_rocm//rocm:rocm_headers",
     ] + select({
-        # Builds against libstdc++ resolve the shim's libstdc++ symbols with
-        # the toolchain's own libstdc++.
+        # Builds against libc++: link against the stub to resolve the shim's
+        # versioned libstdc++ symbols.
         "@rules_ml_toolchain//common:is_stdlib_libcxx": [
             ":hipblaslt_ext_shim_libstdcxx_stub",
         ],
+        # Builds against libstdc++: the toolchain's own libstdc++ resolves them.
         "//conditions:default": [],
     }),
 )
