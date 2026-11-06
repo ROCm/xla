@@ -2360,8 +2360,7 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
     }
     for (auto instruction : computation->MakeInstructionPostOrder()) {
       ABSL_ASSIGN_OR_RETURN(
-          bool c,
-          ReplaceSetSize(instruction, options_.preserve_valid_prefix));
+          bool c, ReplaceSetSize(instruction, options_.preserve_valid_prefix));
       changed |= c;
 
       ABSL_ASSIGN_OR_RETURN(c, ReplaceSetBound(instruction));
@@ -2397,7 +2396,7 @@ absl::StatusOr<bool> RemoveUnfusedValidPrefixMarkers(HloModule* module) {
         computation->set_root_instruction(data,
                                           /*accept_different_shape=*/false);
       }
-      TF_RETURN_IF_ERROR(computation->RemoveInstruction(instruction));
+      RETURN_IF_ERROR(computation->RemoveInstruction(instruction));
       changed = true;
     }
   }
