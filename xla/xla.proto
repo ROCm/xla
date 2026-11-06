@@ -2028,7 +2028,16 @@ message DebugOptions {
   // buffers instead of separate copies.
   optional bool xla_gpu_dynamic_slice_fusion_triton_calls = 571;
 
-  // Next id: 572 (568 is used by a sibling branch)
+  // If true, a value a loop stores into a stacked buffer (a
+  // dynamic-update-slice into the loop state, e.g. a residual a scan saves for
+  // the backward pass) is written into its slice by the custom call that
+  // produces it, also when the value has other users (they read the slice
+  // back) or is an in-place update of another custom call's result, instead
+  // of being copied into the slice. Needs dynamic slice fusion for the
+  // producing custom calls (e.g. the legacy / Triton custom call flags).
+  optional bool xla_gpu_dynamic_slice_fusion_forward_stores = 572;
+
+  // Next id: 573 (568 is used by a sibling branch)
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

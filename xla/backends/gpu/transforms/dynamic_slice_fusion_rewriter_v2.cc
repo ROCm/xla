@@ -287,7 +287,39 @@ std::vector<SlicedParameter> ResolveSlicedParameters(
 // Resolve sliced results
 //===----------------------------------------------------------------------===//
 
-std::optional<SlicedResult> ResolveSlicedResult(HloInstruction* user) {
+// The dynamic-update-slice's result is the computation's result or a root
+// tuple element. With `allow_update_chains`, it may also reach the root through
+// further dynamic-update-slices of the same buffer, if those and dynamic-slices
+// of it are its only users (e.g. a slice stored, read back, updated in place
+// and stored again).
+bool FlowsIntoRoot(const HloInstruction* dus, bool allow_update_chains) {
+  const HloInstruction* root = dus->parent()->root_instruction();
+  if (dus == root || (root->opcode() == HloOpcode::kTuple &&
+                      absl::c_linear_search(root->operands(), dus))) {
+    return true;
+  }
+  if (!allow_update_chains || dus->IsRoot()) {
+    return false;
+  }
+  bool reaches_root = false;
+  for (const HloInstruction* user : dus->users()) {
+    if (user->operand(0) != dus || absl::c_count(user->operands(), dus) != 1) {
+      return false;
+    }
+    if (user->opcode() == HloOpcode::kDynamicSlice) {
+      continue;
+    }
+    if (user->opcode() != HloOpcode::kDynamicUpdateSlice ||
+        !FlowsIntoRoot(user, allow_update_chains)) {
+      return false;
+    }
+    reaches_root = true;
+  }
+  return reaches_root;
+}
+
+std::optional<SlicedResult> ResolveSlicedResult(HloInstruction* user,
+                                                bool allow_update_chains) {
   HloInstruction* current = user;
 
   // Walk forward through no-ops to find the DUS.
@@ -314,18 +346,8 @@ std::optional<SlicedResult> ResolveSlicedResult(HloInstruction* user) {
   }
 
   // DUS must flow into the root: either IS the root, or feeds root tuple.
-  HloComputation* parent = dus->parent();
-  HloInstruction* root = parent->root_instruction();
-  if (dus != root) {
-    if (root->opcode() != HloOpcode::kTuple) {
-      return std::nullopt;
-    }
-    bool feeds_root =
-        absl::c_any_of(root->operands(),
-                       [dus](const HloInstruction* op) { return op == dus; });
-    if (!feeds_root) {
-      return std::nullopt;
-    }
+  if (!FlowsIntoRoot(dus, allow_update_chains)) {
+    return std::nullopt;
   }
 
   return SlicedResult{0, std::move(noops), dus};
@@ -344,12 +366,13 @@ HloInstruction* FindGte(HloInstruction* hero, int64_t tuple_index) {
 
 // Walks forward from `gte` to find a DUS chain. If found, returns a
 // SlicedResult with the GTE prepended into noops.
-std::optional<SlicedResult> ResolveLeafDus(HloInstruction* gte) {
+std::optional<SlicedResult> ResolveLeafDus(HloInstruction* gte,
+                                           bool allow_update_chains) {
   if (gte->user_count() != 1) {
     return std::nullopt;
   }
   for (HloInstruction* user : gte->users()) {
-    if (auto sliced = ResolveSlicedResult(user)) {
+    if (auto sliced = ResolveSlicedResult(user, allow_update_chains)) {
       sliced->noops.insert(sliced->noops.begin(), gte);
       return sliced;
     }
@@ -359,12 +382,13 @@ std::optional<SlicedResult> ResolveLeafDus(HloInstruction* gte) {
 
 // Resolves the sliced result for a non-tuple hero.
 std::vector<SlicedResult> ResolveNonTupleSlicedResult(
-    HloInstruction* hero, const CaptureUpdateSlice& capture_update_slice) {
+    HloInstruction* hero, const CaptureUpdateSlice& capture_update_slice,
+    bool allow_update_chains) {
   if (hero->user_count() != 1) {
     return {};
   }
   for (HloInstruction* user : hero->users()) {
-    if (auto sliced = ResolveSlicedResult(user)) {
+    if (auto sliced = ResolveSlicedResult(user, allow_update_chains)) {
       if (!capture_update_slice(hero, std::nullopt, sliced->update_slice)) {
         continue;
       }
@@ -377,7 +401,8 @@ std::vector<SlicedResult> ResolveNonTupleSlicedResult(
 // Resolves sliced results for a flat tuple-producing hero. Returns one
 // SlicedResult per tuple element.
 std::vector<SlicedResult> ResolveTupleSlicedResults(
-    HloInstruction* hero, const CaptureUpdateSlice& capture_update_slice) {
+    HloInstruction* hero, const CaptureUpdateSlice& capture_update_slice,
+    bool allow_update_chains) {
   const int64_t tuple_size = hero->shape().tuple_shapes().size();
 
   struct LeafInfo {
@@ -392,7 +417,7 @@ std::vector<SlicedResult> ResolveTupleSlicedResults(
     HloInstruction* gte = FindGte(hero, i);
     std::optional<SlicedResult> sliced_update;
     if (gte != nullptr) {
-      sliced_update = ResolveLeafDus(gte);
+      sliced_update = ResolveLeafDus(gte, allow_update_chains);
     }
     leaf_infos.push_back({i, gte, std::move(sliced_update)});
   }
@@ -419,11 +444,14 @@ std::vector<SlicedResult> ResolveTupleSlicedResults(
 }
 
 std::vector<SlicedResult> ResolveSlicedResults(
-    HloInstruction* hero, const CaptureUpdateSlice& capture_update_slice) {
+    HloInstruction* hero, const CaptureUpdateSlice& capture_update_slice,
+    bool allow_update_chains) {
   if (hero->shape().IsTuple()) {
-    return ResolveTupleSlicedResults(hero, capture_update_slice);
+    return ResolveTupleSlicedResults(hero, capture_update_slice,
+                                     allow_update_chains);
   }
-  return ResolveNonTupleSlicedResult(hero, capture_update_slice);
+  return ResolveNonTupleSlicedResult(hero, capture_update_slice,
+                                     allow_update_chains);
 }
 
 absl::Status FilterAliasedParametersAndResults(
@@ -918,7 +946,8 @@ absl::StatusOr<bool> DynamicSliceFusionRewriterV2::RunImpl(
       auto sliced_params = ResolveSlicedParameters(hero, options_.opt_level,
                                                    options_.capture_slice);
       auto sliced_results =
-          ResolveSlicedResults(hero, options_.capture_update_slice);
+          ResolveSlicedResults(hero, options_.capture_update_slice,
+                               options_.allow_update_chains);
       ABSL_RETURN_IF_ERROR(FilterAliasedParametersAndResults(
           hero, sliced_params, sliced_results));
       ABSL_ASSIGN_OR_RETURN(

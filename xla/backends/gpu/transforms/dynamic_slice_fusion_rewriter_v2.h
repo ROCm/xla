@@ -79,6 +79,11 @@ class DynamicSliceFusionRewriterV2 : public HloModulePass {
     CaptureSlice capture_slice = [](auto...) { return true; };
     CaptureUpdateSlice capture_update_slice = [](auto...) { return true; };
     OptLevel opt_level = OptLevel::kO1;
+    // Also capture a DynamicUpdateSlice whose result reaches the root only
+    // through further DynamicUpdateSlices of the same buffer (with
+    // DynamicSlices of it as the only other users), as
+    // DynamicSliceStoreForwarding creates for in-place heroes.
+    bool allow_update_chains = false;
   };
 
   DynamicSliceFusionRewriterV2(stream_executor::PlatformId platform_id,

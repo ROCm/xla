@@ -38,6 +38,24 @@ limitations under the License.
 
 namespace xla::gpu {
 namespace {
+// `hlo` is a call whose (non-tuple) result aliases `operand`, which it uses
+// once: it writes its result over the operand's buffer.
+bool UpdatesOperandInPlace(const HloInstruction* hlo,
+                           const HloInstruction* operand) {
+  const auto* callable = DynCast<HloCallableInstruction>(hlo);
+  if (callable == nullptr || hlo->opcode() == HloOpcode::kFusion ||
+      hlo->shape().IsTuple() || absl::c_count(hlo->operands(), operand) != 1) {
+    return false;
+  }
+  const int64_t operand_index = hlo->operand_index(operand);
+  return absl::c_any_of(callable->output_to_operand_aliasing(),
+                        [&](const auto& alias) {
+                          return alias.first.empty() &&
+                                 alias.second.first == operand_index &&
+                                 alias.second.second.empty();
+                        });
+}
+
 std::optional<bool> FusionCanShareBufferHint(
     const HloInstruction* operand, const HloFusionInstruction* user,
     const ShapeIndex& user_index,
@@ -159,6 +177,9 @@ std::optional<bool> FusionCanShareBufferHint(
             }
           }
         }
+      } else if (UpdatesOperandInPlace(hlo, hlo_operand)) {
+        // A hero of a dynamic slice fusion that updates this operand in place
+        // (output_to_operand_aliasing): its result is the operand's buffer.
       } else if ((!hlo->IsElementwiseOnOperand(
                       hlo->operand_index(hlo_operand)) ||
                   hlo->opcode() == HloOpcode::kCopy) &&

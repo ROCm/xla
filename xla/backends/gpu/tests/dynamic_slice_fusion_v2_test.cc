@@ -2087,5 +2087,173 @@ INSTANTIATE_TEST_SUITE_P(TritonCalls, DynamicSliceFusionTritonCallTest,
                            return info.param ? "Enabled" : "Disabled";
                          });
 
+// Triton kernel updating its operand in place (one program per element):
+// buf[pid] = buf[pid] * 2. The operand and the aliased result arrive as two
+// pointers to the same buffer.
+constexpr absl::string_view kTritonDoubleInPlaceIr =
+    "module { tt.func public @double_in_place("
+    "%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, "
+    "%arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) { "
+    "%0 = tt.get_program_id x : i32 "
+    "%1 = tt.addptr %arg0, %0 : !tt.ptr<f32>, i32 "
+    "%2 = tt.load %1 : !tt.ptr<f32> "
+    "%3 = arith.addf %2, %2 : f32 "
+    "%4 = tt.addptr %arg1, %0 : !tt.ptr<f32>, i32 "
+    "tt.store %4, %3 : !tt.ptr<f32> "
+    "tt.return } }";
+
+std::string TritonBackendConfig(absl::string_view name, absl::string_view ir) {
+  return absl::CEscape(absl::StrCat(
+      "{name = \"", name, "\", ir = \"", ir,
+      "\", num_stages = 1 : i32, num_warps = 1 : i32, grid_x = 256 : i32, "
+      "grid_y = 1 : i32, grid_z = 1 : i32, debug = false}"));
+}
+
+// A scan storing, per layer, the result of an in-place kernel on another
+// kernel's result into one stack (as a grouped GEMM followed by the kernel
+// that zeroes its rows past the groups), and a reader of that result into a
+// second stack: stored[i] = (in[i] + 1) * 2, negated[i] = -stored[i].
+std::string InPlaceStoreScan() {
+  return absl::StrReplaceAll(
+      R"(
+  HloModule test
+
+  body {
+    param = (s32[], f32[4,256], f32[4,256], f32[4,256]) parameter(0)
+    i = s32[] get-tuple-element(param), index=0
+    in = f32[4,256] get-tuple-element(param), index=1
+    stored = f32[4,256] get-tuple-element(param), index=2
+    negated = f32[4,256] get-tuple-element(param), index=3
+    zero = s32[] constant(0)
+    row = f32[1,256] dynamic-slice(in, i, zero), dynamic_slice_sizes={1,256}
+    row_1d = f32[256] reshape(row)
+    gemm = f32[256] custom-call(row_1d),
+      custom_call_target="__gpu$xla.gpu.triton",
+      backend_config="ADD_ONE"
+    doubled = f32[256] custom-call(gemm),
+      custom_call_target="__gpu$xla.gpu.triton",
+      output_to_operand_aliasing={{}: (0, {})},
+      backend_config="DOUBLE"
+    doubled_2d = f32[1,256] reshape(doubled)
+    stored_next = f32[4,256] dynamic-update-slice(stored, doubled_2d, i, zero)
+    neg = f32[256] negate(doubled)
+    neg_2d = f32[1,256] reshape(neg)
+    negated_next = f32[4,256] dynamic-update-slice(negated, neg_2d, i, zero)
+    one = s32[] constant(1)
+    next_i = s32[] add(i, one)
+    ROOT tuple = (s32[], f32[4,256], f32[4,256], f32[4,256])
+      tuple(next_i, in, stored_next, negated_next)
+  }
+
+  cond {
+    param = (s32[], f32[4,256], f32[4,256], f32[4,256]) parameter(0)
+    i = s32[] get-tuple-element(param), index=0
+    limit = s32[] constant(4)
+    ROOT cmp = pred[] compare(i, limit), direction=LT
+  }
+
+  ENTRY main {
+    in = f32[4,256] parameter(0)
+    zero = s32[] constant(0)
+    init_stored = f32[4,256] broadcast(f32[] constant(0)), dimensions={}
+    init_negated = f32[4,256] broadcast(f32[] constant(0)), dimensions={}
+    init = (s32[], f32[4,256], f32[4,256], f32[4,256])
+      tuple(zero, in, init_stored, init_negated)
+    while = (s32[], f32[4,256], f32[4,256], f32[4,256])
+      while(init), condition=cond, body=body
+    stored = f32[4,256] get-tuple-element(while), index=2
+    negated = f32[4,256] get-tuple-element(while), index=3
+    ROOT result = (f32[4,256], f32[4,256]) tuple(stored, negated)
+  }
+)",
+      {{"ADD_ONE", TritonBackendConfig("add_one", kTritonAddOneIr)},
+       {"DOUBLE",
+        TritonBackendConfig("double_in_place", kTritonDoubleInPlaceIr)}});
+}
+
+class DynamicSliceFusionForwardStoresTest
+    : public HloPjRtGpuTestBase,
+      public ::testing::WithParamInterface<bool> {
+ protected:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions debug_options = HloPjRtGpuTestBase::GetDebugOptionsForTest();
+    debug_options.set_xla_gpu_dynamic_slice_fusion_triton_calls(true);
+    debug_options.set_xla_gpu_dynamic_slice_fusion_forward_stores(GetParam());
+    debug_options.set_xla_gpu_enable_while_loop_unrolling(
+        DebugOptions::WHILE_LOOP_UNROLLING_NO_UNROLL);
+    debug_options.set_xla_gpu_experimental_dynamic_slice_fusion_verify_offsets(
+        true);
+    return debug_options;
+  }
+};
+
+// With forwarding both kernels run inside dynamic slice fusions on the stored
+// slice, and nothing copies the stacked buffers.
+TEST_P(DynamicSliceFusionForwardStoresTest, KernelsWriteIntoTheStack) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> optimized,
+                       GetOptimizedModule(InPlaceStoreScan()));
+  int64_t fused_kernels = 0;
+  int64_t stack_copies = 0;
+  for (const HloComputation* computation : optimized->computations()) {
+    if (computation->IsFusionComputation()) {
+      continue;
+    }
+    for (const HloInstruction* instr : computation->instructions()) {
+      if (instr->opcode() == HloOpcode::kCopy &&
+          instr->shape().dimensions().size() == 2 &&
+          instr->shape().dimensions(0) == 4 &&
+          computation->IsWhileBodyComputation()) {
+        ++stack_copies;
+      }
+      if (instr->opcode() != HloOpcode::kFusion) {
+        continue;
+      }
+      auto config = instr->backend_config<GpuBackendConfig>();
+      if (!config.ok() ||
+          config->fusion_backend_config().custom_fusion_config().name() !=
+              "dynamic_slice_fusion") {
+        continue;
+      }
+      for (const HloInstruction* fused_instr :
+           instr->fused_instructions_computation()->instructions()) {
+        fused_kernels += fused_instr->opcode() == HloOpcode::kCustomCall &&
+                         fused_instr->custom_call_target() ==
+                             "__gpu$xla.gpu.triton";
+      }
+    }
+  }
+  // Without forwarding only the first kernel (reading a slice of `in`) fuses.
+  EXPECT_EQ(fused_kernels, GetParam() ? 2 : 1) << optimized->ToString();
+  EXPECT_EQ(stack_copies, 0) << optimized->ToString();
+}
+
+TEST_P(DynamicSliceFusionForwardStoresTest, StoresAndReadsTheSameValues) {
+  Array2D<float> rows(4, 256);
+  rows.Each([](int64_t r, int64_t c, float* v) { *v = r * 1000.0f + c; });
+  Array2D<float> stored(4, 256);
+  stored.Each(
+      [](int64_t r, int64_t c, float* v) { *v = (r * 1000.0f + c + 1) * 2; });
+  Array2D<float> negated(4, 256);
+  negated.Each(
+      [](int64_t r, int64_t c, float* v) { *v = -(r * 1000.0f + c + 1) * 2; });
+  Literal input = LiteralUtil::CreateR2FromArray2D<float>(rows);
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(InPlaceStoreScan()));
+  ASSERT_OK_AND_ASSIGN(Literal result, Execute(std::move(module), {&input},
+                                               /*run_hlo_passes=*/true));
+  std::vector<Literal> parts = result.DecomposeTuple();
+  ASSERT_EQ(parts.size(), 2);
+  EXPECT_TRUE(LiteralTestUtil::Equal(
+      LiteralUtil::CreateR2FromArray2D<float>(stored), parts[0]));
+  EXPECT_TRUE(LiteralTestUtil::Equal(
+      LiteralUtil::CreateR2FromArray2D<float>(negated), parts[1]));
+}
+
+INSTANTIATE_TEST_SUITE_P(ForwardStores, DynamicSliceFusionForwardStoresTest,
+                         ::testing::Bool(),
+                         [](const ::testing::TestParamInfo<bool>& info) {
+                           return info.param ? "Enabled" : "Disabled";
+                         });
+
 }  // namespace
 }  // namespace xla::gpu

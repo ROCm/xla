@@ -119,6 +119,7 @@ limitations under the License.
 #include "xla/backends/gpu/transforms/dynamic_slice_copy.h"
 #include "xla/backends/gpu/transforms/dynamic_slice_copy_fusion_async_wrapper.h"
 #include "xla/backends/gpu/transforms/dynamic_slice_fusion_rewriter_v2.h"
+#include "xla/backends/gpu/transforms/dynamic_slice_store_forwarding.h"
 #include "xla/backends/gpu/transforms/erase_xla_late_frontend_attributes.h"
 #include "xla/backends/gpu/transforms/estimate_cub_scan_scratch_size.h"
 #include "xla/backends/gpu/transforms/estimate_cub_sort_scratch_size.h"
@@ -1769,13 +1770,20 @@ absl::Status RunDynamicSliceFusionPasses(HloModule* hlo_module,
     const bool triton_calls = hlo_module->config()
                                   .debug_options()
                                   .xla_gpu_dynamic_slice_fusion_triton_calls();
-    opts.predicate = [platform_id, legacy_custom_calls,
-                      triton_calls](const HloInstruction* instr) {
+    auto is_hero = [platform_id, legacy_custom_calls,
+                    triton_calls](const HloInstruction* instr) {
       return IsNonFusedCublasLtMatmul(*instr) ||
              IsFfiCustomCall(instr, platform_id) ||
              (legacy_custom_calls && IsLegacyCustomCall(instr, platform_id)) ||
              (triton_calls && IsTritonCustomCall(instr));
     };
+    opts.predicate = is_hero;
+    if (hlo_module->config()
+            .debug_options()
+            .xla_gpu_dynamic_slice_fusion_forward_stores()) {
+      pipeline.AddPass<DynamicSliceStoreForwarding>(is_hero);
+      opts.allow_update_chains = true;
+    }
     pipeline.AddPass<DynamicSliceFusionRewriterV2>(platform_id,
                                                    std::move(opts));
   }
