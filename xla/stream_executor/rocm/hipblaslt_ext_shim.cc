@@ -68,14 +68,9 @@ std::vector<int64_t> ToVector(const int64_t* values, size_t count) {
 
 extern "C" {
 
-hipblasStatus_t XlaHipblasLtGroupedGemmCreate(
-    hipblasLtHandle_t handle, const XlaHipblasLtProblemType* problem_type,
-    XlaHipblasLtGroupedGemm** gemm) {
-  if (problem_type == nullptr || gemm == nullptr) {
-    return HIPBLAS_STATUS_INVALID_VALUE;
-  }
-  *gemm = new XlaHipblasLtGroupedGemm(handle, *problem_type);
-  return HIPBLAS_STATUS_SUCCESS;
+XlaHipblasLtGroupedGemm* XlaHipblasLtGroupedGemmCreate(
+    hipblasLtHandle_t handle, const XlaHipblasLtProblemType& problem_type) {
+  return new XlaHipblasLtGroupedGemm(handle, problem_type);
 }
 
 void XlaHipblasLtGroupedGemmDestroy(XlaHipblasLtGroupedGemm* gemm) {
@@ -83,14 +78,14 @@ void XlaHipblasLtGroupedGemmDestroy(XlaHipblasLtGroupedGemm* gemm) {
 }
 
 hipblasStatus_t XlaHipblasLtGroupedGemmSetProblem(
-    XlaHipblasLtGroupedGemm* gemm, size_t group_count, const int64_t* m,
+    XlaHipblasLtGroupedGemm& gemm, size_t group_count, const int64_t* m,
     const int64_t* n, const int64_t* k, const int64_t* batch_count,
     const int64_t* lda, const int64_t* ldb, const int64_t* ldc,
     const int64_t* ldd, const int64_t* stride_a, const int64_t* stride_b,
     const int64_t* stride_c, const int64_t* stride_d,
     const XlaHipblasLtEpilogue* epilogues,
     const XlaHipblasLtGemmInputs* inputs) {
-  if (gemm == nullptr || group_count == 0) {
+  if (group_count == 0) {
     return HIPBLAS_STATUS_INVALID_VALUE;
   }
   for (const int64_t* array : {m, n, k, batch_count, lda, ldb, ldc, ldd,
@@ -150,20 +145,19 @@ hipblasStatus_t XlaHipblasLtGroupedGemmSetProblem(
   // The problem type given to the constructor, as hipBLASLt's own setProblem
   // overloads without problem type pass it.
   std::vector<hipblaslt_ext::GemmProblemType> problem_types =
-      gemm->gemm.getProblemTypes();
-  return gemm->gemm.setProblem(v_m, v_n, v_k, v_batch, v_lda, v_ldb, v_ldc,
-                               v_ldd, v_stride_a, v_stride_b, v_stride_c,
-                               v_stride_d, v_epilogues, v_inputs,
-                               problem_types[0]);
+      gemm.gemm.getProblemTypes();
+  return gemm.gemm.setProblem(v_m, v_n, v_k, v_batch, v_lda, v_ldb, v_ldc,
+                              v_ldd, v_stride_a, v_stride_b, v_stride_c,
+                              v_stride_d, v_epilogues, v_inputs,
+                              problem_types[0]);
 }
 
 hipblasStatus_t XlaHipblasLtGroupedGemmGetAllAlgos(
-    hipblasLtHandle_t handle, const XlaHipblasLtProblemType* problem_type,
+    hipblasLtHandle_t handle, const XlaHipblasLtProblemType& p,
     XlaHipblasLtHeuristicResultsCallback callback, void* context) {
-  if (problem_type == nullptr || callback == nullptr) {
+  if (callback == nullptr) {
     return HIPBLAS_STATUS_INVALID_VALUE;
   }
-  const XlaHipblasLtProblemType& p = *problem_type;
   std::vector<hipblasLtMatmulHeuristicResult_t> results;
   hipblasStatus_t status = hipblaslt_ext::getAllAlgos(
       handle, hipblaslt_ext::GemmType::HIPBLASLT_GROUPED_GEMM, p.op_a, p.op_b,
@@ -174,48 +168,40 @@ hipblasStatus_t XlaHipblasLtGroupedGemmGetAllAlgos(
   return status;
 }
 
-void XlaHipblasLtGroupedGemmSetMaxWorkspaceBytes(XlaHipblasLtGroupedGemm* gemm,
+void XlaHipblasLtGroupedGemmSetMaxWorkspaceBytes(XlaHipblasLtGroupedGemm& gemm,
                                                  size_t workspace_bytes) {
-  gemm->gemm.setMaxWorkspaceBytes(workspace_bytes);
+  gemm.gemm.setMaxWorkspaceBytes(workspace_bytes);
 }
 
 hipblasStatus_t XlaHipblasLtGroupedGemmIsAlgoSupported(
-    XlaHipblasLtGroupedGemm* gemm, hipblasLtMatmulAlgo_t* algo,
-    size_t* workspace_size) {
-  if (gemm == nullptr || algo == nullptr || workspace_size == nullptr) {
-    return HIPBLAS_STATUS_INVALID_VALUE;
-  }
-  return gemm->gemm.isAlgoSupported(*algo, *workspace_size);
+    XlaHipblasLtGroupedGemm& gemm, hipblasLtMatmulAlgo_t& algo,
+    size_t& workspace_size) {
+  return gemm.gemm.isAlgoSupported(algo, workspace_size);
 }
 
 hipblasStatus_t XlaHipblasLtGroupedGemmInitialize(
-    XlaHipblasLtGroupedGemm* gemm, const hipblasLtMatmulAlgo_t* algo,
+    XlaHipblasLtGroupedGemm& gemm, const hipblasLtMatmulAlgo_t& algo,
     void* workspace) {
-  if (gemm == nullptr || algo == nullptr) {
-    return HIPBLAS_STATUS_INVALID_VALUE;
-  }
-  return gemm->gemm.initialize(*algo, workspace);
+  return gemm.gemm.initialize(algo, workspace);
 }
 
 hipblasStatus_t XlaHipblasLtGroupedGemmGetDefaultValueForDeviceUserArguments(
-    XlaHipblasLtGroupedGemm* gemm, void* host_user_args) {
-  if (gemm == nullptr || host_user_args == nullptr) {
+    XlaHipblasLtGroupedGemm& gemm, void* host_user_args) {
+  if (host_user_args == nullptr) {
     return HIPBLAS_STATUS_INVALID_VALUE;
   }
-  return gemm->gemm.getDefaultValueForDeviceUserArguments(host_user_args);
+  return gemm.gemm.getDefaultValueForDeviceUserArguments(host_user_args);
 }
 
-hipblasStatus_t XlaHipblasLtGroupedGemmRun(XlaHipblasLtGroupedGemm* gemm,
+hipblasStatus_t XlaHipblasLtGroupedGemmRun(XlaHipblasLtGroupedGemm& gemm,
                                            void* device_user_args,
                                            hipStream_t stream) {
-  if (gemm == nullptr) {
-    return HIPBLAS_STATUS_INVALID_VALUE;
-  }
-  return gemm->gemm.run(device_user_args, stream);
+  return gemm.gemm.run(device_user_args, stream);
 }
 
-int XlaHipblasLtGetIndexFromAlgo(const hipblasLtMatmulAlgo_t* algo) {
-  hipblasLtMatmulAlgo_t copy = *algo;
+int XlaHipblasLtGetIndexFromAlgo(const hipblasLtMatmulAlgo_t& algo) {
+  // hipblaslt_ext::getIndexFromAlgo takes a non-const reference.
+  hipblasLtMatmulAlgo_t copy = algo;
   return hipblaslt_ext::getIndexFromAlgo(copy);
 }
 
