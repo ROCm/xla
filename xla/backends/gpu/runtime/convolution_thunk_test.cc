@@ -15,26 +15,33 @@ limitations under the License.
 
 #include "xla/backends/gpu/runtime/convolution_thunk.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <memory>
 #include <vector>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/status_matchers.h"
+#include "absl/status/statusor.h"
+#include "absl/types/span.h"
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/backends/gpu/runtime/thunk.pb.h"
 #include "xla/service/buffer_assignment.h"
+#include "xla/stream_executor/mock_stream_executor.h"
 #include "xla/tsl/util/proto/parse_text_proto.h"
 #include "xla/tsl/util/proto/proto_matchers.h"
 
 namespace xla::gpu {
 namespace {
 
+using ::absl_testing::StatusIs;
+using ::testing::Return;
 using ::tsl::proto_testing::EqualsProto;
 using ::tsl::proto_testing::ParseTextProtoOrDie;
 
-TEST(ConvolutionThunkTest, ProtoRoundTrip) {
-  auto proto = ParseTextProtoOrDie<ThunkProto>(R"pb(
+ThunkProto ConvolutionThunkProto() {
+  return ParseTextProtoOrDie<ThunkProto>(R"pb(
     thunk_info { profile_annotation: "conv_thunk_profile" }
     convolution_thunk {
       conv_descriptor {
@@ -144,22 +151,47 @@ TEST(ConvolutionThunkTest, ProtoRoundTrip) {
       scratch_buffer { offset: 0 size: 1024 buffer_allocation_index: 3 }
     }
   )pb");
+}
 
+std::vector<BufferAllocation> CreateBufferAllocations() {
   std::vector<BufferAllocation> buffer_allocations;
   buffer_allocations.emplace_back(/*index=*/0, /*size=*/4, /*color=*/0);
   buffer_allocations.emplace_back(/*index=*/1, /*size=*/4, /*color=*/0);
   buffer_allocations.emplace_back(/*index=*/2, /*size=*/4, /*color=*/0);
   buffer_allocations.emplace_back(/*index=*/3, /*size=*/1024, /*color=*/0);
+  return buffer_allocations;
+}
 
-  ASSERT_OK_AND_ASSIGN(Thunk::ThunkInfo thunk_info,
-                       Thunk::ThunkInfo::FromProto(proto.thunk_info()));
-  ASSERT_OK_AND_ASSIGN(
-      std::unique_ptr<ConvolutionThunk> thunk,
-      ConvolutionThunk::FromProto(thunk_info, proto.convolution_thunk(),
-                                  buffer_allocations,
-                                  /*devices_per_host=*/1));
+absl::StatusOr<std::unique_ptr<ConvolutionThunk>> CreateThunk(
+    const ThunkProto& proto,
+    absl::Span<const BufferAllocation> buffer_allocations) {
+  ABSL_ASSIGN_OR_RETURN(Thunk::ThunkInfo thunk_info,
+                        Thunk::ThunkInfo::FromProto(proto.thunk_info()));
+  return ConvolutionThunk::FromProto(thunk_info, proto.convolution_thunk(),
+                                     buffer_allocations,
+                                     /*devices_per_host=*/1);
+}
+
+TEST(ConvolutionThunkTest, ProtoRoundTrip) {
+  ThunkProto proto = ConvolutionThunkProto();
+  std::vector<BufferAllocation> buffer_allocations = CreateBufferAllocations();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ConvolutionThunk> thunk,
+                       CreateThunk(proto, buffer_allocations));
   ASSERT_OK_AND_ASSIGN(ThunkProto round_trip_proto, thunk->ToProto());
   EXPECT_THAT(round_trip_proto, EqualsProto(proto));
+}
+
+TEST(ConvolutionThunkTest, InitializeRequestsDnnSupport) {
+  std::vector<BufferAllocation> buffer_allocations = CreateBufferAllocations();
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<ConvolutionThunk> thunk,
+      CreateThunk(ConvolutionThunkProto(), buffer_allocations));
+  se::MockStreamExecutor executor;
+  EXPECT_CALL(executor, AsDnn()).WillOnce(Return(nullptr));
+
+  Thunk::InitializeParams params;
+  params.executor = &executor;
+  EXPECT_THAT(thunk->Initialize(params), StatusIs(absl::StatusCode::kInternal));
 }
 
 }  // namespace

@@ -50,6 +50,10 @@ limitations under the License.
 #include "xla/tsl/platform/threadpool.h"
 #include "xla/util.h"
 
+#if TENSORFLOW_USE_ROCM
+#include "xla/stream_executor/rocm/rocm_capture_invalidation.h"
+#endif  // TENSORFLOW_USE_ROCM
+
 namespace xla {
 
 namespace {
@@ -289,6 +293,12 @@ PlatformUtil::GetStreamExecutors(
     return Internal("no supported devices found for platform %s: %s",
                     platform->Name(), absl::StrJoin(device_errors, ", "));
   }
+
+#if TENSORFLOW_USE_ROCM
+  if (platform->id() == se::rocm::kROCmPlatformId) {
+    se::gpu::CreateDnnSupportUnlessCaptureInvalidationIsDeviceScoped(out);
+  }
+#endif  // TENSORFLOW_USE_ROCM
   return out;
 }
 

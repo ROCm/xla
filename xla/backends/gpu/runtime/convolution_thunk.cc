@@ -94,6 +94,16 @@ absl::StatusOr<RunConvOptions> ConvolutionThunk::GetOrCreate(
   return RunConvOptions{nullptr, &**runner_states_.Find(device_ordinal)};
 }
 
+absl::Status ConvolutionThunk::Initialize(const InitializeParams& params) {
+  // The first ExecuteOnStream may run inside a command buffer's stream
+  // capture, and creating the DNN handle there fails on ROCm (it allocates
+  // device memory).
+  if (!params.executor->AsDnn()) {
+    return absl::InternalError("Failed to initialize DNN support");
+  }
+  return absl::OkStatus();
+}
+
 absl::Status ConvolutionThunk::ExecuteOnStream(const ExecuteParams& params) {
   VLOG(5) << "ConvolutionThunk";
   const auto& buffer_allocations = *params.buffer_allocations;
