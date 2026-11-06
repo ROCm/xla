@@ -25,6 +25,8 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/gpu/backend_configs.pb.h"
+#include "xla/shape.h"
+#include "xla/status_macros.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla::gpu {
@@ -79,10 +81,7 @@ absl::StatusOr<std::optional<ValidPrefixExtent>> GetValidPrefixExtent(
 
 absl::Status SetValidPrefixExtent(HloInstruction* instruction,
                                   int64_t operand_index) {
-  if (instruction == nullptr) {
-    return absl::InvalidArgumentError(
-        "cannot attach a valid-prefix extent to a null instruction");
-  }
+  TF_RET_CHECK(instruction != nullptr);
   ABSL_RETURN_IF_ERROR(
       Validate(*instruction, operand_index, /*dimension=*/0).status());
   ABSL_ASSIGN_OR_RETURN(GpuBackendConfig config,
