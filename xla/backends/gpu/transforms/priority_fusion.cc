@@ -225,7 +225,7 @@ bool IsFusible(const HloInstruction& instr) {
     return false;
   }
 
-  // Prototype: preserve the valid-prefix marker as real fusion dataflow.
+  // Preserve the valid-prefix marker as real fusion dataflow.
   if (instr.IsCustomCall("xla.valid_prefix")) {
     return true;
   }

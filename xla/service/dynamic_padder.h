@@ -57,6 +57,9 @@ struct DynamicPadderOptions {
   // outputs that are inferred to be dynamic.
   bool slice_dynamic_output = true;
 
+  // Preserve dimension-0 extents as identity markers for GPU fusion.
+  bool preserve_valid_prefix = false;
+
   // Assertion generator for shape checks, only used if shape check mode is
   // "runtime".
   DynamicDimensionInference::AssertionGenerator assertion_generator;
@@ -82,6 +85,10 @@ class DynamicPadder : public HloModulePass {
  private:
   DynamicPadderOptions options_;
 };
+
+// Replaces valid-prefix markers outside fusion computations with their data
+// operand. GPU fusion calls this after it has consumed all fusible markers.
+absl::StatusOr<bool> RemoveUnfusedValidPrefixMarkers(HloModule* module);
 
 }  // namespace xla
 
