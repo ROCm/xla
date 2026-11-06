@@ -29,12 +29,17 @@ limitations under the License.
 // from code built against either library. Its functions have C linkage, so
 // their symbols do not depend on C++ name mangling either.
 //
+// hipblaslt_ext::GemmEpilogue and hipblaslt_ext::GemmInputs are passed as they
+// are: all their members are defined in hipBLASLt, and their only data is a
+// pointer to their implementation.
+//
 // TODO: Replace with hipBLASLt's own C API for grouped GEMM once it exists.
 
 #include <cstddef>
 #include <cstdint>
 
 #include "rocm/include/hip/hip_runtime.h"
+#include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
 #include "rocm/include/hipblaslt/hipblaslt.h"
 
 // The implementation is compiled with hidden visibility, so that none of its
@@ -57,23 +62,6 @@ struct XlaHipblasLtExt_ProblemType {
   hipblasComputeType_t compute_type;
 };
 
-// The epilogue of one GEMM in a group. The defaults are hipBLASLt's.
-struct XlaHipblasLtExt_Epilogue {
-  hipblasLtEpilogue_t mode = HIPBLASLT_EPILOGUE_DEFAULT;
-  hipDataType bias_data_type = HIPBLASLT_DATATYPE_INVALID;
-};
-
-// The input pointers of one GEMM in a group. The defaults are hipBLASLt's.
-struct XlaHipblasLtExt_GemmInputs {
-  const void* a = nullptr;
-  const void* b = nullptr;
-  const void* c = nullptr;
-  const void* d = nullptr;
-  const void* alpha = nullptr;
-  const void* beta = nullptr;
-  const void* bias = nullptr;
-};
-
 // Creates a grouped GEMM for `problem_type`, to be destroyed with
 // XlaHipblasLtExt_GroupedGemmDestroy. `handle` must outlive it.
 XLA_HIPBLASLT_SHIM_EXPORT XlaHipblasLtExt_GroupedGemm*
@@ -92,8 +80,8 @@ XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t XlaHipblasLtExt_GroupedGemmSetProblem(
     const int64_t* lda, const int64_t* ldb, const int64_t* ldc,
     const int64_t* ldd, const int64_t* stride_a, const int64_t* stride_b,
     const int64_t* stride_c, const int64_t* stride_d,
-    const XlaHipblasLtExt_Epilogue* epilogues,
-    const XlaHipblasLtExt_GemmInputs* inputs);
+    const hipblaslt_ext::GemmEpilogue* epilogues,
+    const hipblaslt_ext::GemmInputs* inputs);
 
 // Receives the results of XlaHipblasLtExt_GroupedGemmGetAllAlgos. `results` is
 // only valid during the call.

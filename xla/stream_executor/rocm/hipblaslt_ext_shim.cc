@@ -83,8 +83,8 @@ hipblasStatus_t XlaHipblasLtExt_GroupedGemmSetProblem(
     const int64_t* lda, const int64_t* ldb, const int64_t* ldc,
     const int64_t* ldd, const int64_t* stride_a, const int64_t* stride_b,
     const int64_t* stride_c, const int64_t* stride_d,
-    const XlaHipblasLtExt_Epilogue* epilogues,
-    const XlaHipblasLtExt_GemmInputs* inputs) {
+    const hipblaslt_ext::GemmEpilogue* epilogues,
+    const hipblaslt_ext::GemmInputs* inputs) {
   if (group_count == 0) {
     return HIPBLAS_STATUS_INVALID_VALUE;
   }
@@ -102,20 +102,9 @@ hipblasStatus_t XlaHipblasLtExt_GroupedGemmSetProblem(
   std::vector<int64_t> v_stride_c = ToVector(stride_c, group_count);
   std::vector<int64_t> v_stride_d = ToVector(stride_d, group_count);
 
-  std::vector<hipblaslt_ext::GemmEpilogue> v_epilogues(group_count);
-  std::vector<hipblaslt_ext::GemmInputs> v_inputs(group_count);
-  for (size_t i = 0; i < group_count; ++i) {
-    v_epilogues[i].setMode(epilogues[i].mode);
-    v_epilogues[i].setBiasDataType(epilogues[i].bias_data_type);
-    const XlaHipblasLtExt_GemmInputs& in = inputs[i];
-    v_inputs[i].setA(in.a);
-    v_inputs[i].setB(in.b);
-    v_inputs[i].setC(in.c);
-    v_inputs[i].setD(in.d);
-    v_inputs[i].setAlpha(in.alpha);
-    v_inputs[i].setBeta(in.beta);
-    v_inputs[i].setBias(in.bias);
-  }
+  std::vector<hipblaslt_ext::GemmEpilogue> v_epilogues(epilogues,
+                                                       epilogues + group_count);
+  std::vector<hipblaslt_ext::GemmInputs> v_inputs(inputs, inputs + group_count);
 
   // The problem type given to the constructor, as hipBLASLt's own setProblem
   // overloads without problem type pass it.
