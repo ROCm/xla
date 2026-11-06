@@ -2396,7 +2396,7 @@ absl::StatusOr<bool> RemoveUnfusedValidPrefixMarkers(HloModule* module) {
         computation->set_root_instruction(data,
                                           /*accept_different_shape=*/false);
       }
-      RETURN_IF_ERROR(computation->RemoveInstruction(instruction));
+      ABSL_RETURN_IF_ERROR(computation->RemoveInstruction(instruction));
       changed = true;
     }
   }
