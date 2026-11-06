@@ -23,6 +23,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
+#include "rocm/rocm_config.h"  // IWYU pragma: keep
 #include "xla/backends/gpu/collectives/cancellation_token.h"
 #include "xla/backends/gpu/collectives/rccl_errors.h"
 #include "xla/future.h"
@@ -33,6 +34,7 @@ limitations under the License.
 namespace xla::gpu {
 namespace {
 
+#if TF_ROCM_VERSION >= 100000
 // Returns the outcome of an RCCL call; on a non-blocking communicator, where
 // the call returns ncclInProgress, first polls until it has completed.
 absl::Status WaitUntilDone(ncclComm_t comm, ncclResult_t status,
@@ -43,6 +45,7 @@ absl::Status WaitUntilDone(ncclComm_t comm, ncclResult_t status,
   CancellationToken never_cancelled;
   return PollUntilDone(comm, cancel != nullptr ? *cancel : never_cancelled);
 }
+#endif  // TF_ROCM_VERSION >= 100000
 
 }  // namespace
 
@@ -60,6 +63,7 @@ RcclSymmetricMemory::Create(ncclComm_t comm,
                             stream_executor::DeviceAddressBase addr,
                             bool symmetric_window, tsl::Executor* executor,
                             const CancellationToken* cancel) {
+#if TF_ROCM_VERSION >= 100000
   // NCCL_WIN_COLL_SYMMETRIC lets RCCL use its copy-engine (SDMA) collectives
   // on the window; the caller guarantees the memory is symmetric across ranks.
   const int win_flags =
@@ -69,10 +73,9 @@ RcclSymmetricMemory::Create(ncclComm_t comm,
       "win_flags=%d",
       comm, addr.opaque(), addr.size(), win_flags);
 
-  // A collective call: every rank of `comm` registers its buffer. RCCL >= 2.30
-  // implements it; older RCCL fails or returns a null window, as do single-rank
-  // communicators. Either way the buffer still works for collectives,
-  // unregistered.
+  // A collective call: every rank of `comm` registers its buffer. If it fails
+  // (or returns a null window, as on single-rank communicators) the buffer
+  // still works for collectives, unregistered.
   // `win` is only set once the registration has completed.
   ncclWindow_t win = nullptr;
   const absl::Status status = WaitUntilDone(
@@ -85,12 +88,55 @@ RcclSymmetricMemory::Create(ncclComm_t comm,
                  << " size=" << addr.size();
     win = nullptr;
   }
+
+  // RCCL can return ncclSuccess for NCCL_WIN_COLL_SYMMETRIC but register a
+  // non-symmetric window, e.g. when the communicator has no symmetric (LSA)
+  // support or NCCL_CUMEM_ENABLE is not 1. A symmetric window maps this rank's
+  // own buffer, so probe that: a non-symmetric window has no peer pointers.
+  // (Other ranks may be outside this rank's LSA team, e.g. on another node,
+  // and legitimately have none.)
+  if (symmetric_window && win != nullptr) {
+    int rank = -1;
+    void* self_ptr = nullptr;
+    absl::Status probe = XLA_RCCL_STATUS(ncclCommUserRank(comm, &rank));
+    if (probe.ok()) {
+      probe = XLA_RCCL_STATUS(
+          ncclGetPeerDevicePointer(win, /*offset=*/0, rank, &self_ptr));
+    }
+    if (!probe.ok() || self_ptr == nullptr) {
+      LOG_FIRST_N(WARNING, 1)
+          << "ncclCommWindowRegister(NCCL_WIN_COLL_SYMMETRIC) returned a "
+             "non-symmetric window ("
+          << (probe.ok() ? "no load/store pointer to this rank"
+                         : probe.ToString())
+          << "); using the buffer unregistered. Symmetric windows need "
+             "NCCL_CUMEM_ENABLE=1 and a communicator with symmetric memory "
+             "support: ptr="
+          << addr.opaque() << " size=" << addr.size();
+      const absl::Status deregistered =
+          WaitUntilDone(comm, ncclCommWindowDeregister(comm, win), cancel);
+      if (!deregistered.ok()) {
+        LOG(ERROR) << "Failed to deregister non-symmetric RCCL window: "
+                   << deregistered;
+      }
+      win = nullptr;
+    }
+  }
+#else
+  // ncclCommWindowRegister needs ROCm 10.0+.
+  VLOG(3) << absl::StrFormat(
+      "RCCL window registration needs ROCm 10.0+; using the buffer "
+      "unregistered: comm=%p ptr=%p size=%ld",
+      comm, addr.opaque(), addr.size());
+  ncclWindow_t win = nullptr;
+#endif  // TF_ROCM_VERSION >= 100000
   return absl::WrapUnique(
       new RcclSymmetricMemory(comm, win, addr, executor, cancel));
 }
 
 RcclSymmetricMemory::~RcclSymmetricMemory() {
   VLOG(3) << absl::StrFormat("Destroy %v", *this);
+#if TF_ROCM_VERSION >= 100000
   if (win_ == nullptr) {
     return;
   }
@@ -104,6 +150,7 @@ RcclSymmetricMemory::~RcclSymmetricMemory() {
   if (!status.ok()) {
     LOG(ERROR) << "Failed to deregister RCCL symmetric memory: " << status;
   }
+#endif  // TF_ROCM_VERSION >= 100000
 }
 
 stream_executor::DeviceAddressBase RcclSymmetricMemory::addr() const {

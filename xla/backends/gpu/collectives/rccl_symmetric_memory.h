@@ -16,15 +16,25 @@ limitations under the License.
 #ifndef XLA_BACKENDS_GPU_COLLECTIVES_RCCL_SYMMETRIC_MEMORY_H_
 #define XLA_BACKENDS_GPU_COLLECTIVES_RCCL_SYMMETRIC_MEMORY_H_
 
+#include <cstddef>
 #include <memory>
 #include <string>
 
 #include "absl/status/statusor.h"
 #include "rocm/include/rccl/rccl.h"
+#include "rocm/rocm_config.h"  // IWYU pragma: keep
 #include "xla/backends/gpu/collectives/cancellation_token.h"
 #include "xla/core/collectives/symmetric_memory.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/tsl/concurrency/executor.h"
+
+#if TF_ROCM_VERSION >= 100000
+// Exported by librccl.so in ROCm 10.0+ but declared only in RCCL's
+// nccl_device/core.h, which the ROCm install does not ship.
+extern "C" ncclResult_t ncclGetPeerDevicePointer(ncclWindow_t window,
+                                                 size_t offset, int peer,
+                                                 void** outPtr);
+#endif  // TF_ROCM_VERSION >= 100000
 
 namespace xla::gpu {
 
@@ -36,10 +46,15 @@ class RcclSymmetricMemory final : public SymmetricMemory {
   ~RcclSymmetricMemory() final;
 
   // Registers `addr` with NCCL_WIN_COLL_SYMMETRIC if `symmetric_window`, else
-  // with NCCL_WIN_DEFAULT (see NcclSymmetricMemory::Create). Must be called on
-  // `executor` if it is not null, which then also runs the deregistration; on a
-  // non-blocking communicator, `cancel` (if not null) aborts the polling. Both
-  // are owned by the communicator and must outlive the returned object.
+  // with NCCL_WIN_DEFAULT (see NcclSymmetricMemory::Create). Window
+  // registration needs ROCm 10.0+; on older ROCm, or if registration fails or
+  // a symmetric registration comes back non-symmetric, the buffer is left
+  // unregistered (win() is null) and still works for collectives.
+  //
+  // Must be called on `executor` if it is not null, which then also runs the
+  // deregistration; on a non-blocking communicator, `cancel` (if not null)
+  // aborts the polling. Both are owned by the communicator and must outlive the
+  // returned object.
   static absl::StatusOr<std::unique_ptr<RcclSymmetricMemory>> Create(
       ncclComm_t comm, stream_executor::DeviceAddressBase addr,
       bool symmetric_window = false, tsl::Executor* executor = nullptr,

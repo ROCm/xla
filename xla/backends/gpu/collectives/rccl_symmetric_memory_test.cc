@@ -26,6 +26,7 @@ limitations under the License.
 #include "absl/status/status_matchers.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/include/rccl/rccl.h"
+#include "rocm/rocm_config.h"  // IWYU pragma: keep
 #include "xla/stream_executor/device_address.h"
 
 namespace xla::gpu {
@@ -142,6 +143,30 @@ TEST_F(RcclSymmetricMemoryTest, MultimemAddrNotSupported) {
   auto result = symm_mem->multimem_addr();
   EXPECT_THAT(result, Not(IsOk()));
   EXPECT_EQ(result.status().code(), absl::StatusCode::kUnimplemented);
+}
+
+// Verifies that a symmetric registration either yields a window that really is
+// symmetric (this rank's buffer is load/store accessible through it) or, when
+// RCCL cannot provide one, leaves the buffer unregistered.
+TEST_F(RcclSymmetricMemoryTest, SymmetricWindowIsSymmetricOrNull) {
+  se::DeviceAddressBase addr(buf_ptr_, buf_size_);
+  ASSERT_OK_AND_ASSIGN(
+      auto symm_mem,
+      RcclSymmetricMemory::Create(comm_, addr, /*symmetric_window=*/true));
+  EXPECT_EQ(symm_mem->addr().opaque(), buf_ptr_);
+#if TF_ROCM_VERSION >= 100000
+  if (symm_mem->win() == nullptr) {
+    GTEST_SKIP() << "RCCL did not provide a symmetric window (needs "
+                    "NCCL_CUMEM_ENABLE=1 and symmetric memory support).";
+  }
+  void* self_ptr = nullptr;
+  ASSERT_EQ(ncclGetPeerDevicePointer(symm_mem->win(), /*offset=*/0,
+                                     /*peer=*/0, &self_ptr),
+            ncclSuccess);
+  EXPECT_NE(self_ptr, nullptr);
+#else
+  EXPECT_EQ(symm_mem->win(), nullptr);
+#endif  // TF_ROCM_VERSION >= 100000
 }
 
 // Verifies that two independent windows created from the same communicator
