@@ -28,7 +28,7 @@ limitations under the License.
 namespace xla::gpu {
 
 // This pass transforms eligible TopK CustomCall into a call to be executed by
-// runtime/topk.cc.
+// runtime/topk.cc, or, on ROCm, by the Triton TopK kernels.
 class TopkSpecializer : public HloModulePass {
  public:
   explicit TopkSpecializer(se::DeviceDescription device_description)

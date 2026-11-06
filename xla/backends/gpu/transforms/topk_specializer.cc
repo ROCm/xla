@@ -30,6 +30,7 @@ limitations under the License.
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "xla/backends/gpu/codegen/triton/topk_config.h"
 #include "xla/comparison_util.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
@@ -428,6 +429,47 @@ absl::StatusOr<HloInstruction*> SmallBufferOptimization(
   return TupleUtil::ExtractPrefix(new_topk, 2);
 }
 
+// Returns true if the Triton TopK kernels take `topk` on `device`. Without
+// `force`, only shapes in the speed table of the device are taken.
+bool RocmTritonTopKGate(const HloCustomCallInstruction* topk,
+                        const se::DeviceDescription& device, bool force) {
+  absl::StatusOr<TopKKernelSpec> spec = GetTopKKernelSpec(*topk);
+  if (!spec.ok()) {
+    VLOG(2) << "Triton TopK not used: " << spec.status();
+    return false;
+  }
+  if (absl::Status limits = CheckTopKKernelLimits(*spec); !limits.ok()) {
+    VLOG(2) << "Triton TopK not used for " << spec->ToString() << ": "
+            << limits;
+    return false;
+  }
+  if (!GetTopKKernelConfig(*spec, device).has_value()) {
+    VLOG(2) << "Triton TopK not used for " << spec->ToString()
+            << ": no kernel config fits " << device.name();
+    return false;
+  }
+  if (!force && !IsTritonTopKFaster(*spec, device)) {
+    VLOG(2) << "Triton TopK not used for " << spec->ToString()
+            << ": not in the speed table of " << device.name();
+    return false;
+  }
+  return true;
+}
+
+// Replaces `topk` by a __gpu$TopK custom call on the original values with the
+// same (values, indices) result, marked for the Triton TopK kernels.
+absl::StatusOr<HloInstruction*> RewriteTopKForRocmTriton(
+    HloCustomCallInstruction* topk) {
+  HloComputation* comp = topk->parent();
+  auto* new_topk = Cast<HloCustomCallInstruction>(
+      comp->AddInstruction(HloInstruction::CreateCustomCall(
+          topk->shape(), topk->operands(), "__gpu$TopK",
+          /*opaque=*/"", CustomCallApiVersion::API_VERSION_TYPED_FFI)));
+  new_topk->set_raw_backend_config_string(topk->raw_backend_config_string());
+  ABSL_RETURN_IF_ERROR(MarkAsTritonTopK(*new_topk));
+  return new_topk;
+}
+
 class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
  public:
   explicit SpecializeTopkVisitor(se::DeviceDescription device_description)
@@ -443,17 +485,26 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
     }
     TF_RET_CHECK(topk->operand_count() == 1);
     bool is_cuda = compute_capability.IsCuda();
+    const auto& debug_options = topk->GetModule()->config().debug_options();
     bool enable_raft_for_stable_topk =
-        topk->GetModule()
-            ->config()
-            .debug_options()
-            .xla_gpu_experimental_enable_raft_for_stable_topk();
+        debug_options.xla_gpu_experimental_enable_raft_for_stable_topk();
     // Route stable TopK to RAFT select_k via Uint64 adapter
     if (is_cuda && enable_raft_for_stable_topk &&
         ShouldRewriteStableTopKToUint64(topk)) {
       VLOG(2) << "Rewriting stable TopK to RAFT select_k via Uint64 adapter";
       ABSL_ASSIGN_OR_RETURN(HloInstruction * new_topk,
                             RewriteStableTopKToUint64(topk));
+      return ReplaceInstruction(topk, new_topk);
+    }
+
+    if (compute_capability.IsRocm() &&
+        debug_options.xla_gpu_experimental_enable_triton_topk() &&
+        RocmTritonTopKGate(
+            topk, device_description_,
+            debug_options.xla_gpu_experimental_force_triton_topk())) {
+      VLOG(2) << "Rewriting TopK for the Triton TopK kernels";
+      ABSL_ASSIGN_OR_RETURN(HloInstruction * new_topk,
+                            RewriteTopKForRocmTriton(topk));
       return ReplaceInstruction(topk, new_topk);
     }
 
