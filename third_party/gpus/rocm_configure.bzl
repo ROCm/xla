@@ -36,6 +36,10 @@ load(
     ":sycl_configure.bzl",
     "enable_sycl",
 )
+load(
+    ":compiler_common_tools.bzl",
+    "get_cxx_inc_directories",
+)
 
 _TF_ROCM_AMDGPU_TARGETS = "TF_ROCM_AMDGPU_TARGETS"
 _TF_ROCM_CONFIG_REPO = "TF_ROCM_CONFIG_REPO"
@@ -61,6 +65,26 @@ _DEFAULT_TF_ROCM_RBE_MULTI_GPU_POOL = "linux_x64_multigpu"
 
 # rocm/tensorflow-build:latest-jammy-python3.11-rocm7.0.2
 _DEFAULT_TF_ROCM_RBE_DOCKER_IMAGE = "rocm/tensorflow-build@sha256:a2672ff2510b369b4a5f034272a518dc93c2e492894e3befaeef19649632ccaa"
+
+def _resolve_hermetic_clang_path(repository_ctx):
+    """Path to the same hermetic clang --config=rocm_clang_hermetic uses, for
+    the non-hermetic-cc crosstool this file also generates
+    (--config=rocm_clang_local).
+
+    @llvm_linux_x86_64 is an alias-only repo pointing at whichever concrete
+    llvm<N>_linux_x86_64 is active (default, or --repo_env=LLVM_VERSION=<N>);
+    repository_ctx.path() can't resolve through that alias, so we read the
+    `version.bzl` file the same rule writes (a real file) to get the active
+    version and build the concrete label ourselves -- keeps this in sync with
+    rocm_clang_hermetic instead of drifting via a hardcoded version.
+
+    Uses the canonical repo name (not use_repo()'d) so this works for any
+    version rules_ml_toolchain supports without listing them all here.
+    """
+    version_bzl = repository_ctx.path(repository_ctx.attr._llvm_version_repo)
+    version = repository_ctx.read(version_bzl).split("\"")[1]
+    clang_label = Label("@@rules_ml_toolchain++toolchain_ext+llvm{}_linux_x86_64//:bin/clang".format(version))
+    return str(repository_ctx.path(clang_label))
 
 def auto_configure_fail(msg):
     """Output failure message when rocm configuration fails."""
@@ -423,6 +447,14 @@ def _create_local_rocm_repository(repository_ctx):
 
     bash_bin = get_bash_bin(repository_ctx)
 
+    # Host compiler for the non-hermetic-cc crosstool below (--config=rocm_clang_local).
+    hermetic_clang_path = _resolve_hermetic_clang_path(repository_ctx)
+    hermetic_clang_include_directories = get_cxx_inc_directories(
+        repository_ctx,
+        hermetic_clang_path,
+        get_host_environ(repository_ctx, "TF_SYSROOT", ""),
+    )
+
     # Set up BUILD file for rocm/
     repository_ctx.template(
         "rocm/build_defs.bzl",
@@ -456,6 +488,10 @@ def _create_local_rocm_repository(repository_ctx):
     repository_ctx.template(
         "crosstool/BUILD",
         tpl_paths["crosstool:BUILD.rocm"],
+        {
+            "%{hermetic_clang_path}": hermetic_clang_path,
+            "%{hermetic_clang_include_directories}": repr(hermetic_clang_include_directories),
+        },
     )
 
     # No templating of cc_toolchain_config - use attributes and templatize the
@@ -584,6 +620,11 @@ remote_rocm_configure = repository_rule(
         "_find_rocm_config": attr.label(
             default = Label("//third_party/gpus:find_rocm_config.py"),
         ),
+        # See _resolve_hermetic_clang_path.
+        "_llvm_version_repo": attr.label(
+            default = Label("@llvm_linux_x86_64//:version.bzl"),
+            allow_single_file = True,
+        ),
     },
 )
 
@@ -593,6 +634,11 @@ rocm_configure = repository_rule(
     attrs = {
         "_find_rocm_config": attr.label(
             default = Label("//third_party/gpus:find_rocm_config.py"),
+        ),
+        # See _resolve_hermetic_clang_path.
+        "_llvm_version_repo": attr.label(
+            default = Label("@llvm_linux_x86_64//:version.bzl"),
+            allow_single_file = True,
         ),
     },
 )
