@@ -390,7 +390,10 @@ TopKCustomCall CreateTopKCustomCall(HloSortInstruction* sort, const int64_t k,
       "{is_stable = %s, order = \"%s\"}", sort->is_stable() ? "true" : "false",
       ComparisonOrderToShortString(order)));
   if (IsTopKWithDeferredPackedBf16(sort)) {
+    // Move the mark: replacing the users of `sort` would copy it to the new
+    // instructions.
     topk->set_frontend_attribute(kTopKDeferredPackedBf16Attr, "true");
+    sort->erase_frontend_attribute(kTopKDeferredPackedBf16Attr);
   }
   HloInstruction* value_gte =
       sort->AddInstruction(HloInstruction::CreateGetTupleElement(
@@ -531,9 +534,12 @@ class TopkDecomposerVisitor : public DfsHloRewriteVisitor {
     }
     // A "TopK" custom call computes the largest k, so a deferred BF16 TopK op
     // gets the packed BF16 sort it would have got without the deferral.
-    if (IsTopKWithDeferredPackedBf16(call) &&
-        CanUsePackedBf16Sort(call->operand(0))) {
-      return DecomposeTopKWithSorting(call);
+    if (IsTopKWithDeferredPackedBf16(call)) {
+      // The mark must not be copied to the instructions that replace `call`.
+      call->erase_frontend_attribute(kTopKDeferredPackedBf16Attr);
+      if (CanUsePackedBf16Sort(call->operand(0))) {
+        return DecomposeTopKWithSorting(call);
+      }
     }
     HloComputation* comparator = call->to_apply();
     // TODO: Support packed BF16 sort for legacy custom calls if needed.

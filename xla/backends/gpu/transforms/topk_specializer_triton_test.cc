@@ -259,6 +259,10 @@ TEST_F(TopkSpecializerTritonTest, DeferredPackedBf16IsRoutedWhenForced) {
                  module.get()));
   EXPECT_TRUE(changed);
   ExpectMarkedTopK(*module, /*stable=*/true, ComparisonOrder::kTotal);
+  for (const HloInstruction* inst :
+       module->entry_computation()->instructions()) {
+    EXPECT_FALSE(IsTopKWithDeferredPackedBf16(inst)) << inst->ToString();
+  }
 }
 
 TEST_F(TopkSpecializerTritonTest, CudaIsNotRouted) {

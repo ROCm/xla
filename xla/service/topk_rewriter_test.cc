@@ -812,6 +812,8 @@ ENTRY TopK {
        module->entry_computation()->instructions()) {
     if (inst->IsCustomCall("TopK")) {
       topk = inst;
+    } else {
+      EXPECT_FALSE(IsTopKWithDeferredPackedBf16(inst)) << inst->ToString();
     }
   }
   ASSERT_NE(topk, nullptr);
@@ -827,6 +829,10 @@ ENTRY TopK {
   EXPECT_EQ(sort->operand_count(), 1);
   EXPECT_EQ(sort->operand(0)->shape().element_type(), S32);
   EXPECT_FALSE(sort->is_stable());
+  for (const HloInstruction* inst :
+       module->entry_computation()->instructions()) {
+    EXPECT_FALSE(IsTopKWithDeferredPackedBf16(inst)) << inst->ToString();
+  }
 }
 
 TEST_F(TopkRewriterTest, TopKDecompositionDeferredPackedOnlyMarksPackedCases) {

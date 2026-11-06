@@ -504,6 +504,9 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
             topk, device_description_,
             debug_options.xla_gpu_experimental_force_triton_topk())) {
       VLOG(2) << "Rewriting TopK for the Triton TopK kernels";
+      // No packed BF16 sort follows, and ReplaceInstruction would copy the
+      // mark to the new TopK.
+      topk->erase_frontend_attribute(kTopKDeferredPackedBf16Attr);
       ABSL_ASSIGN_OR_RETURN(HloInstruction * new_topk,
                             RewriteTopKForRocmTriton(topk));
       return ReplaceInstruction(topk, new_topk);
