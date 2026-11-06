@@ -973,7 +973,6 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
-        ":hipblaslt_ext_shim",
         "//xla:types",
         "//xla/stream_executor:blas",
         "//xla/stream_executor:device_address",
