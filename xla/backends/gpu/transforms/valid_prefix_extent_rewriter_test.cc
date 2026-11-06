@@ -63,7 +63,9 @@ TEST_F(ValidPrefixExtentRewriterTest,
       [&](absl::string_view hlo) -> absl::StatusOr<std::unique_ptr<HloModule>> {
     ABSL_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(hlo));
-    DynamicPadder dynamic_padder;
+    DynamicPadderOptions options;
+    options.preserve_valid_prefix = true;
+    DynamicPadder dynamic_padder(options);
     ABSL_RETURN_IF_ERROR(dynamic_padder.Run(module.get()).status());
     bool found_marker = false;
     for (HloComputation* computation : module->computations()) {
@@ -278,6 +280,58 @@ ENTRY main {
   ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> contract,
                        GetValidPrefixExtent(*fusion));
   EXPECT_FALSE(contract.has_value());
+}
+
+TEST_F(ValidPrefixExtentRewriterTest,
+       RejectionPropagatesThroughSameExtentFusion) {
+  constexpr absl::string_view kHlo = R"(
+HloModule PropagatedRejection
+
+first_computation {
+  x = f32[8,4] parameter(0)
+  n = s32[] parameter(1)
+  bounded = f32[8,4] custom-call(x, n),
+    custom_call_target="xla.valid_prefix"
+  ROOT negated = f32[8,4] negate(bounded)
+}
+
+second_computation {
+  x = f32[8,4] parameter(0)
+  n = s32[] parameter(1)
+  bounded = f32[8,4] custom-call(x, n),
+    custom_call_target="xla.valid_prefix"
+  ROOT result = f32[8,4] exponential(bounded)
+}
+
+ENTRY main {
+  data = f32[8,4] parameter(0)
+  n = s32[] parameter(1)
+  first = f32[8,4] fusion(data, n), kind=kLoop,
+    calls=first_computation
+  second = f32[8,4] fusion(first, n), kind=kLoop,
+    calls=second_computation
+  ROOT result = f32[8,4] custom-call(second),
+    custom_call_target="unknown"
+}
+)";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kHlo));
+  HloInstruction* first =
+      module->entry_computation()->GetInstructionWithName("first");
+  HloInstruction* second =
+      module->entry_computation()->GetInstructionWithName("second");
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+
+  ValidPrefixExtentRewriter rewriter;
+  ASSERT_OK_AND_ASSIGN(bool changed, rewriter.Run(module.get()));
+  EXPECT_FALSE(changed);
+  ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> first_contract,
+                       GetValidPrefixExtent(*first));
+  ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> second_contract,
+                       GetValidPrefixExtent(*second));
+  EXPECT_FALSE(first_contract.has_value());
+  EXPECT_FALSE(second_contract.has_value());
 }
 
 TEST_F(ValidPrefixExtentRewriterTest, RemovesUnfusedMarkers) {
