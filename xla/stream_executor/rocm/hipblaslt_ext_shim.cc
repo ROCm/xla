@@ -52,21 +52,13 @@ XLA_LIBSTDCXX_SYMBOL(_ZSt28__throw_bad_array_new_lengthv, "GLIBCXX_3.4.29");
 struct XlaHipblasLtGroupedGemm {
   XlaHipblasLtGroupedGemm(hipblasLtHandle_t handle,
                           const XlaHipblasLtProblemType& problem)
-      : problem_type(problem),
-        gemm(handle, problem.op_a, problem.op_b, problem.type_a, problem.type_b,
+      : gemm(handle, problem.op_a, problem.op_b, problem.type_a, problem.type_b,
              problem.type_c, problem.type_d, problem.compute_type) {}
 
-  XlaHipblasLtProblemType problem_type;
   hipblaslt_ext::GroupedGemm gemm;
 };
 
 namespace {
-
-hipblaslt_ext::GemmProblemType ToGemmProblemType(
-    const XlaHipblasLtProblemType& p) {
-  return hipblaslt_ext::GemmProblemType(p.op_a, p.op_b, p.type_a, p.type_b,
-                                        p.type_c, p.type_d, p.compute_type);
-}
 
 std::vector<int64_t> ToVector(const int64_t* values, size_t count) {
   return std::vector<int64_t>(values, values + count);
@@ -155,11 +147,14 @@ hipblasStatus_t XlaHipblasLtGroupedGemmSetProblem(
     }
   }
 
-  hipblaslt_ext::GemmProblemType problem =
-      ToGemmProblemType(gemm->problem_type);
+  // The problem type given to the constructor, as hipBLASLt's own setProblem
+  // overloads without problem type pass it.
+  std::vector<hipblaslt_ext::GemmProblemType> problem_types =
+      gemm->gemm.getProblemTypes();
   return gemm->gemm.setProblem(v_m, v_n, v_k, v_batch, v_lda, v_ldb, v_ldc,
                                v_ldd, v_stride_a, v_stride_b, v_stride_c,
-                               v_stride_d, v_epilogues, v_inputs, problem);
+                               v_stride_d, v_epilogues, v_inputs,
+                               problem_types[0]);
 }
 
 hipblasStatus_t XlaHipblasLtGroupedGemmGetAllAlgos(
