@@ -24,6 +24,7 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/log/check.h"
 #include "absl/status/status_matchers.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
 #include "xla/backends/gpu/codegen/triton/topk_config.h"
@@ -38,6 +39,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/service/gpu/gpu_device_info_for_tests.h"
+#include "xla/service/topk_rewriter.h"
 #include "xla/stream_executor/device_description.h"
 
 namespace xla::gpu {
@@ -48,16 +50,20 @@ enum class TritonTopKFlags { kOff, kOn, kForced };
 class TopkSpecializerTritonTest : public HloHardwareIndependentTestBase {
  protected:
   // Parses a module whose root is `ROOT t = (out, idx) custom-call(p)` with
-  // target "TopK".
+  // target "TopK" and the HLO attributes `extra_attrs`, if any.
   std::unique_ptr<HloModule> ParseTopK(absl::string_view in,
                                        absl::string_view out,
                                        absl::string_view idx,
                                        absl::string_view backend_config,
-                                       TritonTopKFlags flags) {
+                                       TritonTopKFlags flags,
+                                       absl::string_view extra_attrs = "") {
     std::string config_attr =
         backend_config.empty()
             ? ""
             : absl::Substitute(", backend_config=$0", backend_config);
+    if (!extra_attrs.empty()) {
+      absl::StrAppend(&config_attr, ", ", extra_attrs);
+    }
     auto module = ParseAndReturnVerifiedModule(absl::Substitute(
         R"(
       HloModule m
@@ -215,6 +221,44 @@ TEST_F(TopkSpecializerTritonTest, LongRowKeepsThePrebuiltKernel) {
   EXPECT_EQ(Cast<HloCustomCallInstruction>(root->operand(0)->operand(0))
                 ->custom_call_target(),
             "__gpu$TopK");
+}
+
+constexpr absl::string_view kDeferredPackedBf16 =
+    R"(frontend_attributes={_xla_topk_deferred_packed_bf16="true"})";
+
+TEST_F(TopkSpecializerTritonTest, DeferredPackedBf16KeepsTheTopKWhenNotRouted) {
+  // Without the mark, this shape takes the prebuilt kernel.
+  auto unmarked = ParseTopK("bf16[8,4096]", "bf16[8,8]", "s32[8,8]", "",
+                            TritonTopKFlags::kOn);
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                 unmarked.get()));
+  EXPECT_TRUE(changed);
+
+  // With the mark, TopkDecomposer later gives it the packed BF16 sort.
+  auto marked = ParseTopK("bf16[8,4096]", "bf16[8,8]", "s32[8,8]", "",
+                          TritonTopKFlags::kOn, kDeferredPackedBf16);
+  ASSERT_OK_AND_ASSIGN(
+      changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                 marked.get()));
+  EXPECT_FALSE(changed);
+  const HloInstruction* root = marked->entry_computation()->root_instruction();
+  EXPECT_TRUE(root->IsCustomCall("TopK"));
+  EXPECT_TRUE(IsTopKWithDeferredPackedBf16(root));
+}
+
+TEST_F(TopkSpecializerTritonTest, DeferredPackedBf16IsRoutedWhenForced) {
+  auto module = ParseTopK("bf16[24576,64]", "bf16[24576,6]", "s32[24576,6]",
+                          R"({is_stable = true, order = "TOTAL"})",
+                          TritonTopKFlags::kForced, kDeferredPackedBf16);
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                 module.get()));
+  EXPECT_TRUE(changed);
+  ExpectMarkedTopK(*module, /*stable=*/true, ComparisonOrder::kTotal);
 }
 
 TEST_F(TopkSpecializerTritonTest, CudaIsNotRouted) {

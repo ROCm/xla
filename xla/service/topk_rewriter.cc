@@ -58,6 +58,18 @@ limitations under the License.
 
 namespace xla {
 
+bool IsTopKWithDeferredPackedBf16(const HloInstruction* inst) {
+  return inst->get_frontend_attribute(kTopKDeferredPackedBf16Attr).has_value();
+}
+
+// Returns true if the largest-k TopK of `input` along its last dimension can
+// use the packed BF16 sort: the BF16 value and the index fit in one S32 key.
+static bool CanUsePackedBf16Sort(const HloInstruction* input) {
+  constexpr int64_t kLow16BitsLimit = int64_t{1} << 16;
+  return input->shape().element_type() == BF16 &&
+         input->shape().dimensions().back() < kLow16BitsLimit;
+}
+
 static std::optional<ComparisonOrder> MatchNanSafeGt(HloComputation* comp) {
   namespace m = match;
   auto match_bitcast_f32 = [](int64_t parameter_number) {
@@ -377,6 +389,9 @@ TopKCustomCall CreateTopKCustomCall(HloSortInstruction* sort, const int64_t k,
   topk->set_raw_backend_config_string(absl::StrFormat(
       "{is_stable = %s, order = \"%s\"}", sort->is_stable() ? "true" : "false",
       ComparisonOrderToShortString(order)));
+  if (IsTopKWithDeferredPackedBf16(sort)) {
+    topk->set_frontend_attribute(kTopKDeferredPackedBf16Attr, "true");
+  }
   HloInstruction* value_gte =
       sort->AddInstruction(HloInstruction::CreateGetTupleElement(
           topk->shape().tuple_shapes(0), topk, 0));
@@ -502,8 +517,9 @@ absl::StatusOr<bool> TopkRewriter::RunImpl(
 
 class TopkDecomposerVisitor : public DfsHloRewriteVisitor {
  public:
-  explicit TopkDecomposerVisitor(HloPredicate should_decompose)
-      : should_decompose_(should_decompose) {}
+  TopkDecomposerVisitor(HloPredicate should_decompose, bool defer_packed_bf16)
+      : should_decompose_(should_decompose),
+        defer_packed_bf16_(defer_packed_bf16) {}
 
   absl::Status HandleCustomCall(HloInstruction* inst) override {
     if (should_decompose_ && !should_decompose_(inst)) {
@@ -513,9 +529,15 @@ class TopkDecomposerVisitor : public DfsHloRewriteVisitor {
     if (call == nullptr || call->custom_call_target() != "TopK") {
       return absl::OkStatus();
     }
+    // A "TopK" custom call computes the largest k, so a deferred BF16 TopK op
+    // gets the packed BF16 sort it would have got without the deferral.
+    if (IsTopKWithDeferredPackedBf16(call) &&
+        CanUsePackedBf16Sort(call->operand(0))) {
+      return DecomposeTopKWithSorting(call);
+    }
     HloComputation* comparator = call->to_apply();
     // TODO: Support packed BF16 sort for legacy custom calls if needed.
-    return DecomposeTopKFallback(call, comparator);
+    return DecomposeTopKFallback(call, comparator).status();
   }
 
   absl::Status HandleTopK(HloInstruction* inst) override {
@@ -527,15 +549,20 @@ class TopkDecomposerVisitor : public DfsHloRewriteVisitor {
     // Use packed BF16 sort optimization when applicable: BF16 input with
     // largest=true, both values and indices used, and the last dimension size
     // fits in 16 bits so indices can be packed.
-    constexpr int32_t kLow16BitsLimit = int32_t{1} << 16;
-    if (topk->largest() && topk->operand(0)->shape().element_type() == BF16 &&
-        topk->operand(0)->shape().dimensions().back() < kLow16BitsLimit) {
+    const bool use_packed_bf16 =
+        topk->largest() && CanUsePackedBf16Sort(topk->operand(0));
+    if (use_packed_bf16 && !defer_packed_bf16_) {
       return DecomposeTopKWithSorting(topk);
     }
 
     ABSL_ASSIGN_OR_RETURN(HloComputation * comparator,
                           CreateVariadicComparator(topk));
-    return DecomposeTopKFallback(topk, comparator);
+    ABSL_ASSIGN_OR_RETURN(HloInstruction * sort,
+                          DecomposeTopKFallback(topk, comparator));
+    if (use_packed_bf16) {
+      sort->set_frontend_attribute(kTopKDeferredPackedBf16Attr, "true");
+    }
+    return absl::OkStatus();
   }
 
  private:
@@ -580,8 +607,9 @@ class TopkDecomposerVisitor : public DfsHloRewriteVisitor {
     int64_t rank = input_shape.dimensions().size();
     int64_t last_dim = rank - 1;
 
-    HloTopKInstruction* topk = DynCast<HloTopKInstruction>(call);
-    int64_t k = topk->k();
+    // `call` is a TopK op or a "TopK" custom call; both output (values,
+    // indices) with k elements in the last dimension.
+    int64_t k = call->shape().tuple_shapes(0).dimensions(last_dim);
 
     constexpr int32_t kLow16BitsLimit = int32_t{1} << 16;
     constexpr int32_t kLow16BitsMask = kLow16BitsLimit - 1;
@@ -703,8 +731,9 @@ class TopkDecomposerVisitor : public DfsHloRewriteVisitor {
     return absl::OkStatus();
   }
 
-  absl::Status DecomposeTopKFallback(HloInstruction* call,
-                                     HloComputation* variadic_comparator) {
+  // Returns the sort that replaces `call`.
+  absl::StatusOr<HloInstruction*> DecomposeTopKFallback(
+      HloInstruction* call, HloComputation* variadic_comparator) {
     HloInstruction* input = call->mutable_operand(0);
     const Shape& input_shape = input->shape();
     int64_t rank = input_shape.dimensions().size();
@@ -721,9 +750,10 @@ class TopkDecomposerVisitor : public DfsHloRewriteVisitor {
     std::vector<int64_t> ones(rank, 1);
 
     // If only the topk values are necessary, skip the iota.
+    HloInstruction* sort;
     if (HasSingleUserReadingOnlyTheValueOutput(call) &&
         variadic_comparator->num_parameters() == 2) {
-      HloInstruction* sort = call->AddInstruction(
+      sort = call->AddInstruction(
           HloInstruction::CreateSort(input->shape(), sort_dimension, {input},
                                      variadic_comparator, is_stable));
       ABSL_RETURN_IF_ERROR(ReplaceInstruction(
@@ -734,7 +764,7 @@ class TopkDecomposerVisitor : public DfsHloRewriteVisitor {
     } else {
       HloInstruction* iota = call->AddInstruction(HloInstruction::CreateIota(
           iota_shape, iota_shape.dimensions().size() - 1));
-      HloInstruction* sort = call->AddInstruction(HloInstruction::CreateSort(
+      sort = call->AddInstruction(HloInstruction::CreateSort(
           ShapeUtil::MakeTupleShape({input->shape(), iota_shape}),
           sort_dimension, {input, iota}, variadic_comparator, is_stable));
       // Apply a slice to a tuple.
@@ -749,17 +779,18 @@ class TopkDecomposerVisitor : public DfsHloRewriteVisitor {
           call, call->AddInstruction(HloInstruction::CreateTuple(
                     {slice_tuple(0), slice_tuple(1)}))));
     }
-    return absl::OkStatus();
+    return sort;
   }
 
  private:
   HloPredicate should_decompose_;
+  bool defer_packed_bf16_;
 };
 
 absl::StatusOr<bool> TopkDecomposer::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
-  return TopkDecomposerVisitor(should_decompose_)
+  return TopkDecomposerVisitor(should_decompose_, defer_packed_bf16_)
       .RunOnModule(module, execution_threads);
 }
 
@@ -774,7 +805,8 @@ class TopkDecomposerFactory : public HloPassFactory {
     return std::make_unique<TopkDecomposer>(
         options.Get<bool>("only_topk_op").value_or(false)
             ? HloPredicateIsOp<HloOpcode::kTopK>
-            : HloPredicate());
+            : HloPredicate(),
+        options.Get<bool>("defer_packed_bf16").value_or(false));
   }
 };
 

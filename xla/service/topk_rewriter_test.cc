@@ -31,6 +31,7 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/status/status_matchers.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
@@ -760,6 +761,123 @@ ENTRY TopK {
     }
   }
   EXPECT_EQ(sort_count, 1);
+}
+
+// Returns the only sort of the entry computation, or nullptr.
+const HloSortInstruction* GetOnlySort(const HloModule& module) {
+  const HloSortInstruction* only_sort = nullptr;
+  for (const HloInstruction* inst :
+       module.entry_computation()->instructions()) {
+    if (inst->opcode() == HloOpcode::kSort) {
+      if (only_sort != nullptr) {
+        return nullptr;
+      }
+      only_sort = Cast<HloSortInstruction>(inst);
+    }
+  }
+  return only_sort;
+}
+
+TEST_F(TopkRewriterTest, TopKDecompositionDeferredPackedRoundTrip) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule topk
+
+ENTRY TopK {
+  x = bf16[10,10]{1,0} parameter(0)
+  ROOT topk = (bf16[10,2]{1,0}, s32[10,2]{1,0}) topk(x), k=2, largest=true
+})"));
+
+  // Before sharding: the generic sort, marked, instead of the packed sort.
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       TopkDecomposer(HloPredicateIsOp<HloOpcode::kTopK>,
+                                      /*defer_packed_bf16=*/true)
+                           .Run(module.get()));
+  EXPECT_TRUE(changed);
+  ASSERT_OK(HloDCE().Run(module.get()).status());
+  ASSERT_OK(TupleSimplifier().Run(module.get()).status());
+  auto sort_matcher = op::Sort(op::Parameter(0), op::Iota());
+  EXPECT_THAT(module->entry_computation()->root_instruction(),
+              op::Tuple(op::Slice(op::GetTupleElement(sort_matcher, 0)),
+                        op::Slice(op::GetTupleElement(sort_matcher, 1))));
+  const HloSortInstruction* sort = GetOnlySort(*module);
+  ASSERT_NE(sort, nullptr);
+  EXPECT_TRUE(IsTopKWithDeferredPackedBf16(sort));
+
+  // TopkRewriter keeps the mark on the "TopK" custom call.
+  ASSERT_OK_AND_ASSIGN(changed, TopkRewriter().Run(module.get()));
+  EXPECT_TRUE(changed);
+  ASSERT_OK(HloDCE().Run(module.get()).status());
+  const HloInstruction* topk = nullptr;
+  for (const HloInstruction* inst :
+       module->entry_computation()->instructions()) {
+    if (inst->IsCustomCall("TopK")) {
+      topk = inst;
+    }
+  }
+  ASSERT_NE(topk, nullptr);
+  EXPECT_TRUE(IsTopKWithDeferredPackedBf16(topk));
+
+  // After sharding: the packed BF16 sort, as without the deferral.
+  ASSERT_OK_AND_ASSIGN(changed, TopkDecomposer().Run(module.get()));
+  EXPECT_TRUE(changed);
+  ASSERT_OK(HloDCE().Run(module.get()).status());
+  ASSERT_OK(TupleSimplifier().Run(module.get()).status());
+  sort = GetOnlySort(*module);
+  ASSERT_NE(sort, nullptr);
+  EXPECT_EQ(sort->operand_count(), 1);
+  EXPECT_EQ(sort->operand(0)->shape().element_type(), S32);
+  EXPECT_FALSE(sort->is_stable());
+}
+
+TEST_F(TopkRewriterTest, TopKDecompositionDeferredPackedOnlyMarksPackedCases) {
+  for (absl::string_view topk : {
+           "x = f32[10,10] parameter(0)\n"
+           "ROOT t = (f32[10,2], s32[10,2]) topk(x), k=2, largest=true",
+           "x = bf16[2,65536] parameter(0)\n"
+           "ROOT t = (bf16[2,2], s32[2,2]) topk(x), k=2, largest=true",
+           "x = bf16[10,10] parameter(0)\n"
+           "ROOT t = (bf16[10,2], s32[10,2]) topk(x), k=2, largest=false",
+       }) {
+    SCOPED_TRACE(topk);
+    ASSERT_OK_AND_ASSIGN(auto module,
+                         ParseAndReturnVerifiedModule(absl::StrCat(
+                             "HloModule topk\nENTRY e {\n", topk, "\n}")));
+    ASSERT_OK_AND_ASSIGN(bool changed,
+                         TopkDecomposer(HloPredicateIsOp<HloOpcode::kTopK>,
+                                        /*defer_packed_bf16=*/true)
+                             .Run(module.get()));
+    EXPECT_TRUE(changed);
+    const HloSortInstruction* sort = GetOnlySort(*module);
+    ASSERT_NE(sort, nullptr);
+    EXPECT_EQ(sort->operand_count(), 2);
+    EXPECT_FALSE(IsTopKWithDeferredPackedBf16(sort));
+  }
+}
+
+TEST_F(TopkRewriterTest, TopKCustomCallBf16WithoutMarkUsesGenericSort) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule module
+
+compare {
+  p0 = bf16[] parameter(0)
+  p1 = bf16[] parameter(1)
+  p2 = s32[] parameter(2)
+  p3 = s32[] parameter(3)
+  ROOT cmp = pred[] compare(p0, p1), direction=GT, order=TOTAL
+}
+
+ENTRY e {
+  p = bf16[8,2048] parameter(0)
+  ROOT cc = (bf16[8,24], s32[8,24]) custom-call(p), custom_call_target="TopK", called_computations={compare}
+})"));
+  ASSERT_OK_AND_ASSIGN(bool changed, TopkDecomposer().Run(module.get()));
+  EXPECT_TRUE(changed);
+  ASSERT_OK(HloDCE().Run(module.get()).status());
+  ASSERT_OK(TupleSimplifier().Run(module.get()).status());
+  auto sort_matcher = op::Sort(op::Parameter(0), op::Iota());
+  EXPECT_THAT(module->entry_computation()->root_instruction(),
+              op::Tuple(op::Slice(op::GetTupleElement(sort_matcher, 0)),
+                        op::Slice(op::GetTupleElement(sort_matcher, 1))));
 }
 
 TEST_F(TopkRewriterTest, TopKIsNotIncorrectlyCSEd) {

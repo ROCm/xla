@@ -25,7 +25,8 @@ namespace {
 
 void AppendPreSPMDPartitionerPasses(
     HloPipelineEditor pipeline,
-    const AlgebraicSimplifierOptions& layout_insensitive_algsimp_opts) {
+    const AlgebraicSimplifierOptions& layout_insensitive_algsimp_opts,
+    bool defer_packed_bf16_topk) {
   pipeline.AppendPass("erase-xla-late-frontend-attributes");
   pipeline.AppendPass("cudnn-custom-call-converter");
   pipeline.AppendPass("composite-rewriter");
@@ -40,7 +41,12 @@ void AppendPreSPMDPartitionerPasses(
   pipeline.AppendPass("conditional-canonicalizer");
   // The TopkDecomposer generates a compare op with order=TOTAL and must
   // run before the ComparisonExpander which rewrites such comparisons.
-  pipeline.AppendPass("topk-decomposer", {{"only_topk_op", true}});
+  if (defer_packed_bf16_topk) {
+    pipeline.AppendPass("topk-decomposer",
+                        {{"only_topk_op", true}, {"defer_packed_bf16", true}});
+  } else {
+    pipeline.AppendPass("topk-decomposer", {{"only_topk_op", true}});
+  }
   // The SPMD partitioner would mess up the sort+slice structure, so we need to
   // rewrite Topk before that happens.
   pipeline.AppendPass("topk-rewriter");
@@ -49,13 +55,15 @@ void AppendPreSPMDPartitionerPasses(
 }  // namespace
 
 HloPipelineProto GetDefaultCompilationPipeline(
-    const AlgebraicSimplifierOptions& layout_insensitive_algsimp_opts) {
+    const AlgebraicSimplifierOptions& layout_insensitive_algsimp_opts,
+    bool defer_packed_bf16_topk) {
   HloPipelineProto proto;
   HloPipelineEditor root(proto);
   root.AppendSequence("annotate-host-compute")
       .AppendPass("hlo_host_device_type_call_wrapper");
   AppendPreSPMDPartitionerPasses(root.AppendSequence("pre-spmd-partitioner"),
-                                 layout_insensitive_algsimp_opts);
+                                 layout_insensitive_algsimp_opts,
+                                 defer_packed_bf16_topk);
   return proto;
 }
 

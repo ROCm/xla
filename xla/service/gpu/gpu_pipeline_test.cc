@@ -49,16 +49,19 @@ void CollectPasses(const HloPipelineNodeSequenceProto& sequence,
   }
 }
 
+class GpuPipelineTest : public ::testing::TestWithParam<bool> {};
+
 // Checks that every pass of the default pipeline is registered and consumes all
 // of its options.
-TEST(GpuPipelineTest, DefaultCompilationPipelinePassesAreCreatable) {
+TEST_P(GpuPipelineTest, DefaultCompilationPipelinePassesAreCreatable) {
   // Every set field becomes an option that the algebraic simplifier must
   // consume.
   AlgebraicSimplifierOptions algsimp_opts;
   algsimp_opts.set_unconditionally_simplify_reduce_of_transpose_or_reshape(
       true);
   algsimp_opts.set_minmax_propagate_nan(false);
-  const HloPipelineProto proto = GetDefaultCompilationPipeline(algsimp_opts);
+  const HloPipelineProto proto = GetDefaultCompilationPipeline(
+      algsimp_opts, /*defer_packed_bf16_topk=*/GetParam());
   std::vector<const HloPipelineNodeProto*> passes;
   CollectPasses(proto.root(), passes);
   ASSERT_THAT(passes, Not(IsEmpty()));
@@ -80,6 +83,9 @@ TEST(GpuPipelineTest, DefaultCompilationPipelinePassesAreCreatable) {
         << pass->name();
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(DeferPackedBf16TopK, GpuPipelineTest,
+                         ::testing::Bool());
 
 }  // namespace
 }  // namespace xla::gpu

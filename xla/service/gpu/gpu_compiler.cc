@@ -1869,9 +1869,17 @@ absl::Status GpuCompiler::OptimizeHloModule(
   HloPassContext pass_context;
   ABSL_RETURN_IF_ERROR(pass_context.Set(device_description));
   ABSL_RETURN_IF_ERROR(pass_context.Set(host_device_type_options));
+  // TopkSpecializer may route BF16 TopKs to the Triton TopK kernels on ROCm,
+  // so they must reach it as "TopK" custom calls.
+  const bool defer_packed_bf16_topk =
+      device_description.gpu_compute_capability().IsRocm() &&
+      hlo_module->config()
+          .debug_options()
+          .xla_gpu_experimental_enable_triton_topk();
   ABSL_RETURN_IF_ERROR(RunHloPassPipeline(
       hlo_module,
-      GetDefaultCompilationPipeline(layout_insensitive_algsimp_opts),
+      GetDefaultCompilationPipeline(layout_insensitive_algsimp_opts,
+                                    defer_packed_bf16_topk),
       pass_context, compilation_stats));
 
   // Set max_windowed_einsum_iteration to slice_size, as there will be

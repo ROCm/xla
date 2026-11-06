@@ -43,6 +43,7 @@ limitations under the License.
 #include "xla/literal_util.h"
 #include "xla/primitive_util.h"
 #include "xla/service/hlo.pb.h"
+#include "xla/service/topk_rewriter.h"
 #include "xla/service/tuple_util.h"
 #include "xla/shape.h"
 #include "xla/status_macros.h"
@@ -506,6 +507,13 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
       ABSL_ASSIGN_OR_RETURN(HloInstruction * new_topk,
                             RewriteTopKForRocmTriton(topk));
       return ReplaceInstruction(topk, new_topk);
+    }
+
+    // A BF16 TopK whose packed sort was deferred for the Triton TopK kernels
+    // keeps that sort (from TopkDecomposer) when the kernels do not take it.
+    if (IsTopKWithDeferredPackedBf16(topk)) {
+      VLOG(2) << "Keeping the deferred packed BF16 sort for " << topk->name();
+      return absl::OkStatus();
     }
 
     if (auto small_topk = SmallBufferOptimization(topk, is_cuda);

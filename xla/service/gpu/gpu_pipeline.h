@@ -23,8 +23,13 @@ namespace xla::gpu {
 
 // Returns the default HLO pass pipeline of the GPU compiler. So far it covers
 // only the pre-SPMD-partitioner passes.
+//
+// With `defer_packed_bf16_topk`, BF16 TopK ops that would become a packed BF16
+// sort become "TopK" custom calls instead, so that TopkSpecializer sees them;
+// see TopkDecomposer.
 HloPipelineProto GetDefaultCompilationPipeline(
-    const AlgebraicSimplifierOptions& layout_insensitive_algsimp_opts);
+    const AlgebraicSimplifierOptions& layout_insensitive_algsimp_opts,
+    bool defer_packed_bf16_topk = false);
 
 }  // namespace xla::gpu
 
