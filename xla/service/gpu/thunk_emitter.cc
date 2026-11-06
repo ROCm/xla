@@ -67,6 +67,7 @@ limitations under the License.
 #include "xla/backends/gpu/codegen/llvm/llvm_emitter.h"
 #include "xla/backends/gpu/codegen/sort.h"
 #include "xla/backends/gpu/codegen/triton/topk_config.h"
+#include "xla/backends/gpu/codegen/triton/topk_kernel.h"
 #include "xla/backends/gpu/codegen/triton/triton_kernel_source.h"
 #include "xla/backends/gpu/codegen/triton/xtile_compiler.h"
 #include "xla/backends/gpu/ffi/ffi_attributes_from_backend_config.h"
@@ -1625,10 +1626,146 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitTopKCustomCall(
 
 Future<ThunkSequence> ThunkEmitter::EmitTritonTopK(
     const HloCustomCallInstruction* instr) {
-  return absl::UnimplementedError(absl::StrCat(
-      "The Triton TopK kernels are not implemented yet; cannot emit ",
-      instr->name(), " ", instr->shape().ToString(),
-      ". Turn off --xla_gpu_experimental_enable_triton_topk."));
+  const se::DeviceDescription& gpu_device_info =
+      ir_emitter_context_->gpu_device_info();
+  ABSL_ASSIGN_OR_RETURN(TopKKernelSpec spec, GetTopKKernelSpec(*instr));
+  ABSL_RETURN_IF_ERROR(CheckTopKKernelLimits(spec));
+  std::optional<TopKKernelConfig> config =
+      GetTopKKernelConfig(spec, gpu_device_info);
+  if (!config.has_value()) {
+    return absl::InternalError(absl::StrCat(
+        "No Triton TopK kernel config for ", spec.ToString(), " on ",
+        gpu_device_info.name(), "; TopkSpecializer should not have routed ",
+        instr->name(), " to Triton."));
+  }
+  VLOG(1) << "Emitting Triton TopK for " << instr->name() << ": "
+          << spec.ToString() << ", " << config->ToString();
+
+  auto generate = [this, instr, spec,
+                   config = *config]() -> Future<KernelReuseCache::Entry> {
+    std::string kernel_name =
+        ir_emitter_context_->GetSanitizedUniqueName("triton_topk");
+    VLOG(3) << "Generating " << kernel_name << " for " << spec.ToString()
+            << " with " << config.ToString();
+
+    BorrowedMlirContext borrowed_context =
+        ir_emitter_context_->BorrowMlirContext();
+    LoadMlirDialectsForTriton(**borrowed_context);
+    ABSL_ASSIGN_OR_RETURN(
+        mlir::OwningOpRef<mlir::ModuleOp> module,
+        BuildTopKKernel(spec, config, kernel_name, **borrowed_context));
+
+    BlockLevelParameters block_level_parameters;
+    block_level_parameters.num_stages = 1;
+    block_level_parameters.num_warps = config.num_warps;
+    block_level_parameters.num_ctas = 1;
+
+    return ir_emitter_context_->kernel_compiler()
+        ->CompileTritonToLlvm(
+            kernel_name, *instr->GetModule(),
+            ir_emitter_context_->gpu_device_info(), block_level_parameters,
+            ir_emitter_context_->target_triple(),
+            ir_emitter_context_->data_layout(),
+            TritonKernelSource(std::move(module)), std::move(borrowed_context),
+            /*is_xla_fusion=*/false)
+        .Map([kernel_name,
+              kernel_impl_name = ir_emitter_context_->GetSanitizedUniqueName(
+                  kernel_name + "_impl"),
+              instr, config,
+              kernel_compiler = ir_emitter_context_->kernel_compiler(),
+              buffer_assignment = &ir_emitter_context_->buffer_assignment(),
+              &gpu_device_info = ir_emitter_context_->gpu_device_info()](
+                 TritonWrapperResult result) mutable
+                 -> Future<KernelReuseCache::Entry> {
+          if (result.global_scratch_memory_size > 0) {
+            return absl::InternalError(
+                absl::StrCat("Triton TopK kernel ", kernel_name, " asks for ",
+                             result.global_scratch_memory_size,
+                             " bytes of global scratch memory"));
+          }
+          if (result.shmem_bytes > gpu_device_info.shared_memory_per_block()) {
+            return absl::InternalError(absl::StrCat(
+                "Triton TopK kernel ", kernel_name, " needs ",
+                result.shmem_bytes, " bytes of shared memory; the device has ",
+                gpu_device_info.shared_memory_per_block()));
+          }
+          auto local_module =
+              std::move(result.kernel_source).thread_safe_module();
+
+          ABSL_ASSIGN_OR_RETURN(
+              auto kernel_arguments,
+              emitters::KernelArguments::Create(
+                  *buffer_assignment, GetDefaultBufferAlignment(), instr));
+          auto launch_dimensions = LaunchDimensions(
+              se::BlockDim(config.num_programs),
+              se::ThreadDim(config.num_warps *
+                            gpu_device_info.threads_per_warp()));
+
+          ABSL_ASSIGN_OR_RETURN(
+              llvm::Function * kernel,
+              RemoveUnusedTritonAbiArguments(local_module.getModuleUnlocked(),
+                                             kernel_name, kernel_impl_name,
+                                             /*keep_scratch=*/false));
+
+          AnnotateAttrsIfUnset(kernel_arguments, *kernel);
+          ABSL_RETURN_IF_ERROR(AnnotateKernelLaunchDimensions(
+              gpu_device_info, launch_dimensions, kernel,
+              local_module.getModuleUnlocked()));
+
+          GpuKernelSpec kernel_spec{
+              std::move(kernel_name), std::move(launch_dimensions),
+              kernel_arguments,       result.shmem_bytes,
+              result.use_pdl,         result.tma_metadata};
+          return kernel_compiler
+              ->CompileToTargetBinary(LlvmKernelSource{std::move(local_module)},
+                                      kernel_spec)
+              .Map([kernel_spec = std::move(kernel_spec)](
+                       const std::vector<uint8_t>& binary) mutable {
+                return KernelReuseCache::Entry{
+                    std::string{kernel_spec.name()},
+                    kernel_spec.launch_dimensions(),
+                    /*cluster_dim=*/std::nullopt,
+                    static_cast<int64_t>(*kernel_spec.scratch_bytes()),
+                    std::make_shared<const std::vector<uint8_t>>(binary),
+                    kernel_spec.tma_metadata(),
+                    kernel_spec.use_pdl()};
+              });
+        });
+  };
+
+  ABSL_ASSIGN_OR_RETURN(emitters::KernelArguments kernel_arguments,
+                        emitters::KernelArguments::Create(
+                            ir_emitter_context_->buffer_assignment(),
+                            GetDefaultBufferAlignment(), instr));
+
+  auto [status_or_entry, was_cached] =
+      ir_emitter_context_->kernel_cache().GetWithStatus(
+          absl::StrCat("triton_topk ", spec.ToString(), " ",
+                       config->ToString()),
+          generate);
+
+  Thunk::ThunkInfo info = Thunk::ThunkInfo::WithProfileAnnotation(
+      instr, ir_emitter_context_->GetNextThunkId());
+  return status_or_entry.Map(
+      [info = std::move(info), kernel_arguments = std::move(kernel_arguments),
+       name = instr->name(), was_cached = was_cached,
+       devices_in_process =
+           ir_emitter_context_->gpu_topology().num_devices_per_process()](
+          const KernelReuseCache::Entry& entry) mutable
+          -> absl::StatusOr<ThunkSequence> {
+        VLOG(1) << "Triton TopK " << name << " runs kernel "
+                << entry.kernel_name << (was_cached ? " (cached)" : "");
+        ABSL_ASSIGN_OR_RETURN(
+            CustomKernel custom_kernel,
+            kernel::CreateSharedCubinCustomKernel(
+                entry.kernel_name, entry.binary, kernel_arguments.args().size(),
+                entry.launch_dimensions.block_counts(),
+                entry.launch_dimensions.thread_counts_per_block(),
+                entry.shmem_bytes));
+        return ThunkSequence::Of<CustomKernelThunk>(
+            std::move(info), std::move(custom_kernel),
+            std::move(kernel_arguments), devices_in_process, entry.use_pdl);
+      });
 }
 
 Future<ThunkSequence> ThunkEmitter::EmitTritonCustomCall(

@@ -483,6 +483,7 @@ cc_library(
         "//xla/backends/gpu/codegen/kernels:ptx_custom_kernel",
         "//xla/backends/gpu/codegen/llvm:llvm_emitter",
         "//xla/backends/gpu/codegen/triton:topk_config",
+        "//xla/backends/gpu/codegen/triton:topk_kernel",
         "//xla/backends/gpu/codegen/triton:triton_kernel_source",
         "//xla/backends/gpu/codegen/triton:xtile_compiler",
         "//xla/backends/gpu/ffi:ffi_attributes_from_backend_config",
