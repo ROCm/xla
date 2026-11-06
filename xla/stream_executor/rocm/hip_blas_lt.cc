@@ -32,8 +32,9 @@ limitations under the License.
 #include "absl/time/time.h"
 #include "rocm/include/hip/library_types.h"
 #include "rocm/include/hipblas/hipblas.h"
-// Only for UserArguments: call other hipblaslt-ext.hpp APIs through
-// hipblaslt_ext_shim.h, as they pass libstdc++ types.
+// Only for UserArguments, GemmEpilogue and GemmInputs: call other
+// hipblaslt-ext.hpp APIs through hipblaslt_ext_shim.h, as they pass libstdc++
+// types.
 #include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
 #include "rocm/include/hipblaslt/hipblaslt.h"
 #include "rocm/include/rocblas/internal/rocblas-types.h"
@@ -84,6 +85,11 @@ using ::xla::complex64;
 static_assert(std::is_trivial_v<hipblaslt_ext::UserArguments> &&
                   std::is_standard_layout_v<hipblaslt_ext::UserArguments>,
               "hipblaslt_ext::UserArguments must be a POD type");
+// Created and passed here although hipBLASLt is built against libstdc++: all
+// their members are defined in hipBLASLt, and their only data member, a
+// std::unique_ptr, is a plain pointer with any C++ standard library.
+static_assert(sizeof(hipblaslt_ext::GemmEpilogue) == sizeof(void*));
+static_assert(sizeof(hipblaslt_ext::GemmInputs) == sizeof(void*));
 
 void GroupGemmUpdateArgs(
     hipStream_t stream, DeviceAddressBase args, DeviceAddressBase a,
@@ -901,8 +907,8 @@ absl::Status BlasLt::GroupedMatmulPlan::DoInitialize(
     }
   }
 
-  std::vector<XlaHipblasLtExt_Epilogue> epilogues(cfg_.group_count);
-  std::vector<XlaHipblasLtExt_GemmInputs> inputs(cfg_.group_count);
+  std::vector<hipblaslt_ext::GemmEpilogue> epilogues(cfg_.group_count);
+  std::vector<hipblaslt_ext::GemmInputs> inputs(cfg_.group_count);
 
   // Convert the epilogue from the stored member variable
   ABSL_ASSIGN_OR_RETURN(auto hip_epilogue, AsHipblasLtEpilogue(epilogue));
@@ -918,18 +924,18 @@ absl::Status BlasLt::GroupedMatmulPlan::DoInitialize(
                                  epilogue == Epilogue::kBiasThenSILU;
 
   for (int64_t i = 0; i < cfg_.group_count; i++) {
-    epilogues[i].mode = hip_epilogue;
+    epilogues[i].setMode(hip_epilogue);
     // Set bias data type and dummy bias pointer for bias epilogues
     if (has_bias_epilogue) {
-      epilogues[i].bias_data_type = AsHipblasDataType(cfg_.type_d);
-      inputs[i].bias = dummy_pointer;
+      epilogues[i].setBiasDataType(AsHipblasDataType(cfg_.type_d));
+      inputs[i].setBias(dummy_pointer);
     }
-    inputs[i].a = dummy_pointer;
-    inputs[i].b = dummy_pointer;
-    inputs[i].c = dummy_pointer;
-    inputs[i].d = dummy_pointer;
-    inputs[i].alpha = &salpha;
-    inputs[i].beta = &sbeta;
+    inputs[i].setA(dummy_pointer);
+    inputs[i].setB(dummy_pointer);
+    inputs[i].setC(dummy_pointer);
+    inputs[i].setD(dummy_pointer);
+    inputs[i].setAlpha(&salpha);
+    inputs[i].setBeta(&sbeta);
   }
 
   absl::MutexLock lock(blas_lt_.mu_);
