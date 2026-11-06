@@ -19,6 +19,7 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -26,8 +27,13 @@ limitations under the License.
 #include "absl/base/no_destructor.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
+#include "absl/strings/escaping.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/str_replace.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "xla/array2d.h"
 #include "xla/backends/gpu/ffi.h"
 #include "xla/backends/gpu/runtime/while_loop.h"
 #include "xla/backends/gpu/tests/hlo_pjrt_gpu_test_base.h"
@@ -1952,6 +1958,130 @@ TEST_P(DynamicSliceFusionLegacyCustomCallTest, CallSeesSlicesOfStackedBuffers) {
 
 INSTANTIATE_TEST_SUITE_P(LegacyCustomCalls,
                          DynamicSliceFusionLegacyCustomCallTest,
+                         ::testing::Bool(),
+                         [](const ::testing::TestParamInfo<bool>& info) {
+                           return info.param ? "Enabled" : "Disabled";
+                         });
+
+// Triton kernel (one program per element): out[pid] = in[pid] + 1.
+constexpr absl::string_view kTritonAddOneIr =
+    "module { tt.func public @add_one("
+    "%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, "
+    "%arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) { "
+    "%0 = tt.get_program_id x : i32 "
+    "%1 = tt.addptr %arg0, %0 : !tt.ptr<f32>, i32 "
+    "%2 = tt.load %1 : !tt.ptr<f32> "
+    "%cst = arith.constant 1.000000e+00 : f32 "
+    "%3 = arith.addf %2, %cst : f32 "
+    "%4 = tt.addptr %arg1, %0 : !tt.ptr<f32>, i32 "
+    "tt.store %4, %3 : !tt.ptr<f32> "
+    "tt.return } }";
+
+// The scan of kLegacyCustomCallScan with the Triton kernel as the per-layer
+// call: row i of the stacked input, plus one, into row i of the output.
+std::string TritonCallScan() {
+  const std::string backend_config = absl::StrCat(
+      "{name = \"add_one\", ir = \"", kTritonAddOneIr,
+      "\", num_stages = 1 : i32, num_warps = 1 : i32, grid_x = 256 : i32, "
+      "grid_y = 1 : i32, grid_z = 1 : i32, debug = false}");
+  return absl::StrReplaceAll(
+      R"(
+  HloModule test
+
+  body {
+    param = (s32[], f32[4,256], f32[4,256]) parameter(0)
+    i = s32[] get-tuple-element(param), index=0
+    in = f32[4,256] get-tuple-element(param), index=1
+    out = f32[4,256] get-tuple-element(param), index=2
+    zero = s32[] constant(0)
+    row = f32[1,256] dynamic-slice(in, i, zero), dynamic_slice_sizes={1,256}
+    row_1d = f32[256] reshape(row)
+    call = f32[256] custom-call(row_1d),
+      custom_call_target="__gpu$xla.gpu.triton",
+      backend_config="BACKEND_CONFIG"
+    call_2d = f32[1,256] reshape(call)
+    updated = f32[4,256] dynamic-update-slice(out, call_2d, i, zero)
+    one = s32[] constant(1)
+    next_i = s32[] add(i, one)
+    ROOT tuple = (s32[], f32[4,256], f32[4,256]) tuple(next_i, in, updated)
+  }
+
+  cond {
+    param = (s32[], f32[4,256], f32[4,256]) parameter(0)
+    i = s32[] get-tuple-element(param), index=0
+    limit = s32[] constant(4)
+    ROOT cmp = pred[] compare(i, limit), direction=LT
+  }
+
+  ENTRY main {
+    in = f32[4,256] parameter(0)
+    zero = s32[] constant(0)
+    out = f32[4,256] broadcast(f32[] constant(0)), dimensions={}
+    init = (s32[], f32[4,256], f32[4,256]) tuple(zero, in, out)
+    while = (s32[], f32[4,256], f32[4,256])
+      while(init), condition=cond, body=body
+    ROOT result = f32[4,256] get-tuple-element(while), index=2
+  }
+)",
+      {{"BACKEND_CONFIG", absl::CEscape(backend_config)}});
+}
+
+class DynamicSliceFusionTritonCallTest
+    : public HloPjRtGpuTestBase,
+      public ::testing::WithParamInterface<bool> {
+ protected:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions debug_options = HloPjRtGpuTestBase::GetDebugOptionsForTest();
+    debug_options.set_xla_gpu_dynamic_slice_fusion_triton_calls(GetParam());
+    debug_options.set_xla_gpu_enable_while_loop_unrolling(
+        DebugOptions::WHILE_LOOP_UNROLLING_NO_UNROLL);
+    debug_options.set_xla_gpu_experimental_dynamic_slice_fusion_verify_offsets(
+        true);
+    return debug_options;
+  }
+};
+
+TEST_P(DynamicSliceFusionTritonCallTest, FusesOnlyWhenEnabled) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> optimized,
+                       GetOptimizedModule(TritonCallScan()));
+  bool fused = false;
+  for (const HloComputation* computation : optimized->computations()) {
+    for (const HloInstruction* instr : computation->instructions()) {
+      if (instr->opcode() != HloOpcode::kFusion) {
+        continue;
+      }
+      auto config = instr->backend_config<GpuBackendConfig>();
+      if (!config.ok() ||
+          config->fusion_backend_config().custom_fusion_config().name() !=
+              "dynamic_slice_fusion") {
+        continue;
+      }
+      for (const HloInstruction* fused_instr :
+           instr->fused_instructions_computation()->instructions()) {
+        fused |= fused_instr->opcode() == HloOpcode::kCustomCall &&
+                 fused_instr->custom_call_target() == "__gpu$xla.gpu.triton";
+      }
+    }
+  }
+  EXPECT_EQ(fused, GetParam()) << optimized->ToString();
+}
+
+TEST_P(DynamicSliceFusionTritonCallTest, KernelReadsAndWritesLayerRows) {
+  Array2D<float> rows(4, 256);
+  rows.Each([](int64_t r, int64_t c, float* v) { *v = r * 1000.0f + c; });
+  Array2D<float> expected(4, 256);
+  expected.Each(
+      [](int64_t r, int64_t c, float* v) { *v = r * 1000.0f + c + 1; });
+  Literal input = LiteralUtil::CreateR2FromArray2D<float>(rows);
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(TritonCallScan()));
+  ASSERT_OK_AND_ASSIGN(Literal result, Execute(std::move(module), {&input},
+                                               /*run_hlo_passes=*/true));
+  EXPECT_TRUE(LiteralTestUtil::Equal(
+      LiteralUtil::CreateR2FromArray2D<float>(expected), result));
+}
+
+INSTANTIATE_TEST_SUITE_P(TritonCalls, DynamicSliceFusionTritonCallTest,
                          ::testing::Bool(),
                          [](const ::testing::TestParamInfo<bool>& info) {
                            return info.param ? "Enabled" : "Disabled";

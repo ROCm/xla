@@ -2149,7 +2149,13 @@ message DebugOptions {
   // and an in-place user needs a copy of the same size.
   optional bool xla_gpu_while_loop_sink_broadcast_skip_unfusible = 596;
 
-  // Next id: 597
+  // If true, dynamic slice fusion also wraps Triton custom calls
+  // (__gpu$xla.gpu.triton, e.g. Pallas kernels): slices feeding them and
+  // dynamic-update-slices of their results become offsets into the sliced
+  // buffers instead of separate copies.
+  optional bool xla_gpu_dynamic_slice_fusion_triton_calls = 597;
+
+  // Next id: 598
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

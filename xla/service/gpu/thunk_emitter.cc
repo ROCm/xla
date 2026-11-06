@@ -1671,10 +1671,17 @@ Future<ThunkSequence> ThunkEmitter::EmitTritonCustomCall(
                                       borrowed_context->get());
   auto call_zeroed_outputs = call.zeroed_outputs;
 
-  ABSL_ASSIGN_OR_RETURN(emitters::KernelArguments kernel_arguments,
-                        emitters::KernelArguments::Create(
-                            ir_emitter_context_->buffer_assignment(),
-                            GetDefaultBufferAlignment(), instr));
+  // Resolve the kernel arguments through GetAllocationSlice, so that a call
+  // emitted as the hero of a dynamic slice fusion gets the fusion's slices.
+  // The kernel annotation below uses the same arguments: it may run after the
+  // allocation overrides are gone.
+  ABSL_ASSIGN_OR_RETURN(
+      emitters::KernelArguments kernel_arguments,
+      emitters::KernelArguments::Create(
+          [this](const HloInstruction& hlo, const ShapeIndex& index) {
+            return GetAllocationSlice(&hlo, index);
+          },
+          GetDefaultBufferAlignment(), instr));
   std::string fingerprint = absl::StrCat(
       "(", emitters::GetArgumentFingerprint(kernel_arguments.args()), ")",
       instr->raw_backend_config_string());
