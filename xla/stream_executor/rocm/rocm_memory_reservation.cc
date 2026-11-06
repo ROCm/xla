@@ -30,7 +30,7 @@ limitations under the License.
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/rocm/rocm_raw_memory_allocation.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
-#include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
+#include "xla/stream_executor/rocm/rocm_vmm_allocator.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/util.h"
 
@@ -38,7 +38,7 @@ namespace stream_executor::gpu {
 
 absl::StatusOr<std::unique_ptr<RocmMemoryReservation>>
 RocmMemoryReservation::Create(StreamExecutor* executor, uint64_t size,
-                              const RocmVmmOptions& options) {
+                              const RocmVmmAllocator::Options& options) {
   std::unique_ptr<ActivateContext> activation = executor->Activate();
 
   ABSL_ASSIGN_OR_RETURN(RocmVmmAllocationParams params,

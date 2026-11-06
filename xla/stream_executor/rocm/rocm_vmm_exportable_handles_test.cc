@@ -13,8 +13,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
-
 #include <unistd.h>
 
 #include <cstddef>
@@ -24,7 +22,9 @@ limitations under the License.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/status/status_macros.h"
 #include "absl/status/status_matchers.h"  // IWYU pragma: keep
+#include "absl/status/statusor.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/rocm_config.h"
 #include "xla/stream_executor/activate_context.h"
@@ -64,7 +64,7 @@ hipError_t TryExportAsPosixFd(hipMemGenericAllocationHandle_t handle) {
   return hipSuccess;
 }
 
-class RocmVmmHandleTypeTest : public ::testing::Test {
+class RocmVmmExportableHandlesTest : public ::testing::Test {
  protected:
   void SetUp() override {
     auto platform_or = PlatformManager::PlatformWithName("ROCM");
@@ -84,19 +84,32 @@ class RocmVmmHandleTypeTest : public ::testing::Test {
                        "hipDeviceGet"));
   }
 
+  // The handle type GetRocmVmmAllocationParams() ends up requesting for
+  // `options` on this device.
+  absl::StatusOr<hipMemAllocationHandleType> RequestedHandleType(
+      const RocmVmmAllocator::Options& options) {
+    std::unique_ptr<ActivateContext> activation = executor_->Activate();
+    ABSL_ASSIGN_OR_RETURN(RocmVmmAllocationParams params,
+                          GetRocmVmmAllocationParams(executor_, options));
+    return params.prop.requestedHandleTypes;
+  }
+
   // Skips the calling test on a ROCm older than 10.0, where exportable
   // handles are gated off whatever the caller asks for. The exportability
   // assertions below only apply when they are available.
   void SkipIfExportableHandlesUnsupported() {
-    if (RocmVmmHandleType(kExportable) != hipMemHandleTypePosixFileDescriptor) {
+    absl::StatusOr<hipMemAllocationHandleType> handle_type =
+        RequestedHandleType(kExportable);
+    ASSERT_OK(handle_type);
+    if (*handle_type != hipMemHandleTypePosixFileDescriptor) {
       GTEST_SKIP() << "Exportable VMM handles require ROCm 10.0 or newer.";
     }
   }
 
-  static constexpr RocmVmmOptions kExportable = {.enable_posix_fd_handle =
-                                                     true};
-  static constexpr RocmVmmOptions kNonExportable = {.enable_posix_fd_handle =
-                                                        false};
+  static constexpr RocmVmmAllocator::Options kExportable = {
+      .enable_posix_fd_handle = true};
+  static constexpr RocmVmmAllocator::Options kNonExportable = {
+      .enable_posix_fd_handle = false};
 
   Platform* platform_ = nullptr;
   StreamExecutor* executor_ = nullptr;
@@ -104,54 +117,59 @@ class RocmVmmHandleTypeTest : public ::testing::Test {
 };
 
 // On ROCm 10.0 and newer, a caller that asks for exportable handles gets them.
-TEST_F(RocmVmmHandleTypeTest, ExportableHandlesRequestedOnSupportedRocm) {
+TEST_F(RocmVmmExportableHandlesTest, ExportableHandlesOnSupportedRocm) {
   if (TF_ROCM_VERSION < 100000) {
     GTEST_SKIP() << "Exportable VMM handles are gated off below ROCm 10.0.";
   }
 
-  EXPECT_EQ(RocmVmmHandleType(kExportable),
-            hipMemHandleTypePosixFileDescriptor);
+  ASSERT_OK_AND_ASSIGN(hipMemAllocationHandleType handle_type,
+                       RequestedHandleType(kExportable));
+  EXPECT_EQ(handle_type, hipMemHandleTypePosixFileDescriptor);
 }
 
 // Whatever the ROCm version, a caller that does not ask for exportable
 // handles never gets them.
-TEST_F(RocmVmmHandleTypeTest, NonExportableOptionIsHonored) {
-  EXPECT_EQ(RocmVmmHandleType(kNonExportable), hipMemHandleTypeNone);
-
-  std::unique_ptr<ActivateContext> activation = executor_->Activate();
-  ASSERT_OK_AND_ASSIGN(RocmVmmAllocationParams params,
-                       GetRocmVmmAllocationParams(executor_, kNonExportable));
-  EXPECT_EQ(params.prop.requestedHandleTypes, hipMemHandleTypeNone);
+TEST_F(RocmVmmExportableHandlesTest, NonExportableOptionIsHonored) {
+  ASSERT_OK_AND_ASSIGN(hipMemAllocationHandleType handle_type,
+                       RequestedHandleType(kNonExportable));
+  EXPECT_EQ(handle_type, hipMemHandleTypeNone);
 }
 
-TEST_F(RocmVmmHandleTypeTest, RequestedHandleTypeMatchesHandleType) {
+// The rest of the properties describe a pinned allocation on this device,
+// whatever handle type was asked for.
+TEST_F(RocmVmmExportableHandlesTest, ParamsDescribePinnedDeviceAllocation) {
   std::unique_ptr<ActivateContext> activation = executor_->Activate();
   ASSERT_OK_AND_ASSIGN(RocmVmmAllocationParams params,
                        GetRocmVmmAllocationParams(executor_, kExportable));
 
-  EXPECT_EQ(params.prop.requestedHandleTypes, RocmVmmHandleType(kExportable));
   EXPECT_EQ(params.prop.type, hipMemAllocationTypePinned);
   EXPECT_EQ(params.prop.location.type, hipMemLocationTypeDevice);
   EXPECT_EQ(params.prop.location.id, device_);
+  EXPECT_EQ(static_cast<int>(params.prop.allocFlags.compressionType), 0);
+  EXPECT_EQ(static_cast<int>(params.prop.allocFlags.gpuDirectRDMACapable), 0);
+  EXPECT_EQ(static_cast<int>(params.prop.allocFlags.usage), 0);
+  EXPECT_EQ(params.prop.win32HandleMetaData, nullptr);
   EXPECT_GT(params.granularity, 0u);
 }
 
-// The handle type for given options never changes; allocation sites and
-// granularity queries would otherwise drift apart.
-TEST_F(RocmVmmHandleTypeTest, HandleTypeIsStableAcrossCalls) {
+// The handle type and granularity for given options never change; allocation
+// sites and granularity queries would otherwise drift apart.
+TEST_F(RocmVmmExportableHandlesTest, ParamsAreStableAcrossCalls) {
   std::unique_ptr<ActivateContext> activation = executor_->Activate();
-  hipMemAllocationHandleType first = RocmVmmHandleType(kExportable);
+  ASSERT_OK_AND_ASSIGN(RocmVmmAllocationParams first,
+                       GetRocmVmmAllocationParams(executor_, kExportable));
   for (int i = 0; i < 4; ++i) {
-    EXPECT_EQ(RocmVmmHandleType(kExportable), first);
     ASSERT_OK_AND_ASSIGN(RocmVmmAllocationParams params,
                          GetRocmVmmAllocationParams(executor_, kExportable));
-    EXPECT_EQ(params.prop.requestedHandleTypes, first);
+    EXPECT_EQ(params.prop.requestedHandleTypes,
+              first.prop.requestedHandleTypes);
+    EXPECT_EQ(params.granularity, first.granularity);
   }
 }
 
 // An allocation the caller did not ask to be exportable must genuinely not be
 // exportable, or the option is decorative.
-TEST_F(RocmVmmHandleTypeTest, NonExportableAllocationCannotBeExported) {
+TEST_F(RocmVmmExportableHandlesTest, NonExportableAllocationCannotBeExported) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<RocmRawMemoryAllocation> allocation,
                        RocmRawMemoryAllocation::Create(
                            executor_, /*size=*/1024 * 1024, kNonExportable));
@@ -162,7 +180,7 @@ TEST_F(RocmVmmHandleTypeTest, NonExportableAllocationCannotBeExported) {
 
 // RocmDeviceAddressVmmAllocator creates its physical memory through
 // RocmRawMemoryAllocation::Create, so this covers both.
-TEST_F(RocmVmmHandleTypeTest, RawMemoryAllocationHandleIsExportable) {
+TEST_F(RocmVmmExportableHandlesTest, RawMemoryAllocationHandleIsExportable) {
   SkipIfExportableHandlesUnsupported();
 
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<RocmRawMemoryAllocation> allocation,
@@ -178,7 +196,7 @@ TEST_F(RocmVmmHandleTypeTest, RawMemoryAllocationHandleIsExportable) {
 
 // An exported descriptor that cannot be imported back is of no use to whoever
 // receives it, so check the full round trip rather than just the export call.
-TEST_F(RocmVmmHandleTypeTest, ExportedDescriptorCanBeImported) {
+TEST_F(RocmVmmExportableHandlesTest, ExportedDescriptorCanBeImported) {
   SkipIfExportableHandlesUnsupported();
 
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<RocmRawMemoryAllocation> allocation,
@@ -204,7 +222,7 @@ TEST_F(RocmVmmHandleTypeTest, ExportedDescriptorCanBeImported) {
   EXPECT_EQ(hipMemRelease(imported), hipSuccess);
 }
 
-TEST_F(RocmVmmHandleTypeTest, VmmAllocatorMemoryIsExportable) {
+TEST_F(RocmVmmExportableHandlesTest, VmmAllocatorMemoryIsExportable) {
   SkipIfExportableHandlesUnsupported();
 
   RocmVmmAllocator allocator(executor_, kExportable);
@@ -224,7 +242,7 @@ TEST_F(RocmVmmHandleTypeTest, VmmAllocatorMemoryIsExportable) {
 
 // The path that matters in practice: a collective-space buffer from the kVmm
 // allocator, retained and exported the way a collective library would.
-TEST_F(RocmVmmHandleTypeTest, CollectiveAllocationIsExportable) {
+TEST_F(RocmVmmExportableHandlesTest, CollectiveAllocationIsExportable) {
   SkipIfExportableHandlesUnsupported();
 
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<Stream> stream,
@@ -258,7 +276,7 @@ TEST_F(RocmVmmHandleTypeTest, CollectiveAllocationIsExportable) {
 // padded to exactly the granularity it reports pins that down: a site that
 // went back to hand-built properties with a different handle type, and got a
 // different granularity from the driver, would fail here.
-TEST_F(RocmVmmHandleTypeTest, PaddingMatchesGranularityForRequestedHandles) {
+TEST_F(RocmVmmExportableHandlesTest, PaddingMatchesReportedGranularity) {
   std::unique_ptr<ActivateContext> activation = executor_->Activate();
 
   ASSERT_OK_AND_ASSIGN(RocmVmmAllocationParams params,

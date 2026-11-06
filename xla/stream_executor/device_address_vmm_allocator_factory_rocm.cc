@@ -26,7 +26,7 @@ limitations under the License.
 #include "xla/stream_executor/device_address_vmm_allocator.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/rocm/rocm_device_address_vmm_allocator.h"
-#include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
+#include "xla/stream_executor/rocm/rocm_vmm_allocator.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 
@@ -51,7 +51,7 @@ DeviceAddressVmmAllocator::Create(
           platform, memory_fraction, gpu_system_memory_size, devices,
           reclaim_exempt_memory_space, std::move(host_allocator),
           std::move(free_visitors),
-          gpu::RocmVmmOptions{.enable_posix_fd_handle = true}));
+          gpu::RocmVmmAllocator::Options{.enable_posix_fd_handle = true}));
   return std::unique_ptr<DeviceAddressVmmAllocator>(std::move(allocator));
 }
 

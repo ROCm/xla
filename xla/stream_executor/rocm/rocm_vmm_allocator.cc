@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/stream_executor/rocm/rocm_vmm_allocator.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -27,16 +28,53 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "rocm/include/hip/hip_runtime.h"
+#include "rocm/rocm_config.h"
 #include "xla/stream_executor/activate_context.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
-#include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/util.h"
 
 namespace stream_executor::gpu {
+
+absl::StatusOr<RocmVmmAllocationParams> GetRocmVmmAllocationParams(
+    StreamExecutor* executor, const RocmVmmAllocator::Options& options) {
+  hipDevice_t device;
+  ABSL_RETURN_IF_ERROR(ToStatus(
+      hipDeviceGet(&device, executor->device_ordinal()), "hipDeviceGet"));
+
+  RocmVmmAllocationParams params;
+  params.prop.type = hipMemAllocationTypePinned;
+  params.prop.location.type = hipMemLocationTypeDevice;
+  params.prop.location.id = device;
+  params.prop.requestedHandleTypes = hipMemHandleTypeNone;
+
+  if (options.enable_posix_fd_handle) {
+// Exportable VMM handles are only usable from ROCm 10.0 onwards; earlier
+// releases cannot be relied on to export and import them correctly.
+// rocm_config.h encodes TF_ROCM_VERSION as 10000 * major + 100 * minor +
+// patch, so ROCm 10.0.0 is 100000.
+#if TF_ROCM_VERSION >= 100000
+    params.prop.requestedHandleTypes = hipMemHandleTypePosixFileDescriptor;
+#else
+    // Logged once rather than per allocation. A caller that asked for
+    // exportable handles and silently did not get them has no way to tell, and
+    // the consequence only surfaces much later, where the memory is
+    // registered.
+    LOG_FIRST_N(WARNING, 1)
+        << "Exportable ROCm VMM handles require ROCm 10.0 or newer; VMM "
+           "allocations will request no handles (non-exportable).";
+#endif
+  }
+
+  ABSL_RETURN_IF_ERROR(ToStatus(
+      hipMemGetAllocationGranularity(&params.granularity, &params.prop,
+                                     hipMemAllocationGranularityRecommended),
+      "hipMemGetAllocationGranularity"));
+  return params;
+}
 
 static hipMemAccessDesc GetVmmAccessDescriptor(int device) {
   hipMemAccessDesc descriptor = {};
@@ -51,7 +89,7 @@ static hipMemAccessDesc GetVmmAccessDescriptor(int device) {
 static absl::StatusOr<
     std::tuple<void*, uint64_t, hipMemGenericAllocationHandle_t>>
 VmmAllocate(StreamExecutor* executor, uint64_t size,
-            const RocmVmmOptions& options) {
+            const RocmVmmAllocator::Options& options) {
   std::unique_ptr<ActivateContext> activation = executor->Activate();
 
   ABSL_ASSIGN_OR_RETURN(RocmVmmAllocationParams params,
@@ -173,8 +211,11 @@ class RocmVmmMemoryAllocation final : public MemoryAllocation {
 
 }  // namespace
 
+RocmVmmAllocator::RocmVmmAllocator(StreamExecutor* executor)
+    : RocmVmmAllocator(executor, Options()) {}
+
 RocmVmmAllocator::RocmVmmAllocator(StreamExecutor* executor,
-                                   const RocmVmmOptions& options)
+                                   const Options& options)
     : executor_(executor), options_(options) {}
 
 absl::StatusOr<std::unique_ptr<MemoryAllocation>> RocmVmmAllocator::Allocate(

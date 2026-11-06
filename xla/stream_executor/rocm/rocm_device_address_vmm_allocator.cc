@@ -39,7 +39,7 @@ limitations under the License.
 #include "xla/stream_executor/rocm/rocm_memory_reservation.h"
 #include "xla/stream_executor/rocm/rocm_raw_memory_allocation.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
-#include "xla/stream_executor/rocm/rocm_vmm_handle_type.h"
+#include "xla/stream_executor/rocm/rocm_vmm_allocator.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 
@@ -49,7 +49,8 @@ RocmDeviceAddressVmmAllocator::RocmDeviceAddressVmmAllocator(
     const Platform* platform,
     std::optional<int64_t> reclaim_exempt_memory_space,
     std::unique_ptr<DeviceAddressAllocator> host_allocator,
-    std::vector<FreeVisitor> free_visitors, const RocmVmmOptions& vmm_options)
+    std::vector<FreeVisitor> free_visitors,
+    const RocmVmmAllocator::Options& vmm_options)
     : DeviceAddressVmmAllocator(platform, reclaim_exempt_memory_space,
                                 std::move(host_allocator),
                                 std::move(free_visitors)),
@@ -62,7 +63,8 @@ RocmDeviceAddressVmmAllocator::Create(
     const Platform* platform, absl::Span<const DeviceConfig> devices,
     std::optional<int64_t> reclaim_exempt_memory_space,
     std::unique_ptr<DeviceAddressAllocator> host_allocator,
-    std::vector<FreeVisitor> free_visitors, const RocmVmmOptions& vmm_options) {
+    std::vector<FreeVisitor> free_visitors,
+    const RocmVmmAllocator::Options& vmm_options) {
   auto allocator = absl::WrapUnique(new RocmDeviceAddressVmmAllocator(
       platform, reclaim_exempt_memory_space, std::move(host_allocator),
       std::move(free_visitors), vmm_options));
@@ -74,7 +76,8 @@ absl::StatusOr<std::unique_ptr<RocmDeviceAddressVmmAllocator>>
 RocmDeviceAddressVmmAllocator::Create(
     StreamExecutor* executor, Stream* stream, uint64_t pa_budget,
     std::optional<int64_t> reclaim_exempt_memory_space,
-    std::vector<FreeVisitor> free_visitors, const RocmVmmOptions& vmm_options) {
+    std::vector<FreeVisitor> free_visitors,
+    const RocmVmmAllocator::Options& vmm_options) {
   return Create(executor->GetPlatform(),
                 {{DeviceConfig{executor, stream, pa_budget}}},
                 reclaim_exempt_memory_space, /*host_allocator=*/nullptr,
@@ -88,7 +91,8 @@ RocmDeviceAddressVmmAllocator::Create(
     absl::Span<const std::pair<StreamExecutor*, Stream*>> devices,
     std::optional<int64_t> reclaim_exempt_memory_space,
     std::unique_ptr<DeviceAddressAllocator> host_allocator,
-    std::vector<FreeVisitor> free_visitors, const RocmVmmOptions& vmm_options) {
+    std::vector<FreeVisitor> free_visitors,
+    const RocmVmmAllocator::Options& vmm_options) {
   LOG(INFO) << "Using VMM (Virtual Memory Management) allocator for ROCm.";
   std::vector<DeviceConfig> device_configs;
   device_configs.reserve(devices.size());

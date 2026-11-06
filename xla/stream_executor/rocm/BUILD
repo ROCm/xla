@@ -1680,29 +1680,9 @@ rocm_library(
     alwayslink = 1,
 )
 
-cc_library(
-    name = "rocm_vmm_handle_type",
-    srcs = ["rocm_vmm_handle_type.cc"],
-    hdrs = ["rocm_vmm_handle_type.h"],
-    tags = [
-        "gpu",
-        "rocm-only",
-    ],
-    deps = [
-        ":rocm_status",
-        "//xla/stream_executor:stream_executor_h",
-        "@com_google_absl//absl/log",  # buildcleaner: keep
-        "@com_google_absl//absl/status:status_macros",
-        "@com_google_absl//absl/status:statusor",
-        "@local_config_rocm//rocm:hip",  # buildcleaner: keep
-        "@local_config_rocm//rocm:rocm_config",
-        "@local_config_rocm//rocm:rocm_headers",
-    ],
-)
-
 xla_cc_test(
-    name = "rocm_vmm_handle_type_test",
-    srcs = ["rocm_vmm_handle_type_test.cc"],
+    name = "rocm_vmm_exportable_handles_test",
+    srcs = ["rocm_vmm_exportable_handles_test.cc"],
     tags = [
         "gpu",
         "rocm-only",
@@ -1714,7 +1694,6 @@ xla_cc_test(
         ":rocm_raw_memory_allocation",
         ":rocm_status",
         ":rocm_vmm_allocator",
-        ":rocm_vmm_handle_type",
         "//xla/stream_executor:activate_context",
         "//xla/stream_executor:device_address",
         "//xla/stream_executor:device_address_vmm_allocator",
@@ -1726,7 +1705,9 @@ xla_cc_test(
         "//xla/stream_executor:stream_executor_h",
         "//xla/tsl/platform:statusor",
         "//xla/tsl/platform:test",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:status_matchers",  # build_cleaner: keep
+        "@com_google_absl//absl/status:statusor",
         "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
         "@local_config_rocm//rocm:hip",  # buildcleaner: keep
@@ -1745,7 +1726,7 @@ cc_library(
     ],
     deps = [
         ":rocm_status",
-        ":rocm_vmm_handle_type",
+        ":rocm_vmm_allocator",
         "//xla:util",
         "//xla/stream_executor:activate_context",
         "//xla/stream_executor:device_address",
@@ -1792,7 +1773,7 @@ cc_library(
     deps = [
         ":rocm_raw_memory_allocation",
         ":rocm_status",
-        ":rocm_vmm_handle_type",
+        ":rocm_vmm_allocator",
         "//xla:util",
         "//xla/stream_executor:activate_context",
         "//xla/stream_executor:device_address",
@@ -1849,7 +1830,6 @@ cc_library(
     ],
     deps = [
         ":rocm_status",
-        ":rocm_vmm_handle_type",
         "//xla:util",
         "//xla/stream_executor:activate_context",
         "//xla/stream_executor:device_address",
@@ -1864,6 +1844,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
         "@local_config_rocm//rocm:hip",  # buildcleaner: keep
+        "@local_config_rocm//rocm:rocm_config",
         "@local_config_rocm//rocm:rocm_headers",
     ],
 )
@@ -1880,7 +1861,7 @@ cc_library(
         ":rocm_memory_reservation",
         ":rocm_raw_memory_allocation",
         ":rocm_status",
-        ":rocm_vmm_handle_type",
+        ":rocm_vmm_allocator",
         "//xla/stream_executor:activate_context",
         "//xla/stream_executor:device_address_allocator",
         "//xla/stream_executor:device_address_vmm_allocator",
