@@ -32,8 +32,6 @@ limitations under the License.
 #include "absl/time/time.h"
 #include "rocm/include/hip/library_types.h"
 #include "rocm/include/hipblas/hipblas.h"
-// Call the hipblaslt-ext.hpp APIs that pass standard library types through
-// hipblaslt_ext_shim.h, as hipBLASLt is built against libstdc++.
 #include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
 #include "rocm/include/hipblaslt/hipblaslt.h"
 #include "rocm/include/rocblas/internal/rocblas-types.h"
@@ -911,27 +909,24 @@ absl::Status BlasLt::GroupedMatmulPlan::DoInitialize(
 
   float salpha = cfg_.alpha.real();
   float sbeta = cfg_.beta;
-  // Dummy pointers for initialization; the real ones are set in the device
-  // user arguments by GroupGemmUpdateArgs.
-  const void* dummy_pointer = reinterpret_cast<const void*>(~0ULL);
-  const bool has_bias_epilogue = epilogue == Epilogue::kBias ||
-                                 epilogue == Epilogue::kBiasThenReLU ||
-                                 epilogue == Epilogue::kBiasThenGELU ||
-                                 epilogue == Epilogue::kBiasThenSILU;
+  // Dummy bias pointer for initialization (similar to A, B, C, D)
+  static void* dummy_bias = reinterpret_cast<void*>(~0ULL);
 
   for (int64_t i = 0; i < cfg_.group_count; i++) {
     epilogues[i].setMode(hip_epilogue);
     // Set bias data type and dummy bias pointer for bias epilogues
-    if (has_bias_epilogue) {
+    if (epilogue == Epilogue::kBias || epilogue == Epilogue::kBiasThenReLU ||
+        epilogue == Epilogue::kBiasThenGELU ||
+        epilogue == Epilogue::kBiasThenSILU) {
       epilogues[i].setBiasDataType(AsHipblasDataType(cfg_.type_d));
-      inputs[i].setBias(dummy_pointer);
+      inputs[i].setBias(dummy_bias);
     }
-    inputs[i].setA(dummy_pointer);
-    inputs[i].setB(dummy_pointer);
-    inputs[i].setC(dummy_pointer);
-    inputs[i].setD(dummy_pointer);
-    inputs[i].setAlpha(&salpha);
-    inputs[i].setBeta(&sbeta);
+    inputs[i].setA(reinterpret_cast<void*>(~0ULL));
+    inputs[i].setB(reinterpret_cast<void*>(~0ULL));
+    inputs[i].setC(reinterpret_cast<void*>(~0ULL));
+    inputs[i].setD(reinterpret_cast<void*>(~0ULL));
+    inputs[i].setAlpha(static_cast<void*>(&salpha));
+    inputs[i].setBeta(static_cast<void*>(&sbeta));
   }
 
   absl::MutexLock lock(blas_lt_.mu_);
