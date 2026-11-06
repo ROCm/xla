@@ -88,15 +88,6 @@ hipblasStatus_t XlaHipblasLtGroupedGemmSetProblem(
   if (group_count == 0) {
     return HIPBLAS_STATUS_INVALID_VALUE;
   }
-  for (const int64_t* array : {m, n, k, batch_count, lda, ldb, ldc, ldd,
-                               stride_a, stride_b, stride_c, stride_d}) {
-    if (array == nullptr) {
-      return HIPBLAS_STATUS_INVALID_VALUE;
-    }
-  }
-  if (epilogues == nullptr || inputs == nullptr) {
-    return HIPBLAS_STATUS_INVALID_VALUE;
-  }
 
   std::vector<int64_t> v_m = ToVector(m, group_count);
   std::vector<int64_t> v_n = ToVector(n, group_count);
@@ -155,9 +146,6 @@ hipblasStatus_t XlaHipblasLtGroupedGemmSetProblem(
 hipblasStatus_t XlaHipblasLtGroupedGemmGetAllAlgos(
     hipblasLtHandle_t handle, const XlaHipblasLtProblemType& p,
     XlaHipblasLtHeuristicResultsCallback callback, void* context) {
-  if (callback == nullptr) {
-    return HIPBLAS_STATUS_INVALID_VALUE;
-  }
   std::vector<hipblasLtMatmulHeuristicResult_t> results;
   hipblasStatus_t status = hipblaslt_ext::getAllAlgos(
       handle, hipblaslt_ext::GemmType::HIPBLASLT_GROUPED_GEMM, p.op_a, p.op_b,
@@ -187,9 +175,6 @@ hipblasStatus_t XlaHipblasLtGroupedGemmInitialize(
 
 hipblasStatus_t XlaHipblasLtGroupedGemmGetDefaultValueForDeviceUserArguments(
     XlaHipblasLtGroupedGemm& gemm, void* host_user_args) {
-  if (host_user_args == nullptr) {
-    return HIPBLAS_STATUS_INVALID_VALUE;
-  }
   return gemm.gemm.getDefaultValueForDeviceUserArguments(host_user_args);
 }
 
