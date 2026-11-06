@@ -447,6 +447,7 @@ xla_test(
     backends = ["gpu"],
     deps = [
         ":hlo_pjrt_gpu_test_base",
+        "//xla:array2d",
         "//xla:literal",
         "//xla:literal_util",
         "//xla:shape_util",
@@ -467,7 +468,9 @@ xla_test(
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest_main",
     ],

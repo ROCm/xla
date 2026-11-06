@@ -468,6 +468,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_enable_while_loop_sink_broadcast_constants(false);
   opts.set_xla_gpu_dynamic_slice_fusion_legacy_custom_calls(false);
   opts.set_xla_gpu_while_loop_sink_broadcast_skip_unfusible(true);
+  opts.set_xla_gpu_dynamic_slice_fusion_triton_calls(false);
   opts.set_xla_gpu_nccl_collective_max_nchannels(0);
   opts.set_xla_gpu_nccl_p2p_max_nchannels(0);
   opts.set_xla_gpu_multi_streamed_windowed_einsum(true);
@@ -3066,6 +3067,13 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_dynamic_slice_fusion_legacy_custom_calls(),
       "Whether dynamic slice fusion also fuses slices into legacy (non "
       "typed-FFI) custom calls registered for the platform."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_dynamic_slice_fusion_triton_calls",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_dynamic_slice_fusion_triton_calls),
+      debug_options->xla_gpu_dynamic_slice_fusion_triton_calls(),
+      "Whether dynamic slice fusion also fuses slices into Triton custom "
+      "calls (__gpu$xla.gpu.triton, e.g. Pallas kernels)."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_while_loop_sink_broadcast_skip_unfusible",
       bool_setter_for(

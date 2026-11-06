@@ -1740,6 +1740,14 @@ bool IsLegacyCustomCall(const HloInstruction* hlo,
              std::string(platform_id->ToName())) != nullptr;
 }
 
+// A Triton custom call (e.g. a Pallas kernel). The thunk emitter resolves its
+// kernel arguments through GetAllocationSlice, so dynamic slice fusion can hand
+// it slices of larger buffers.
+bool IsTritonCustomCall(const HloInstruction* hlo) {
+  return hlo->opcode() == HloOpcode::kCustomCall &&
+         hlo->custom_call_target() == "__gpu$xla.gpu.triton";
+}
+
 absl::Status RunDynamicSliceFusionPasses(HloModule* hlo_module,
                                          se::Platform::Id platform_id,
                                          CompilationStats* compilation_stats) {
@@ -1758,11 +1766,15 @@ absl::Status RunDynamicSliceFusionPasses(HloModule* hlo_module,
         hlo_module->config()
             .debug_options()
             .xla_gpu_dynamic_slice_fusion_legacy_custom_calls();
-    opts.predicate = [platform_id,
-                      legacy_custom_calls](const HloInstruction* instr) {
+    const bool triton_calls = hlo_module->config()
+                                  .debug_options()
+                                  .xla_gpu_dynamic_slice_fusion_triton_calls();
+    opts.predicate = [platform_id, legacy_custom_calls,
+                      triton_calls](const HloInstruction* instr) {
       return IsNonFusedCublasLtMatmul(*instr) ||
              IsFfiCustomCall(instr, platform_id) ||
-             (legacy_custom_calls && IsLegacyCustomCall(instr, platform_id));
+             (legacy_custom_calls && IsLegacyCustomCall(instr, platform_id)) ||
+             (triton_calls && IsTritonCustomCall(instr));
     };
     pipeline.AddPass<DynamicSliceFusionRewriterV2>(platform_id,
                                                    std::move(opts));

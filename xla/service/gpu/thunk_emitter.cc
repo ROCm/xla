@@ -1644,10 +1644,24 @@ Future<ThunkSequence> ThunkEmitter::EmitTritonCustomCall(
   TritonCall call = TritonCall::Parse(instr->raw_backend_config_string(),
                                       borrowed_context->get());
   auto call_zeroed_outputs = call.zeroed_outputs;
+
+  // Resolve the kernel arguments through GetAllocationSlice, so that a call
+  // emitted as the hero of a dynamic slice fusion gets the fusion's slices.
+  // The kernel annotation below uses the same arguments: it may run after the
+  // allocation overrides are gone.
+  ABSL_ASSIGN_OR_RETURN(
+      emitters::KernelArguments kernel_arguments,
+      emitters::KernelArguments::Create(
+          [this](const HloInstruction& hlo, const ShapeIndex& index) {
+            return GetAllocationSlice(&hlo, index);
+          },
+          GetDefaultBufferAlignment(), instr));
+
   auto generate =
       [this, &instr, borrowed_context = std::move(borrowed_context),
-       call =
-           std::move(call)]() mutable -> xla::Future<KernelReuseCache::Entry> {
+       call = std::move(call),
+       annotation_arguments =
+           kernel_arguments]() mutable -> xla::Future<KernelReuseCache::Entry> {
     std::string kernel_name =
         ir_emitter_context_->GetSanitizedUniqueName(call.name);
 
@@ -1675,19 +1689,14 @@ Future<ThunkSequence> ThunkEmitter::EmitTritonCustomCall(
         .Map([kernel_name,
               kernel_impl_name = ir_emitter_context_->GetSanitizedUniqueName(
                   kernel_name + "_impl"),
-              instr, call = std::move(call),
+              call = std::move(call),
               kernel_compiler = ir_emitter_context_->kernel_compiler(),
-              buffer_assignment = &ir_emitter_context_->buffer_assignment(),
+              kernel_arguments = std::move(annotation_arguments),
               &gpu_device_info = ir_emitter_context_->gpu_device_info()](
                  TritonWrapperResult result) mutable
                  -> xla::Future<KernelReuseCache::Entry> {
           auto local_module =
               std::move(result.kernel_source).thread_safe_module();
-
-          ABSL_ASSIGN_OR_RETURN(
-              auto kernel_arguments,
-              emitters::KernelArguments::Create(
-                  *buffer_assignment, GetDefaultBufferAlignment(), instr));
           auto launch_dimensions = LaunchDimensions(
               se::BlockDim(call.grid_x, call.grid_y, call.grid_z),
               se::ThreadDim(call.num_warps *
@@ -1722,11 +1731,6 @@ Future<ThunkSequence> ThunkEmitter::EmitTritonCustomCall(
               });
         });
   };
-
-  ABSL_ASSIGN_OR_RETURN(emitters::KernelArguments kernel_arguments,
-                        emitters::KernelArguments::Create(
-                            ir_emitter_context_->buffer_assignment(),
-                            GetDefaultBufferAlignment(), instr));
 
   auto [status_or_entry, was_cached] =
       ir_emitter_context_->kernel_cache().GetWithStatus(
