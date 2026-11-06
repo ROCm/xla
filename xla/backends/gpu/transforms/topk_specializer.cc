@@ -430,17 +430,19 @@ absl::StatusOr<HloInstruction*> SmallBufferOptimization(
 
 class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
  public:
-  explicit SpecializeTopkVisitor(se::GpuComputeCapability compute_capability)
-      : compute_capability_(std::move(compute_capability)) {}
+  explicit SpecializeTopkVisitor(se::DeviceDescription device_description)
+      : device_description_(std::move(device_description)) {}
 
   absl::Status HandleCustomCall(HloInstruction* inst) override {
     HloCustomCallInstruction* topk = DynCast<HloCustomCallInstruction>(inst);
+    const se::GpuComputeCapability& compute_capability =
+        device_description_.gpu_compute_capability();
     if (topk == nullptr || topk->custom_call_target() != "TopK" ||
-        compute_capability_.IsOneAPI()) {
+        compute_capability.IsOneAPI()) {
       return absl::OkStatus();
     }
     TF_RET_CHECK(topk->operand_count() == 1);
-    bool is_cuda = compute_capability_.IsCuda();
+    bool is_cuda = compute_capability.IsCuda();
     bool enable_raft_for_stable_topk =
         topk->GetModule()
             ->config()
@@ -467,7 +469,7 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
   }
 
  private:
-  se::GpuComputeCapability compute_capability_;
+  se::DeviceDescription device_description_;
 };
 
 }  // namespace
@@ -475,7 +477,7 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
 absl::StatusOr<bool> TopkSpecializer::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
-  return SpecializeTopkVisitor(compute_capability_)
+  return SpecializeTopkVisitor(device_description_)
       .RunOnModule(module, execution_threads);
 }
 

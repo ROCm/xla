@@ -95,8 +95,7 @@ TEST_P(TopkTest, ProducesCorrectResult) {
   std::unique_ptr<HloModule> reference_module = topk_module->Clone("reference");
   ASSERT_OK_AND_ASSIGN(
       bool changed,
-      TopkSpecializer(device_description().gpu_compute_capability())
-          .Run(topk_module.get()));
+      TopkSpecializer(device_description()).Run(topk_module.get()));
   ASSERT_TRUE(changed);
 
   ASSERT_OK_AND_ASSIGN(changed, TopkDecomposer().Run(reference_module.get()));
@@ -144,10 +143,8 @@ TEST_F(TopkTest, PreservesBackendConfig) {
 
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                        ParseAndReturnVerifiedModule(hlo));
-  ASSERT_OK_AND_ASSIGN(
-      bool changed,
-      TopkSpecializer(device_description().gpu_compute_capability())
-          .Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       TopkSpecializer(device_description()).Run(module.get()));
   if (!device_description().gpu_compute_capability().IsCuda()) {
     // RAFT is CUDA-only. Without RAFT, k=64 exceeds the default max_k=16
     // for SmallBufferOptimization, so the pass should gracefully do nothing.
@@ -194,10 +191,8 @@ TEST_F(TopkTest, RewriteStableTopKF32ToUint64) {
     GTEST_SKIP() << "RAFT is CUDA-only.";
   }
 
-  ASSERT_OK_AND_ASSIGN(
-      bool changed,
-      TopkSpecializer(device_description().gpu_compute_capability())
-          .Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       TopkSpecializer(device_description()).Run(module.get()));
   ASSERT_TRUE(changed);
 
   const char* check_pattern = R"(
@@ -272,10 +267,8 @@ TEST_F(TopkTest, RewriteStableTopKBF16ToUint64) {
     GTEST_SKIP() << "RAFT is CUDA-only.";
   }
 
-  ASSERT_OK_AND_ASSIGN(
-      bool changed,
-      TopkSpecializer(device_description().gpu_compute_capability())
-          .Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       TopkSpecializer(device_description()).Run(module.get()));
   ASSERT_TRUE(changed);
 
   const char* check_pattern = R"(
@@ -347,10 +340,8 @@ TEST_F(TopkTest, RewriteStableTopKDefaultAndDisableFlag) {
   // Enabled by default.
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                        ParseAndReturnVerifiedModule(hlo));
-  ASSERT_OK_AND_ASSIGN(
-      bool changed,
-      TopkSpecializer(device_description().gpu_compute_capability())
-          .Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       TopkSpecializer(device_description()).Run(module.get()));
   EXPECT_TRUE(changed);
   // Can still be disabled via flag.
   HloModuleConfig disabled_config = GetModuleConfigForTest();
@@ -359,8 +350,8 @@ TEST_F(TopkTest, RewriteStableTopKDefaultAndDisableFlag) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> disabled_module,
                        ParseAndReturnVerifiedModule(hlo, disabled_config));
   ASSERT_OK_AND_ASSIGN(
-      changed, TopkSpecializer(device_description().gpu_compute_capability())
-                   .Run(disabled_module.get()));
+      changed,
+      TopkSpecializer(device_description()).Run(disabled_module.get()));
   EXPECT_FALSE(changed);
 }
 
@@ -392,10 +383,8 @@ TEST_F(TopkTest, RewriteStablePartialOrderTopKF32ToUint64) {
     GTEST_SKIP() << "RAFT is CUDA-only.";
   }
 
-  ASSERT_OK_AND_ASSIGN(
-      bool changed,
-      TopkSpecializer(device_description().gpu_compute_capability())
-          .Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       TopkSpecializer(device_description()).Run(module.get()));
   ASSERT_TRUE(changed);
 
   const char* check_pattern = R"(
@@ -479,10 +468,8 @@ TEST_F(TopkTest, RewriteStablePartialOrderTopKBF16ToUint64) {
     GTEST_SKIP() << "RAFT is CUDA-only.";
   }
 
-  ASSERT_OK_AND_ASSIGN(
-      bool changed,
-      TopkSpecializer(device_description().gpu_compute_capability())
-          .Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       TopkSpecializer(device_description()).Run(module.get()));
   ASSERT_TRUE(changed);
 
   const char* check_pattern = R"(
@@ -564,10 +551,8 @@ TEST_F(TopkTest, SmallPartialOrderTopKUsesCustomKernel) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                        ParseAndReturnVerifiedModule(hlo, config));
 
-  ASSERT_OK_AND_ASSIGN(
-      bool changed,
-      TopkSpecializer(device_description().gpu_compute_capability())
-          .Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       TopkSpecializer(device_description()).Run(module.get()));
   ASSERT_TRUE(changed);
 
   const char* check_pattern = R"(
@@ -629,8 +614,7 @@ TEST_F(TopkTest, RewriteStablePartialOrderTopKProducesCorrectResult) {
 
     ASSERT_OK_AND_ASSIGN(
         bool changed,
-        TopkSpecializer(device_description().gpu_compute_capability())
-            .Run(topk_module.get()));
+        TopkSpecializer(device_description()).Run(topk_module.get()));
     ASSERT_TRUE(changed);
 
     ASSERT_OK_AND_ASSIGN(changed, TopkDecomposer().Run(reference_module.get()));

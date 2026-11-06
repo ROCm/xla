@@ -328,6 +328,10 @@ class ThunkEmitter {
   Future<ThunkSequence> EmitTritonCustomCall(
       const HloCustomCallInstruction* instr);
 
+  // Emits a __gpu$TopK custom call marked by TopkSpecializer for the Triton
+  // TopK kernels.
+  Future<ThunkSequence> EmitTritonTopK(const HloCustomCallInstruction* instr);
+
   Future<ThunkSequence> EmitWhile(const HloInstruction* instr);
 
   absl::Status AssertNonDeterminismIsOkay(const std::string& op_name);

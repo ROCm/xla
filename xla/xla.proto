@@ -1987,7 +1987,15 @@ message DebugOptions {
   // (ScanRewriterTriton).
   optional bool xla_gpu_experimental_enable_triton_scan = 562;
 
-  // Next id: 565
+  // If true, on ROCm, TopkSpecializer routes a TopK to the Triton TopK kernels
+  // when the speed table of the GPU says they are faster than the default path.
+  optional bool xla_gpu_experimental_enable_triton_topk = 565;
+
+  // Test only. With xla_gpu_experimental_enable_triton_topk, routes every TopK
+  // that the Triton TopK kernels support, ignoring the speed table.
+  optional bool xla_gpu_experimental_force_triton_topk = 566;
+
+  // Next id: 567
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

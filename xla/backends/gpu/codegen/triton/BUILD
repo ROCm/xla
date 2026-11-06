@@ -887,3 +887,46 @@ xla_cc_test(
         "@llvm-project//mlir:IR",
     ],
 )
+
+cc_library(
+    name = "topk_config",
+    srcs = ["topk_config.cc"],
+    hdrs = ["topk_config.h"],
+    deps = [
+        "//xla:comparison_util",
+        "//xla:shape_util",
+        "//xla:util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/ir:hlo_instruction_utils",
+        "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/numeric:bits",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/types:span",
+        "@com_googlesource_code_re2//:re2",
+    ],
+)
+
+xla_cc_test(
+    name = "topk_config_test",
+    srcs = ["topk_config_test.cc"],
+    deps = [
+        ":topk_config",
+        "//xla:comparison_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/ir:hlo_instruction_utils",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
+        "//xla/service/gpu:gpu_device_info_for_tests",
+        "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings",
+        "@com_google_googletest//:gtest_main",
+    ],
+)

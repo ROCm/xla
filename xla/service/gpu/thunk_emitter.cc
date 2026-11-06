@@ -66,6 +66,7 @@ limitations under the License.
 #include "xla/backends/gpu/codegen/kernels/ptx_custom_kernel.h"
 #include "xla/backends/gpu/codegen/llvm/llvm_emitter.h"
 #include "xla/backends/gpu/codegen/sort.h"
+#include "xla/backends/gpu/codegen/triton/topk_config.h"
 #include "xla/backends/gpu/codegen/triton/triton_kernel_source.h"
 #include "xla/backends/gpu/codegen/triton/xtile_compiler.h"
 #include "xla/backends/gpu/ffi/ffi_attributes_from_backend_config.h"
@@ -417,6 +418,9 @@ Future<ThunkSequence> ThunkEmitter::DispatchCustomCall(
   }
   if (IsCustomCallToPtxKernel(*hlo)) {
     return EmitPtxCustomCall(custom_call);
+  }
+  if (IsCustomCallToTopK(*hlo) && IsTritonTopK(*custom_call)) {
+    return EmitTritonTopK(custom_call);
   }
   if (IsCustomCallToTopK(*hlo)) {
     return EmitTopKCustomCall(custom_call);
@@ -1617,6 +1621,14 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitTopKCustomCall(
   return ThunkSequence::Of<CustomKernelThunk>(
       std::move(info), std::move(kernel), kernel_arguments,
       ir_emitter_context_->gpu_topology().num_devices_per_process());
+}
+
+Future<ThunkSequence> ThunkEmitter::EmitTritonTopK(
+    const HloCustomCallInstruction* instr) {
+  return absl::UnimplementedError(absl::StrCat(
+      "The Triton TopK kernels are not implemented yet; cannot emit ",
+      instr->name(), " ", instr->shape().ToString(),
+      ". Turn off --xla_gpu_experimental_enable_triton_topk."));
 }
 
 Future<ThunkSequence> ThunkEmitter::EmitTritonCustomCall(

@@ -31,8 +31,8 @@ namespace xla::gpu {
 // runtime/topk.cc.
 class TopkSpecializer : public HloModulePass {
  public:
-  explicit TopkSpecializer(se::GpuComputeCapability compute_capability)
-      : compute_capability_(std::move(compute_capability)) {}
+  explicit TopkSpecializer(se::DeviceDescription device_description)
+      : device_description_(std::move(device_description)) {}
   absl::string_view name() const override { return "topk-specializer"; }
 
  protected:
@@ -41,7 +41,7 @@ class TopkSpecializer : public HloModulePass {
       const absl::flat_hash_set<absl::string_view>& execution_threads) override;
 
  private:
-  se::GpuComputeCapability compute_capability_;
+  se::DeviceDescription device_description_;
 };
 
 }  // namespace xla::gpu
