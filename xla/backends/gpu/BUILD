@@ -154,6 +154,7 @@ cc_library(
         "//xla/backends/gpu/hlo/transforms:dynamic_slice_copy",
         "//xla/backends/gpu/hlo/transforms:dynamic_slice_copy_fusion_async_wrapper",
         "//xla/backends/gpu/hlo/transforms:dynamic_slice_fusion_rewriter_v2",
+        "//xla/backends/gpu/hlo/transforms:dynamic_slice_store_forwarding",
         "//xla/backends/gpu/hlo/transforms:estimate_cub_scan_scratch_size",
         "//xla/backends/gpu/hlo/transforms:estimate_cub_sort_scratch_size",
         "//xla/backends/gpu/hlo/transforms:explicit_collectives_group_async_wrapper",
