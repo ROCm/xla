@@ -16,29 +16,28 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_ROCM_HIPBLASLT_EXT_SHIM_H_
 #define XLA_STREAM_EXECUTOR_ROCM_HIPBLASLT_EXT_SHIM_H_
 
-// Interface to the parts of hipBLASLt's C++ extension API (hipblaslt-ext.hpp)
-// that XLA uses for grouped GEMM.
+// The parts of hipBLASLt's C++ extension API (hipblaslt-ext.hpp) for grouped
+// GEMM that pass standard library types.
 //
-// hipBLASLt is built against libstdc++, and some of its extension functions
-// take std::vector arguments or return them, so they cannot be called from
-// code built against another C++ standard library (such as libc++). The
-// implementation, hipblaslt_ext_shim.cc, is always built against libstdc++
-// (see libstdcxx_cc_library). This interface passes only references,
-// pointers, integers and plain structs, and keeps the
-// hipblaslt_ext::GroupedGemm object behind an opaque type, so it can be used
-// from code built against either library. Its functions have C linkage, so
-// their symbols do not depend on C++ name mangling either.
+// hipBLASLt is built against libstdc++, so its functions that take or return
+// std::vector cannot be called from code built against another C++ standard
+// library (such as libc++). The implementation, hipblaslt_ext_shim.cc, is
+// always built against libstdc++ (see libstdcxx_cc_library) and wraps them in
+// functions that pass only references, pointers and integers. They have C
+// linkage, so their symbols do not depend on C++ name mangling either.
 //
-// hipblaslt_ext::GemmEpilogue and hipblaslt_ext::GemmInputs are passed as they
-// are: all their members are defined in hipBLASLt, and their only data is a
-// pointer to their implementation.
+// The rest of hipblaslt-ext.hpp can be used directly: hipblaslt_ext::
+// GroupedGemm's other members, GemmEpilogue and GemmInputs are defined in
+// hipBLASLt and pass no standard library types, and UserArguments is a POD.
+// A GroupedGemm, whose members are libstdc++ types, must only be created by
+// XlaHipblasLtExt_GroupedGemmCreate and deleted through its virtual
+// destructor, which hipBLASLt defines.
 //
 // TODO: Replace with hipBLASLt's own C API for grouped GEMM once it exists.
 
 #include <cstddef>
 #include <cstdint>
 
-#include "rocm/include/hip/hip_runtime.h"
 #include "rocm/include/hipblaslt/hipblaslt-ext.hpp"
 #include "rocm/include/hipblaslt/hipblaslt.h"
 
@@ -48,34 +47,20 @@ limitations under the License.
 
 extern "C" {
 
-// A hipblaslt_ext::GroupedGemm.
-struct XlaHipblasLtExt_GroupedGemm;
-
-// Transposes, data types and compute type shared by all GEMMs in a group.
-struct XlaHipblasLtExt_ProblemType {
-  hipblasOperation_t op_a;
-  hipblasOperation_t op_b;
-  hipDataType type_a;
-  hipDataType type_b;
-  hipDataType type_c;
-  hipDataType type_d;
-  hipblasComputeType_t compute_type;
-};
-
-// Creates a grouped GEMM for `problem_type`, to be destroyed with
-// XlaHipblasLtExt_GroupedGemmDestroy. `handle` must outlive it.
-XLA_HIPBLASLT_SHIM_EXPORT XlaHipblasLtExt_GroupedGemm*
-XlaHipblasLtExt_GroupedGemmCreate(
-    hipblasLtHandle_t handle, const XlaHipblasLtExt_ProblemType& problem_type);
-
-// Destroys `gemm`. Null is allowed.
-XLA_HIPBLASLT_SHIM_EXPORT void XlaHipblasLtExt_GroupedGemmDestroy(
-    XlaHipblasLtExt_GroupedGemm* gemm);
+// new hipblaslt_ext::GroupedGemm(handle, op_a, ...). Allocated and constructed
+// with libstdc++, like hipBLASLt's own objects; delete it as usual.
+XLA_HIPBLASLT_SHIM_EXPORT hipblaslt_ext::GroupedGemm*
+XlaHipblasLtExt_GroupedGemmCreate(hipblasLtHandle_t handle,
+                                  hipblasOperation_t op_a,
+                                  hipblasOperation_t op_b, hipDataType type_a,
+                                  hipDataType type_b, hipDataType type_c,
+                                  hipDataType type_d,
+                                  hipblasComputeType_t compute_type);
 
 // hipblaslt_ext::GroupedGemm::setProblem. Every array has `group_count`
 // elements; the problem type is the one given at creation.
 XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t XlaHipblasLtExt_GroupedGemmSetProblem(
-    XlaHipblasLtExt_GroupedGemm& gemm, size_t group_count, const int64_t* m,
+    hipblaslt_ext::GroupedGemm& gemm, size_t group_count, const int64_t* m,
     const int64_t* n, const int64_t* k, const int64_t* batch_count,
     const int64_t* lda, const int64_t* ldb, const int64_t* ldc,
     const int64_t* ldd, const int64_t* stride_a, const int64_t* stride_b,
@@ -89,43 +74,12 @@ typedef void (*XlaHipblasLtExt_HeuristicResultsCallback)(
     void* context, const hipblasLtMatmulHeuristicResult_t* results,
     size_t count);
 
-// hipblaslt_ext::getAllAlgos for grouped GEMM. On success, calls
-// `callback(context, results, count)` once with all results.
+// hipblaslt_ext::getAllAlgos for grouped GEMMs of `gemm`'s problem type. On
+// success, calls `callback(context, results, count)` once with all results.
 XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t
 XlaHipblasLtExt_GroupedGemmGetAllAlgos(
-    hipblasLtHandle_t handle, const XlaHipblasLtExt_ProblemType& problem_type,
+    hipblasLtHandle_t handle, hipblaslt_ext::GroupedGemm& gemm,
     XlaHipblasLtExt_HeuristicResultsCallback callback, void* context);
-
-// hipblaslt_ext::GemmInstance::setMaxWorkspaceBytes.
-XLA_HIPBLASLT_SHIM_EXPORT void XlaHipblasLtExt_GroupedGemmSetMaxWorkspaceBytes(
-    XlaHipblasLtExt_GroupedGemm& gemm, size_t workspace_bytes);
-
-// hipblaslt_ext::GemmInstance::isAlgoSupported. Updates `algo`.
-XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t
-XlaHipblasLtExt_GroupedGemmIsAlgoSupported(XlaHipblasLtExt_GroupedGemm& gemm,
-                                           hipblasLtMatmulAlgo_t& algo,
-                                           size_t& workspace_size);
-
-// hipblaslt_ext::GemmInstance::initialize with device user arguments.
-XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t XlaHipblasLtExt_GroupedGemmInitialize(
-    XlaHipblasLtExt_GroupedGemm& gemm, const hipblasLtMatmulAlgo_t& algo,
-    void* workspace);
-
-// hipblaslt_ext::GroupedGemm::getDefaultValueForDeviceUserArguments: writes
-// one hipblaslt_ext::UserArguments per GEMM to the host buffer
-// `host_user_args`.
-XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t
-XlaHipblasLtExt_GroupedGemmGetDefaultValueForDeviceUserArguments(
-    XlaHipblasLtExt_GroupedGemm& gemm, void* host_user_args);
-
-// hipblaslt_ext::GroupedGemm::run with device user arguments.
-XLA_HIPBLASLT_SHIM_EXPORT hipblasStatus_t
-XlaHipblasLtExt_GroupedGemmRun(XlaHipblasLtExt_GroupedGemm& gemm,
-                               void* device_user_args, hipStream_t stream);
-
-// hipblaslt_ext::getIndexFromAlgo.
-XLA_HIPBLASLT_SHIM_EXPORT int XlaHipblasLtExt_GetIndexFromAlgo(
-    const hipblasLtMatmulAlgo_t& algo);
 
 }  // extern "C"
 
