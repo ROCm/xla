@@ -726,6 +726,14 @@ running `inference/1gpu` with command buffers on:
 | science | `alphafold3`, `colabfold` |
 | large_language_models | `gpt_j_6b`, `flan_t5_large` |
 
+> **Fixed in TheRock ROCm nightlies.** These failures are fixed by CLR commit
+> [`a9dad6342cd`](https://github.com/ROCm/rocm-systems/commit/a9dad6342cdf0ad3ec74d8cd9d103a8ee15b4e78)
+> ([ROCm/rocm-systems#12274](https://github.com/ROCm/rocm-systems/pull/12274)), available since nightly
+> `10.3.0a20261103`. With it and MIOpen
+> [ROCm/rocm-libraries#12265](https://github.com/ROCm/rocm-libraries/pull/12265) (since `10.3.0a20261104`),
+> every model above runs with command buffers ON on gfx950. These nightlies are development builds of TheRock
+> `main` (rocm-systems and rocm-libraries `develop`), not a 10.3 release candidate.
+
 These run fine **with command buffers ON** (the flag is not required, but the
 default `CMD_BUFFER=off` is harmless for them):
 
