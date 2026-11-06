@@ -30,7 +30,6 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/error_spec.h"
-#include "xla/frontend_attributes.h"
 #include "xla/hlo/builder/xla_builder.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -2558,7 +2557,8 @@ ENTRY main {
 }
 
 TEST_F(DynamicPadderTest, PreservesValidPrefixAssociation) {
-  auto module = ParseAndReturnVerifiedModule(R"(
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                       ParseAndReturnVerifiedModule(R"(
 HloModule ValidPrefixAssociation
 
 ENTRY main {
@@ -2567,11 +2567,13 @@ ENTRY main {
   bounded = f32[<=8,4] set-dimension-size(data, n), dimensions={0}
   ROOT result = f32[<=8,4] exponential(bounded)
 }
-)")
-                    .value();
+)"));
 
-  DynamicPadder pass;
-  ASSERT_TRUE(pass.Run(module.get()).value());
+  DynamicPadderOptions options;
+  options.preserve_valid_prefix = true;
+  DynamicPadder pass(options);
+  ASSERT_OK_AND_ASSIGN(bool changed, pass.Run(module.get()));
+  EXPECT_TRUE(changed);
 
   HloInstruction* marker = FindValidPrefixMarker(module.get());
   ASSERT_NE(marker, nullptr);
@@ -2580,7 +2582,8 @@ ENTRY main {
 }
 
 TEST_F(DynamicPadderTest, KeepsOriginalExtentInDataflow) {
-  auto module = ParseAndReturnVerifiedModule(R"(
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                       ParseAndReturnVerifiedModule(R"(
 HloModule ValidPrefixDerivedScalar
 
 ENTRY main {
@@ -2592,11 +2595,13 @@ ENTRY main {
   result = f32[<=8,4] exponential(bounded)
   ROOT tuple = (f32[<=8,4], s32[]) tuple(result, n_minus_one)
 }
-)")
-                    .value();
+)"));
 
-  DynamicPadder pass;
-  ASSERT_TRUE(pass.Run(module.get()).value());
+  DynamicPadderOptions options;
+  options.preserve_valid_prefix = true;
+  DynamicPadder pass(options);
+  ASSERT_OK_AND_ASSIGN(bool changed, pass.Run(module.get()));
+  EXPECT_TRUE(changed);
 
   HloInstruction* n = FindInstruction(module.get(), "n");
   HloInstruction* n_minus_one = FindInstruction(module.get(), "n_minus_one");
@@ -2609,7 +2614,8 @@ ENTRY main {
 }
 
 TEST_F(DynamicPadderTest, ValidPrefixMarkerSeedsAssociation) {
-  auto module = ParseAndReturnVerifiedModule(R"(
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                       ParseAndReturnVerifiedModule(R"(
 HloModule ValidPrefixMarker
 
 add {
@@ -2627,17 +2633,43 @@ ENTRY main {
       custom_call_target="xla.valid_prefix"
   ROOT result = f32[8,4] exponential(marker)
 }
-)")
-                    .value();
+)"));
 
-  DynamicPadder pass;
-  ASSERT_OK(pass.Run(module.get()).status());
+  DynamicPadderOptions options;
+  options.preserve_valid_prefix = true;
+  DynamicPadder pass(options);
+  ASSERT_OK_AND_ASSIGN(bool changed, pass.Run(module.get()));
+  EXPECT_FALSE(changed);
 
   HloInstruction* marker = FindValidPrefixMarker(module.get());
   ASSERT_NE(marker, nullptr);
   HloInstruction* n = FindInstruction(module.get(), "n");
   ASSERT_NE(n, nullptr);
   EXPECT_EQ(marker->operand(1), n);
+}
+
+TEST_F(DynamicPadderTest, RemovesUnfusedValidPrefixMarker) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                       ParseAndReturnVerifiedModule(R"(
+HloModule UnfusedValidPrefixMarker
+
+ENTRY main {
+  data = f32[8,4] parameter(0)
+  n = s32[] parameter(1)
+  marker = f32[8,4] custom-call(data, n),
+      custom_call_target="xla.valid_prefix"
+  weights = f32[4,2] parameter(2)
+  ROOT result = f32[8,2] dot(marker, weights),
+      lhs_contracting_dims={1}, rhs_contracting_dims={0}
+}
+)"));
+
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       RemoveUnfusedValidPrefixMarkers(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_EQ(FindValidPrefixMarker(module.get()), nullptr);
+  EXPECT_EQ(module->entry_computation()->root_instruction()->operand(0),
+            module->entry_computation()->parameter_instruction(0));
 }
 
 namespace op = xla::testing::opcode_matchers;

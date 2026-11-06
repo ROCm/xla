@@ -57,7 +57,9 @@ ENTRY main {
 )";
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                        ParseAndReturnVerifiedModule(kHlo));
-  DynamicPadder dynamic_padder;
+  DynamicPadderOptions options;
+  options.preserve_valid_prefix = true;
+  DynamicPadder dynamic_padder(options);
   ASSERT_OK(dynamic_padder.Run(module.get()).status());
 
   auto shape_size = [](const Shape& shape) {

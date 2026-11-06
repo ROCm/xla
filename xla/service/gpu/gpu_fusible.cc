@@ -568,9 +568,8 @@ bool IsInputFusible(const HloInstruction& instr,
 // Returns true if `instr` can be fused as a producer or as a consumer into a
 // kLoop fusion.
 bool IsUniversallyLoopFusible(const HloInstruction& instr) {
-  // Prototype: keep the valid-prefix marker in real dataflow until fusion.
-  // The marker is an elementwise identity whose second operand carries the
-  // runtime extent.
+  // The valid-prefix marker is an elementwise identity whose second operand
+  // carries the runtime extent.
   if (instr.IsCustomCall("xla.valid_prefix")) {
     return true;
   }

@@ -1010,6 +1010,7 @@ absl::Status RunOptimizationPasses(
   pipeline.AddPass<DynamicDimensionSimplifier>();
 
   DynamicPadderOptions dynamic_padder_options;
+  dynamic_padder_options.preserve_valid_prefix = true;
 
   switch (debug_options.xla_gpu_shape_checks()) {
     case DebugOptions::IGNORE:
@@ -1516,6 +1517,7 @@ absl::Status RunFusionPasses(HloModule* hlo_module,
                      mlir_context_pool)
           .Run(hlo_module, {HloInstruction::kMainExecutionThread})
           .status());
+  ABSL_RETURN_IF_ERROR(RemoveUnfusedValidPrefixMarkers(hlo_module).status());
 
   if (VLOG_IS_ON(2)) {
     HloFusionStatsVisitor stats;
