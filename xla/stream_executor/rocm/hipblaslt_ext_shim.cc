@@ -49,9 +49,9 @@ XLA_LIBSTDCXX_SYMBOL(_ZSt20__throw_length_errorPKc, "GLIBCXX_3.4");
 // Only referenced with GCC 11+ headers.
 XLA_LIBSTDCXX_SYMBOL(_ZSt28__throw_bad_array_new_lengthv, "GLIBCXX_3.4.29");
 
-struct XlaHipblasLtGroupedGemm {
-  XlaHipblasLtGroupedGemm(hipblasLtHandle_t handle,
-                          const XlaHipblasLtProblemType& problem)
+struct XlaHipblasLtExt_GroupedGemm {
+  XlaHipblasLtExt_GroupedGemm(hipblasLtHandle_t handle,
+                              const XlaHipblasLtExt_ProblemType& problem)
       : gemm(handle, problem.op_a, problem.op_b, problem.type_a, problem.type_b,
              problem.type_c, problem.type_d, problem.compute_type) {}
 
@@ -68,23 +68,23 @@ std::vector<int64_t> ToVector(const int64_t* values, size_t count) {
 
 extern "C" {
 
-XlaHipblasLtGroupedGemm* XlaHipblasLtGroupedGemmCreate(
-    hipblasLtHandle_t handle, const XlaHipblasLtProblemType& problem_type) {
-  return new XlaHipblasLtGroupedGemm(handle, problem_type);
+XlaHipblasLtExt_GroupedGemm* XlaHipblasLtExt_GroupedGemmCreate(
+    hipblasLtHandle_t handle, const XlaHipblasLtExt_ProblemType& problem_type) {
+  return new XlaHipblasLtExt_GroupedGemm(handle, problem_type);
 }
 
-void XlaHipblasLtGroupedGemmDestroy(XlaHipblasLtGroupedGemm* gemm) {
+void XlaHipblasLtExt_GroupedGemmDestroy(XlaHipblasLtExt_GroupedGemm* gemm) {
   delete gemm;
 }
 
-hipblasStatus_t XlaHipblasLtGroupedGemmSetProblem(
-    XlaHipblasLtGroupedGemm& gemm, size_t group_count, const int64_t* m,
+hipblasStatus_t XlaHipblasLtExt_GroupedGemmSetProblem(
+    XlaHipblasLtExt_GroupedGemm& gemm, size_t group_count, const int64_t* m,
     const int64_t* n, const int64_t* k, const int64_t* batch_count,
     const int64_t* lda, const int64_t* ldb, const int64_t* ldc,
     const int64_t* ldd, const int64_t* stride_a, const int64_t* stride_b,
     const int64_t* stride_c, const int64_t* stride_d,
-    const XlaHipblasLtEpilogue* epilogues,
-    const XlaHipblasLtGemmInputs* inputs) {
+    const XlaHipblasLtExt_Epilogue* epilogues,
+    const XlaHipblasLtExt_GemmInputs* inputs) {
   if (group_count == 0) {
     return HIPBLAS_STATUS_INVALID_VALUE;
   }
@@ -109,7 +109,7 @@ hipblasStatus_t XlaHipblasLtGroupedGemmSetProblem(
     if (epilogues[i].has_bias_data_type != 0) {
       v_epilogues[i].setBiasDataType(epilogues[i].bias_data_type);
     }
-    const XlaHipblasLtGemmInputs& in = inputs[i];
+    const XlaHipblasLtExt_GemmInputs& in = inputs[i];
     if (in.a != nullptr) {
       v_inputs[i].setA(in.a);
     }
@@ -143,9 +143,9 @@ hipblasStatus_t XlaHipblasLtGroupedGemmSetProblem(
                               problem_types[0]);
 }
 
-hipblasStatus_t XlaHipblasLtGroupedGemmGetAllAlgos(
-    hipblasLtHandle_t handle, const XlaHipblasLtProblemType& p,
-    XlaHipblasLtHeuristicResultsCallback callback, void* context) {
+hipblasStatus_t XlaHipblasLtExt_GroupedGemmGetAllAlgos(
+    hipblasLtHandle_t handle, const XlaHipblasLtExt_ProblemType& p,
+    XlaHipblasLtExt_HeuristicResultsCallback callback, void* context) {
   std::vector<hipblasLtMatmulHeuristicResult_t> results;
   hipblasStatus_t status = hipblaslt_ext::getAllAlgos(
       handle, hipblaslt_ext::GemmType::HIPBLASLT_GROUPED_GEMM, p.op_a, p.op_b,
@@ -156,35 +156,36 @@ hipblasStatus_t XlaHipblasLtGroupedGemmGetAllAlgos(
   return status;
 }
 
-void XlaHipblasLtGroupedGemmSetMaxWorkspaceBytes(XlaHipblasLtGroupedGemm& gemm,
-                                                 size_t workspace_bytes) {
+void XlaHipblasLtExt_GroupedGemmSetMaxWorkspaceBytes(
+    XlaHipblasLtExt_GroupedGemm& gemm, size_t workspace_bytes) {
   gemm.gemm.setMaxWorkspaceBytes(workspace_bytes);
 }
 
-hipblasStatus_t XlaHipblasLtGroupedGemmIsAlgoSupported(
-    XlaHipblasLtGroupedGemm& gemm, hipblasLtMatmulAlgo_t& algo,
+hipblasStatus_t XlaHipblasLtExt_GroupedGemmIsAlgoSupported(
+    XlaHipblasLtExt_GroupedGemm& gemm, hipblasLtMatmulAlgo_t& algo,
     size_t& workspace_size) {
   return gemm.gemm.isAlgoSupported(algo, workspace_size);
 }
 
-hipblasStatus_t XlaHipblasLtGroupedGemmInitialize(
-    XlaHipblasLtGroupedGemm& gemm, const hipblasLtMatmulAlgo_t& algo,
+hipblasStatus_t XlaHipblasLtExt_GroupedGemmInitialize(
+    XlaHipblasLtExt_GroupedGemm& gemm, const hipblasLtMatmulAlgo_t& algo,
     void* workspace) {
   return gemm.gemm.initialize(algo, workspace);
 }
 
-hipblasStatus_t XlaHipblasLtGroupedGemmGetDefaultValueForDeviceUserArguments(
-    XlaHipblasLtGroupedGemm& gemm, void* host_user_args) {
+hipblasStatus_t
+XlaHipblasLtExt_GroupedGemmGetDefaultValueForDeviceUserArguments(
+    XlaHipblasLtExt_GroupedGemm& gemm, void* host_user_args) {
   return gemm.gemm.getDefaultValueForDeviceUserArguments(host_user_args);
 }
 
-hipblasStatus_t XlaHipblasLtGroupedGemmRun(XlaHipblasLtGroupedGemm& gemm,
-                                           void* device_user_args,
-                                           hipStream_t stream) {
+hipblasStatus_t XlaHipblasLtExt_GroupedGemmRun(
+    XlaHipblasLtExt_GroupedGemm& gemm, void* device_user_args,
+    hipStream_t stream) {
   return gemm.gemm.run(device_user_args, stream);
 }
 
-int XlaHipblasLtGetIndexFromAlgo(const hipblasLtMatmulAlgo_t& algo) {
+int XlaHipblasLtExt_GetIndexFromAlgo(const hipblasLtMatmulAlgo_t& algo) {
   // hipblaslt_ext::getIndexFromAlgo takes a non-const reference.
   hipblasLtMatmulAlgo_t copy = algo;
   return hipblaslt_ext::getIndexFromAlgo(copy);
