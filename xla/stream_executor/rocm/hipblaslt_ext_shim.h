@@ -57,23 +57,21 @@ struct XlaHipblasLtExt_ProblemType {
   hipblasComputeType_t compute_type;
 };
 
-// The epilogue of one GEMM in a group.
+// The epilogue of one GEMM in a group. The defaults are hipBLASLt's.
 struct XlaHipblasLtExt_Epilogue {
-  hipblasLtEpilogue_t mode;
-  // Only used if has_bias_data_type is nonzero.
-  hipDataType bias_data_type;
-  int has_bias_data_type;
+  hipblasLtEpilogue_t mode = HIPBLASLT_EPILOGUE_DEFAULT;
+  hipDataType bias_data_type = HIPBLASLT_DATATYPE_INVALID;
 };
 
-// The input pointers of one GEMM in a group. Null pointers are left unset.
+// The input pointers of one GEMM in a group. The defaults are hipBLASLt's.
 struct XlaHipblasLtExt_GemmInputs {
-  const void* a;
-  const void* b;
-  const void* c;
-  const void* d;
-  const void* alpha;
-  const void* beta;
-  const void* bias;
+  const void* a = nullptr;
+  const void* b = nullptr;
+  const void* c = nullptr;
+  const void* d = nullptr;
+  const void* alpha = nullptr;
+  const void* beta = nullptr;
+  const void* bias = nullptr;
 };
 
 // Creates a grouped GEMM for `problem_type`, to be destroyed with

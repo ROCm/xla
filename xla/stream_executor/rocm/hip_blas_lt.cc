@@ -922,7 +922,6 @@ absl::Status BlasLt::GroupedMatmulPlan::DoInitialize(
     // Set bias data type and dummy bias pointer for bias epilogues
     if (has_bias_epilogue) {
       epilogues[i].bias_data_type = AsHipblasDataType(cfg_.type_d);
-      epilogues[i].has_bias_data_type = 1;
       inputs[i].bias = dummy_pointer;
     }
     inputs[i].a = dummy_pointer;
