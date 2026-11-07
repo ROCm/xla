@@ -195,6 +195,7 @@ cc_library(
         "//xla/backends/gpu/hlo/transforms:topk_splitter",
         "//xla/backends/gpu/hlo/transforms:tree_reduction_rewriter",
         "//xla/backends/gpu/hlo/transforms:triton_fusion_numerics_verifier",
+        "//xla/backends/gpu/hlo/transforms:while_loop_duplicate_stack_elimination",
         "//xla/backends/gpu/hlo/transforms:windowed_einsum_handler",
         "//xla/backends/gpu/hlo/transforms/collectives:all_gather_dynamic_slice_simplifier",
         "//xla/backends/gpu/hlo/transforms/collectives:all_gather_major_dimension_rewriter",
