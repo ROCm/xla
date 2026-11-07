@@ -217,7 +217,8 @@ absl::StatusOr<bool> ReplaceGetSize(
   return true;
 }
 
-absl::StatusOr<bool> ReplaceSetSize(HloInstruction* instr) {
+absl::StatusOr<bool> ReplaceSetSize(HloInstruction* instr,
+                                    bool preserve_valid_prefix) {
   if (instr->opcode() != HloOpcode::kSetDimensionSize) {
     return false;
   }
@@ -228,7 +229,14 @@ absl::StatusOr<bool> ReplaceSetSize(HloInstruction* instr) {
       << "instruction operand shape " << instr->operand(0)->shape();
   HloInstruction* operand = instr->mutable_operand(0);
 
-  ABSL_RETURN_IF_ERROR(instr->ReplaceAllUsesWith(operand));
+  HloInstruction* replacement = operand;
+  if (preserve_valid_prefix && instr->dimension() == 0) {
+    replacement =
+        instr->parent()->AddInstruction(HloInstruction::CreateCustomCall(
+            operand->shape(), {operand, instr->mutable_operand(1)},
+            "xla.valid_prefix"));
+  }
+  ABSL_RETURN_IF_ERROR(instr->ReplaceAllUsesWith(replacement));
   return true;
 }
 
@@ -2136,7 +2144,8 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
         }
         if (instruction->opcode() == HloOpcode::kSetDimensionSize ||
             instruction->opcode() == HloOpcode::kGetDimensionSize ||
-            instruction->IsCustomCall("SetBound")) {
+            instruction->IsCustomCall("SetBound") ||
+            instruction->IsCustomCall("xla.valid_prefix")) {
           return true;
         }
       }
@@ -2350,7 +2359,8 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
       continue;
     }
     for (auto instruction : computation->MakeInstructionPostOrder()) {
-      ABSL_ASSIGN_OR_RETURN(bool c, ReplaceSetSize(instruction));
+      ABSL_ASSIGN_OR_RETURN(
+          bool c, ReplaceSetSize(instruction, options_.preserve_valid_prefix));
       changed |= c;
 
       ABSL_ASSIGN_OR_RETURN(c, ReplaceSetBound(instruction));
@@ -2366,6 +2376,30 @@ absl::StatusOr<bool> DynamicPadder::RunImpl(
 
   VLOG(2) << "Post DynamicPadder HLO:";
   XLA_VLOG_LINES(2, module->ToString());
+  return changed;
+}
+
+absl::StatusOr<bool> RemoveUnfusedValidPrefixMarkers(HloModule* module) {
+  bool changed = false;
+  for (HloComputation* computation : module->computations()) {
+    if (computation->IsFusionComputation()) {
+      continue;
+    }
+    for (HloInstruction* instruction :
+         computation->MakeInstructionPostOrder()) {
+      if (!instruction->IsCustomCall("xla.valid_prefix")) {
+        continue;
+      }
+      HloInstruction* data = instruction->mutable_operand(0);
+      ABSL_RETURN_IF_ERROR(instruction->ReplaceAllUsesWith(data));
+      if (computation->root_instruction() == instruction) {
+        computation->set_root_instruction(data,
+                                          /*accept_different_shape=*/false);
+      }
+      ABSL_RETURN_IF_ERROR(computation->RemoveInstruction(instruction));
+      changed = true;
+    }
+  }
   return changed;
 }
 
