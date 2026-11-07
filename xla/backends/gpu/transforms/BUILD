@@ -467,6 +467,56 @@ xla_test(
 )
 
 cc_library(
+    name = "while_loop_duplicate_stack_elimination",
+    srcs = ["while_loop_duplicate_stack_elimination.cc"],
+    hdrs = ["while_loop_duplicate_stack_elimination.h"],
+    deps = [
+        "//xla:comparison_util",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/analysis:while_loop_analysis",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/pass:hlo_pass",
+        "//xla/service:value_range",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "while_loop_duplicate_stack_elimination_test",
+    srcs = ["while_loop_duplicate_stack_elimination_test.cc"],
+    deps = [
+        ":while_loop_duplicate_stack_elimination",
+        "//xla:shape_util",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
+        "//xla/service:while_loop_simplifier",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+xla_test(
+    name = "while_loop_duplicate_stack_elimination_execution_test",
+    srcs = ["while_loop_duplicate_stack_elimination_execution_test.cc"],
+    backends = ["gpu"],
+    deps = [
+        "//xla:error_spec",
+        "//xla:xla_proto_cc",
+        "//xla/service:hlo_module_config",
+        "//xla/tests:hlo_pjrt_test_base",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "block_scaling_rewriter",
     srcs = ["block_scaling_rewriter.cc"],
     hdrs = ["block_scaling_rewriter.h"],

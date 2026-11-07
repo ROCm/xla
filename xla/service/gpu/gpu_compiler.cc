@@ -162,6 +162,7 @@ limitations under the License.
 #include "xla/backends/gpu/transforms/topk_splitter.h"
 #include "xla/backends/gpu/transforms/tree_reduction_rewriter.h"
 #include "xla/backends/gpu/transforms/triton_fusion_numerics_verifier.h"
+#include "xla/backends/gpu/transforms/while_loop_duplicate_stack_elimination.h"
 #include "xla/backends/gpu/transforms/windowed_einsum_handler.h"
 #include "xla/core/host_offloading/hlo_host_device_type_call_wrapper.h"
 #include "xla/core/host_offloading/host_compute_asyncifier.h"
@@ -1094,6 +1095,14 @@ absl::Status RunCollectiveOptimizationPasses(
                                        compilation_stats);
   collectives_pipeline.AddPass<LegalizeCollectiveDomain>();
   collectives_pipeline.AddPass<RaggedAllToAllCanonicalizer>();
+
+  if (debug_options.xla_gpu_enable_while_loop_duplicate_stack_elimination()) {
+    // Before the collective pipeliner peels iterations off the loops; the
+    // simplifier removes the loop elements no longer read.
+    collectives_pipeline.AddPass<WhileLoopDuplicateStackElimination>();
+    collectives_pipeline.AddPass<WhileLoopSimplifier>();
+    collectives_pipeline.AddPass<HloDCE>();
+  }
 
   if (debug_options.xla_gpu_unsupported_enable_ragged_all_to_all_decomposer()) {
     collectives_pipeline.AddPass<RaggedAllToAllDecomposer>();

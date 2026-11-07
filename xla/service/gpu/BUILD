@@ -1876,6 +1876,7 @@ cc_library(
         "//xla/backends/gpu/transforms:topk_splitter",
         "//xla/backends/gpu/transforms:tree_reduction_rewriter",
         "//xla/backends/gpu/transforms:triton_fusion_numerics_verifier",
+        "//xla/backends/gpu/transforms:while_loop_duplicate_stack_elimination",
         "//xla/backends/gpu/transforms:windowed_einsum_handler",
         "//xla/backends/gpu/transforms/collectives:all_gather_dynamic_slice_simplifier",
         "//xla/backends/gpu/transforms/collectives:all_gather_major_dimension_rewriter",

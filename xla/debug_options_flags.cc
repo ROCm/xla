@@ -470,6 +470,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_while_loop_sink_broadcast_skip_unfusible(true);
   opts.set_xla_gpu_dynamic_slice_fusion_triton_calls(false);
   opts.set_xla_gpu_dynamic_slice_fusion_forward_stores(false);
+  opts.set_xla_gpu_enable_while_loop_duplicate_stack_elimination(false);
   opts.set_xla_gpu_nccl_collective_max_nchannels(0);
   opts.set_xla_gpu_nccl_p2p_max_nchannels(0);
   opts.set_xla_gpu_multi_streamed_windowed_einsum(true);
@@ -3084,6 +3085,14 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "its slice by the custom call producing it even when it has other "
       "users (they read the slice back) or is an in-place update of another "
       "custom call's result."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_enable_while_loop_duplicate_stack_elimination",
+      bool_setter_for(
+          &DebugOptions::
+              set_xla_gpu_enable_while_loop_duplicate_stack_elimination),
+      debug_options->xla_gpu_enable_while_loop_duplicate_stack_elimination(),
+      "Whether a while loop that writes the same value at the same offsets "
+      "into two stacked buffers, covering both, keeps only one of them."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_while_loop_sink_broadcast_skip_unfusible",
       bool_setter_for(

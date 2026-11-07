@@ -2037,7 +2037,15 @@ message DebugOptions {
   // producing custom calls (e.g. the legacy / Triton custom call flags).
   optional bool xla_gpu_dynamic_slice_fusion_forward_stores = 572;
 
-  // Next id: 573 (568 is used by a sibling branch)
+  // If true, a while loop that carries two stacked buffers which every
+  // iteration overwrites with the same value at the same offsets, together
+  // covering each buffer (e.g. a scan that writes a value into a carried
+  // buffer and also saves it as a residual for the backward pass), keeps only
+  // one of them: the users of the other read it instead. Runs before the
+  // collective pipeliner.
+  optional bool xla_gpu_enable_while_loop_duplicate_stack_elimination = 573;
+
+  // Next id: 574 (568 is used by a sibling branch)
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
