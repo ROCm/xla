@@ -61,7 +61,10 @@ Use the same ROCm-less build container as CI for reproducible local builds and C
 docker pull ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f
 ```
 
-This is the digest pinned in the `rocm-config` job of the `main` CI workflows; the image's `latest` tag is a newer build that CI does not use. The image is Ubuntu 24.04 with Python 3.12, Bazel (via Bazelisk), and the build dependencies needed by JAX and XLA, but it has **no ROCm install** (no `/opt/rocm`). Instead, Bazel downloads a [TheRock](https://github.com/ROCm/TheRock) ROCm tarball and builds against it with the hermetic Clang toolchain, so neither a system ROCm nor a system Clang is required. Mount your local `jax` and `xla` source checkouts into the container (e.g. as `/tf/jax` and `/tf/xla`), and pass `--device=/dev/kfd --device=/dev/dri --group-add video` to `docker run` so tests can see the GPU, before running the build commands below.
+- This is the digest pinned in the `rocm-config` job of the `main` CI workflows; the image's `latest` tag is a newer build that CI does not use.
+- The image is **Ubuntu 24.04 with Python 3.12, Bazel (via Bazelisk), and the build [dependencies](https://github.com/ROCm/rocm-jax/blob/c6bf97612668a95bb264e16e0e8423ec9ecc31f6/docker/Dockerfile.rocmless)** needed by JAX and XLA, but it has **no ROCm install** (no `/opt/rocm`).
+   - Instead, Bazel downloads a [TheRock](https://github.com/ROCm/TheRock) ROCm tarball and builds against it with the hermetic Clang toolchain, so neither a system ROCm nor a system Clang is required.
+- Mount your local `jax` and `xla` source checkouts into the container (e.g. as `/tf/jax` and `/tf/xla`), and pass `--device=/dev/kfd --device=/dev/dri --group-add video` to `docker run` so tests can see the GPU, before running the build commands below.
 
 Bazel picks the TheRock tarball from these flags, which the `main` CI jobs all pass:
 
@@ -89,7 +92,7 @@ Bazel picks the TheRock tarball from these flags, which the `main` CI jobs all p
 
 ### Building `jax-ml/jax:main` against `openxla/xla:main`
 
-Inside the [recommended container](#recommended-docker-image--build-instructions), with the JAX repo mounted at `/tf/jax` and the XLA repo mounted at `/tf/xla`:
+Inside the [recommended rocmless container](#recommended-docker-image--build-instructions), with the JAX repo mounted at `/tf/jax` and the XLA repo mounted at `/tf/xla`:
 
 ```bash
 cd /tf/jax
@@ -125,11 +128,14 @@ cd /tmp && python3 -c "import jax; print(jax.devices())"
 Notes:
 
 - **Use `--override_module=xla=/tf/xla`, NOT `--override_repository=xla=...`.** [Current JAX builds run under **bzlmod**](https://github.com/jax-ml/jax/pull/40053) (`.bazelrc` sets `--enable_bzlmod --noenable_workspace`), where XLA is a Bazel *module* whose canonical repo name is **`xla+`** (note the trailing `+`). The legacy `--override_repository=xla=...` targets a repo literally named `xla`, which does not exist under bzlmod, so it is **silently ignored** — Bazel then builds XLA from the bzlmod-pinned commit and your local checkout is never compiled.
-- The example builds for `gfx950`, the architecture CI builds and tests on. Adjust `--rocm_amdgpu_targets` and `--repo_env=TF_ROCM_AMDGPU_TARGETS` to match your hardware (e.g. `gfx90a`, `gfx942`, `gfx950`, `gfx1100`), keeping both the same. Multiple targets can be passed comma-separated. `--rocm_amdgpu_targets` alone does not reach Bazel's ROCm setup, because `build/rocm/rocm.bazelrc` sets `TF_ROCM_AMDGPU_TARGETS` to 27 architectures with `--repo_env`, which makes the build much slower and the wheels much larger.
+- The example builds for `gfx950`, the architecture CI builds and tests on. Adjust `--rocm_amdgpu_targets` and `--repo_env=TF_ROCM_AMDGPU_TARGETS` to match your hardware (e.g. `gfx90a`, `gfx942`, `gfx950`, `gfx1100`), keeping both the same.
+    - Multiple targets can be passed comma-separated. `--rocm_amdgpu_targets` alone does not reach Bazel's ROCm setup, because `build/rocm/rocm.bazelrc` sets `TF_ROCM_AMDGPU_TARGETS` to 27 architectures with `--repo_env`, which makes the build much slower and the wheels much larger.
 - The `--wheels=jax,jaxlib,jax-rocm-plugin,jax-rocm-pjrt` list produces all four required wheels in `dist/`; `pip install dist/*.whl` installs the matching set. Built against TheRock 10.0.0, the ROCm wheels are named `jax_rocm10_plugin` and `jax_rocm10_pjrt`.
 - The last command should print `[RocmDevice(id=0), ...]`. Without the `LD_LIBRARY_PATH` step, JAX prints a plugin error (`librocprofiler-sdk.so.1: cannot open shared object file`) and falls back to `[CpuDevice(id=0)]`. Set `LD_LIBRARY_PATH` again in every new shell, and rebuild after a `bazel clean --expunge`, which deletes the extracted libraries.
 
-### Building the `rocm-jaxlib-v0.8.x` / `rocm-jaxlib-v0.9.x` release branches
+
+<details>
+<summary><strong>Building the <code>rocm-jaxlib-v0.8.x</code> / <code>rocm-jaxlib-v0.9.x</code> release branches</strong></summary>
 
 For the **0.8.x** and **0.9.x** JAX releases (rows in the [XLA Branches for JAX](#xla-branches-for-jax) table above), the wheel build is driven by the [`ROCm/rocm-jax`](https://github.com/ROCm/rocm-jax/tree/rocm-jax-infra) repository on its `rocm-jax-infra` branch — **not** by `build/build.py` in `ROCm/jax` directly. This is the legacy `stack.py` / `build/ci_build` path that pairs the matching `rocm-jaxlib-v0.8.x` / `rocm-jaxlib-v0.9.x` branches of `ROCm/xla` and `ROCm/jax`.
 
@@ -142,6 +148,9 @@ For the **0.8.x** and **0.9.x** JAX releases (rows in the [XLA Branches for JAX]
 Starting with **JAX 0.10.0**, wheel builds move to the `ROCm/jax` fork's artifact workflow (`ci/build_rocm_artifacts.sh` → `build/build.py`); the `stack.py` entrypoint in `rocm-jax` is deprecated and the `rocm-jax-infra` branch is retained only for Dockerfiles and image-build infrastructure.
 
 To build a 0.8.x / 0.9.x wheel set, follow the build and CI scripts in the `rocm-jax-infra` branch of `ROCm/rocm-jax`, pointing them at the corresponding `rocm-jaxlib-v0.8.x` / `rocm-jaxlib-v0.9.x` branches of this repository ([`ROCm/xla`](https://github.com/ROCm/xla)) and [`ROCm/jax`](https://github.com/ROCm/jax). For `main` and the 0.11.x+ branches, use the `build/build.py` invocation shown in the previous section instead. The 0.10.x branches' XLA predates TheRock tarball support (`ROCM_DISTRO_URL`), so build those in the ROCm 7.2.4 image (`ghcr.io/rocm/jax-ubu22.rocm7.2.4`) with the same command, replacing the three `--repo_env=ROCM_*` options with `--rocm_path=/opt/rocm` and using `--rocm_version=7`.
+
+</details>
+
 
 ## OpenXLA Upstream PR Status
 
