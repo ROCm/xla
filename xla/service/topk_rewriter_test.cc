@@ -835,6 +835,42 @@ ENTRY TopK {
   }
 }
 
+TEST_F(TopkRewriterTest, TopKCustomCallOfARankThreeInputIsTheOnlyMark) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule topk
+
+ENTRY TopK {
+  x = bf16[2,5,10]{2,1,0} parameter(0)
+  ROOT topk = (bf16[2,5,2]{2,1,0}, s32[2,5,2]{2,1,0}) topk(x), k=2,
+    largest=true
+})"));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       TopkDecomposer(HloPredicateIsOp<HloOpcode::kTopK>,
+                                      /*defer_packed_bf16=*/true)
+                           .Run(module.get()));
+  EXPECT_TRUE(changed);
+  ASSERT_OK(HloDCE().Run(module.get()).status());
+  ASSERT_OK_AND_ASSIGN(changed, TopkRewriter().Run(module.get()));
+  EXPECT_TRUE(changed);
+  ASSERT_OK(HloDCE().Run(module.get()).status());
+
+  // The reshapes to and from rank 2 do not get the mark.
+  int reshapes = 0;
+  const HloInstruction* topk = nullptr;
+  for (const HloInstruction* inst :
+       module->entry_computation()->instructions()) {
+    if (inst->IsCustomCall("TopK")) {
+      topk = inst;
+      continue;
+    }
+    reshapes += inst->opcode() == HloOpcode::kReshape;
+    EXPECT_FALSE(IsTopKWithDeferredPackedBf16(inst)) << inst->ToString();
+  }
+  ASSERT_NE(topk, nullptr);
+  EXPECT_TRUE(IsTopKWithDeferredPackedBf16(topk));
+  EXPECT_GT(reshapes, 0);
+}
+
 TEST_F(TopkRewriterTest, TopKDecompositionDeferredPackedOnlyMarksPackedCases) {
   for (absl::string_view topk : {
            "x = f32[10,10] parameter(0)\n"

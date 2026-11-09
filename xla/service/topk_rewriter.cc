@@ -339,6 +339,10 @@ struct TopKCustomCall {
 
 TopKCustomCall CreateTopKCustomCall(HloSortInstruction* sort, const int64_t k,
                                     ComparisonOrder order) {
+  // Move the mark to the TopK: the instructions added from `sort` copy its
+  // frontend attributes.
+  const bool deferred_packed_bf16 = IsTopKWithDeferredPackedBf16(sort);
+  sort->erase_frontend_attribute(kTopKDeferredPackedBf16Attr);
   HloInstruction* input = sort->mutable_operand(0);
   Shape data_shape = input->shape();
   PrimitiveType element_type = data_shape.element_type();
@@ -389,11 +393,8 @@ TopKCustomCall CreateTopKCustomCall(HloSortInstruction* sort, const int64_t k,
   topk->set_raw_backend_config_string(absl::StrFormat(
       "{is_stable = %s, order = \"%s\"}", sort->is_stable() ? "true" : "false",
       ComparisonOrderToShortString(order)));
-  if (IsTopKWithDeferredPackedBf16(sort)) {
-    // Move the mark: replacing the users of `sort` would copy it to the new
-    // instructions.
+  if (deferred_packed_bf16) {
     topk->set_frontend_attribute(kTopKDeferredPackedBf16Attr, "true");
-    sort->erase_frontend_attribute(kTopKDeferredPackedBf16Attr);
   }
   HloInstruction* value_gte =
       sort->AddInstruction(HloInstruction::CreateGetTupleElement(
