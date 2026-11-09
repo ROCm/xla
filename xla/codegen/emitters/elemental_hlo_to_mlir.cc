@@ -1043,6 +1043,15 @@ absl::StatusOr<SmallVector<Value, 1>> HloToMlir(
     const OperandProvider& operand_provider,
     const CallTargetProvider& call_target_provider,
     ImplicitLocOpBuilder& builder, MLIRContext* mlir_context) {
+  // xla.valid_prefix is an elementwise identity. Keeping it in the fused
+  // computation preserves the real dataflow edge to its extent operand.
+  if (instr->IsCustomCall("xla.valid_prefix")) {
+    ABSL_ASSIGN_OR_RETURN(
+        Value operand,
+        GetSingleOperandValue(operand_provider, instr, 0, indices));
+    return {{operand}};
+  }
+
   if (kUnsupportedOps.contains(instr->opcode())) {
     return absl::UnimplementedError(
         absl::StrCat("Unsupported: ", instr->ToShortString()));

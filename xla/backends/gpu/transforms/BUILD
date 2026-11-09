@@ -3147,6 +3147,25 @@ xla_cc_test(
     ],
 )
 
+xla_cc_test(
+    name = "valid_prefix_marker_test",
+    srcs = ["valid_prefix_marker_test.cc"],
+    deps = [
+        "//xla:shape_util",
+        "//xla/hlo/analysis:symbolic_map",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
+        "//xla/hlo/testlib:test",
+        "//xla/service:dynamic_padder",
+        "//xla/service/gpu:alias_info",
+        "//xla/service/gpu:fusion_pipeline",
+        "//xla/service/gpu:gpu_device_info_for_tests",
+        "//xla/stream_executor:device_description",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//mlir:IR",
+    ],
+)
+
 cc_library(
     name = "rename_fusions",
     srcs = ["rename_fusions.cc"],
