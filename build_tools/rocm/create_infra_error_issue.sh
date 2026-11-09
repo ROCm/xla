@@ -55,6 +55,7 @@ TEAM_MEMBERS=(
     charleshofer
     leo-automation
     pelumi1163
+    nurmukhametov
 )
 
 # Build assignee flags
