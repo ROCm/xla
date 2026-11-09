@@ -105,6 +105,8 @@ constexpr int kMaxVectorizedBytes = 4;
 constexpr int kNumRowsRocm = 8;
 constexpr int64_t kNumThreadsPerBlockRocm = kNumRowsRocm * kTileSize;  // 256
 constexpr int kMaxVectorizedBytesRocm = 16;
+// The floor of the ROCm shared memory budget: gfx942's limit per block.
+constexpr int64_t kMinShmemBudgetRocm = 64 * 1024;
 
 // Reads the 2D vector tile <vector_size x vector_size> from the shared memory
 // at the given indices.
@@ -288,14 +290,20 @@ TransposeFusion::TransposeFusion(const HloFusionAnalysis& analysis)
     int max_vectorized_bytes = device.gpu_compute_capability().IsRocm()
                                    ? kMaxVectorizedBytesRocm
                                    : kMaxVectorizedBytes;
+    // On ROCm, budget at most half the CU so that two blocks stay resident.
+    int64_t shmem_budget = device.shared_memory_per_block();
+    if (device.gpu_compute_capability().IsRocm()) {
+      shmem_budget = std::min(
+          shmem_budget,
+          std::max(device.shared_memory_per_core() / 2, kMinShmemBudgetRocm));
+    }
     for (int vec_size = max_vectorized_bytes / max_element_bytes; vec_size > 1;
          vec_size /= 2) {
       int elems_per_thread = vec_size * vec_size;
       bool enough_work = Product(block_counts_) * num_threads_per_block_ >=
                          elems_per_thread * device.core_count() *
                              device.threads_per_core_limit();
-      bool enough_shmem =
-          shmem_usage * elems_per_thread <= device.shared_memory_per_block();
+      bool enough_shmem = shmem_usage * elems_per_thread <= shmem_budget;
       bool aligned_dims = (input_shape_.back() % vec_size == 0) &&
                           (input_shape_[permutation_.back()] % vec_size == 0);
       if (enough_work && enough_shmem && aligned_dims) {
@@ -308,7 +316,7 @@ TransposeFusion::TransposeFusion(const HloFusionAnalysis& analysis)
     // does so with an atomic read-modify-write of the byte, and its neighbour
     // contends for it. If the heuristics above chose vector size 1 for a
     // fusion with a 4-bit root, use vector size 2 when both tiled minor
-    // dimensions are even and the enlarged tile fits in shared memory; then
+    // dimensions are even and the enlarged tile fits the budget; then
     // no two threads share an output byte. Otherwise the rule is skipped. 1-
     // and 2-bit roots keep the heuristics' choice, since larger tiles for them
     // are untested. Intel GPUs do not vectorize sub-byte stores.
@@ -328,13 +336,12 @@ TransposeFusion::TransposeFusion(const HloFusionAnalysis& analysis)
                 << vector_size_ << ": a tiled minor dimension ("
                 << input_shape_.back() << ", "
                 << input_shape_[permutation_.back()] << ") is odd";
-      } else if (shmem_usage * elems_per_thread >
-                 device.shared_memory_per_block()) {
+      } else if (shmem_usage * elems_per_thread > shmem_budget) {
         VLOG(2) << "Transpose with a 4-bit root keeps vector size "
                 << vector_size_ << ": the enlarged tile needs "
                 << shmem_usage * elems_per_thread
-                << " bytes of shared memory, more than the "
-                << device.shared_memory_per_block() << " per block";
+                << " bytes of shared memory, more than the budget of "
+                << shmem_budget << " per block";
       } else {
         compute_block_sizes(kFourBitVectorSize);
       }

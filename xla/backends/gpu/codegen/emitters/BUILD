@@ -469,6 +469,7 @@ xla_cc_test(
     deps = [
         ":mlir_kernel_emitter",
         ":transpose",
+        "//xla/backends/gpu/codegen/emitters/ir:xla_gpu",
         "//xla/hlo/analysis:indexing_analysis",
         "//xla/hlo/analysis:interval",
         "//xla/hlo/analysis:symbolic_map",
@@ -483,5 +484,6 @@ xla_cc_test(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest",
         "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Support",
     ],
 )
