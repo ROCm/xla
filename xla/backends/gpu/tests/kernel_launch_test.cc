@@ -110,6 +110,16 @@ TEST_F(KernelLaunchTest, ValidPrefixExtentDoesNotReuseUnboundedKernel) {
       ROOT result = f32[8,4] select(is_live, squared, x)
     }
 
+    unbounded_computation {
+      x = f32[8,4] parameter(0)
+      n = s32[] parameter(1)
+      rows = s32[8,4] iota(), iota_dimension=0
+      broadcast_n = s32[8,4] broadcast(n), dimensions={}
+      is_live = pred[8,4] compare(rows, broadcast_n), direction=LT
+      squared = f32[8,4] multiply(x, x)
+      ROOT result = f32[8,4] select(is_live, squared, x)
+    }
+
     ENTRY main {
       x = f32[8,4] parameter(0)
       n = s32[] constant(3)
@@ -117,9 +127,10 @@ TEST_F(KernelLaunchTest, ValidPrefixExtentDoesNotReuseUnboundedKernel) {
         calls=fused_computation,
         backend_config={"fusion_backend_config":{"kind":"kLoop"},"valid_prefix_extent":{"operand_index":"1","dimension":"0"}}
       unbounded = f32[8,4] fusion(x, n), kind=kLoop,
-        calls=fused_computation,
+        calls=unbounded_computation,
         backend_config={"fusion_backend_config":{"kind":"kLoop"}}
-      ROOT result = (f32[8,4], f32[8,4]) tuple(bounded, unbounded)
+      bounded_prefix = f32[3,4] slice(bounded), slice={[0:3], [0:4]}
+      ROOT result = (f32[3,4], f32[8,4]) tuple(bounded_prefix, unbounded)
     }
   )";
 
