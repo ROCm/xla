@@ -20,6 +20,7 @@ limitations under the License.
 #include <iterator>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/status/status.h"
@@ -29,6 +30,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -71,12 +73,70 @@ namespace xla::emitters {
 
 using ::mlir::MLIRContext;
 
+namespace {
+
+IndexingMap AddValidPrefixConstraint(IndexingMap indexing_map,
+                                     int64_t capacity) {
+  const SymbolicMap& old_map = indexing_map.GetSymbolicMap();
+  int64_t extent_dim = old_map.GetNumDims();
+
+  std::vector<IndexingMap::Variable> dim_vars = indexing_map.GetDimVars();
+  dim_vars.emplace_back(/*lb=*/0, /*ub=*/capacity, "valid_prefix_extent");
+
+  // Symbol positions are encoded relative to the dimension count, so adding a
+  // dimension requires remapping every symbol use in the map and constraints.
+  llvm::SmallVector<SymbolicExpr> symbol_replacements;
+  symbol_replacements.reserve(old_map.GetNumSymbols());
+  for (int64_t i = 0; i < old_map.GetNumSymbols(); ++i) {
+    symbol_replacements.push_back(CreateSymbolExpr(
+        i, /*num_dims=*/extent_dim + 1, indexing_map.GetMLIRContext()));
+  }
+  SymbolicMap remapped_map = old_map.ReplaceDimsAndSymbols(
+      /*dim_replacements=*/{}, symbol_replacements,
+      /*num_result_dims=*/extent_dim + 1,
+      /*num_result_symbols=*/old_map.GetNumSymbols());
+  llvm::SmallVector<std::pair<SymbolicExpr, Interval>> constraints;
+  constraints.reserve(indexing_map.GetConstraintsCount());
+  for (const auto& [expression, interval] :
+       indexing_map.GetSymbolicConstraints()) {
+    constraints.emplace_back(expression.ReplaceDimsAndSymbols(
+                                 /*dim_replacements=*/{}, symbol_replacements,
+                                 /*num_result_dims=*/extent_dim + 1),
+                             interval);
+  }
+
+  IndexingMap constrained_map(std::move(remapped_map), std::move(dim_vars),
+                              indexing_map.GetRangeVars(),
+                              indexing_map.GetRTVars(), constraints);
+
+  SymbolicExpr row = constrained_map.GetSymbolicMap().GetResult(0);
+  SymbolicExpr extent =
+      CreateDimExpr(extent_dim, indexing_map.GetMLIRContext());
+  constrained_map.AddConstraint(row - extent, Interval{-capacity, -1});
+  return constrained_map;
+}
+
+mlir::Value EmitClampedValidPrefixExtent(mlir::ImplicitLocOpBuilder& builder,
+                                         mlir::Value extent_tensor,
+                                         int64_t capacity) {
+  mlir::Value extent = mlir::tensor::ExtractOp::create(builder, extent_tensor);
+  extent =
+      mlir::arith::IndexCastOp::create(builder, builder.getIndexType(), extent);
+  mlir::Value zero = mlir::arith::ConstantIndexOp::create(builder, 0);
+  mlir::Value upper = mlir::arith::ConstantIndexOp::create(builder, capacity);
+  extent = mlir::arith::MaxSIOp::create(builder, extent, zero);
+  return mlir::arith::MinSIOp::create(builder, extent, upper);
+}
+
+}  // namespace
+
 LoopFusionKernelEmitter::LoopFusionKernelEmitter(
     MLIRContext& mlir_context, const HloFusionInstruction& fusion,
     const HloFusionSpec& fusion_spec, const BufferAssignment* buffer_assignment,
     KernelArguments::BufferAlignment buffer_alignment,
     WorkDimensions work_dimensions, absl::string_view entry_function_name,
-    BackendKind backend_kind)
+    BackendKind backend_kind,
+    std::optional<LoopFusionValidPrefixExtent> valid_prefix_extent)
     : mlir_context_(mlir_context),
       fusion_(fusion),
       fusion_spec_(fusion_spec),
@@ -84,7 +144,8 @@ LoopFusionKernelEmitter::LoopFusionKernelEmitter(
       buffer_alignment_(std::move(buffer_alignment)),
       work_dimensions_(std::move(work_dimensions)),
       entry_function_name_(entry_function_name),
-      backend_kind_(backend_kind) {}
+      backend_kind_(backend_kind),
+      valid_prefix_extent_(valid_prefix_extent) {}
 
 absl::StatusOr<LoopFusionKernelEmitter::KernelDefinition>
 LoopFusionKernelEmitter::EmitKernelDefinition() {
@@ -154,6 +215,14 @@ absl::Status LoopFusionKernelEmitter::EmitEntryFunction(
       EmitWorkGroupIds(builder, work_dimensions_.num_work_groups);
 
   auto indexing = ComputeWorkItemIdToOutputIndexing(&mlir_context_);
+  std::optional<mlir::Value> valid_prefix_extent;
+  if (valid_prefix_extent_.has_value()) {
+    const LoopFusionValidPrefixExtent& extent = *valid_prefix_extent_;
+    valid_prefix_extent = EmitClampedValidPrefixExtent(
+        builder, entry_function.getArgument(extent.operand_index),
+        extent.capacity);
+    indexing = AddValidPrefixConstraint(std::move(indexing), extent.capacity);
+  }
 
   int num_inputs = fusion.fused_instructions_computation()->num_parameters();
   auto output_tensor_args =
@@ -203,10 +272,13 @@ absl::Status LoopFusionKernelEmitter::EmitEntryFunction(
     mlir::ValueRange workitem_ids = workitem_ids_and_outputs.take_front(3);
     mlir::ValueRange outputs = workitem_ids_and_outputs.drop_front(3);
 
-    llvm::SmallVector<mlir::Value, 6> work_dims;
+    llvm::SmallVector<mlir::Value, 7> work_dims;
     work_dims.insert(work_dims.end(), workitem_ids.begin(), workitem_ids.end());
     work_dims.insert(work_dims.end(), workgroup_ids.begin(),
                      workgroup_ids.end());
+    if (valid_prefix_extent.has_value()) {
+      work_dims.push_back(*valid_prefix_extent);
+    }
 
     auto loop_results = emitters::EmitXlaLoopOp(
         nested_b, mlir::ValueRange(work_dims), outputs, indexing, body_builder);

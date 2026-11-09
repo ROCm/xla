@@ -42,6 +42,7 @@ limitations under the License.
 #include "xla/service/gpu/gpu_constants.h"
 #include "xla/service/gpu/hlo_fusion_analysis.h"
 #include "xla/service/gpu/launch_dimensions.h"
+#include "xla/service/gpu/valid_prefix_extent.h"
 #include "xla/shape.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/xla_data.pb.h"
@@ -125,10 +126,18 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> LoopFusion::CreateMLIRModule(
     mlir::MLIRContext& mlir_context, const HloFusionInstruction& fusion,
     const std::string& entry_function_name,
     const BufferAssignment* buffer_assignment) const {
+  ABSL_ASSIGN_OR_RETURN(std::optional<ValidPrefixExtent> valid_prefix_extent,
+                        GetValidPrefixExtent(fusion));
+  std::optional<emitters::LoopFusionValidPrefixExtent>
+      codegen_valid_prefix_extent;
+  if (valid_prefix_extent.has_value()) {
+    codegen_valid_prefix_extent = emitters::LoopFusionValidPrefixExtent{
+        valid_prefix_extent->operand_index, valid_prefix_extent->capacity};
+  }
   emitters::LoopFusionKernelEmitter emitter(
       mlir_context, fusion, analysis_.fusion_spec(), buffer_assignment,
       GetDefaultBufferAlignment(), GetWorkDimensions(), entry_function_name,
-      BackendKind::kGpu);
+      BackendKind::kGpu, codegen_valid_prefix_extent);
 
   ABSL_ASSIGN_OR_RETURN(auto kernel_definition, emitter.EmitKernelDefinition());
   return std::move(kernel_definition).TakeSource().TakeModule();
