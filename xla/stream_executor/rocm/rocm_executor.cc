@@ -666,7 +666,19 @@ absl::Status RocmExecutor::Init() {
   // There is no real advantage of explicitly using 'lazy initialization' on
   // ROCM platform because rocBLAS/hipBlasLt already use 'lazy initialization'
   // internally
-  return InitBlas();
+  ABSL_RETURN_IF_ERROR(InitBlas());
+
+  // Before HIP 7.18 (ROCm 10.3), a synchronous HIP call invalidates stream
+  // captures on every device, and creating the MIOpen handle makes such calls.
+  // Create it now so that it is not created during a command buffer capture.
+  int runtime_version = 0;
+  ABSL_RETURN_IF_ERROR(ToStatus(hipRuntimeGetVersion(&runtime_version),
+                                "Failed call to hipRuntimeGetVersion"));
+  if (ParseRocmVersion(runtime_version).value_or(SemanticVersion{0, 0, 0}) <
+      SemanticVersion{7, 18, 0}) {
+    AsDnn();
+  }
+  return absl::OkStatus();
 }
 
 absl::StatusOr<std::unique_ptr<Kernel>> RocmExecutor::LoadKernel(
