@@ -39,8 +39,8 @@ class RocmMemoryReservation : public MemoryReservation {
   // Reserves a virtual address range of at least `size` bytes using
   // hipMemAddressReserve. StreamExecutor is used only for context activation.
   //
-  // `options` decides the handle type the mapping granularity is queried for,
-  // so it must match the options of the allocations mapped into this range.
+  // `options` must match the allocations mapped into this range: the handle
+  // type feeds the granularity the two are padded to.
   static absl::StatusOr<std::unique_ptr<RocmMemoryReservation>> Create(
       StreamExecutor* executor, uint64_t size,
       const RocmVmmAllocator::Options& options = {});

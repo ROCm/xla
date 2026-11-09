@@ -28,12 +28,13 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "rocm/include/hip/hip_runtime.h"
-#include "rocm/rocm_config.h"
 #include "xla/stream_executor/activate_context.h"
 #include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
+#include "xla/stream_executor/semantic_version.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/util.h"
 
@@ -41,32 +42,25 @@ namespace stream_executor::gpu {
 
 absl::StatusOr<RocmVmmAllocationParams> GetRocmVmmAllocationParams(
     StreamExecutor* executor, const RocmVmmAllocator::Options& options) {
-  hipDevice_t device;
-  ABSL_RETURN_IF_ERROR(ToStatus(
-      hipDeviceGet(&device, executor->device_ordinal()), "hipDeviceGet"));
-
   RocmVmmAllocationParams params;
   params.prop.type = hipMemAllocationTypePinned;
   params.prop.location.type = hipMemLocationTypeDevice;
-  params.prop.location.id = device;
+  params.prop.location.id = executor->device_ordinal();
   params.prop.requestedHandleTypes = hipMemHandleTypeNone;
 
   if (options.enable_posix_fd_handle) {
-// Exportable VMM handles are only usable from ROCm 10.0 onwards; earlier
-// releases cannot be relied on to export and import them correctly.
-// rocm_config.h encodes TF_ROCM_VERSION as 10000 * major + 100 * minor +
-// patch, so ROCm 10.0.0 is 100000.
-#if TF_ROCM_VERSION >= 100000
-    params.prop.requestedHandleTypes = hipMemHandleTypePosixFileDescriptor;
-#else
-    // Logged once rather than per allocation. A caller that asked for
-    // exportable handles and silently did not get them has no way to tell, and
-    // the consequence only surfaces much later, where the memory is
-    // registered.
-    LOG_FIRST_N(WARNING, 1)
-        << "Exportable ROCm VMM handles require ROCm 10.0 or newer; VMM "
-           "allocations will request no handles (non-exportable).";
-#endif
+    // ROCm before 10.0 cannot export and import these handles correctly. This
+    // is the HIP version, numbered separately: ROCm 10.0 ships HIP 7.15.
+    SemanticVersion hip_version =
+        executor->GetDeviceDescription().runtime_version();
+    if (hip_version >= SemanticVersion{7, 15, 0}) {
+      params.prop.requestedHandleTypes = hipMemHandleTypePosixFileDescriptor;
+    } else {
+      LOG_FIRST_N(WARNING, 1)
+          << "Exportable ROCm VMM handles require ROCm 10.0 or newer; HIP "
+             "runtime is "
+          << hip_version << ". Requesting non-exportable handles.";
+    }
   }
 
   ABSL_RETURN_IF_ERROR(ToStatus(

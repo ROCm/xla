@@ -36,8 +36,7 @@ class RocmRawMemoryAllocation : public MemoryAllocation {
   // Creates a physical memory allocation of at least `size` bytes using
   // hipMemCreate. StreamExecutor is used only for context activation.
   //
-  // `options` decides the requested handle type. It must match the options the
-  // reservation this allocation is mapped into was created with, since the
+  // `options` must match the reservation this allocation is mapped into: the
   // handle type feeds the granularity the two are padded to.
   static absl::StatusOr<std::unique_ptr<RocmRawMemoryAllocation>> Create(
       StreamExecutor* executor, uint64_t size,

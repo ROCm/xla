@@ -40,11 +40,8 @@ DeviceAddressVmmAllocator::Create(
     std::optional<int64_t> reclaim_exempt_memory_space,
     std::unique_ptr<DeviceAddressAllocator> host_allocator,
     std::vector<FreeVisitor> free_visitors) {
-  // This allocator also serves collective memory - it is the only device
-  // allocator in this configuration, and kCollective is exempt from reclaim
-  // rather than carved out of a separate pool. Collective libraries register
-  // those buffers and export their allocation handles as POSIX file
-  // descriptors, which requires exportable handles.
+  // This allocator also serves collective memory, and collective libraries
+  // export those buffers' allocation handles as POSIX file descriptors.
   ABSL_ASSIGN_OR_RETURN(
       std::unique_ptr<gpu::RocmDeviceAddressVmmAllocator> allocator,
       gpu::RocmDeviceAddressVmmAllocator::Create(

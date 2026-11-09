@@ -46,11 +46,8 @@ namespace stream_executor::gpu {
 // hipExtMallocWithFlags(hipMallocSignalMemory), which is required by
 // hipStreamWriteValue64 on AMD hardware.
 //
-// Use the Create() factories to obtain an instance.
-//
-// `vmm_options` on each factory decides how the underlying VMM allocations are
-// created - most importantly whether their handles are exportable, which
-// memory served to collectives has to be.
+// Use the Create() factories to obtain an instance. `vmm_options` decides how
+// the underlying VMM allocations are created.
 class RocmDeviceAddressVmmAllocator : public DeviceAddressVmmAllocator {
  public:
   ~RocmDeviceAddressVmmAllocator() override;
@@ -126,8 +123,8 @@ class RocmDeviceAddressVmmAllocator : public DeviceAddressVmmAllocator {
       std::vector<FreeVisitor> free_visitors = {},
       const RocmVmmAllocator::Options& vmm_options = {});
 
-  // Applied to every physical allocation and reservation this allocator
-  // creates, so that the two are padded to the same granularity.
+  // Applied to every allocation and reservation, so the two are padded to the
+  // same granularity.
   RocmVmmAllocator::Options vmm_options_;
 };
 
