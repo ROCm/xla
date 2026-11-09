@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/backends/gpu/codegen/emitters/concatenate.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -57,8 +58,21 @@ ConcatenateFusion::ConcatenateFusion(const HloFusionAnalysis& analysis)
 }
 
 LaunchDimensions ConcatenateFusion::launch_dimensions() const {
-  return CalculateLaunchDimensions(largest_shape_, analysis_.device_info(),
-                                   unroll_factor_);
+  LaunchDimensions dims = CalculateLaunchDimensions(
+      largest_shape_, analysis_.device_info(), unroll_factor_);
+  const se::BlockDim& blocks = dims.block_counts();
+  std::array<uint64_t, 2> split_x = MaybeSplitGridDimensionX(
+      dims.thread_counts_per_block().x, blocks.x, analysis_.device_info());
+  if (split_x[0] != blocks.x) {  // dim X has been split
+    if (blocks.z != 1) {
+      LOG(FATAL) << "Unable to split launch dimensions since block.z ("
+                 << blocks.z << ") != 1";
+    }
+    // split blocks.x into x and y, move blocks.y -> blocks.z
+    return LaunchDimensions(se::BlockDim(split_x[0], split_x[1], blocks.y),
+                            dims.thread_counts_per_block());
+  }
+  return dims;
 }
 
 std::optional<IndexingMap> ConcatenateFusion::ComputeThreadIdToOutputIndexing(

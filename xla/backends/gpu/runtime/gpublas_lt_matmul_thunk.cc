@@ -16,6 +16,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/gpublas_lt_matmul_thunk.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -27,6 +28,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/numbers.h"
 #include "absl/types/span.h"
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/backends/gpu/runtime/thunk.pb.h"
@@ -171,10 +173,19 @@ CublasLtMatmulThunk::GetCachedMatmulPlan(const ExecuteParams& params) {
         "proto was provided.");
   }
 
+  // Allow forcing the cuBLASLt algorithm index via env for overlap studies.
+  // Read raw every execute (NOT cached) so a running process can sweep indices.
+  int64_t algo_idx = algorithm_idx_;
+  if (const char* env = std::getenv("XLA_GEMM_ALGORITHM_IDX")) {
+    int64_t v = 0;
+    if (absl::SimpleAtoi(env, &v) && v >= 0) {
+      algo_idx = v;
+    }
+  }
   // Always request the full algorithm list: plans are shared across thunks by
   // canonical_hlo_, and a varying count would invalidate the cached list.
   return blas_lt->GetOrCreateMatmulPlanWithAlgorithm(
-      canonical_hlo_, create, algorithm_idx_, GemmConfig::kNumAlgorithms,
+      canonical_hlo_, create, algo_idx, GemmConfig::kNumAlgorithms,
       autotune_workspace_size_);
 }
 
