@@ -3147,6 +3147,52 @@ xla_cc_test(
     ],
 )
 
+cc_library(
+    name = "valid_prefix_extent_rewriter",
+    srcs = ["valid_prefix_extent_rewriter.cc"],
+    hdrs = ["valid_prefix_extent_rewriter.h"],
+    deps = [
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/pass:hlo_pass",
+        "//xla/service/gpu:cublas_cudnn",
+        "//xla/service/gpu:valid_prefix_extent",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status:status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+xla_cc_test(
+    name = "valid_prefix_extent_rewriter_test",
+    srcs = ["valid_prefix_extent_rewriter_test.cc"],
+    deps = [
+        ":valid_prefix_extent_rewriter",
+        "//xla:shape_util",
+        "//xla/hlo/analysis:symbolic_map",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
+        "//xla/hlo/testlib:test",
+        "//xla/hlo/transforms/simplifiers:hlo_dce",
+        "//xla/service:dynamic_padder",
+        "//xla/service/gpu:alias_info",
+        "//xla/service/gpu:fusion_pipeline",
+        "//xla/service/gpu:gpu_device_info_for_tests",
+        "//xla/service/gpu:valid_prefix_extent",
+        "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/status:status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//mlir:IR",
+    ],
+)
+
 xla_cc_test(
     name = "valid_prefix_marker_test",
     srcs = ["valid_prefix_marker_test.cc"],
