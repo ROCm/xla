@@ -1,0 +1,239 @@
+// Synthetic GShard-style Mixture-of-Experts forward pass, SPMD-annotated for 8 devices.
+//
+// Run with (see yhlo_runner.sh): --num_partitions=8 --num_replicas=1 --use_spmd_partitioning=true
+//
+// Sizes:  G=8 token groups (1 per device), S=1024 tokens/group, H=1024 hidden,
+//         F=4096 FFN, E=8 experts (1 per device), C=256 capacity/expert, L=8 layers.
+//
+// Each while-loop iteration is one MoE layer:
+//   gating (f32 softmax, top-1) -> capacity positions (triangular dot) -> dispatch mask [G,S,E,C]
+//   -> dispatch dot -> reshard G->E (all-to-all) -> expert FFN (batched over E)
+//   -> reshard E->G (all-to-all) -> combine dot -> residual + RMSNorm
+//   -> load-balancing aux loss (reduction over sharded dims => all-reduce).
+// Per-layer weights are generated in-graph from iota/sine (finite, deterministic, sharded
+// over experts), so the only parameter is the token activations.
+// Output: a single f32 scalar checksum (sum of final activations + accumulated aux loss).
+
+HloModule moe_step, num_partitions=8
+
+sum_f32 {
+  a = f32[] parameter(0)
+  b = f32[] parameter(1)
+  ROOT r = f32[] add(a, b)
+}
+
+max_f32 {
+  a = f32[] parameter(0)
+  b = f32[] parameter(1)
+  ROOT r = f32[] maximum(a, b)
+}
+
+while_cond {
+  p = (s32[], bf16[8,1024,1024], f32[]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  n = s32[] constant(8)
+  ROOT c = pred[] compare(i, n), direction=LT
+}
+
+while_body {
+  p = (s32[], bf16[8,1024,1024], f32[]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  x = bf16[8,1024,1024] get-tuple-element(p), index=1, sharding={devices=[8,1,1]<=[8]}
+  aux = f32[] get-tuple-element(p), index=2
+
+  zero = f32[] constant(0)
+  ninf = f32[] constant(-inf)
+  il = f32[] convert(i)
+
+  // ---------------------------------------------------------------- weights (generated)
+  // gate weights wg[H,E], replicated
+  wg_r = f32[1024,8] iota(), iota_dimension=0
+  wg_c = f32[1024,8] iota(), iota_dimension=1
+  wg_ka = f32[] constant(0.0137)
+  wg_kb = f32[] constant(1.3)
+  wg_ko = f32[] constant(0.7)
+  wg_amp = f32[] constant(0.05)
+  wg_off = f32[] multiply(il, wg_ko)
+  wg_kab = f32[1024,8] broadcast(wg_ka), dimensions={}
+  wg_kbb = f32[1024,8] broadcast(wg_kb), dimensions={}
+  wg_offb = f32[1024,8] broadcast(wg_off), dimensions={}
+  wg_ampb = f32[1024,8] broadcast(wg_amp), dimensions={}
+  wg_t0 = f32[1024,8] multiply(wg_r, wg_kab)
+  wg_t1 = f32[1024,8] multiply(wg_c, wg_kbb)
+  wg_p0 = f32[1024,8] add(wg_t0, wg_t1)
+  wg_p1 = f32[1024,8] add(wg_p0, wg_offb)
+  wg_s = f32[1024,8] sine(wg_p1)
+  wg = f32[1024,8] multiply(wg_s, wg_ampb), sharding={replicated}
+
+  // expert weights w1[E,H,F], sharded on E
+  w1_e = f32[8,1024,4096] iota(), iota_dimension=0
+  w1_h = f32[8,1024,4096] iota(), iota_dimension=1
+  w1_f = f32[8,1024,4096] iota(), iota_dimension=2
+  w1_ke = f32[] constant(0.9)
+  w1_kh = f32[] constant(0.0131)
+  w1_kf = f32[] constant(0.0073)
+  w1_ko = f32[] constant(0.7)
+  w1_amp = f32[] constant(0.02)
+  w1_off = f32[] multiply(il, w1_ko)
+  w1_keb = f32[8,1024,4096] broadcast(w1_ke), dimensions={}
+  w1_khb = f32[8,1024,4096] broadcast(w1_kh), dimensions={}
+  w1_kfb = f32[8,1024,4096] broadcast(w1_kf), dimensions={}
+  w1_offb = f32[8,1024,4096] broadcast(w1_off), dimensions={}
+  w1_ampb = f32[8,1024,4096] broadcast(w1_amp), dimensions={}
+  w1_t0 = f32[8,1024,4096] multiply(w1_e, w1_keb)
+  w1_t1 = f32[8,1024,4096] multiply(w1_h, w1_khb)
+  w1_t2 = f32[8,1024,4096] multiply(w1_f, w1_kfb)
+  w1_p0 = f32[8,1024,4096] add(w1_t0, w1_t1)
+  w1_p1 = f32[8,1024,4096] add(w1_p0, w1_t2)
+  w1_p2 = f32[8,1024,4096] add(w1_p1, w1_offb)
+  w1_s = f32[8,1024,4096] sine(w1_p2)
+  w1_f32 = f32[8,1024,4096] multiply(w1_s, w1_ampb)
+  w1 = bf16[8,1024,4096] convert(w1_f32), sharding={devices=[8,1,1]<=[8]}
+
+  // expert weights w2[E,F,H], sharded on E
+  w2_e = f32[8,4096,1024] iota(), iota_dimension=0
+  w2_f = f32[8,4096,1024] iota(), iota_dimension=1
+  w2_h = f32[8,4096,1024] iota(), iota_dimension=2
+  w2_ke = f32[] constant(1.1)
+  w2_kf = f32[] constant(0.0059)
+  w2_kh = f32[] constant(0.0167)
+  w2_ko = f32[] constant(1.1)
+  w2_amp = f32[] constant(0.01)
+  w2_off = f32[] multiply(il, w2_ko)
+  w2_keb = f32[8,4096,1024] broadcast(w2_ke), dimensions={}
+  w2_kfb = f32[8,4096,1024] broadcast(w2_kf), dimensions={}
+  w2_khb = f32[8,4096,1024] broadcast(w2_kh), dimensions={}
+  w2_offb = f32[8,4096,1024] broadcast(w2_off), dimensions={}
+  w2_ampb = f32[8,4096,1024] broadcast(w2_amp), dimensions={}
+  w2_t0 = f32[8,4096,1024] multiply(w2_e, w2_keb)
+  w2_t1 = f32[8,4096,1024] multiply(w2_f, w2_kfb)
+  w2_t2 = f32[8,4096,1024] multiply(w2_h, w2_khb)
+  w2_p0 = f32[8,4096,1024] add(w2_t0, w2_t1)
+  w2_p1 = f32[8,4096,1024] add(w2_p0, w2_t2)
+  w2_p2 = f32[8,4096,1024] add(w2_p1, w2_offb)
+  w2_s = f32[8,4096,1024] sine(w2_p2)
+  w2_f32 = f32[8,4096,1024] multiply(w2_s, w2_ampb)
+  w2 = bf16[8,4096,1024] convert(w2_f32), sharding={devices=[8,1,1]<=[8]}
+
+  // ---------------------------------------------------------------- gating (f32)
+  xf = f32[8,1024,1024] convert(x)
+  logits0 = f32[8,1024,8] dot(xf, wg), lhs_contracting_dims={2}, rhs_contracting_dims={0}
+  // tiny per-expert bias to break ties (e.g. for all-zero inputs)
+  bias_i = f32[8,1024,8] iota(), iota_dimension=2
+  bias_k = f32[] constant(0.0001)
+  bias_kb = f32[8,1024,8] broadcast(bias_k), dimensions={}
+  bias = f32[8,1024,8] multiply(bias_i, bias_kb)
+  logits = f32[8,1024,8] add(logits0, bias)
+
+  lmax = f32[8,1024] reduce(logits, ninf), dimensions={2}, to_apply=max_f32
+  lmaxb = f32[8,1024,8] broadcast(lmax), dimensions={0,1}
+  lsub = f32[8,1024,8] subtract(logits, lmaxb)
+  lexp = f32[8,1024,8] exponential(lsub)
+  lden = f32[8,1024] reduce(lexp, zero), dimensions={2}, to_apply=sum_f32
+  ldenb = f32[8,1024,8] broadcast(lden), dimensions={0,1}
+  gates = f32[8,1024,8] divide(lexp, ldenb)
+
+  // top-1 expert per token
+  gmax = f32[8,1024] reduce(gates, ninf), dimensions={2}, to_apply=max_f32
+  gmaxb = f32[8,1024,8] broadcast(gmax), dimensions={0,1}
+  is_top = pred[8,1024,8] compare(gates, gmaxb), direction=GE
+  mask = f32[8,1024,8] convert(is_top)
+
+  // position of each token inside its expert's queue: inclusive cumsum over S via triangular dot
+  tri_r = s32[1024,1024] iota(), iota_dimension=0
+  tri_c = s32[1024,1024] iota(), iota_dimension=1
+  tri_p = pred[1024,1024] compare(tri_c, tri_r), direction=LE
+  tri = f32[1024,1024] convert(tri_p)
+  pos_raw = f32[1024,8,8] dot(tri, mask), lhs_contracting_dims={1}, rhs_contracting_dims={1}
+  pos_incl = f32[8,1024,8] transpose(pos_raw), dimensions={1,0,2}
+  one = f32[] constant(1)
+  oneb = f32[8,1024,8] broadcast(one), dimensions={}
+  pos = f32[8,1024,8] subtract(pos_incl, oneb)
+
+  cap = f32[] constant(256)
+  capb = f32[8,1024,8] broadcast(cap), dimensions={}
+  in_cap_p = pred[8,1024,8] compare(pos, capb), direction=LT
+  in_cap = f32[8,1024,8] convert(in_cap_p)
+  keep = f32[8,1024,8] multiply(mask, in_cap)
+
+  // dispatch mask [G,S,E,C]
+  pos4 = f32[8,1024,8,256] broadcast(pos), dimensions={0,1,2}
+  cidx = f32[8,1024,8,256] iota(), iota_dimension=3
+  onehot_p = pred[8,1024,8,256] compare(pos4, cidx), direction=EQ
+  onehot = f32[8,1024,8,256] convert(onehot_p)
+  keep4 = f32[8,1024,8,256] broadcast(keep), dimensions={0,1,2}
+  disp = f32[8,1024,8,256] multiply(onehot, keep4)
+  disp_bf = bf16[8,1024,8,256] convert(disp)
+
+  gates4 = f32[8,1024,8,256] broadcast(gates), dimensions={0,1,2}
+  comb_f = f32[8,1024,8,256] multiply(disp, gates4)
+  comb = bf16[8,1024,8,256] convert(comb_f)
+
+  // ---------------------------------------------------------------- dispatch + all-to-all (G -> E)
+  ein_g0 = bf16[8,8,256,1024] dot(disp_bf, x), lhs_batch_dims={0}, lhs_contracting_dims={1}, rhs_batch_dims={0}, rhs_contracting_dims={1}
+  ein_g = bf16[8,8,256,1024] custom-call(ein_g0), custom_call_target="Sharding", sharding={devices=[8,1,1,1]<=[8]}
+  ein_t = bf16[8,8,256,1024] transpose(ein_g), dimensions={1,0,2,3}
+  ein_e = bf16[8,8,256,1024] custom-call(ein_t), custom_call_target="Sharding", sharding={devices=[8,1,1,1]<=[8]}
+
+  // ---------------------------------------------------------------- expert FFN, batched over E
+  h1 = bf16[8,8,256,4096] dot(ein_e, w1), lhs_batch_dims={0}, lhs_contracting_dims={3}, rhs_batch_dims={0}, rhs_contracting_dims={1}
+  gelu_k = bf16[] constant(1.702)
+  gelu_kb = bf16[8,8,256,4096] broadcast(gelu_k), dimensions={}
+  gelu_a = bf16[8,8,256,4096] multiply(h1, gelu_kb)
+  gelu_s = bf16[8,8,256,4096] logistic(gelu_a)
+  act = bf16[8,8,256,4096] multiply(h1, gelu_s)
+  eout = bf16[8,8,256,1024] dot(act, w2), lhs_batch_dims={0}, lhs_contracting_dims={3}, rhs_batch_dims={0}, rhs_contracting_dims={1}
+  eout_e = bf16[8,8,256,1024] custom-call(eout), custom_call_target="Sharding", sharding={devices=[8,1,1,1]<=[8]}
+
+  // ---------------------------------------------------------------- all-to-all (E -> G) + combine
+  eback_t = bf16[8,8,256,1024] transpose(eout_e), dimensions={1,0,2,3}
+  eback = bf16[8,8,256,1024] custom-call(eback_t), custom_call_target="Sharding", sharding={devices=[8,1,1,1]<=[8]}
+  y = bf16[8,1024,1024] dot(comb, eback), lhs_batch_dims={0}, lhs_contracting_dims={2,3}, rhs_batch_dims={0}, rhs_contracting_dims={1,2}
+
+  // ---------------------------------------------------------------- residual + RMSNorm
+  x2 = bf16[8,1024,1024] add(x, y)
+  x2f = f32[8,1024,1024] convert(x2)
+  sq = f32[8,1024,1024] multiply(x2f, x2f)
+  ssum = f32[8,1024] reduce(sq, zero), dimensions={2}, to_apply=sum_f32
+  inv_h = f32[] constant(0.0009765625)
+  inv_hb = f32[8,1024] broadcast(inv_h), dimensions={}
+  ms = f32[8,1024] multiply(ssum, inv_hb)
+  eps = f32[] constant(0.000001)
+  epsb = f32[8,1024] broadcast(eps), dimensions={}
+  ms_e = f32[8,1024] add(ms, epsb)
+  rs = f32[8,1024] rsqrt(ms_e)
+  rsb = f32[8,1024,1024] broadcast(rs), dimensions={0,1}
+  xn_f = f32[8,1024,1024] multiply(x2f, rsb)
+  xn = bf16[8,1024,1024] convert(xn_f)
+
+  // ---------------------------------------------------------------- load-balancing aux loss
+  me = f32[8] reduce(gates, zero), dimensions={0,1}, to_apply=sum_f32
+  ce = f32[8] reduce(mask, zero), dimensions={0,1}, to_apply=sum_f32
+  inv_tok = f32[] constant(0.0001220703125)
+  inv_tokb = f32[8] broadcast(inv_tok), dimensions={}
+  me_n = f32[8] multiply(me, inv_tokb)
+  ce_n = f32[8] multiply(ce, inv_tokb)
+  me_ce = f32[8] multiply(me_n, ce_n)
+  aux_s = f32[] reduce(me_ce, zero), dimensions={0}, to_apply=sum_f32
+  n_exp = f32[] constant(8)
+  aux_l = f32[] multiply(aux_s, n_exp)
+  aux_new = f32[] add(aux, aux_l)
+
+  inc = s32[] constant(1)
+  i2 = s32[] add(i, inc)
+  ROOT out = (s32[], bf16[8,1024,1024], f32[]) tuple(i2, xn, aux_new)
+}
+
+ENTRY main {
+  x0 = bf16[8,1024,1024] parameter(0), sharding={devices=[8,1,1]<=[8]}
+  i0 = s32[] constant(0)
+  a0 = f32[] constant(0)
+  init = (s32[], bf16[8,1024,1024], f32[]) tuple(i0, x0, a0), sharding={{replicated}, {devices=[8,1,1]<=[8]}, {replicated}}
+  w = (s32[], bf16[8,1024,1024], f32[]) while(init), condition=while_cond, body=while_body, sharding={{replicated}, {devices=[8,1,1]<=[8]}, {replicated}}
+  xr = bf16[8,1024,1024] get-tuple-element(w), index=1
+  ar = f32[] get-tuple-element(w), index=2
+  xc = f32[8,1024,1024] convert(xr)
+  z = f32[] constant(0)
+  s = f32[] reduce(xc, z), dimensions={0,1,2}, to_apply=sum_f32
+  ROOT checksum = f32[] add(s, ar)
+}

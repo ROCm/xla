@@ -1,0 +1,471 @@
+// Synthetic transformer-like layer stack: ring attention + GShard-style MoE, SPMD for 8 devices.
+//
+// Run with (see yhlo_runner.sh): --num_partitions=8 --num_replicas=1 --use_spmd_partitioning=true
+//
+// Sizes:  G=8 groups = 8 sequence chunks of one 8192-token sequence (1 per device),
+//         S=1024 tokens/chunk, H=1024 hidden, NH=8 heads, DH=128, F=4096 FFN,
+//         E=8 experts (1 per device), C=256 capacity/expert, L=8 layers.
+//
+// Each outer while-loop iteration (layer) is:
+//   1. q/k/v projections (auto-sharded on G)
+//   2. RING ATTENTION in a manual-sharding (shard_map-style) region:
+//        inner while t<8: causal-masked scores -> online softmax update ->
+//        collective-permute of K and V to the next device (forced, explicit source_target_pairs)
+//   3. wo projection + residual + RMSNorm
+//   4. MoE: gating -> dispatch -> all-to-all (G->E) -> expert FFN -> all-to-all (E->G) -> combine
+//   5. residual + RMSNorm, load-balancing aux loss (all-reduce)
+// All weights are generated in-graph from iota/sine (finite, deterministic), so the only
+// parameter is the token activations.
+// Output: a single f32 scalar checksum (sum of final activations + accumulated aux loss).
+
+
+// execution without graphs:
+// ## Execution time, file=moe_ring_attn_spmd.hlo repeat=5 duration=19.96ms
+// ## Execution time, file=moe_ring_attn_spmd.hlo repeat=6 duration=19.84ms
+// ## Execution time, file=moe_ring_attn_spmd.hlo repeat=7 duration=19.87ms
+
+// straight graph execution:
+// ## Execution time, file=moe_ring_attn_spmd.hlo repeat=7 duration=18.40ms
+// ## Execution time, file=moe_ring_attn_spmd.hlo repeat=8 duration=18.42ms
+// ## Execution time, file=moe_ring_attn_spmd.hlo repeat=9 duration=18.39ms
+
+// non-straight graph execution:
+// ## Execution time, file=moe_ring_attn_spmd.hlo repeat=6 duration=21.19ms
+// ## Execution time, file=moe_ring_attn_spmd.hlo repeat=7 duration=21.19ms
+// ## Execution time, file=moe_ring_attn_spmd.hlo repeat=8 duration=21.46ms
+
+HloModule moe_ring_attn_step, num_partitions=8
+
+sum_f32 {
+  a = f32[] parameter(0)
+  b = f32[] parameter(1)
+  ROOT r = f32[] add(a, b)
+}
+
+max_f32 {
+  a = f32[] parameter(0)
+  b = f32[] parameter(1)
+  ROOT r = f32[] maximum(a, b)
+}
+
+// ======================================================================= ring attention loop
+// Carry: (t, q, k, v, m, l, acc); all per-device (manual) shapes.
+attn_cond {
+  p = (s32[], bf16[1024,8,128], bf16[1024,8,128], bf16[1024,8,128], f32[8,1024], f32[8,1024], f32[8,1024,128]) parameter(0), sharding={{manual}, {manual}, {manual}, {manual}, {manual}, {manual}, {manual}}
+  t = s32[] get-tuple-element(p), index=0, sharding={manual}
+  n = s32[] constant(8), sharding={manual}
+  ROOT c = pred[] compare(t, n), direction=LT, sharding={manual}
+}
+
+attn_body {
+  p = (s32[], bf16[1024,8,128], bf16[1024,8,128], bf16[1024,8,128], f32[8,1024], f32[8,1024], f32[8,1024,128]) parameter(0), sharding={{manual}, {manual}, {manual}, {manual}, {manual}, {manual}, {manual}}
+  t = s32[] get-tuple-element(p), index=0, sharding={manual}
+  q = bf16[1024,8,128] get-tuple-element(p), index=1, sharding={manual}
+  k = bf16[1024,8,128] get-tuple-element(p), index=2, sharding={manual}
+  v = bf16[1024,8,128] get-tuple-element(p), index=3, sharding={manual}
+  m = f32[8,1024] get-tuple-element(p), index=4, sharding={manual}
+  l = f32[8,1024] get-tuple-element(p), index=5, sharding={manual}
+  acc = f32[8,1024,128] get-tuple-element(p), index=6, sharding={manual}
+
+  zero = f32[] constant(0), sharding={manual}
+  neg = f32[] constant(-1e30), sharding={manual}
+
+  qf = f32[1024,8,128] convert(q), sharding={manual}
+  kf = f32[1024,8,128] convert(k), sharding={manual}
+  vf = f32[1024,8,128] convert(v), sharding={manual}
+
+  // scores[h, sq, sk] = sum_d q[sq,h,d] * k[sk,h,d] / sqrt(DH)
+  sc0 = f32[8,1024,1024] dot(qf, kf), lhs_batch_dims={1}, lhs_contracting_dims={2}, rhs_batch_dims={1}, rhs_contracting_dims={2}, sharding={manual}
+  scale = f32[] constant(0.08838835), sharding={manual}
+  scale_b = f32[8,1024,1024] broadcast(scale), dimensions={}, sharding={manual}
+  sc1 = f32[8,1024,1024] multiply(sc0, scale_b), sharding={manual}
+
+  // Causal block mask. At step t this device holds the KV block that originated on
+  // device src = (me - t) mod 8 (K/V are rotated d -> d+1 every step).
+  pid = u32[] partition-id(), sharding={manual}
+  me = s32[] convert(pid), sharding={manual}
+  eight = s32[] constant(8), sharding={manual}
+  me_mt = s32[] subtract(me, t), sharding={manual}
+  me_mt8 = s32[] add(me_mt, eight), sharding={manual}
+  src = s32[] remainder(me_mt8, eight), sharding={manual}
+  src_lt = pred[] compare(src, me), direction=LT, sharding={manual}
+  src_eq = pred[] compare(src, me), direction=EQ, sharding={manual}
+  qi = s32[1024,1024] iota(), iota_dimension=0, sharding={manual}
+  ki = s32[1024,1024] iota(), iota_dimension=1, sharding={manual}
+  le = pred[1024,1024] compare(ki, qi), direction=LE, sharding={manual}
+  src_lt_b = pred[1024,1024] broadcast(src_lt), dimensions={}, sharding={manual}
+  src_eq_b = pred[1024,1024] broadcast(src_eq), dimensions={}, sharding={manual}
+  diag = pred[1024,1024] and(src_eq_b, le), sharding={manual}
+  allow2 = pred[1024,1024] or(src_lt_b, diag), sharding={manual}
+  allow = pred[8,1024,1024] broadcast(allow2), dimensions={1,2}, sharding={manual}
+  neg_b = f32[8,1024,1024] broadcast(neg), dimensions={}, sharding={manual}
+  s = f32[8,1024,1024] select(allow, sc1, neg_b), sharding={manual}
+
+  // online softmax update
+  bm = f32[8,1024] reduce(s, neg), dimensions={2}, to_apply=max_f32, sharding={manual}
+  m_new = f32[8,1024] maximum(m, bm), sharding={manual}
+  dm = f32[8,1024] subtract(m, m_new), sharding={manual}
+  alpha = f32[8,1024] exponential(dm), sharding={manual}
+  m_new_b = f32[8,1024,1024] broadcast(m_new), dimensions={0,1}, sharding={manual}
+  ps = f32[8,1024,1024] subtract(s, m_new_b), sharding={manual}
+  pr = f32[8,1024,1024] exponential(ps), sharding={manual}
+  psum = f32[8,1024] reduce(pr, zero), dimensions={2}, to_apply=sum_f32, sharding={manual}
+  l_a = f32[8,1024] multiply(l, alpha), sharding={manual}
+  l_new = f32[8,1024] add(l_a, psum), sharding={manual}
+
+  // pv[h, sq, d] = sum_sk p[h,sq,sk] * v[sk,h,d]
+  pv = f32[8,1024,128] dot(pr, vf), lhs_batch_dims={0}, lhs_contracting_dims={2}, rhs_batch_dims={1}, rhs_contracting_dims={0}, sharding={manual}
+  alpha_b = f32[8,1024,128] broadcast(alpha), dimensions={0,1}, sharding={manual}
+  acc_a = f32[8,1024,128] multiply(acc, alpha_b), sharding={manual}
+  acc_new = f32[8,1024,128] add(acc_a, pv), sharding={manual}
+
+  // forced ring rotation of K and V: device d sends to d+1 (mod 8)
+  k_n = bf16[1024,8,128] collective-permute(k), channel_id=1, source_target_pairs={{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,0}}, sharding={manual}
+  v_n = bf16[1024,8,128] collective-permute(v), channel_id=2, source_target_pairs={{0,1},{1,2},{2,3},{3,4},{4,5},{5,6},{6,7},{7,0}}, sharding={manual}
+
+  one = s32[] constant(1), sharding={manual}
+  t2 = s32[] add(t, one), sharding={manual}
+  ROOT out = (s32[], bf16[1024,8,128], bf16[1024,8,128], bf16[1024,8,128], f32[8,1024], f32[8,1024], f32[8,1024,128]) tuple(t2, q, k_n, v_n, m_new, l_new, acc_new), sharding={{manual}, {manual}, {manual}, {manual}, {manual}, {manual}, {manual}}
+}
+
+// ======================================================================= outer layer loop
+while_cond {
+  p = (s32[], bf16[8,1024,1024], f32[]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  n = s32[] constant(8)
+  ROOT c = pred[] compare(i, n), direction=LT
+}
+
+while_body {
+  p = (s32[], bf16[8,1024,1024], f32[]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  x = bf16[8,1024,1024] get-tuple-element(p), index=1, sharding={devices=[8,1,1]<=[8]}
+  aux = f32[] get-tuple-element(p), index=2
+
+  zero = f32[] constant(0)
+  ninf = f32[] constant(-inf)
+  il = f32[] convert(i)
+
+  // shared constants for both RMSNorms
+  inv_h = f32[] constant(0.0009765625)
+  inv_hb = f32[8,1024] broadcast(inv_h), dimensions={}
+  eps = f32[] constant(0.000001)
+  epsb = f32[8,1024] broadcast(eps), dimensions={}
+
+  // ---------------------------------------------------------------- attention weights (generated)
+  // wq[H,H], wk[H,H], wv[H,H], wo[H,H]: replicated
+  wq_r = f32[1024,1024] iota(), iota_dimension=0
+  wq_c = f32[1024,1024] iota(), iota_dimension=1
+  wq_ka = f32[] constant(0.0113)
+  wq_kb = f32[] constant(0.0171)
+  wq_ko = f32[] constant(0.5)
+  wq_amp = f32[] constant(0.03)
+  wq_off = f32[] multiply(il, wq_ko)
+  wq_kab = f32[1024,1024] broadcast(wq_ka), dimensions={}
+  wq_kbb = f32[1024,1024] broadcast(wq_kb), dimensions={}
+  wq_offb = f32[1024,1024] broadcast(wq_off), dimensions={}
+  wq_ampb = f32[1024,1024] broadcast(wq_amp), dimensions={}
+  wq_t0 = f32[1024,1024] multiply(wq_r, wq_kab)
+  wq_t1 = f32[1024,1024] multiply(wq_c, wq_kbb)
+  wq_p0 = f32[1024,1024] add(wq_t0, wq_t1)
+  wq_p1 = f32[1024,1024] add(wq_p0, wq_offb)
+  wq_s = f32[1024,1024] sine(wq_p1)
+  wq_f = f32[1024,1024] multiply(wq_s, wq_ampb)
+  wq = bf16[1024,1024] convert(wq_f), sharding={replicated}
+
+  wk_r = f32[1024,1024] iota(), iota_dimension=0
+  wk_c = f32[1024,1024] iota(), iota_dimension=1
+  wk_ka = f32[] constant(0.0097)
+  wk_kb = f32[] constant(0.0213)
+  wk_ko = f32[] constant(0.9)
+  wk_amp = f32[] constant(0.03)
+  wk_off = f32[] multiply(il, wk_ko)
+  wk_kab = f32[1024,1024] broadcast(wk_ka), dimensions={}
+  wk_kbb = f32[1024,1024] broadcast(wk_kb), dimensions={}
+  wk_offb = f32[1024,1024] broadcast(wk_off), dimensions={}
+  wk_ampb = f32[1024,1024] broadcast(wk_amp), dimensions={}
+  wk_t0 = f32[1024,1024] multiply(wk_r, wk_kab)
+  wk_t1 = f32[1024,1024] multiply(wk_c, wk_kbb)
+  wk_p0 = f32[1024,1024] add(wk_t0, wk_t1)
+  wk_p1 = f32[1024,1024] add(wk_p0, wk_offb)
+  wk_s = f32[1024,1024] sine(wk_p1)
+  wk_f = f32[1024,1024] multiply(wk_s, wk_ampb)
+  wk = bf16[1024,1024] convert(wk_f), sharding={replicated}
+
+  wv_r = f32[1024,1024] iota(), iota_dimension=0
+  wv_c = f32[1024,1024] iota(), iota_dimension=1
+  wv_ka = f32[] constant(0.0151)
+  wv_kb = f32[] constant(0.0089)
+  wv_ko = f32[] constant(1.3)
+  wv_amp = f32[] constant(0.03)
+  wv_off = f32[] multiply(il, wv_ko)
+  wv_kab = f32[1024,1024] broadcast(wv_ka), dimensions={}
+  wv_kbb = f32[1024,1024] broadcast(wv_kb), dimensions={}
+  wv_offb = f32[1024,1024] broadcast(wv_off), dimensions={}
+  wv_ampb = f32[1024,1024] broadcast(wv_amp), dimensions={}
+  wv_t0 = f32[1024,1024] multiply(wv_r, wv_kab)
+  wv_t1 = f32[1024,1024] multiply(wv_c, wv_kbb)
+  wv_p0 = f32[1024,1024] add(wv_t0, wv_t1)
+  wv_p1 = f32[1024,1024] add(wv_p0, wv_offb)
+  wv_s = f32[1024,1024] sine(wv_p1)
+  wv_f = f32[1024,1024] multiply(wv_s, wv_ampb)
+  wv = bf16[1024,1024] convert(wv_f), sharding={replicated}
+
+  wo_r = f32[1024,1024] iota(), iota_dimension=0
+  wo_c = f32[1024,1024] iota(), iota_dimension=1
+  wo_ka = f32[] constant(0.0127)
+  wo_kb = f32[] constant(0.0193)
+  wo_ko = f32[] constant(1.7)
+  wo_amp = f32[] constant(0.03)
+  wo_off = f32[] multiply(il, wo_ko)
+  wo_kab = f32[1024,1024] broadcast(wo_ka), dimensions={}
+  wo_kbb = f32[1024,1024] broadcast(wo_kb), dimensions={}
+  wo_offb = f32[1024,1024] broadcast(wo_off), dimensions={}
+  wo_ampb = f32[1024,1024] broadcast(wo_amp), dimensions={}
+  wo_t0 = f32[1024,1024] multiply(wo_r, wo_kab)
+  wo_t1 = f32[1024,1024] multiply(wo_c, wo_kbb)
+  wo_p0 = f32[1024,1024] add(wo_t0, wo_t1)
+  wo_p1 = f32[1024,1024] add(wo_p0, wo_offb)
+  wo_s = f32[1024,1024] sine(wo_p1)
+  wo_f = f32[1024,1024] multiply(wo_s, wo_ampb)
+  wo = bf16[1024,1024] convert(wo_f), sharding={replicated}
+
+  // ---------------------------------------------------------------- q/k/v projections (auto-sharded on G)
+  q = bf16[8,1024,1024] dot(x, wq), lhs_contracting_dims={2}, rhs_contracting_dims={0}
+  k = bf16[8,1024,1024] dot(x, wk), lhs_contracting_dims={2}, rhs_contracting_dims={0}
+  v = bf16[8,1024,1024] dot(x, wv), lhs_contracting_dims={2}, rhs_contracting_dims={0}
+
+  // ---------------------------------------------------------------- enter manual region
+  q_sh = bf16[8,1024,1024] custom-call(q), custom_call_target="Sharding", sharding={devices=[8,1,1]<=[8]}
+  k_sh = bf16[8,1024,1024] custom-call(k), custom_call_target="Sharding", sharding={devices=[8,1,1]<=[8]}
+  v_sh = bf16[8,1024,1024] custom-call(v), custom_call_target="Sharding", sharding={devices=[8,1,1]<=[8]}
+  q_man = bf16[1,1024,1024] custom-call(q_sh), custom_call_target="SPMDFullToShardShape", sharding={manual}
+  k_man = bf16[1,1024,1024] custom-call(k_sh), custom_call_target="SPMDFullToShardShape", sharding={manual}
+  v_man = bf16[1,1024,1024] custom-call(v_sh), custom_call_target="SPMDFullToShardShape", sharding={manual}
+  q_h = bf16[1024,8,128] reshape(q_man), sharding={manual}
+  k_h = bf16[1024,8,128] reshape(k_man), sharding={manual}
+  v_h = bf16[1024,8,128] reshape(v_man), sharding={manual}
+
+  at_t0 = s32[] constant(0), sharding={manual}
+  at_m_c = f32[] constant(-1e30), sharding={manual}
+  at_m0 = f32[8,1024] broadcast(at_m_c), dimensions={}, sharding={manual}
+  at_z = f32[] constant(0), sharding={manual}
+  at_l0 = f32[8,1024] broadcast(at_z), dimensions={}, sharding={manual}
+  at_acc0 = f32[8,1024,128] broadcast(at_z), dimensions={}, sharding={manual}
+  at_init = (s32[], bf16[1024,8,128], bf16[1024,8,128], bf16[1024,8,128], f32[8,1024], f32[8,1024], f32[8,1024,128]) tuple(at_t0, q_h, k_h, v_h, at_m0, at_l0, at_acc0), sharding={{manual}, {manual}, {manual}, {manual}, {manual}, {manual}, {manual}}
+  at_w = (s32[], bf16[1024,8,128], bf16[1024,8,128], bf16[1024,8,128], f32[8,1024], f32[8,1024], f32[8,1024,128]) while(at_init), condition=attn_cond, body=attn_body, sharding={{manual}, {manual}, {manual}, {manual}, {manual}, {manual}, {manual}}
+
+  at_l = f32[8,1024] get-tuple-element(at_w), index=5, sharding={manual}
+  at_acc = f32[8,1024,128] get-tuple-element(at_w), index=6, sharding={manual}
+  at_lb = f32[8,1024,128] broadcast(at_l), dimensions={0,1}, sharding={manual}
+  at_o = f32[8,1024,128] divide(at_acc, at_lb), sharding={manual}
+  at_ot = f32[1024,8,128] transpose(at_o), dimensions={1,0,2}, sharding={manual}
+  at_or = f32[1,1024,1024] reshape(at_ot), sharding={manual}
+  at_ob = bf16[1,1024,1024] convert(at_or), sharding={manual}
+
+  // ---------------------------------------------------------------- exit manual region
+  at_man = bf16[1,1024,1024] custom-call(at_ob), custom_call_target="Sharding", sharding={manual}
+  at_full = bf16[8,1024,1024] custom-call(at_man), custom_call_target="SPMDShardToFullShape", sharding={devices=[8,1,1]<=[8]}
+
+  // ---------------------------------------------------------------- wo projection + residual + RMSNorm
+  ao = bf16[8,1024,1024] dot(at_full, wo), lhs_contracting_dims={2}, rhs_contracting_dims={0}
+  a_x2 = bf16[8,1024,1024] add(x, ao)
+  a_x2f = f32[8,1024,1024] convert(a_x2)
+  a_sq = f32[8,1024,1024] multiply(a_x2f, a_x2f)
+  a_ssum = f32[8,1024] reduce(a_sq, zero), dimensions={2}, to_apply=sum_f32
+  a_ms = f32[8,1024] multiply(a_ssum, inv_hb)
+  a_ms_e = f32[8,1024] add(a_ms, epsb)
+  a_rs = f32[8,1024] rsqrt(a_ms_e)
+  a_rsb = f32[8,1024,1024] broadcast(a_rs), dimensions={0,1}
+  a_xn_f = f32[8,1024,1024] multiply(a_x2f, a_rsb)
+  xa = bf16[8,1024,1024] convert(a_xn_f)
+
+  // ================================================================ MoE block (input: xa)
+  // ---------------------------------------------------------------- MoE weights (generated)
+  // gate weights wg[H,E], replicated
+  wg_r = f32[1024,8] iota(), iota_dimension=0
+  wg_c = f32[1024,8] iota(), iota_dimension=1
+  wg_ka = f32[] constant(0.0137)
+  wg_kb = f32[] constant(1.3)
+  wg_ko = f32[] constant(0.7)
+  wg_amp = f32[] constant(0.05)
+  wg_off = f32[] multiply(il, wg_ko)
+  wg_kab = f32[1024,8] broadcast(wg_ka), dimensions={}
+  wg_kbb = f32[1024,8] broadcast(wg_kb), dimensions={}
+  wg_offb = f32[1024,8] broadcast(wg_off), dimensions={}
+  wg_ampb = f32[1024,8] broadcast(wg_amp), dimensions={}
+  wg_t0 = f32[1024,8] multiply(wg_r, wg_kab)
+  wg_t1 = f32[1024,8] multiply(wg_c, wg_kbb)
+  wg_p0 = f32[1024,8] add(wg_t0, wg_t1)
+  wg_p1 = f32[1024,8] add(wg_p0, wg_offb)
+  wg_s = f32[1024,8] sine(wg_p1)
+  wg = f32[1024,8] multiply(wg_s, wg_ampb), sharding={replicated}
+
+  // expert weights w1[E,H,F], sharded on E
+  w1_e = f32[8,1024,4096] iota(), iota_dimension=0
+  w1_h = f32[8,1024,4096] iota(), iota_dimension=1
+  w1_f = f32[8,1024,4096] iota(), iota_dimension=2
+  w1_ke = f32[] constant(0.9)
+  w1_kh = f32[] constant(0.0131)
+  w1_kf = f32[] constant(0.0073)
+  w1_ko = f32[] constant(0.7)
+  w1_amp = f32[] constant(0.02)
+  w1_off = f32[] multiply(il, w1_ko)
+  w1_keb = f32[8,1024,4096] broadcast(w1_ke), dimensions={}
+  w1_khb = f32[8,1024,4096] broadcast(w1_kh), dimensions={}
+  w1_kfb = f32[8,1024,4096] broadcast(w1_kf), dimensions={}
+  w1_offb = f32[8,1024,4096] broadcast(w1_off), dimensions={}
+  w1_ampb = f32[8,1024,4096] broadcast(w1_amp), dimensions={}
+  w1_t0 = f32[8,1024,4096] multiply(w1_e, w1_keb)
+  w1_t1 = f32[8,1024,4096] multiply(w1_h, w1_khb)
+  w1_t2 = f32[8,1024,4096] multiply(w1_f, w1_kfb)
+  w1_p0 = f32[8,1024,4096] add(w1_t0, w1_t1)
+  w1_p1 = f32[8,1024,4096] add(w1_p0, w1_t2)
+  w1_p2 = f32[8,1024,4096] add(w1_p1, w1_offb)
+  w1_s = f32[8,1024,4096] sine(w1_p2)
+  w1_f32 = f32[8,1024,4096] multiply(w1_s, w1_ampb)
+  w1 = bf16[8,1024,4096] convert(w1_f32), sharding={devices=[8,1,1]<=[8]}
+
+  // expert weights w2[E,F,H], sharded on E
+  w2_e = f32[8,4096,1024] iota(), iota_dimension=0
+  w2_f = f32[8,4096,1024] iota(), iota_dimension=1
+  w2_h = f32[8,4096,1024] iota(), iota_dimension=2
+  w2_ke = f32[] constant(1.1)
+  w2_kf = f32[] constant(0.0059)
+  w2_kh = f32[] constant(0.0167)
+  w2_ko = f32[] constant(1.1)
+  w2_amp = f32[] constant(0.01)
+  w2_off = f32[] multiply(il, w2_ko)
+  w2_keb = f32[8,4096,1024] broadcast(w2_ke), dimensions={}
+  w2_kfb = f32[8,4096,1024] broadcast(w2_kf), dimensions={}
+  w2_khb = f32[8,4096,1024] broadcast(w2_kh), dimensions={}
+  w2_offb = f32[8,4096,1024] broadcast(w2_off), dimensions={}
+  w2_ampb = f32[8,4096,1024] broadcast(w2_amp), dimensions={}
+  w2_t0 = f32[8,4096,1024] multiply(w2_e, w2_keb)
+  w2_t1 = f32[8,4096,1024] multiply(w2_f, w2_kfb)
+  w2_t2 = f32[8,4096,1024] multiply(w2_h, w2_khb)
+  w2_p0 = f32[8,4096,1024] add(w2_t0, w2_t1)
+  w2_p1 = f32[8,4096,1024] add(w2_p0, w2_t2)
+  w2_p2 = f32[8,4096,1024] add(w2_p1, w2_offb)
+  w2_s = f32[8,4096,1024] sine(w2_p2)
+  w2_f32 = f32[8,4096,1024] multiply(w2_s, w2_ampb)
+  w2 = bf16[8,4096,1024] convert(w2_f32), sharding={devices=[8,1,1]<=[8]}
+
+  // ---------------------------------------------------------------- gating (f32)
+  xf = f32[8,1024,1024] convert(xa)
+  logits0 = f32[8,1024,8] dot(xf, wg), lhs_contracting_dims={2}, rhs_contracting_dims={0}
+  // tiny per-expert bias to break ties (e.g. for all-zero inputs)
+  bias_i = f32[8,1024,8] iota(), iota_dimension=2
+  bias_k = f32[] constant(0.0001)
+  bias_kb = f32[8,1024,8] broadcast(bias_k), dimensions={}
+  bias = f32[8,1024,8] multiply(bias_i, bias_kb)
+  logits = f32[8,1024,8] add(logits0, bias)
+
+  lmax = f32[8,1024] reduce(logits, ninf), dimensions={2}, to_apply=max_f32
+  lmaxb = f32[8,1024,8] broadcast(lmax), dimensions={0,1}
+  lsub = f32[8,1024,8] subtract(logits, lmaxb)
+  lexp = f32[8,1024,8] exponential(lsub)
+  lden = f32[8,1024] reduce(lexp, zero), dimensions={2}, to_apply=sum_f32
+  ldenb = f32[8,1024,8] broadcast(lden), dimensions={0,1}
+  gates = f32[8,1024,8] divide(lexp, ldenb)
+
+  // top-1 expert per token
+  gmax = f32[8,1024] reduce(gates, ninf), dimensions={2}, to_apply=max_f32
+  gmaxb = f32[8,1024,8] broadcast(gmax), dimensions={0,1}
+  is_top = pred[8,1024,8] compare(gates, gmaxb), direction=GE
+  mask = f32[8,1024,8] convert(is_top)
+
+  // position of each token inside its expert's queue: inclusive cumsum over S via triangular dot
+  tri_r = s32[1024,1024] iota(), iota_dimension=0
+  tri_c = s32[1024,1024] iota(), iota_dimension=1
+  tri_p = pred[1024,1024] compare(tri_c, tri_r), direction=LE
+  tri = f32[1024,1024] convert(tri_p)
+  pos_raw = f32[1024,8,8] dot(tri, mask), lhs_contracting_dims={1}, rhs_contracting_dims={1}
+  pos_incl = f32[8,1024,8] transpose(pos_raw), dimensions={1,0,2}
+  one = f32[] constant(1)
+  oneb = f32[8,1024,8] broadcast(one), dimensions={}
+  pos = f32[8,1024,8] subtract(pos_incl, oneb)
+
+  cap = f32[] constant(256)
+  capb = f32[8,1024,8] broadcast(cap), dimensions={}
+  in_cap_p = pred[8,1024,8] compare(pos, capb), direction=LT
+  in_cap = f32[8,1024,8] convert(in_cap_p)
+  keep = f32[8,1024,8] multiply(mask, in_cap)
+
+  // dispatch mask [G,S,E,C]
+  pos4 = f32[8,1024,8,256] broadcast(pos), dimensions={0,1,2}
+  cidx = f32[8,1024,8,256] iota(), iota_dimension=3
+  onehot_p = pred[8,1024,8,256] compare(pos4, cidx), direction=EQ
+  onehot = f32[8,1024,8,256] convert(onehot_p)
+  keep4 = f32[8,1024,8,256] broadcast(keep), dimensions={0,1,2}
+  disp = f32[8,1024,8,256] multiply(onehot, keep4)
+  disp_bf = bf16[8,1024,8,256] convert(disp)
+
+  gates4 = f32[8,1024,8,256] broadcast(gates), dimensions={0,1,2}
+  comb_f = f32[8,1024,8,256] multiply(disp, gates4)
+  comb = bf16[8,1024,8,256] convert(comb_f)
+
+  // ---------------------------------------------------------------- dispatch + all-to-all (G -> E)
+  ein_g0 = bf16[8,8,256,1024] dot(disp_bf, xa), lhs_batch_dims={0}, lhs_contracting_dims={1}, rhs_batch_dims={0}, rhs_contracting_dims={1}
+  ein_g = bf16[8,8,256,1024] custom-call(ein_g0), custom_call_target="Sharding", sharding={devices=[8,1,1,1]<=[8]}
+  ein_t = bf16[8,8,256,1024] transpose(ein_g), dimensions={1,0,2,3}
+  ein_e = bf16[8,8,256,1024] custom-call(ein_t), custom_call_target="Sharding", sharding={devices=[8,1,1,1]<=[8]}
+
+  // ---------------------------------------------------------------- expert FFN, batched over E
+  h1 = bf16[8,8,256,4096] dot(ein_e, w1), lhs_batch_dims={0}, lhs_contracting_dims={3}, rhs_batch_dims={0}, rhs_contracting_dims={1}
+  gelu_k = bf16[] constant(1.702)
+  gelu_kb = bf16[8,8,256,4096] broadcast(gelu_k), dimensions={}
+  gelu_a = bf16[8,8,256,4096] multiply(h1, gelu_kb)
+  gelu_s = bf16[8,8,256,4096] logistic(gelu_a)
+  act = bf16[8,8,256,4096] multiply(h1, gelu_s)
+  eout = bf16[8,8,256,1024] dot(act, w2), lhs_batch_dims={0}, lhs_contracting_dims={3}, rhs_batch_dims={0}, rhs_contracting_dims={1}
+  eout_e = bf16[8,8,256,1024] custom-call(eout), custom_call_target="Sharding", sharding={devices=[8,1,1,1]<=[8]}
+
+  // ---------------------------------------------------------------- all-to-all (E -> G) + combine
+  eback_t = bf16[8,8,256,1024] transpose(eout_e), dimensions={1,0,2,3}
+  eback = bf16[8,8,256,1024] custom-call(eback_t), custom_call_target="Sharding", sharding={devices=[8,1,1,1]<=[8]}
+  y = bf16[8,1024,1024] dot(comb, eback), lhs_batch_dims={0}, lhs_contracting_dims={2,3}, rhs_batch_dims={0}, rhs_contracting_dims={1,2}
+
+  // ---------------------------------------------------------------- residual + RMSNorm
+  x2 = bf16[8,1024,1024] add(xa, y)
+  x2f = f32[8,1024,1024] convert(x2)
+  sq = f32[8,1024,1024] multiply(x2f, x2f)
+  ssum = f32[8,1024] reduce(sq, zero), dimensions={2}, to_apply=sum_f32
+  ms = f32[8,1024] multiply(ssum, inv_hb)
+  ms_e = f32[8,1024] add(ms, epsb)
+  rs = f32[8,1024] rsqrt(ms_e)
+  rsb = f32[8,1024,1024] broadcast(rs), dimensions={0,1}
+  xn_f = f32[8,1024,1024] multiply(x2f, rsb)
+  xn = bf16[8,1024,1024] convert(xn_f)
+
+  // ---------------------------------------------------------------- load-balancing aux loss
+  me_ = f32[8] reduce(gates, zero), dimensions={0,1}, to_apply=sum_f32
+  ce = f32[8] reduce(mask, zero), dimensions={0,1}, to_apply=sum_f32
+  inv_tok = f32[] constant(0.0001220703125)
+  inv_tokb = f32[8] broadcast(inv_tok), dimensions={}
+  me_n = f32[8] multiply(me_, inv_tokb)
+  ce_n = f32[8] multiply(ce, inv_tokb)
+  me_ce = f32[8] multiply(me_n, ce_n)
+  aux_s = f32[] reduce(me_ce, zero), dimensions={0}, to_apply=sum_f32
+  n_exp = f32[] constant(8)
+  aux_l = f32[] multiply(aux_s, n_exp)
+  aux_new = f32[] add(aux, aux_l)
+
+  inc = s32[] constant(1)
+  i2 = s32[] add(i, inc)
+  ROOT out = (s32[], bf16[8,1024,1024], f32[]) tuple(i2, xn, aux_new)
+}
+
+ENTRY main {
+  x0 = bf16[8,1024,1024] parameter(0), sharding={devices=[8,1,1]<=[8]}
+  i0 = s32[] constant(0)
+  a0 = f32[] constant(0)
+  init = (s32[], bf16[8,1024,1024], f32[]) tuple(i0, x0, a0), sharding={{replicated}, {devices=[8,1,1]<=[8]}, {replicated}}
+  w = (s32[], bf16[8,1024,1024], f32[]) while(init), condition=while_cond, body=while_body, sharding={{replicated}, {devices=[8,1,1]<=[8]}, {replicated}}
+  xr = bf16[8,1024,1024] get-tuple-element(w), index=1
+  ar = f32[] get-tuple-element(w), index=2
+  xc = f32[8,1024,1024] convert(xr)
+  z = f32[] constant(0)
+  s = f32[] reduce(xc, z), dimensions={0,1,2}, to_apply=sum_f32
+  ROOT checksum = f32[] add(s, ar)
+}
