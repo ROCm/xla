@@ -119,8 +119,7 @@ TEST_F(TopkSpecializerTritonTest, FlagOffKeepsTopK) {
   EXPECT_FALSE(changed);
 }
 
-TEST_F(TopkSpecializerTritonTest, FlagOnUsesTheSpeedTable) {
-  // No region is in the speed table yet, so nothing is routed.
+TEST_F(TopkSpecializerTritonTest, FlagOnKeepsShapesOutsideTheSpeedTable) {
   auto module = ParseTopK("f32[8,1000]", "f32[8,32]", "s32[8,32]", "",
                           TritonTopKFlags::kOn);
   ASSERT_OK_AND_ASSIGN(
@@ -128,6 +127,28 @@ TEST_F(TopkSpecializerTritonTest, FlagOnUsesTheSpeedTable) {
       RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
                  module.get()));
   EXPECT_FALSE(changed);
+}
+
+TEST_F(TopkSpecializerTritonTest, FlagOnRoutesShapesInTheSpeedTable) {
+  auto module = ParseTopK("bf16[24576,64]", "bf16[24576,6]", "s32[24576,6]", "",
+                          TritonTopKFlags::kOn);
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                 module.get()));
+  EXPECT_TRUE(changed);
+  ExpectMarkedTopK(*module, /*stable=*/true, ComparisonOrder::kTotal);
+}
+
+TEST_F(TopkSpecializerTritonTest, FlagOnDoesNotRouteWithoutATable) {
+  auto module = ParseTopK("bf16[24576,64]", "bf16[24576,6]", "s32[24576,6]", "",
+                          TritonTopKFlags::kOn);
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI300DeviceInfo()),
+                 module.get()));
+  EXPECT_FALSE(changed);
+  EXPECT_FALSE(HasTritonTopK(*module));
 }
 
 struct RoutedCase {
@@ -227,8 +248,8 @@ constexpr absl::string_view kDeferredPackedBf16 =
     R"(frontend_attributes={_xla_topk_deferred_packed_bf16="true"})";
 
 TEST_F(TopkSpecializerTritonTest, DeferredPackedBf16KeepsTheTopKWhenNotRouted) {
-  // Without the mark, this shape takes the prebuilt kernel.
-  auto unmarked = ParseTopK("bf16[8,4096]", "bf16[8,8]", "s32[8,8]", "",
+  // Not in the speed table. Without the mark, it takes the prebuilt kernel.
+  auto unmarked = ParseTopK("bf16[8,1024]", "bf16[8,16]", "s32[8,16]", "",
                             TritonTopKFlags::kOn);
   ASSERT_OK_AND_ASSIGN(
       bool changed,
@@ -237,7 +258,7 @@ TEST_F(TopkSpecializerTritonTest, DeferredPackedBf16KeepsTheTopKWhenNotRouted) {
   EXPECT_TRUE(changed);
 
   // With the mark, TopkDecomposer later gives it the packed BF16 sort.
-  auto marked = ParseTopK("bf16[8,4096]", "bf16[8,8]", "s32[8,8]", "",
+  auto marked = ParseTopK("bf16[8,1024]", "bf16[8,16]", "s32[8,16]", "",
                           TritonTopKFlags::kOn, kDeferredPackedBf16);
   ASSERT_OK_AND_ASSIGN(
       changed,

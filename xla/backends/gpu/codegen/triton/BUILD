@@ -900,6 +900,7 @@ cc_library(
         "//xla/hlo/ir:hlo",
         "//xla/hlo/ir:hlo_instruction_utils",
         "//xla/stream_executor:device_description",
+        "//xla/stream_executor/rocm:rocm_compute_capability",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/numeric:bits",
         "@com_google_absl//absl/status",

@@ -121,9 +121,29 @@ TEST(TopKKernelConfigTest, RowLimitDependsOnTheWaveSize) {
   EXPECT_FALSE(GetTopKKernelConfig(Spec(8, 16384, 64), rx7900).has_value());
 }
 
-TEST(TopKSpeedTableTest, NoRegionIsMeasuredYet) {
+TEST(TopKSpeedTableTest, Mi350TakesTheMoEShapes) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(24576, 64, 6, BF16), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(196608, 64, 6, BF16), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(24576, 32, 4, BF16), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(24576, 8, 2, BF16), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(24576, 64, 6, F32), mi350));
+}
+
+TEST(TopKSpeedTableTest, Mi350KeepsSlowerShapes) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  // Large k: the k rounds cost more than today's sort.
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(512, 1024, 128), mi350));
+  // Batches beyond the measured ones.
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(1 << 20, 64, 6, BF16), mi350));
+  // Short rows that are not a power of two pad to the next one.
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(262144, 33, 8), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(262144, 64, 8), mi350));
+}
+
+TEST(TopKSpeedTableTest, OtherDevicesHaveNoTable) {
   EXPECT_FALSE(IsTritonTopKFaster(Spec(24576, 64, 6, BF16),
-                                  TestGpuDeviceInfo::AMDMI350DeviceInfo()));
+                                  TestGpuDeviceInfo::AMDMI300DeviceInfo()));
   EXPECT_FALSE(IsTritonTopKFaster(Spec(24576, 64, 6, BF16),
                                   TestGpuDeviceInfo::H100SXMDeviceInfo()));
 }

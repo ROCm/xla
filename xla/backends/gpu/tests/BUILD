@@ -948,6 +948,42 @@ xla_test(
 )
 
 xla_test(
+    name = "triton_topk_test",
+    size = "medium",
+    srcs = ["triton_topk_test.cc"],
+    backends = ["amdgpu_any"],
+    shard_count = 8,
+    deps = [
+        ":hlo_pjrt_gpu_test_base",
+        "//xla:array2d",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:types",
+        "//xla:xla_data_proto_cc",
+        "//xla:xla_proto_cc",
+        "//xla/backends/gpu/codegen/triton:topk_config",
+        "//xla/hlo/ir:hlo",
+        "//xla/service:hlo_module_config",
+        "//xla/service:hlo_runner_interface",
+        "//xla/tests:literal_test_util",
+        "//xla/tests:test_utils",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/testing:temporary_directory",
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@com_google_googletest//:gtest_main",
+        "@tsl//tsl/platform:path",
+    ],
+)
+
+xla_test(
     name = "gpu_cub_sort_deviceless_test",
     # This test may break when the CUB deviceless data is out of date, and we don't want to break
     # XLA when that happens. So we mark it as enormous so that the XLA TAP skips it, but the
