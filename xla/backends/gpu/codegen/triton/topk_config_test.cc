@@ -205,6 +205,19 @@ TEST(TopKSpeedTableTest, Mi350KeepsSlowerShapes) {
   EXPECT_TRUE(IsTritonTopKFaster(Spec(262144, 64, 8), mi350));
 }
 
+TEST(TopKSpeedTableTest, Mi350TakesLongRowsWithSmallK) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(8, 65536, 16), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(4096, 32768, 8), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(1, 1 << 20, 16, BF16), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(8, 1 << 24, 16), mi350));
+  // The k rounds of the chunk and merge kernels cost more for large k.
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(8, 65536, 128), mi350));
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(8, 32768, 64, BF16), mi350));
+  // Not measured: 1024 chunks x 17 candidates do not fit the merge.
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(8, 1 << 24, 17), mi350));
+}
+
 TEST(TopKSpeedTableTest, OtherDevicesHaveNoTable) {
   EXPECT_FALSE(IsTritonTopKFaster(Spec(24576, 64, 6, BF16),
                                   TestGpuDeviceInfo::AMDMI300DeviceInfo()));

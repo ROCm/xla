@@ -253,8 +253,22 @@ TEST_F(TopkSpecializerTritonTest, ForcedLongRowGetsAScratchOutput) {
   EXPECT_EQ(root->operand(1)->operand(0), topk);
 }
 
-TEST_F(TopkSpecializerTritonTest, LongRowKeepsThePrebuiltKernelWhenNotForced) {
+TEST_F(TopkSpecializerTritonTest, FlagOnRoutesLongRowsInTheSpeedTable) {
   auto module = ParseTopK("f32[8,65536]", "f32[8,8]", "s32[8,8]", "",
+                          TritonTopKFlags::kOn);
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                 module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_TRUE(HasTritonTopK(*module));
+  EXPECT_EQ(module->entry_computation()->root_instruction()->opcode(),
+            HloOpcode::kTuple);
+}
+
+TEST_F(TopkSpecializerTritonTest, LongRowOutsideTheSpeedTableKeepsTodaysPath) {
+  // Many rows of 32769..65535 with k = 1: today's prebuilt kernel was faster.
+  auto module = ParseTopK("f32[1024,40000]", "f32[1024,1]", "s32[1024,1]", "",
                           TritonTopKFlags::kOn);
   ASSERT_OK_AND_ASSIGN(
       bool changed,
