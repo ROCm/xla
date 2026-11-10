@@ -18,18 +18,22 @@ limitations under the License.
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/log/log.h"
+#include "absl/log/vlog_is_on.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/types/span.h"
 #include "xla/autotuning.pb.h"
 #include "xla/backends/autotuner/codegen_backend.h"
+#include "xla/backends/gpu/autotuner/hipblaslt_stream_k.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
@@ -356,6 +360,54 @@ absl::Status RewriteWithWideOutputGemm(HloInstruction* gemm,
                              : absl::OkStatus();
 }
 
+// Returns the positions in `algorithms` to autotune: all of them, or, with
+// xla_gpu_hipblaslt_autotune_exclude_stream_k, those whose hipBLASLt kernel is
+// not stream-K (all of them if every one is). Positions rather than a filtered
+// list, so that a config's `algorithm` keeps indexing the list GetAlgorithms
+// returns.
+absl::StatusOr<std::vector<int>> CandidateAlgorithms(
+    const DebugOptions& debug_options, const BlasLt::MatmulPlan& plan,
+    absl::Span<const BlasLt::MatmulAlgorithm> algorithms,
+    const HloInstruction& instr) {
+  std::vector<int> candidates(algorithms.size());
+  absl::c_iota(candidates, 0);
+  if (!debug_options.xla_gpu_hipblaslt_autotune_exclude_stream_k() ||
+      algorithms.empty()) {
+    return candidates;
+  }
+  std::vector<std::string> names;
+  names.reserve(algorithms.size());
+  for (const BlasLt::MatmulAlgorithm& algorithm : algorithms) {
+    absl::StatusOr<std::string> name = plan.GetAlgorithmName(algorithm);
+    if (absl::IsUnimplemented(name.status())) {
+      VLOG(1) << "hipBLASLt: cannot name the solutions for " << instr.name()
+              << ", keeping stream-K ones: " << name.status();
+      return candidates;
+    }
+    ABSL_RETURN_IF_ERROR(name.status());
+    names.push_back(*std::move(name));
+  }
+  std::vector<int> kept = SelectNonStreamKSolutions(names);
+  if (kept.size() == names.size() &&
+      absl::c_any_of(names, [](const std::string& name) {
+        std::optional<int> mode = HipblasLtStreamKMode(name);
+        return mode.has_value() && *mode != 0;
+      })) {
+    VLOG(1) << "hipBLASLt: all " << names.size() << " solutions for "
+            << instr.name() << " are stream-K; keeping them";
+  } else {
+    VLOG(1) << "hipBLASLt: dropped " << names.size() - kept.size() << " of "
+            << names.size() << " solutions as stream-K for " << instr.name();
+  }
+  if (VLOG_IS_ON(2)) {
+    for (int i = 0; i < static_cast<int>(names.size()); ++i) {
+      VLOG(2) << "hipBLASLt: " << instr.name() << " solution " << i << ": "
+              << names[i];
+    }
+  }
+  return kept;
+}
+
 }  // namespace
 
 bool HipblasLtBackend::IsSupported(const HloInstruction& instr) {
@@ -438,9 +490,12 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
           algorithms, plan->GetAlgorithms(max_algorithms, workspace_size));
     }
     int num_algorithms = algorithms.size();
+    ABSL_ASSIGN_OR_RETURN(
+        std::vector<int> candidates,
+        CandidateAlgorithms(debug_options(), *plan, algorithms, instr));
     std::vector<std::unique_ptr<BackendConfig>> configs;
-    configs.reserve(num_algorithms);
-    for (int i = 0; i < num_algorithms; ++i) {
+    configs.reserve(candidates.size());
+    for (int i : candidates) {
       auto config = std::make_unique<BackendConfig>();
       auto* gemm_key = config->mutable_gemm();
       gemm_key->set_algorithm(i);
@@ -452,8 +507,9 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
       }
       configs.push_back(std::move(config));
     }
-    VLOG(1) << "hipBLASLt: " << num_algorithms << " configs for "
-            << instr.name() << (all_solutions ? " (all solutions)" : "");
+    VLOG(1) << "hipBLASLt: " << configs.size() << " of " << num_algorithms
+            << " configs for " << instr.name()
+            << (all_solutions ? " (all solutions)" : "");
     if (configs.empty()) {
       Decision can_unfuse = CanUnfuseFp8Output(instr);
       if (can_unfuse.IsForbidden()) {
@@ -531,9 +587,12 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
       return std::vector<std::unique_ptr<BackendConfig>>();
     }
 
+    ABSL_ASSIGN_OR_RETURN(
+        std::vector<int> candidates,
+        CandidateAlgorithms(debug_options(), **plan_or, algorithms, instr));
     std::vector<std::unique_ptr<BackendConfig>> configs;
-    configs.reserve(algorithms.size());
-    for (int64_t i = 0; i < static_cast<int64_t>(algorithms.size()); ++i) {
+    configs.reserve(candidates.size());
+    for (int64_t i : candidates) {
       auto config = std::make_unique<BackendConfig>();
       auto* gemm_key = config->mutable_gemm();
       gemm_key->set_algorithm(i);
@@ -583,10 +642,12 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
 
     ABSL_ASSIGN_OR_RETURN(std::vector<BlasLt::MatmulAlgorithm> algorithms,
                           plan->GetAlgorithms(max_algorithms, workspace_size));
-    int num_algorithms = algorithms.size();
+    ABSL_ASSIGN_OR_RETURN(
+        std::vector<int> candidates,
+        CandidateAlgorithms(debug_options(), *plan, algorithms, instr));
     std::vector<std::unique_ptr<BackendConfig>> configs;
-    configs.reserve(num_algorithms);
-    for (int i = 0; i < num_algorithms; ++i) {
+    configs.reserve(candidates.size());
+    for (int i : candidates) {
       auto config = std::make_unique<BackendConfig>();
       auto* gemm_key = config->mutable_gemm();
       gemm_key->set_algorithm(i);

@@ -2053,7 +2053,15 @@ message DebugOptions {
   // hipBLASLt library. Expect thousands of candidates per GEMM shape.
   optional bool xla_gpu_hipblaslt_autotune_all_solutions = 568;
 
-  // Next id: 574
+  // If true, the hipBLASLt GEMM autotuner drops stream-K solutions (kernel
+  // name token SK<n> with n > 0) before timing, from the heuristic list and
+  // from the xla_gpu_hipblaslt_autotune_all_solutions list. A GEMM whose
+  // solutions are all stream-K keeps them. Autotune results loaded from a cache
+  // are applied as they are. Stream-K kernels launch one large workgroup per
+  // CU and slow down sharply when anything else (e.g. a collective) holds CUs.
+  optional bool xla_gpu_hipblaslt_autotune_exclude_stream_k = 577;
+
+  // Next id: 578 (574-576 are used by sibling branches)
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

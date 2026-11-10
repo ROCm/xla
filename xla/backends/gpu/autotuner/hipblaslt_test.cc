@@ -307,6 +307,42 @@ TEST_F(HipblasLtBackendTest, GetSupportedConfigsWithAllSolutions) {
       absl_testing::IsOkAndHolds(true));
 }
 
+TEST_F(HipblasLtBackendTest, GetSupportedConfigsExcludingStreamK) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> hlo_module,
+                       ParseAndReturnVerifiedModule(kHipblasLtCustomCallHlo));
+  const HloInstruction& gemm =
+      *hlo_module->entry_computation()->root_instruction()->operand(0);
+  for (bool all_solutions : {false, true}) {
+    SCOPED_TRACE(absl::StrCat("all_solutions=", all_solutions));
+    debug_options_.set_xla_gpu_hipblaslt_autotune_all_solutions(all_solutions);
+    debug_options_.set_xla_gpu_hipblaslt_autotune_exclude_stream_k(false);
+    ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> all,
+                         backend_.GetSupportedConfigs(gemm));
+    debug_options_.set_xla_gpu_hipblaslt_autotune_exclude_stream_k(true);
+    ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> kept,
+                         backend_.GetSupportedConfigs(gemm));
+    ASSERT_FALSE(all.empty());
+    ASSERT_FALSE(kept.empty());
+    EXPECT_LE(kept.size(), all.size());
+    // A kept config is the unfiltered config at the same list position, so
+    // `algorithm` still indexes the unfiltered list.
+    int64_t previous = -1;
+    for (const std::unique_ptr<BackendConfig>& config : kept) {
+      int64_t i = config->gemm().algorithm();
+      ASSERT_GT(i, previous);
+      ASSERT_LT(i, static_cast<int64_t>(all.size()));
+      EXPECT_EQ(all[i]->gemm().algorithm(), i);
+      EXPECT_EQ(config->gemm().has_algorithm_proto(), all_solutions);
+      if (all_solutions) {
+        EXPECT_EQ(
+            config->gemm().algorithm_proto().hipblaslt().solution_index(),
+            all[i]->gemm().algorithm_proto().hipblaslt().solution_index());
+      }
+      previous = i;
+    }
+  }
+}
+
 const char kScaledDotFp8FusionHlo[] = R"(
 HloModule ScaledDotFusion
 

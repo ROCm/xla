@@ -232,6 +232,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_autotune_max_solutions(0);
   opts.set_xla_gpu_blas_max_algorithms(0);
   opts.set_xla_gpu_hipblaslt_autotune_all_solutions(false);
+  opts.set_xla_gpu_hipblaslt_autotune_exclude_stream_k(false);
   opts.set_xla_gpu_fusion_autotune_top_k_configs(1);
   opts.set_xla_cpu_multi_thread_eigen(true);
   opts.set_xla_enable_hlo_modules_upload(true);
@@ -1846,6 +1847,15 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "only the heuristic's top xla_gpu_blas_max_algorithms. The choice is "
       "recorded by hipBLASLt solution index and needs the same hipBLASLt "
       "library at run time."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_hipblaslt_autotune_exclude_stream_k",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_hipblaslt_autotune_exclude_stream_k),
+      debug_options->xla_gpu_hipblaslt_autotune_exclude_stream_k(),
+      "Do not autotune hipBLASLt GEMMs over stream-K solutions (kernel name "
+      "token SK<n>, n > 0), only data-parallel ones, unless a GEMM has no "
+      "other solution. Applies to the heuristic and the all-solutions lists; "
+      "cached autotune results are used as they are."));
   flag_list->push_back(
       tsl::Flag("xla_gpu_fusion_autotune_top_k_configs",
                 int32_setter_for(

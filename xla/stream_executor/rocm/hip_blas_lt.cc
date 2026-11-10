@@ -381,6 +381,24 @@ auto BlasLt::RegularMatmulPlan::GetAllSupportedAlgorithms(
   return algorithms;
 }
 
+absl::StatusOr<std::string> BlasLt::RegularMatmulPlan::GetAlgorithmName(
+    const MatmulAlgorithm& algorithm) const {
+  const auto* algo =
+      std::any_cast<hipblasLtMatmulAlgo_t>(&algorithm.opaque_algo);
+  if (algo == nullptr) {
+    return absl::InternalError("Invalid algorithm type!");
+  }
+  hipblasLtMatmulAlgo_t copy = *algo;
+  absl::MutexLock lock(blas_lt_.mu_);
+  TF_RET_CHECK(blas_lt_.handle_ != nullptr);
+  std::string name =
+      hipblaslt_ext::getKernelNameFromAlgo(blas_lt_.handle_.get(), copy);
+  if (name.empty()) {
+    name = hipblaslt_ext::getSolutionNameFromAlgo(blas_lt_.handle_.get(), copy);
+  }
+  return name;
+}
+
 absl::StatusOr<gpu::BlasLtMatmulAlgorithm>
 BlasLt::RegularMatmulPlan::GetBlasLtMatmulAlgorithm(
     const MatmulAlgorithm& algorithm) const {

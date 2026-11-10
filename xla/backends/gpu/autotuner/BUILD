@@ -660,6 +660,25 @@ cc_library(
 )
 
 cc_library(
+    name = "hipblaslt_stream_k",
+    srcs = ["hipblaslt_stream_k.cc"],
+    hdrs = ["hipblaslt_stream_k.h"],
+    deps = [
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "hipblaslt_stream_k_test",
+    srcs = ["hipblaslt_stream_k_test.cc"],
+    deps = [
+        ":hipblaslt_stream_k",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "hipblaslt",
     srcs = ["hipblaslt.cc"],
     hdrs = ["hipblaslt.h"],
@@ -669,6 +688,7 @@ cc_library(
     ],
     deps = [
         ":gpu_codegen_backend",
+        ":hipblaslt_stream_k",
         "//xla:autotuning_proto_cc",
         "//xla:literal",
         "//xla:literal_util",
@@ -700,10 +720,12 @@ cc_library(
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:vlog_is_on",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
     ],
 )
 

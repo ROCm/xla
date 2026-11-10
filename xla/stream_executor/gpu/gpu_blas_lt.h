@@ -266,6 +266,15 @@ struct BlasLt {
           "GetAllSupportedAlgorithms is not implemented for this platform.");
     }
 
+    // Returns the library's name for the kernel `algorithm` runs, e.g. the
+    // hipBLASLt (TensileLite) kernel name, for diagnostics and for selecting
+    // algorithms by kernel properties.
+    virtual absl::StatusOr<std::string> GetAlgorithmName(
+        const MatmulAlgorithm& algorithm) const {
+      return absl::UnimplementedError(
+          "GetAlgorithmName is not implemented for this platform.");
+    }
+
     // Converts `algorithm` into a `BlasLtMatmulAlgorithm` descriptor.
     virtual absl::StatusOr<BlasLtMatmulAlgorithm> GetBlasLtMatmulAlgorithm(
         const MatmulAlgorithm& algorithm) const {

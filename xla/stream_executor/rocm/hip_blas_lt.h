@@ -18,6 +18,7 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -134,6 +135,11 @@ class BlasLt : public gpu::BlasLt {
     // supports this problem (getAllAlgos + matmulIsAlgoSupported).
     absl::StatusOr<std::vector<MatmulAlgorithm>> GetAllSupportedAlgorithms(
         size_t max_heuristic_count, size_t max_workspace_size) const override;
+
+    // The hipBLASLt kernel name of `algorithm`, or its solution name if the
+    // library reports no kernel name.
+    absl::StatusOr<std::string> GetAlgorithmName(
+        const MatmulAlgorithm& algorithm) const override;
 
     // Describes an algorithm by its hipBLASLt solution index.
     absl::StatusOr<gpu::BlasLtMatmulAlgorithm> GetBlasLtMatmulAlgorithm(
