@@ -23,10 +23,10 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/status_matchers.h"
 #include "absl/strings/string_view.h"
-#include "xla/hlo/ir/hlo_computation.h"
+#include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_module.h"
-#include "xla/hlo/ir/hlo_print_options.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/hlo/testlib/test.h"
 
@@ -43,9 +43,9 @@ HloModule ValidPrefixExtentContract
 fused_computation {
   x = f32[8,4] parameter(0)
   n = s32[] parameter(1)
-  predicate = pred[] compare(n, n), direction=EQ
-  broadcast = pred[8,4] broadcast(predicate), dimensions={}
-  ROOT result = f32[8,4] select(broadcast, x, x)
+  bounded = f32[8,4] custom-call(x, n),
+    custom_call_target="xla.valid_prefix"
+  ROOT result = f32[8,4] exponential(bounded)
 }
 
 ENTRY main {
@@ -56,13 +56,9 @@ ENTRY main {
 }
 )hlo";
 
-TEST_F(ValidPrefixExtentTest,
-       ContractSurvivesCloneSerializationAndFingerprinting) {
+TEST_F(ValidPrefixExtentTest, DataflowContractSurvivesCloneAndSerialization) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                        ParseAndReturnVerifiedModule(kValidFusionHlo));
-  std::unique_ptr<HloModule> without_extent = module->Clone("without_extent");
-  ASSERT_OK(SetValidPrefixExtent(
-      module->entry_computation()->root_instruction(), /*operand_index=*/1));
 
   auto verify_contract = [](const HloModule& candidate) {
     const HloInstruction* fusion =
@@ -71,7 +67,6 @@ TEST_F(ValidPrefixExtentTest,
                          GetValidPrefixExtent(*fusion));
     ASSERT_TRUE(extent.has_value());
     EXPECT_EQ(extent->operand_index, 1);
-    EXPECT_EQ(extent->dimension, 0);
     EXPECT_EQ(extent->capacity, 8);
   };
 
@@ -82,89 +77,107 @@ TEST_F(ValidPrefixExtentTest,
       std::unique_ptr<HloModule> roundtrip,
       HloModule::CreateFromProto(module->ToProto(), module->config()));
   verify_contract(*roundtrip);
-
-  HloPrintOptions fingerprint_options =
-      HloPrintOptions::Fingerprint().set_print_backend_config(true);
-  EXPECT_NE(module->GetFingerprint128(fingerprint_options),
-            without_extent->GetFingerprint128(fingerprint_options));
-  EXPECT_FALSE(module->entry_computation()->root_instruction()->Identical(
-      *without_extent->entry_computation()->root_instruction(),
-      [](const HloInstruction*, const HloInstruction*) { return true; },
-      [](const HloComputation*, const HloComputation*) { return true; }));
 }
 
-TEST_F(ValidPrefixExtentTest, RejectsInvalidSetterInputs) {
-  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                       ParseAndReturnVerifiedModule(kValidFusionHlo));
-  HloInstruction* fusion = module->entry_computation()->root_instruction();
-
-  EXPECT_THAT(SetValidPrefixExtent(
-                  module->entry_computation()->parameter_instruction(0),
-                  /*operand_index=*/0),
-              StatusIs(absl::StatusCode::kInvalidArgument,
-                       HasSubstr("requires a fusion instruction")));
-  EXPECT_THAT(SetValidPrefixExtent(fusion, /*operand_index=*/2),
-              StatusIs(absl::StatusCode::kInvalidArgument,
-                       HasSubstr("valid fusion operand")));
-  EXPECT_THAT(SetValidPrefixExtent(fusion, /*operand_index=*/0),
-              StatusIs(absl::StatusCode::kInvalidArgument,
-                       HasSubstr("s32 scalar operand")));
-  EXPECT_THAT(SetValidPrefixExtent(nullptr, /*operand_index=*/0),
-              StatusIs(absl::StatusCode::kInternal,
-                       HasSubstr("instruction != nullptr")));
-}
-
-TEST_F(ValidPrefixExtentTest, RejectsScalarFusionOutput) {
-  constexpr absl::string_view kScalarOutputHlo = R"hlo(
-HloModule ScalarFusionOutput
+TEST_F(ValidPrefixExtentTest, FollowsOperandDeduplication) {
+  constexpr absl::string_view kDuplicateOperandHlo = R"hlo(
+HloModule DeduplicatedValidPrefixExtent
 
 fused_computation {
-  n = s32[] parameter(0)
-  ROOT result = s32[] copy(n)
+  x = f32[8,4] parameter(0)
+  duplicate_x = f32[8,4] parameter(1)
+  n = s32[] parameter(2)
+  bounded = f32[8,4] custom-call(duplicate_x, n),
+    custom_call_target="xla.valid_prefix"
+  ROOT result = f32[8,4] add(x, bounded)
 }
 
 ENTRY main {
-  n = s32[] parameter(0)
-  ROOT fusion = s32[] fusion(n), kind=kLoop, calls=fused_computation
+  x = f32[8,4] parameter(0)
+  n = s32[] parameter(1)
+  ROOT fusion = f32[8,4] fusion(x, x, n), kind=kLoop,
+    calls=fused_computation
 }
 )hlo";
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                       ParseAndReturnVerifiedModule(kScalarOutputHlo));
+                       ParseAndReturnVerifiedModule(kDuplicateOperandHlo));
+  auto* fusion = Cast<HloFusionInstruction>(
+      module->entry_computation()->root_instruction());
 
-  EXPECT_THAT(
-      SetValidPrefixExtent(module->entry_computation()->root_instruction(),
-                           /*operand_index=*/0),
-      StatusIs(absl::StatusCode::kInvalidArgument,
-               HasSubstr("array output with rank at least one")));
+  ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> before,
+                       GetValidPrefixExtent(*fusion));
+  ASSERT_TRUE(before.has_value());
+  EXPECT_EQ(before->operand_index, 2);
+
+  ASSERT_OK(fusion->DeduplicateFusionOperands());
+  ASSERT_EQ(fusion->operand_count(), 2);
+  ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> after,
+                       GetValidPrefixExtent(*fusion));
+  ASSERT_TRUE(after.has_value());
+  EXPECT_EQ(after->operand_index, 1);
+  EXPECT_EQ(fusion->operand(after->operand_index),
+            module->entry_computation()->parameter_instruction(1));
 }
 
-TEST_F(ValidPrefixExtentTest, RejectsInvalidSerializedDimension) {
-  constexpr absl::string_view kInvalidDimensionHlo = R"hlo(
-HloModule InvalidValidPrefixDimension
+TEST_F(ValidPrefixExtentTest, RejectsComputedExtentInsideFusion) {
+  constexpr absl::string_view kComputedExtentHlo = R"hlo(
+HloModule ComputedValidPrefixExtent
 
 fused_computation {
   x = f32[8,4] parameter(0)
   n = s32[] parameter(1)
-  predicate = pred[] compare(n, n), direction=EQ
-  broadcast = pred[8,4] broadcast(predicate), dimensions={}
-  ROOT result = f32[8,4] select(broadcast, x, x)
+  zero = s32[] constant(0)
+  computed_n = s32[] add(n, zero)
+  ROOT result = f32[8,4] custom-call(x, computed_n),
+    custom_call_target="xla.valid_prefix"
 }
 
 ENTRY main {
   x = f32[8,4] parameter(0)
   n = s32[] parameter(1)
   ROOT fusion = f32[8,4] fusion(x, n), kind=kLoop,
-    calls=fused_computation,
-    backend_config={"fusion_backend_config":{"kind":"kLoop"},"valid_prefix_extent":{"operand_index":"1","dimension":"1"}}
+    calls=fused_computation
 }
 )hlo";
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                       ParseAndReturnVerifiedModule(kInvalidDimensionHlo));
+                       ParseAndReturnVerifiedModule(kComputedExtentHlo));
 
   EXPECT_THAT(
       GetValidPrefixExtent(*module->entry_computation()->root_instruction()),
       StatusIs(absl::StatusCode::kInvalidArgument,
-               HasSubstr("only supports output dimension 0")));
+               HasSubstr("must be a fusion parameter")));
+}
+
+TEST_F(ValidPrefixExtentTest, ConflictingExtentsDoNotFormAContract) {
+  constexpr absl::string_view kConflictingExtentsHlo = R"hlo(
+HloModule ConflictingValidPrefixExtents
+
+fused_computation {
+  x = f32[8,4] parameter(0)
+  lhs_n = s32[] parameter(1)
+  rhs_n = s32[] parameter(2)
+  lhs = f32[8,4] custom-call(x, lhs_n),
+    custom_call_target="xla.valid_prefix"
+  rhs = f32[8,4] custom-call(x, rhs_n),
+    custom_call_target="xla.valid_prefix"
+  ROOT result = f32[8,4] add(lhs, rhs)
+}
+
+ENTRY main {
+  x = f32[8,4] parameter(0)
+  lhs_n = s32[] parameter(1)
+  rhs_n = s32[] parameter(2)
+  ROOT fusion = f32[8,4] fusion(x, lhs_n, rhs_n), kind=kLoop,
+    calls=fused_computation
+}
+)hlo";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kConflictingExtentsHlo));
+
+  ASSERT_OK_AND_ASSIGN(
+      std::optional<ValidPrefixExtent> extent,
+      GetValidPrefixExtent(*module->entry_computation()->root_instruction()));
+  EXPECT_FALSE(extent.has_value());
 }
 
 }  // namespace
