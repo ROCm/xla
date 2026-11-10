@@ -70,6 +70,7 @@ cc_library(
     srcs = ["valid_prefix_extent.cc"],
     hdrs = ["valid_prefix_extent.h"],
     deps = [
+        "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
         "@com_google_absl//absl/container:flat_hash_map",
