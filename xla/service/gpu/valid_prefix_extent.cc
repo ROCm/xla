@@ -97,8 +97,7 @@ absl::StatusOr<std::optional<ValidPrefixExtent>> GetValidPrefixExtent(
   }
   if (!instruction.shape().IsArray() ||
       instruction.shape().dimensions().empty()) {
-    return absl::InvalidArgumentError(
-        "valid-prefix extent requires an array output with rank at least one");
+    return std::nullopt;
   }
 
   using ExtentParameters = absl::flat_hash_set<int64_t>;

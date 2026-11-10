@@ -79,6 +79,29 @@ TEST_F(ValidPrefixExtentTest, DataflowContractSurvivesCloneAndSerialization) {
   verify_contract(*roundtrip);
 }
 
+TEST_F(ValidPrefixExtentTest, ScalarFusionHasNoContract) {
+  constexpr absl::string_view kScalarFusionHlo = R"hlo(
+HloModule ScalarFusion
+
+fused_computation {
+  x = s32[] parameter(0)
+  ROOT result = s32[] negate(x)
+}
+
+ENTRY main {
+  x = s32[] parameter(0)
+  ROOT fusion = s32[] fusion(x), kind=kLoop, calls=fused_computation
+}
+)hlo";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kScalarFusionHlo));
+
+  ASSERT_OK_AND_ASSIGN(
+      std::optional<ValidPrefixExtent> extent,
+      GetValidPrefixExtent(*module->entry_computation()->root_instruction()));
+  EXPECT_FALSE(extent.has_value());
+}
+
 TEST_F(ValidPrefixExtentTest, FollowsOperandDeduplication) {
   constexpr absl::string_view kDuplicateOperandHlo = R"hlo(
 HloModule DeduplicatedValidPrefixExtent
