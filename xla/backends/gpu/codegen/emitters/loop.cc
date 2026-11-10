@@ -37,6 +37,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/utils/hlo_traversal.h"
+#include "xla/layout_util.h"
 #include "xla/runtime/work_dimensions.h"
 #include "xla/service/buffer_assignment.h"
 #include "xla/service/gpu/gpu_constants.h"
@@ -130,7 +131,8 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> LoopFusion::CreateMLIRModule(
                         GetValidPrefixExtent(fusion));
   std::optional<emitters::LoopFusionValidPrefixExtent>
       codegen_valid_prefix_extent;
-  if (valid_prefix_extent.has_value()) {
+  if (valid_prefix_extent.has_value() &&
+      LayoutUtil::IsMonotonicWithDim0Major(fusion.shape().layout())) {
     codegen_valid_prefix_extent = emitters::LoopFusionValidPrefixExtent{
         valid_prefix_extent->operand_index, valid_prefix_extent->capacity};
   }

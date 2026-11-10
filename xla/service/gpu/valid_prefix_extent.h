@@ -19,25 +19,28 @@ limitations under the License.
 #include <cstdint>
 #include <optional>
 
-#include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 
 namespace xla::gpu {
 
+inline constexpr absl::string_view kValidPrefixCallTarget = "xla.valid_prefix";
+
+// Describes a valid prefix derived from HLO dataflow at the point of use.
+//
+// Only rows [0, extent) are semantically observable. Code generation may omit
+// loads, computation, and stores for the remaining rows. The association is
+// represented by an xla.valid_prefix(data, extent) custom call inside the
+// fusion, so HLO operand rewrites update it together with normal dataflow.
 struct ValidPrefixExtent {
   int64_t operand_index;
-  int64_t dimension;
   int64_t capacity;
 };
 
-// Returns and validates the valid-prefix contract attached to `instruction`.
+// Returns the unique dimension-0 valid prefix reaching a fusion root.
 absl::StatusOr<std::optional<ValidPrefixExtent>> GetValidPrefixExtent(
     const HloInstruction& instruction);
-
-// Validates and attaches a dimension-0 valid-prefix contract.
-absl::Status SetValidPrefixExtent(HloInstruction* instruction,
-                                  int64_t operand_index);
 
 }  // namespace xla::gpu
 

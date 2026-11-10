@@ -130,7 +130,6 @@ limitations under the License.
 #include "xla/service/gpu/launch_dimensions.h"
 #include "xla/service/gpu/llvm_gpu_backend/ptx_version_util.h"
 #include "xla/service/gpu/target_util.h"
-#include "xla/service/gpu/valid_prefix_extent.h"
 #include "xla/service/llvm_ir/llvm_util.h"
 #include "xla/shape.h"
 #include "xla/status_macros.h"
@@ -419,15 +418,7 @@ AsyncThunkSequence MlirKernelFusion::Emit(
     IrEmitterContext& ir_emitter_context,
     const HloFusionInstruction& fusion) const {
   VLOG(4) << "Fusion: " << fusion.fused_instructions_computation()->ToString();
-  ABSL_ASSIGN_OR_RETURN(std::optional<ValidPrefixExtent> valid_prefix_extent,
-                        GetValidPrefixExtent(fusion));
   std::string discriminator = "MlirKernelFusion";
-  if (valid_prefix_extent.has_value()) {
-    absl::StrAppend(&discriminator,
-                    ":valid_prefix=", valid_prefix_extent->operand_index, ":",
-                    valid_prefix_extent->dimension, ":",
-                    valid_prefix_extent->capacity);
-  }
   ABSL_ASSIGN_OR_RETURN(
       emitters::KernelArguments args,
       emitters::KernelArguments::Create(ir_emitter_context.buffer_assignment(),
