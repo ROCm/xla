@@ -1042,6 +1042,15 @@ absl::StatusOr<SmallVector<Value, 1>> HloToMlir(
     const OperandProvider& operand_provider,
     const CallTargetProvider& call_target_provider,
     ImplicitLocOpBuilder& builder, MLIRContext* mlir_context) {
+  // The extent remains in HLO dataflow, but the marker's value is its data
+  // operand.
+  if (instr->IsCustomCall("xla.valid_prefix")) {
+    ABSL_ASSIGN_OR_RETURN(
+        Value operand,
+        GetSingleOperandValue(operand_provider, instr, 0, indices));
+    return {{operand}};
+  }
+
   if (kUnsupportedOps.contains(instr->opcode())) {
     return absl::UnimplementedError(
         absl::StrCat("Unsupported: ", instr->ToShortString()));
