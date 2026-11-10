@@ -520,6 +520,47 @@ xla_cc_test(
 )
 
 cc_library(
+    name = "block_scaled_quantize_swizzle_folding",
+    srcs = ["block_scaled_quantize_swizzle_folding.cc"],
+    hdrs = ["block_scaled_quantize_swizzle_folding.h"],
+    deps = [
+        "//xla:shape_util",
+        "//xla/backends/gpu/autotuner:hipblaslt_scale_utils",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/pass:hlo_pass",
+        "//xla/service:decision",
+        "//xla/service/gpu:backend_configs_cc",
+        "//xla/service/gpu:ir_emission_utils",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "block_scaled_quantize_swizzle_folding_test",
+    srcs = ["block_scaled_quantize_swizzle_folding_test.cc"],
+    deps = [
+        ":block_scaled_quantize_swizzle_folding",
+        "//xla:shape_util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
+        "//xla/hlo/testlib:pattern_matcher_gmock",
+        "//xla/hlo/testlib:verified_hlo_module",
+        "//xla/service:pattern_matcher",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "block_scaling_rewriter",
     srcs = ["block_scaling_rewriter.cc"],
     hdrs = ["block_scaling_rewriter.h"],

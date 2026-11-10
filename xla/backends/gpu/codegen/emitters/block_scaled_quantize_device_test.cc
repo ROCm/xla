@@ -29,12 +29,17 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/algorithm/container.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
+#include "xla/backends/autotuner/backends.pb.h"
 #include "xla/backends/gpu/tests/hlo_pjrt_gpu_test_base.h"
+#include "xla/backends/gpu/transforms/block_scaled_quantize_swizzle_folding.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -45,6 +50,7 @@ limitations under the License.
 #include "xla/literal.h"
 #include "xla/literal_util.h"
 #include "xla/primitive_util.h"
+#include "xla/service/computation_layout.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/ir_emission_utils.h"
 #include "xla/service/hlo_module_config.h"
@@ -52,7 +58,9 @@ limitations under the License.
 #include "xla/shape_util.h"
 #include "xla/tests/literal_test_util.h"
 #include "xla/types.h"
+#include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
+#include "re2/re2.h"
 
 namespace xla::gpu {
 namespace {
@@ -1381,6 +1389,293 @@ INSTANTIATE_TEST_SUITE_P(
           "_", std::get<1>(info.param), std::get<2>(info.param) ? "_pair" : "");
     });
 
+// The hipBLASLt 32x8 swizzle of `scale` as `SwizzleHipblasLtScale32x8` builds
+// it, which the swizzle folding pass recognizes.
+HloInstruction* Swizzle32x8(HloInstruction* scale) {
+  const xla::Shape& shape = scale->shape();
+  const int64_t rows = shape.dimensions(0);
+  const int64_t cols = shape.dimensions(1);
+  HloComputation::Builder builder("hipblaslt_mx_scale_32x8");
+  HloInstruction* input = builder.AddInstruction(
+      HloInstruction::CreateParameter(0, shape, "scale"));
+  HloInstruction* split =
+      builder.AddInstruction(HloInstruction::CreateReshape(
+          ShapeUtil::MakeShapeWithDescendingLayout(
+              F8E8M0FNU, {rows / 32, 2, 16, cols / 8, 2, 4}),
+          input));
+  HloInstruction* transpose =
+      builder.AddInstruction(HloInstruction::CreateTranspose(
+          ShapeUtil::MakeShapeWithDescendingLayout(
+              F8E8M0FNU, {rows / 32, cols / 8, 4, 16, 2, 2}),
+          split, {0, 3, 5, 2, 4, 1}));
+  HloInstruction* result = builder.AddInstruction(
+      HloInstruction::CreateReshape(shape, transpose));
+  HloComputation* computation =
+      scale->GetModule()->AddEmbeddedComputation(builder.Build(result));
+  return scale->parent()->AddInstruction(HloInstruction::CreateFusion(
+      shape, HloInstruction::FusionKind::kLoop, {scale}, computation));
+}
+
+// Reads the u8 scale results of the fusion at the root of `module` as E8M0 and
+// swizzles each one that the hipBLASLt 32x8 layout supports.
+void SwizzleScaleResults(HloModule* module) {
+  HloComputation* entry = module->entry_computation();
+  HloInstruction* fusion = entry->root_instruction();
+  std::vector<HloInstruction*> results;
+  for (int64_t i = 0; i < fusion->shape().tuple_shapes().size(); ++i) {
+    HloInstruction* result = entry->AddInstruction(
+        HloInstruction::CreateGetTupleElement(fusion, i));
+    const xla::Shape& shape = result->shape();
+    if (shape.element_type() == U8 && shape.dimensions(0) % 32 == 0 &&
+        shape.dimensions(1) % 8 == 0) {
+      result = Swizzle32x8(
+          entry->AddInstruction(HloInstruction::CreateBitcast(
+              ShapeUtil::ChangeElementType(shape, F8E8M0FNU), result)));
+    }
+    results.push_back(result);
+  }
+  entry->set_root_instruction(
+      entry->AddInstruction(HloInstruction::CreateTuple(results)),
+      /*accept_different_shape=*/true);
+  *module->mutable_entry_computation_layout() =
+      ComputationLayout(entry->ComputeProgramShape(), /*ignore_layouts=*/false);
+}
+
+// Stores the u8[a, b] scale results of `computation` through reshape,
+// transpose and reshape, in an order other than the hipBLASLt one.
+absl::Status PermuteScaleResults(HloComputation* computation) {
+  HloInstruction* root = computation->root_instruction();
+  for (int64_t i = 0; i < root->operand_count(); ++i) {
+    HloInstruction* scale = root->mutable_operand(i);
+    if (scale->shape().element_type() != U8) {
+      continue;
+    }
+    const int64_t a = scale->shape().dimensions(0);
+    const int64_t b = scale->shape().dimensions(1);
+    HloInstruction* split = computation->AddInstruction(
+        HloInstruction::CreateReshape(ShapeUtil::MakeShapeWithDescendingLayout(
+                                          U8, {a / 4, 4, b / 2, 2}),
+                                      scale));
+    HloInstruction* transpose =
+        computation->AddInstruction(HloInstruction::CreateTranspose(
+            ShapeUtil::MakeShapeWithDescendingLayout(U8, {b / 2, a / 4, 2, 4}),
+            split, {2, 0, 3, 1}));
+    ABSL_RETURN_IF_ERROR(root->ReplaceOperandWith(
+        i, computation->AddInstruction(
+               HloInstruction::CreateReshape(scale->shape(), transpose))));
+  }
+  return absl::OkStatus();
+}
+
+// Scale results stored in the hipBLASLt 32x8 order by the emitter, after the
+// swizzle folding, against natural-order scales and the separate swizzle.
+class BlockScaledQuantizeSwizzleTest : public BlockScaledQuantizeDeviceTest {
+ protected:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions options =
+        BlockScaledQuantizeDeviceTest::GetDebugOptionsForTest();
+    options.set_xla_gpu_experimental_enable_fusion_autotuner(false);
+    return options;
+  }
+
+  void RunAndCompareSwizzled(const Quantize& q,
+                             absl::Span<const InputClass> classes,
+                             absl::Span<const bool> column_fills = {false}) {
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> natural,
+                         ParseAndReturnVerifiedModule(FusedModule(q)));
+    SwizzleScaleResults(natural.get());
+    std::unique_ptr<HloModule> folded = natural->Clone();
+    ASSERT_THAT(BlockScaledQuantizeSwizzleFolding().Run(folded.get()),
+                absl_testing::IsOkAndHolds(true));
+    EXPECT_FALSE(absl::c_any_of(folded->entry_computation()->instructions(),
+                                [](const HloInstruction* instr) {
+                                  return instr->IsLoopFusion();
+                                }));
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> natural_executable,
+                         CreateExecutable(std::move(natural),
+                                          /*run_hlo_passes=*/false));
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> folded_executable,
+                         CreateExecutable(std::move(folded),
+                                          /*run_hlo_passes=*/false));
+    for (auto [c, column_fill] : Cross(classes, column_fills)) {
+      SCOPED_TRACE(
+          absl::StrCat(ClassName(c), column_fill ? " in columns" : ""));
+      std::vector<Literal> arguments;
+      arguments.push_back(MakeSource(q.source, q.rows, q.cols, c,
+                                     static_cast<int>(c), column_fill));
+      for (const std::vector<int64_t>& shape :
+           q.tiny_operand ? TinyShapes(q)
+                          : std::vector<std::vector<int64_t>>{}) {
+        Literal tiny(ShapeUtil::MakeShape(F32, shape));
+        absl::Span<float> values = tiny.data<float>();
+        std::fill(values.begin(), values.end(), std::ldexp(1.0f, -127));
+        arguments.push_back(std::move(tiny));
+      }
+      ASSERT_OK_AND_ASSIGN(Literal expected,
+                           test_runner().ExecuteWithExecutable(
+                               natural_executable.get(), arguments));
+      ASSERT_OK_AND_ASSIGN(Literal actual,
+                           test_runner().ExecuteWithExecutable(
+                               folded_executable.get(), arguments));
+      EXPECT_TRUE(LiteralTestUtil::Equal(expected, actual));
+    }
+  }
+};
+
+TEST_P(BlockScaledQuantizeSwizzleTest, Row) {
+  auto [source, data] = GetParam();
+  RunAndCompareSwizzled(Quantize{source, data, 128, 256}, kAllClasses);
+}
+
+// 96 rows leave the last row workgroup partial; a 32x8 scale needs its rows to
+// be a multiple of 32, so no grid is partial inside a block of 32 rows.
+TEST_P(BlockScaledQuantizeSwizzleTest, RowPartialGrid) {
+  auto [source, data] = GetParam();
+  RunAndCompareSwizzled(Quantize{source, data, 96, 512},
+                        {InputClass::kRandom, InputClass::kMixed});
+}
+
+TEST_P(BlockScaledQuantizeSwizzleTest, RowWithScaleOperand) {
+  auto [source, data] = GetParam();
+  Quantize q{source, data, 128, 256};
+  q.tiny_operand = true;
+  RunAndCompareSwizzled(
+      q, {InputClass::kRandom, InputClass::kScaleSubstitution,
+          InputClass::kMixed});
+}
+
+TEST_P(BlockScaledQuantizeSwizzleTest, ColumnNormalized) {
+  auto [source, data] = GetParam();
+  Quantize q{source, data, 256, 256};
+  q.row = false;
+  q.column = Column::kNormalized;
+  RunAndCompareSwizzled(q, kAllClasses, {false, true});
+}
+
+TEST_P(BlockScaledQuantizeSwizzleTest, ColumnTransposeFirst) {
+  auto [source, data] = GetParam();
+  Quantize q{source, data, 256, 256};
+  q.row = false;
+  q.column = Column::kTransposeFirst;
+  RunAndCompareSwizzled(q, kAllClasses, {false, true});
+}
+
+// 320 columns leave the last column tile partial.
+TEST_P(BlockScaledQuantizeSwizzleTest, ColumnPartialTile) {
+  auto [source, data] = GetParam();
+  Quantize q{source, data, 256, 320};
+  q.row = false;
+  q.column = Column::kNormalized;
+  RunAndCompareSwizzled(q, {InputClass::kRandom, InputClass::kMixed},
+                        {false, true});
+}
+
+TEST_P(BlockScaledQuantizeSwizzleTest, BothNormalized) {
+  auto [source, data] = GetParam();
+  Quantize q{source, data, 256, 256};
+  q.column = Column::kNormalized;
+  RunAndCompareSwizzled(q, kAllClasses, {false, true});
+}
+
+TEST_P(BlockScaledQuantizeSwizzleTest, BothTransposeFirst) {
+  auto [source, data] = GetParam();
+  Quantize q{source, data, 256, 256};
+  q.column = Column::kTransposeFirst;
+  RunAndCompareSwizzled(q, kAllClasses, {false, true});
+}
+
+TEST_P(BlockScaledQuantizeSwizzleTest, BothWithScaleOperand) {
+  auto [source, data] = GetParam();
+  Quantize q{source, data, 256, 256};
+  q.column = Column::kNormalized;
+  q.tiny_operand = true;
+  RunAndCompareSwizzled(
+      q,
+      {InputClass::kRandom, InputClass::kScaleSubstitution, InputClass::kMixed},
+      {false, true});
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    BlockScaledQuantizeSwizzleTests, BlockScaledQuantizeSwizzleTest,
+    ::testing::Combine(::testing::Values(BF16, F32),
+                       ::testing::Values(F8E4M3FN, F4E2M1FN)),
+    [](const ::testing::TestParamInfo<std::tuple<PrimitiveType, PrimitiveType>>&
+           info) {
+      return absl::StrCat(
+          primitive_util::LowercasePrimitiveTypeName(std::get<0>(info.param)),
+          "_",
+          primitive_util::LowercasePrimitiveTypeName(std::get<1>(info.param)));
+    });
+
+// The shards' scale results in another order, against today's pipeline with
+// the same order.
+class BlockScaledQuantizeShardPermutationTest
+    : public BlockScaledQuantizeShardTest {
+ protected:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions options =
+        BlockScaledQuantizeShardTest::GetDebugOptionsForTest();
+    options.set_xla_gpu_experimental_enable_fusion_autotuner(false);
+    return options;
+  }
+};
+
+TEST_P(BlockScaledQuantizeShardPermutationTest, PermutedScales) {
+  auto [data, cols, row] = GetParam();
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> fused,
+      ParseAndReturnVerifiedModule(ShardFusedModule(data, cols, row)));
+  ASSERT_OK(PermuteScaleResults(fused->entry_computation()
+                                    ->root_instruction()
+                                    ->fused_instructions_computation()));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> unfused,
+      ParseAndReturnVerifiedModule(ShardUnfusedModule(data, cols, row)));
+  ASSERT_OK(PermuteScaleResults(unfused->entry_computation()));
+  unfused->mutable_config()
+      .mutable_debug_options()
+      .set_xla_allow_excess_precision(false);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> fused_executable,
+                       CreateExecutable(std::move(fused),
+                                        /*run_hlo_passes=*/false));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> unfused_executable,
+                       CreateExecutable(std::move(unfused),
+                                        /*run_hlo_passes=*/true));
+  for (InputClass c : {InputClass::kRandom, InputClass::kMixed,
+                       InputClass::kScaleSubstitution}) {
+    SCOPED_TRACE(ClassName(c));
+    Literal stack(ShapeUtil::MakeShape(F32, {2, 512, cols}));
+    for (int64_t slice = 0; slice < 2; ++slice) {
+      Literal source =
+          MakeSource(F32, 512, cols, c, static_cast<int>(c) * 2 + slice);
+      absl::c_copy(source.data<float>(),
+                   stack.data<float>().begin() + slice * 512 * cols);
+    }
+    std::vector<Literal> arguments;
+    arguments.push_back(std::move(stack));
+    arguments.push_back(LiteralUtil::CreateR0<int32_t>(1));
+    ASSERT_OK_AND_ASSIGN(Literal expected,
+                         test_runner().ExecuteWithExecutable(
+                             unfused_executable.get(), arguments));
+    ASSERT_OK_AND_ASSIGN(
+        Literal actual,
+        test_runner().ExecuteWithExecutable(fused_executable.get(), arguments));
+    EXPECT_TRUE(LiteralTestUtil::Equal(expected, actual));
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    BlockScaledQuantizeShardPermutationTests,
+    BlockScaledQuantizeShardPermutationTest,
+    ::testing::Combine(::testing::Values(F8E4M3FN, F4E2M1FN),
+                       ::testing::Values(192, 256), ::testing::Bool()),
+    [](const ::testing::TestParamInfo<std::tuple<PrimitiveType, int64_t, bool>>&
+           info) {
+      return absl::StrCat(
+          primitive_util::LowercasePrimitiveTypeName(std::get<0>(info.param)),
+          "_", std::get<1>(info.param), std::get<2>(info.param) ? "_pair" : "");
+    });
+
 // An optimized module and the executable that owns it.
 using OptimizedModule =
     std::pair<const HloModule*, std::unique_ptr<OpaqueExecutable>>;
@@ -1432,6 +1727,136 @@ class BlockScaledQuantizePipelineTest
     }
   }
 };
+
+int64_t CountScaleSwizzles(const HloModule& module) {
+  int64_t count = 0;
+  for (const HloInstruction* instr :
+       module.entry_computation()->instructions()) {
+    count += instr->IsLoopFusion() &&
+             absl::StartsWith(instr->name(), "hipblaslt_mx_scale_32x8");
+  }
+  return count;
+}
+
+class BlockScaledQuantizeScaledDotTest : public HloPjRtGpuTestBase {
+ protected:
+  DebugOptions GetDebugOptionsForTest() const override {
+    DebugOptions options = HloPjRtGpuTestBase::GetDebugOptionsForTest();
+    options.set_xla_gpu_experimental_enable_fusion_autotuner(false);
+    options.set_xla_gpu_experimental_scaled_dot_with_triton(true);
+    options.set_xla_gpu_enable_triton_gemm(true);
+    options.set_xla_gpu_blas_max_algorithms(4);
+    options.set_xla_autotuner_preferred_backend(autotuner::HIPBLASLT);
+    options.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(
+        DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_PRESWIZZLED_32X8);
+    return options;
+  }
+};
+
+// An MX scaled-dot on hipBLASLt with 32x8 scales, its lhs and lhs scale from a
+// quantize fusion: as the autotuner leaves it, with the lhs scale swizzled by
+// a kernel of its own, and after the swizzle folding.
+TEST_F(BlockScaledQuantizeScaledDotTest, SwizzleFoldedIntoQuantizeFusion) {
+  const auto* rocm =
+      device_description().gpu_compute_capability().rocm_compute_capability();
+  if (rocm == nullptr || !rocm->gfx9_mi350()) {
+    GTEST_SKIP() << "32x8 hipBLASLt scales require gfx950.";
+  }
+  constexpr int64_t kM = 256, kN = 256, kK = 512;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> optimized,
+                       GetOptimizedModule(R"hlo(
+    ENTRY main {
+      a = f8e4m3fn[256,512] parameter(0)
+      b = f8e4m3fn[256,512] parameter(1)
+      sa = f8e8m0fnu[256,16] parameter(2)
+      sb = f8e8m0fnu[256,16] parameter(3)
+      ROOT dot = f32[256,256] scaled-dot(a, b, sa, sb),
+          lhs_contracting_dims={1}, rhs_contracting_dims={1}
+    })hlo"));
+  ASSERT_EQ(CountScaleSwizzles(*optimized), 2) << optimized->ToString();
+
+  // Parameters 0 and 2 become the data and scale results of a quantize fusion
+  // of a bf16 parameter 0; parameter 2 stays, unused.
+  std::string quantize = FusedModule(Quantize{BF16, F8E4M3FN, kM, kK});
+  quantize = absl::StrReplaceAll(quantize.substr(0, quantize.find("ENTRY")),
+                                 {{"HloModule fused\n", ""},
+                                  {"max_bf16", "e2e_max_bf16"},
+                                  {"max_f32", "e2e_max_f32"},
+                                  {"fused_quantize", "e2e_quantize"}});
+  std::string text = absl::StrReplaceAll(
+      optimized->ToString(), {{"is_scheduled=true, ", ""}});
+  ASSERT_TRUE(RE2::Replace(
+      &text, R"(entry_computation_layout=\{\(f8e4m3fn\[256,512\]\{1,0\})",
+      "entry_computation_layout={(bf16[256,512]{1,0}"));
+  text.insert(text.find("\nENTRY ") + 1, quantize);
+  const RE2 lhs(
+      R"((%[a-z_.0-9]+) = f8e4m3fn\[256,512\]\{1,0\} parameter\(0\))");
+  const RE2 lhs_scale(
+      R"((%[a-z_.0-9]+) = f8e8m0fnu\[256,16\]\{1,0\} parameter\(2\))");
+  std::string lhs_name, lhs_scale_name;
+  ASSERT_TRUE(RE2::PartialMatch(text, lhs, &lhs_name)) << text;
+  ASSERT_TRUE(RE2::PartialMatch(text, lhs_scale, &lhs_scale_name)) << text;
+  const size_t body = text.find("{\n", text.find("\nENTRY ")) + 2;
+  text.insert(body,
+              "  %x = bf16[256,512]{1,0} parameter(0)\n  %q = (f8e4m3fn[256,16,"
+              "32]{2,1,0}, u8[256,16]{1,0}) fusion(%x), kind=kCustom, "
+              "calls=%e2e_quantize, backend_config={\"fusion_backend_config\":"
+              "{\"kind\":\"__block_scaled_quantize\"}}\n  %q_data = "
+              "f8e4m3fn[256,16,32]{2,1,0} get-tuple-element(%q), index=0\n  "
+              "%q_scale = u8[256,16]{1,0} get-tuple-element(%q), index=1\n");
+  ASSERT_TRUE(RE2::Replace(
+      &text, lhs,
+      absl::StrCat(lhs_name, " = f8e4m3fn[256,512]{1,0} bitcast(%q_data)")));
+  ASSERT_TRUE(RE2::Replace(
+      &text, lhs_scale,
+      absl::StrCat("%sa_unused = f8e8m0fnu[256,16]{1,0} parameter(2)\n  ",
+                   lhs_scale_name,
+                   " = f8e8m0fnu[256,16]{1,0} bitcast(%q_scale)")));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> natural,
+                       ParseAndReturnVerifiedModule(text));
+  std::unique_ptr<HloModule> folded = natural->Clone();
+  ASSERT_THAT(BlockScaledQuantizeSwizzleFolding().Run(folded.get()),
+              absl_testing::IsOkAndHolds(true));
+  EXPECT_EQ(CountScaleSwizzles(*natural), 2);
+  EXPECT_EQ(CountScaleSwizzles(*folded), 1) << folded->ToString();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> natural_executable,
+                       CreateExecutable(std::move(natural),
+                                        /*run_hlo_passes=*/false));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> folded_executable,
+                       CreateExecutable(std::move(folded),
+                                        /*run_hlo_passes=*/false));
+
+  std::mt19937 rng(7);
+  std::uniform_int_distribution<int> magnitude(0, 0x7e);
+  std::uniform_int_distribution<int> exponent(124, 130);
+  for (InputClass c : {InputClass::kRandom, InputClass::kMixed,
+                       InputClass::kScaleSubstitution}) {
+    SCOPED_TRACE(ClassName(c));
+    Literal rhs(ShapeUtil::MakeShape(F8E4M3FN, {kN, kK}));
+    for (tsl::float8_e4m3fn& value : rhs.data<tsl::float8_e4m3fn>()) {
+      value = tsl::float8_e4m3fn::FromRep(
+          static_cast<uint8_t>(magnitude(rng) | (rng() & 0x80)));
+    }
+    Literal rhs_scale(ShapeUtil::MakeShape(F8E8M0FNU, {kN, kK / 32}));
+    for (tsl::float8_e8m0fnu& value : rhs_scale.data<tsl::float8_e8m0fnu>()) {
+      value =
+          tsl::float8_e8m0fnu::FromRep(static_cast<uint8_t>(exponent(rng)));
+    }
+    std::vector<Literal> arguments;
+    arguments.push_back(MakeSource(BF16, kM, kK, c, static_cast<int>(c)));
+    arguments.push_back(std::move(rhs));
+    arguments.push_back(
+        Literal(ShapeUtil::MakeShape(F8E8M0FNU, {kM, kK / 32})));
+    arguments.push_back(std::move(rhs_scale));
+    ASSERT_OK_AND_ASSIGN(Literal expected,
+                         test_runner().ExecuteWithExecutable(
+                             natural_executable.get(), arguments));
+    ASSERT_OK_AND_ASSIGN(Literal actual,
+                         test_runner().ExecuteWithExecutable(
+                             folded_executable.get(), arguments));
+    EXPECT_TRUE(LiteralTestUtil::Equal(expected, actual));
+  }
+}
 
 constexpr InputClass kPipelineClasses[] = {
     InputClass::kRandom,

@@ -268,6 +268,47 @@ bool IsDataType(PrimitiveType type) {
   return type == F8E4M3FN || type == F4E2M1FN;
 }
 
+// Whether each dimension of `shape` is the product of consecutive dimensions of
+// `split`.
+bool OnlySplitsDimensions(const Shape& shape, const Shape& split) {
+  int64_t next = 0;
+  for (int64_t dim : shape.dimensions()) {
+    int64_t product = 1;
+    while (product < dim && next < split.dimensions().size()) {
+      product *= split.dimensions(next++);
+    }
+    if (product != dim) {
+      return false;
+    }
+  }
+  while (next < split.dimensions().size() && split.dimensions(next) == 1) {
+    ++next;
+  }
+  return next == split.dimensions().size();
+}
+
+// The reshape, transpose and reshape of a result `merge` that store its bytes
+// in another order (the hipBLASLt 32x8 scale swizzle): the first reshape only
+// splits dimensions and the last one restores the shape.
+std::vector<const HloInstruction*> MatchResultPermutation(
+    const HloInstruction& merge) {
+  if (merge.opcode() != HloOpcode::kReshape || merge.user_count() != 1) {
+    return {};
+  }
+  const HloInstruction* transpose = merge.operand(0);
+  if (transpose->opcode() != HloOpcode::kTranspose ||
+      transpose->user_count() != 1) {
+    return {};
+  }
+  const HloInstruction* split = transpose->operand(0);
+  if (split->opcode() != HloOpcode::kReshape || split->user_count() != 1 ||
+      !ShapeUtil::SameDimensions(merge.shape(), split->operand(0)->shape()) ||
+      !OnlySplitsDimensions(split->operand(0)->shape(), split->shape())) {
+    return {};
+  }
+  return {split, transpose, &merge};
+}
+
 // (d0, d1) of `sizes` -> the source (row, col) of the block's first element.
 IndexingMap BlockToElement(Orientation orientation,
                            absl::Span<const int64_t> sizes, int64_t block_size,
@@ -431,6 +472,13 @@ absl::StatusOr<BlockScaledQuantizeAnalysis> AnalyzeBlockScaledQuantize(
     }
   }
 
+  absl::flat_hash_set<const HloInstruction*> result_permutations;
+  for (const HloInstruction* output : root->operands()) {
+    for (const HloInstruction* instr : MatchResultPermutation(*output)) {
+      result_permutations.insert(instr);
+    }
+  }
+
   absl::flat_hash_map<const HloInstruction*, Classification> regions;
   absl::flat_hash_map<const HloInstruction*, IndexingMap> element_to_amax;
   for (const HloInstruction* instr : post_order) {
@@ -483,8 +531,13 @@ absl::StatusOr<BlockScaledQuantizeAnalysis> AnalyzeBlockScaledQuantize(
                         operand.owner, instr};
       continue;
     }
-    if (!IsAllowedRegionOp(*instr)) {
+    if (!IsAllowedRegionOp(*instr) && !result_permutations.contains(instr)) {
       return Refuse(absl::StrCat("unsupported instruction ", instr->name()));
+    }
+    if (result_permutations.contains(instr) &&
+        regions.at(instr->operand(0)).region != Region::kScale) {
+      return Refuse(absl::StrCat(instr->name(),
+                                 " permutes a result other than a scale"));
     }
     std::vector<int64_t> scale_operands;
     std::vector<int64_t> element_operands;

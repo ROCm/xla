@@ -17,6 +17,8 @@ limitations under the License.
 
 #include <cstdint>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -795,6 +797,117 @@ TEST_F(BlockScaledQuantizeAnalysisTest, RowWithBf16DataRegion) {
   EXPECT_THAT(
       analysis.quantizations[0].broadcast_scales,
       ElementsAre(::testing::Property(&HloInstruction::name, "r_dec_bf16")));
+}
+
+// The u8[rows, cols] scale `name` in the hipBLASLt 32x8 order, as the swizzle
+// folding pass leaves it in the fused computation: `name`_sw.
+std::string Swizzled(absl::string_view name, int64_t rows, int64_t cols) {
+  return absl::StrReplaceAll(
+      R"(
+  $n_split = u8[$R32,2,16,$C8,2,4] reshape($n)
+  $n_perm = u8[$R32,$C8,4,16,2,2] transpose($n_split), dimensions={0,3,5,2,4,1}
+  $n_sw = u8[$R,$C] reshape($n_perm)
+)",
+      {{"$n", name},
+       {"$R32", absl::StrCat(rows / 32)},
+       {"$C8", absl::StrCat(cols / 8)},
+       {"$R", absl::StrCat(rows)},
+       {"$C", absl::StrCat(cols)}});
+}
+
+// Where element (row, col) of a u8[rows, cols] scale lands in the 32x8 order.
+std::vector<int64_t> SwizzledPosition(int64_t rows, int64_t cols, int64_t row,
+                                      int64_t col) {
+  const int64_t split[] = {row / 32,     row % 32 / 16, row % 16,
+                           col / 8,      col % 8 / 4,   col % 4};
+  const int64_t permutation[] = {0, 3, 5, 2, 4, 1};
+  const int64_t sizes[] = {rows / 32, cols / 8, 4, 16, 2, 2};
+  int64_t linear = 0;
+  for (int64_t i = 0; i < 6; ++i) {
+    linear = linear * sizes[i] + split[permutation[i]];
+  }
+  return {linear / cols, linear % cols};
+}
+
+TEST_F(BlockScaledQuantizeAnalysisTest, RowScaleSwizzled) {
+  for (auto [type, max, inv_max, layout] :
+       {std::make_tuple("f8e4m3fn", "448", "0.00223214296", ""),
+        std::make_tuple("f4e2m1fn", "6", "0.166666672", "{2,1,0:E(4)}")}) {
+    SCOPED_TRACE(type);
+    ASSERT_OK_AND_ASSIGN(
+        BlockScaledQuantizeAnalysis analysis,
+        Analyze(Module(absl::StrCat(
+            RowBody(type, max, inv_max), Swizzled("r_scale", 128, 8),
+            "  ROOT t = (", type, "[128,8,32]", layout,
+            ", u8[128,8]) tuple(r_data, r_scale_sw)"))));
+    ASSERT_EQ(analysis.quantizations.size(), 1);
+    const BlockScaledQuantization& row = analysis.quantizations[0];
+    EXPECT_THAT(row.scale_root_indices, ElementsAre(1));
+    EXPECT_THAT(Evaluate(row.data_root_indexing[0], {70, 100}),
+                ElementsAre(70, 3, 4));
+    for (auto [r, b] : {std::pair<int64_t, int64_t>{70, 3}, {0, 0}, {127, 7},
+                        {33, 5}}) {
+      EXPECT_EQ(Evaluate(row.scale_root_indexing[0], {r, b}),
+                SwizzledPosition(128, 8, r, b));
+    }
+  }
+}
+
+TEST_F(BlockScaledQuantizeAnalysisTest, ColumnScaleSwizzled) {
+  ASSERT_OK_AND_ASSIGN(
+      BlockScaledQuantizeAnalysis analysis,
+      Analyze(Module(absl::StrCat(
+          "  p0 = bf16[256,256] parameter(0)", ColumnOf(256, 256),
+          Swizzled("c_scale", 256, 8),
+          "  ROOT t = (f8e4m3fn[256,8,32], u8[256,8]) tuple(c_data, "
+          "c_scale_sw)"))));
+  ASSERT_EQ(analysis.quantizations.size(), 1);
+  const BlockScaledQuantization& column = analysis.quantizations[0];
+  EXPECT_EQ(column.orientation, Orientation::kColumn);
+  // Block 2 of column 100 is element (100, 2) of the natural scale.
+  EXPECT_EQ(Evaluate(column.scale_root_indexing[0], {2, 100}),
+            SwizzledPosition(256, 8, 100, 2));
+}
+
+TEST_F(BlockScaledQuantizeAnalysisTest, BothScalesSwizzled) {
+  std::string pair = PairOf(256, 256);
+  pair.replace(pair.find("  ROOT t"), std::string::npos,
+               absl::StrCat(Swizzled("r_scale", 256, 8),
+                            Swizzled("c_scale", 256, 8),
+                            "  ROOT t = (f8e4m3fn[256,8,32], "
+                            "f8e4m3fn[256,8,32], u8[256,8], u8[256,8]) "
+                            "tuple(r_data, c_data, r_scale_sw, c_scale_sw)"));
+  ASSERT_OK_AND_ASSIGN(BlockScaledQuantizeAnalysis analysis,
+                       Analyze(Module(pair)));
+  ASSERT_EQ(analysis.quantizations.size(), 2);
+  EXPECT_THAT(analysis.row()->scale_root_indices, ElementsAre(2));
+  EXPECT_THAT(analysis.column()->scale_root_indices, ElementsAre(3));
+  EXPECT_EQ(Evaluate(analysis.row()->scale_root_indexing[0], {200, 6}),
+            SwizzledPosition(256, 8, 200, 6));
+  EXPECT_EQ(Evaluate(analysis.column()->scale_root_indexing[0], {6, 200}),
+            SwizzledPosition(256, 8, 200, 6));
+}
+
+TEST_F(BlockScaledQuantizeAnalysisTest, RefusesPermutedDataResult) {
+  EXPECT_THAT(Analyze(Module(absl::StrCat(
+                  RowBody("f8e4m3fn", "448", "0.00223214296"), R"(
+  d_split = f8e4m3fn[4,32,8,32] reshape(r_data)
+  d_perm = f8e4m3fn[32,4,8,32] transpose(d_split), dimensions={1,0,2,3}
+  d_sw = f8e4m3fn[128,8,32] reshape(d_perm)
+  ROOT t = (f8e4m3fn[128,8,32], u8[128,8]) tuple(d_sw, r_scale))"))),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("permutes a result other than a scale")));
+}
+
+TEST_F(BlockScaledQuantizeAnalysisTest, RefusesScaleReshapeThatMerges) {
+  EXPECT_THAT(Analyze(Module(absl::StrCat(
+                  RowBody("f8e4m3fn", "448", "0.00223214296"), R"(
+  s_merged = u8[8,128] reshape(r_scale)
+  s_perm = u8[128,8] transpose(s_merged), dimensions={1,0}
+  s_sw = u8[128,8] reshape(s_perm)
+  ROOT t = (f8e4m3fn[128,8,32], u8[128,8]) tuple(r_data, s_sw))"))),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("unsupported instruction s_merged")));
 }
 
 }  // namespace

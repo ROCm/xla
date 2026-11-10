@@ -87,6 +87,7 @@ limitations under the License.
 #include "xla/backends/gpu/transforms/algorithm_checker.h"
 #include "xla/backends/gpu/transforms/async_wrapper.h"
 #include "xla/backends/gpu/transforms/block_scaled_quantize_fusion.h"
+#include "xla/backends/gpu/transforms/block_scaled_quantize_swizzle_folding.h"
 #include "xla/backends/gpu/transforms/collectives/all_gather_combiner.h"
 #include "xla/backends/gpu/transforms/collectives/all_gather_dynamic_slice_simplifier.h"
 #include "xla/backends/gpu/transforms/collectives/all_gather_major_dimension_rewriter.h"
@@ -2040,6 +2041,15 @@ absl::Status GpuCompiler::OptimizeHloModule(
 
     ABSL_RETURN_IF_ERROR(pipeline.Run(hlo_module).status());
     mlir_context_pool_.Clear();
+  }
+
+  if (hlo_module->config()
+          .debug_options()
+          .xla_gpu_experimental_enable_block_scaled_quantize_fusion()) {
+    HloPassPipeline pipeline("block-scaled-quantize-swizzle-folding",
+                             compilation_stats);
+    pipeline.AddPass<BlockScaledQuantizeSwizzleFolding>();
+    ABSL_RETURN_IF_ERROR(pipeline.Run(hlo_module).status());
   }
 
   {
