@@ -15,6 +15,7 @@ limitations under the License.
 
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -104,9 +105,44 @@ struct RewriteFp8TruncFPattern : public Fp8OpRewritePattern<arith::TruncFOp> {
       return mlir::success();
     }
 
+    if (vector::FromElementsOp from_elements = MatchFromElements(op)) {
+      llvm::SmallVector<mlir::Value, 4> inputs;
+      for (mlir::Value element : from_elements.getElements()) {
+        inputs.push_back(element.getDefiningOp<arith::TruncFOp>().getIn());
+      }
+      auto vector_ty =
+          mlir::cast<mlir::FixedVectorType>(from_elements.getType());
+      rewriter.setInsertionPoint(from_elements);
+      mlir::ImplicitLocOpBuilder b(op.getLoc(), rewriter);
+      rewriter.replaceOp(from_elements, EmitVectorizedTruncToF8Intrinsic(
+                                            inputs, vector_ty, b));
+      return mlir::success();
+    }
+
     mlir::ImplicitLocOpBuilder b(op.getLoc(), rewriter);
     rewriter.replaceOp(op, EmitTruncToF8Intrinsic(src, dst_ty, b));
     return mlir::success();
+  }
+
+  static vector::FromElementsOp MatchFromElements(arith::TruncFOp op) {
+    if (!op->hasOneUse()) {
+      return nullptr;
+    }
+    auto from_elements =
+        mlir::dyn_cast<vector::FromElementsOp>(*op->user_begin());
+    if (!from_elements) {
+      return nullptr;
+    }
+    int64_t num_elements = from_elements.getType().getNumElements();
+    if (num_elements < 2 || !llvm::isPowerOf2_64(num_elements)) {
+      return nullptr;
+    }
+    if (!llvm::all_of(from_elements.getElements(), [](mlir::Value element) {
+          return element.getDefiningOp<arith::TruncFOp>() != nullptr;
+        })) {
+      return nullptr;
+    }
+    return from_elements;
   }
 
   std::optional<std::tuple<llvm::SmallVector<mlir::Value, 4>, FixedVectorValue>>
@@ -549,6 +585,132 @@ struct RewriteFp8ExtFPattern : public Fp8OpRewritePattern<arith::ExtFOp> {
   }
 };
 
+struct RewriteFp4TruncFPattern
+    : public mlir::OpRewritePattern<arith::TruncFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult matchAndRewrite(
+      arith::TruncFOp op, mlir::PatternRewriter& rewriter) const override {
+    auto dst_ty = mlir::dyn_cast<mlir::Float4E2M1FNType>(op.getType());
+    if (!dst_ty) {
+      return rewriter.notifyMatchFailure(op, "unsupported float conversion");
+    }
+    if (!IsTruncFromF32F16OrBf16(op)) {
+      return rewriter.notifyMatchFailure(op, "only f32, f16 and bf16 sources");
+    }
+
+    if (vector::FromElementsOp from_elements = MatchFromElements(op)) {
+      rewriter.setInsertionPoint(from_elements);
+      mlir::ImplicitLocOpBuilder b(op.getLoc(), rewriter);
+      rewriter.replaceOp(from_elements,
+                         EmitVectorizedTruncToF4Intrinsic(from_elements, b));
+      return mlir::success();
+    }
+
+    mlir::ImplicitLocOpBuilder b(op.getLoc(), rewriter);
+    mlir::Value x = ExtendToF32ForFp4(op.getIn(), b);
+    mlir::Value word = EmitTruncToF4x2Intrinsic(
+        LLVM::ConstantOp::create(b, b.getI32Type(), 0), x, x, 0, b);
+    mlir::Value bits = LLVM::TruncOp::create(b, b.getIntegerType(4), word);
+    rewriter.replaceOp(op, arith::BitcastOp::create(b, dst_ty, bits));
+    return mlir::success();
+  }
+
+  static bool IsTruncFromF32F16OrBf16(arith::TruncFOp op) {
+    return mlir::isa<mlir::Float32Type, mlir::Float16Type, mlir::BFloat16Type>(
+        op.getIn().getType());
+  }
+
+  static vector::FromElementsOp MatchFromElements(arith::TruncFOp op) {
+    if (!op->hasOneUse()) {
+      return nullptr;
+    }
+    auto from_elements =
+        mlir::dyn_cast<vector::FromElementsOp>(*op->user_begin());
+    if (!from_elements) {
+      return nullptr;
+    }
+    int64_t num_elements = from_elements.getType().getNumElements();
+    if (num_elements < 2 || !llvm::isPowerOf2_64(num_elements)) {
+      return nullptr;
+    }
+    for (mlir::Value element : from_elements.getElements()) {
+      auto truncf = element.getDefiningOp<arith::TruncFOp>();
+      if (!truncf || !IsTruncFromF32F16OrBf16(truncf)) {
+        return nullptr;
+      }
+    }
+    return from_elements;
+  }
+
+  // NaN -> -0: the instruction gives +-6, ExpandFloatOps 0x8.
+  static mlir::Value ExtendToF32ForFp4(mlir::Value value,
+                                       mlir::ImplicitLocOpBuilder& b) {
+    mlir::FloatType f32_ty = b.getF32Type();
+    if (value.getType() != f32_ty) {
+      value = arith::ExtFOp::create(b, f32_ty, value);
+    }
+    mlir::Value is_nan =
+        arith::CmpFOp::create(b, arith::CmpFPredicate::UNO, value, value);
+    return arith::SelectOp::create(
+        b, is_nan, LLVM::ConstantOp::create(b, b.getF32FloatAttr(-0.0f)),
+        value);
+  }
+
+  // `lo` to the low and `hi` to the high nibble of byte `byte` of `word`.
+  static mlir::Value EmitTruncToF4x2Intrinsic(mlir::Value word, mlir::Value lo,
+                                              mlir::Value hi, int byte,
+                                              mlir::ImplicitLocOpBuilder& b) {
+    mlir::IntegerType i32_ty = b.getI32Type();
+    return LLVM::CallIntrinsicOp::create(
+               b, i32_ty,
+               b.getStringAttr("llvm.amdgcn.cvt.scalef32.pk.fp4.f32"),
+               mlir::ValueRange{
+                   word, lo, hi,
+                   LLVM::ConstantOp::create(b, b.getF32FloatAttr(1.0f)),
+                   LLVM::ConstantOp::create(b, i32_ty, byte)})
+        .getResult(0);
+  }
+
+  // Element 2k to the low nibble of byte k % 4 of word k / 4.
+  static mlir::Value EmitVectorizedTruncToF4Intrinsic(
+      vector::FromElementsOp from_elements, mlir::ImplicitLocOpBuilder& b) {
+    mlir::IntegerType i32_ty = b.getI32Type();
+    mlir::OperandRange elements = from_elements.getElements();
+    llvm::SmallVector<mlir::Value, 2> words;
+    for (size_t i = 0; i < elements.size(); i += 2) {
+      if (i % 8 == 0) {
+        words.push_back(LLVM::ConstantOp::create(b, i32_ty, 0));
+      }
+      words.back() = EmitTruncToF4x2Intrinsic(
+          words.back(),
+          ExtendToF32ForFp4(
+              elements[i].getDefiningOp<arith::TruncFOp>().getIn(), b),
+          ExtendToF32ForFp4(
+              elements[i + 1].getDefiningOp<arith::TruncFOp>().getIn(), b),
+          (i % 8) / 2, b);
+    }
+    mlir::Value packed = words.front();
+    if (words.size() > 1) {
+      packed = LLVM::UndefOp::create(
+          b, mlir::VectorType::get(words.size(), i32_ty));
+      for (auto [i, word] : llvm::enumerate(words)) {
+        packed = LLVM::InsertElementOp::create(
+            b, packed, word, LLVM::ConstantOp::create(b, i32_ty, i));
+      }
+    } else if (elements.size() < 8) {
+      packed = LLVM::TruncOp::create(
+          b, b.getIntegerType(4 * elements.size()), packed);
+    }
+    packed = LLVM::BitcastOp::create(
+        b, mlir::VectorType::get(elements.size(), b.getIntegerType(4)),
+        packed);
+    return mlir::UnrealizedConversionCastOp::create(
+               b, from_elements.getType(), packed)
+        .getResult(0);
+  }
+};
+
 class ConvertFloatAMDPass
     : public impl::ConvertFloatAMDPassBase<ConvertFloatAMDPass> {
  public:
@@ -570,6 +732,9 @@ class ConvertFloatAMDPass
     bool nativeNanooFp8 = cc_.has_nanoo_fp8_support();
     patterns.add<RewriteFp8TruncFPattern, RewriteFp8ExtFPattern>(
         &getContext(), nativeNanooFp8);
+    if (cc_.gfx9_mi350()) {
+      patterns.add<RewriteFp4TruncFPattern>(&getContext());
+    }
     if (mlir::failed(
             mlir::applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();
