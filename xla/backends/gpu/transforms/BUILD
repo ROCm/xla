@@ -3153,7 +3153,6 @@ cc_library(
         "//xla/hlo/ir:hlo",
         "//xla/hlo/pass:hlo_pass",
         "//xla/hlo/transforms/simplifiers:hlo_dce",
-        "//xla/service:call_graph",
         "//xla/service/gpu:cublas_cudnn",
         "//xla/service/gpu:valid_prefix_extent",
         "@com_google_absl//absl/container:flat_hash_map",
