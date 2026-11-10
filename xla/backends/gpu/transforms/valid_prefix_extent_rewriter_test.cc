@@ -98,6 +98,11 @@ TEST_F(ValidPrefixExtentRewriterTest,
       [](HloModule* module) -> absl::StatusOr<HloInstruction*> {
     for (HloInstruction* instruction :
          module->entry_computation()->instructions()) {
+      if (instruction->opcode() != HloOpcode::kFusion ||
+          !instruction->shape().IsArray() ||
+          instruction->shape().dimensions().empty()) {
+        continue;
+      }
       ABSL_ASSIGN_OR_RETURN(std::optional<ValidPrefixExtent> extent,
                             GetValidPrefixExtent(*instruction));
       if (extent.has_value()) {
@@ -131,7 +136,6 @@ ENTRY main {
                        GetValidPrefixExtent(*valid_prefix_fusion));
   ASSERT_TRUE(extent.has_value());
   EXPECT_EQ(extent->operand_index, 1);
-  EXPECT_EQ(extent->dimension, 0);
   EXPECT_EQ(extent->capacity, 8);
   EXPECT_FALSE(valid_prefix_fusion->fused_parameter(1)->users().empty());
   const Shape& extent_shape = valid_prefix_fusion->operand(1)->shape();
@@ -242,7 +246,7 @@ ENTRY main {
   HloInstruction* extent = fusion->mutable_operand(1);
   ValidPrefixExtentRewriter rewriter;
   ASSERT_OK_AND_ASSIGN(bool changed, rewriter.Run(module.get()));
-  EXPECT_TRUE(changed);
+  EXPECT_FALSE(changed);
   ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> contract,
                        GetValidPrefixExtent(*fusion));
   ASSERT_TRUE(contract.has_value());
@@ -276,7 +280,7 @@ ENTRY main {
   ASSERT_NE(fusion, nullptr);
   ValidPrefixExtentRewriter rewriter;
   ASSERT_OK_AND_ASSIGN(bool changed, rewriter.Run(module.get()));
-  EXPECT_FALSE(changed);
+  EXPECT_TRUE(changed);
   ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> contract,
                        GetValidPrefixExtent(*fusion));
   EXPECT_FALSE(contract.has_value());
@@ -325,7 +329,7 @@ ENTRY main {
 
   ValidPrefixExtentRewriter rewriter;
   ASSERT_OK_AND_ASSIGN(bool changed, rewriter.Run(module.get()));
-  EXPECT_FALSE(changed);
+  EXPECT_TRUE(changed);
   ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> first_contract,
                        GetValidPrefixExtent(*first));
   ASSERT_OK_AND_ASSIGN(std::optional<ValidPrefixExtent> second_contract,

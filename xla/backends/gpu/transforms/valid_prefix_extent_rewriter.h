@@ -25,8 +25,8 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
-// Resolves DynamicPadder's transient valid-prefix association into a scalar
-// operand of each eligible GPU loop fusion.
+// Retains valid-prefix markers only in GPU loop fusions whose consumers cannot
+// observe the unspecified tail.
 class ValidPrefixExtentRewriter : public HloModulePass {
  public:
   absl::string_view name() const override {

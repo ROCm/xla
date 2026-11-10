@@ -3150,9 +3150,10 @@ cc_library(
     srcs = ["valid_prefix_extent_rewriter.cc"],
     hdrs = ["valid_prefix_extent_rewriter.h"],
     deps = [
-        "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/pass:hlo_pass",
+        "//xla/hlo/transforms/simplifiers:hlo_dce",
+        "//xla/service:call_graph",
         "//xla/service/gpu:cublas_cudnn",
         "//xla/service/gpu:valid_prefix_extent",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -3160,7 +3161,7 @@ cc_library(
         "@com_google_absl//absl/status:status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
     ],
 )
 

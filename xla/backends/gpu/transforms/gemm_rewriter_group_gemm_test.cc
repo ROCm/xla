@@ -116,7 +116,7 @@ ENTRY main {
                     R"(
                     ; CHECK: custom_call_target="__cublas$lt$groupedMatmul"
                     ; CHECK: kind=kLoop
-                    ; CHECK-SAME: valid_prefix_extent
+                    ; CHECK: custom_call_target="xla.valid_prefix"
                     ; CHECK-NOT: compare(
                     )");
 }

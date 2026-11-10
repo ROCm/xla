@@ -2077,7 +2077,6 @@ absl::Status GpuCompiler::OptimizeHloModule(
     // been wrapped in a fusion.
     HloPassPipeline pipeline("valid-prefix extent", compilation_stats);
     pipeline.AddPass<ValidPrefixExtentRewriter>();
-    pipeline.AddPass<HloDCE>();
     ABSL_RETURN_IF_ERROR(
         pipeline.Run(hlo_module, {HloInstruction::kMainExecutionThread})
             .status());
