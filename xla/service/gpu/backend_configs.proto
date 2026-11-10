@@ -468,7 +468,7 @@ enum DeviceType {
 }
 
 // Generic backend config for XLA:GPU
-// Next-Id: 20
+// Next-Id: 19
 message GpuBackendConfig {
   // Specifies which operation queue the current instruction will run on.
   // A backend may have multiple operation queues to run instructions
