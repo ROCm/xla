@@ -90,7 +90,7 @@ jobs:
         --local_test_jobs=4
         --spawn_strategy=local
         --strategy=TestRunner=local
-        --run_under=//build_tools/rocm:sanitizer_wrapper_parallel_gpu_execute \
+        --run_under=//build_tools/rocm:sanitizer_wrapper_parallel_gpu_execute
         --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu
         --repo_env=TF_ROCM_RBE_MULTI_GPU_POOL=default
         --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950
