@@ -17,7 +17,9 @@ limitations under the License.
 
 #include <memory>
 #include <string>
+#include <utility>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/log/log.h"
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
@@ -26,10 +28,19 @@ limitations under the License.
 #include "rocm/rocm_config.h"  // IWYU pragma: keep
 #include "xla/backends/gpu/collectives/cancellation_token.h"
 #include "xla/backends/gpu/collectives/rccl_errors.h"
+#include "xla/core/collectives/rank_id.h"
 #include "xla/future.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/tsl/concurrency/executor.h"
 #include "xla/util.h"
+
+#if TF_ROCM_VERSION >= 100000
+// Exported by librccl.so in ROCm 10.0+ but declared only in RCCL's
+// nccl_device/core.h.
+extern "C" ncclResult_t ncclGetPeerDevicePointer(ncclWindow_t window,
+                                                 size_t offset, int peer,
+                                                 void** outPtr);
+#endif  // TF_ROCM_VERSION >= 100000
 
 namespace xla::gpu {
 namespace {
@@ -96,6 +107,16 @@ RcclSymmetricMemory::Create(ncclComm_t comm,
   // (Other ranks may be outside this rank's LSA team, e.g. on another node,
   // and legitimately have none.)
   if (symmetric_window && win != nullptr) {
+    // Deregisters the window unless the probe below shows it is symmetric.
+    absl::Cleanup deregister_non_symmetric = [&] {
+      const absl::Status deregistered =
+          WaitUntilDone(comm, ncclCommWindowDeregister(comm, win), cancel);
+      if (!deregistered.ok()) {
+        LOG(ERROR) << "Failed to deregister non-symmetric RCCL window: "
+                   << deregistered;
+      }
+      win = nullptr;
+    };
     int rank = -1;
     void* self_ptr = nullptr;
     absl::Status probe = XLA_RCCL_STATUS(ncclCommUserRank(comm, &rank));
@@ -103,7 +124,9 @@ RcclSymmetricMemory::Create(ncclComm_t comm,
       probe = XLA_RCCL_STATUS(
           ncclGetPeerDevicePointer(win, /*offset=*/0, rank, &self_ptr));
     }
-    if (!probe.ok() || self_ptr == nullptr) {
+    if (probe.ok() && self_ptr != nullptr) {
+      std::move(deregister_non_symmetric).Cancel();
+    } else {
       LOG_FIRST_N(WARNING, 1)
           << "ncclCommWindowRegister(NCCL_WIN_COLL_SYMMETRIC) returned a "
              "non-symmetric window ("
@@ -113,13 +136,6 @@ RcclSymmetricMemory::Create(ncclComm_t comm,
              "NCCL_CUMEM_ENABLE=1 and a communicator with symmetric memory "
              "support: ptr="
           << addr.opaque() << " size=" << addr.size();
-      const absl::Status deregistered =
-          WaitUntilDone(comm, ncclCommWindowDeregister(comm, win), cancel);
-      if (!deregistered.ok()) {
-        LOG(ERROR) << "Failed to deregister non-symmetric RCCL window: "
-                   << deregistered;
-      }
-      win = nullptr;
     }
   }
 #else
@@ -155,6 +171,28 @@ RcclSymmetricMemory::~RcclSymmetricMemory() {
 
 stream_executor::DeviceAddressBase RcclSymmetricMemory::addr() const {
   return addr_;
+}
+
+absl::StatusOr<stream_executor::DeviceAddressBase>
+RcclSymmetricMemory::peer_addr(RankId peer) const {
+#if TF_ROCM_VERSION >= 100000
+  if (win_ == nullptr) {
+    return absl::FailedPreconditionError(
+        "Cannot get peer address from null RCCL window.");
+  }
+  void* peer_ptr = nullptr;
+  XLA_RCCL_RETURN_IF_ERROR(
+      ncclGetPeerDevicePointer(win_, /*offset=*/0, peer.value(), &peer_ptr));
+  if (peer_ptr == nullptr) {
+    return absl::FailedPreconditionError(absl::StrFormat(
+        "Peer rank %d is not load/store accessible from this rank",
+        peer.value()));
+  }
+  return stream_executor::DeviceAddressBase(peer_ptr, addr_.size());
+#else
+  return absl::UnimplementedError(
+      "Peer address requires ncclGetPeerDevicePointer (ROCm 10.0+)");
+#endif  // TF_ROCM_VERSION >= 100000
 }
 
 std::string RcclSymmetricMemory::ToString() const {

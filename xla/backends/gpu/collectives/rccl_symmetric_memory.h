@@ -24,17 +24,10 @@ limitations under the License.
 #include "rocm/include/rccl/rccl.h"
 #include "rocm/rocm_config.h"  // IWYU pragma: keep
 #include "xla/backends/gpu/collectives/cancellation_token.h"
+#include "xla/core/collectives/rank_id.h"
 #include "xla/core/collectives/symmetric_memory.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/tsl/concurrency/executor.h"
-
-#if TF_ROCM_VERSION >= 100000
-// Exported by librccl.so in ROCm 10.0+ but declared only in RCCL's
-// nccl_device/core.h, which the ROCm install does not ship.
-extern "C" ncclResult_t ncclGetPeerDevicePointer(ncclWindow_t window,
-                                                 size_t offset, int peer,
-                                                 void** outPtr);
-#endif  // TF_ROCM_VERSION >= 100000
 
 namespace xla::gpu {
 
@@ -62,8 +55,14 @@ class RcclSymmetricMemory final : public SymmetricMemory {
 
   stream_executor::DeviceAddressBase addr() const final;
 
-  // multimem_addr() and peer_addr() are not supported by RCCL; the base-class
-  // defaults (returning Unimplemented) are used.
+  // Returns `peer`'s buffer as mapped into this rank's address space by the
+  // window. Fails if the buffer is unregistered or `peer` is not load/store
+  // accessible from this rank (e.g. on another node).
+  absl::StatusOr<stream_executor::DeviceAddressBase> peer_addr(
+      RankId peer) const final;
+
+  // multimem_addr() is not supported by RCCL; the base-class default
+  // (returning Unimplemented) is used.
 
   ncclWindow_t win() const { return win_; }
 
