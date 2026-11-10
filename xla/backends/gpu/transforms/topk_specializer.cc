@@ -19,6 +19,7 @@ limitations under the License.
 
 #include <cstdint>
 #include <initializer_list>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -458,16 +459,30 @@ bool RocmTritonTopKGate(const HloCustomCallInstruction* topk,
 }
 
 // Replaces `topk` by a __gpu$TopK custom call on the original values with the
-// same (values, indices) result, marked for the Triton TopK kernels.
+// same (values, indices) result, marked for the Triton TopK kernels. Rows split
+// into chunks get a third output: the scratch buffer of the chunk candidates.
 absl::StatusOr<HloInstruction*> RewriteTopKForRocmTriton(
-    HloCustomCallInstruction* topk) {
+    HloCustomCallInstruction* topk, const se::DeviceDescription& device) {
+  ABSL_ASSIGN_OR_RETURN(TopKKernelSpec spec, GetTopKKernelSpec(*topk));
+  std::optional<TopKKernelConfig> config = GetTopKKernelConfig(spec, device);
+  TF_RET_CHECK(config.has_value()) << spec.ToString();
+  const int64_t scratch_elements = GetTopKScratchElements(spec, *config);
+  Shape cc_shape = topk->shape();
+  if (scratch_elements > 0) {
+    cc_shape = ShapeUtil::MakeTupleShape(
+        {topk->shape().tuple_shapes(0), topk->shape().tuple_shapes(1),
+         ShapeUtil::MakeShape(U64, {scratch_elements})});
+  }
   HloComputation* comp = topk->parent();
   auto* new_topk = Cast<HloCustomCallInstruction>(
       comp->AddInstruction(HloInstruction::CreateCustomCall(
-          topk->shape(), topk->operands(), "__gpu$TopK",
+          cc_shape, topk->operands(), "__gpu$TopK",
           /*opaque=*/"", CustomCallApiVersion::API_VERSION_TYPED_FFI)));
   new_topk->set_raw_backend_config_string(topk->raw_backend_config_string());
   ABSL_RETURN_IF_ERROR(MarkAsTritonTopK(*new_topk));
+  if (scratch_elements > 0) {
+    return TupleUtil::ExtractPrefix(new_topk, 2);
+  }
   return new_topk;
 }
 
@@ -507,8 +522,9 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
       // No packed BF16 sort follows, and ReplaceInstruction would copy the
       // mark to the new TopK.
       topk->erase_frontend_attribute(kTopKDeferredPackedBf16Attr);
-      ABSL_ASSIGN_OR_RETURN(HloInstruction * new_topk,
-                            RewriteTopKForRocmTriton(topk));
+      ABSL_ASSIGN_OR_RETURN(
+          HloInstruction * new_topk,
+          RewriteTopKForRocmTriton(topk, device_description_));
       return ReplaceInstruction(topk, new_topk);
     }
 

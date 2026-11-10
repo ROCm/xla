@@ -56,8 +56,6 @@ limitations under the License.
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "tsl/platform/human_readable_json.h"
 #include "xla/backends/gpu/codegen/fusion_emitter.h"
 #include "xla/backends/gpu/codegen/fusions.h"
 #include "xla/backends/gpu/codegen/gpu_kernel_spec.h"
@@ -180,6 +178,8 @@ limitations under the License.
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
+#include "tsl/platform/human_readable_json.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace xla::gpu {
 namespace {
@@ -1641,10 +1641,63 @@ Future<ThunkSequence> ThunkEmitter::EmitTritonTopK(
   VLOG(1) << "Emitting Triton TopK for " << instr->name() << ": "
           << spec.ToString() << ", " << config->ToString();
 
-  auto generate = [this, instr, spec,
-                   config = *config]() -> Future<KernelReuseCache::Entry> {
-    std::string kernel_name =
-        ir_emitter_context_->GetSanitizedUniqueName("triton_topk");
+  const int64_t scratch_elements = GetTopKScratchElements(spec, *config);
+  const int64_t num_outputs = instr->shape().tuple_shapes().size();
+  if (scratch_elements == 0
+          ? num_outputs != 2
+          : num_outputs != 3 ||
+                instr->shape().tuple_shapes(2) !=
+                    ShapeUtil::MakeShape(U64, {scratch_elements})) {
+    return absl::InternalError(absl::StrCat(
+        "Triton TopK ", instr->name(), " with ", config->ToString(),
+        " needs a u64[", scratch_elements, "] scratch output only for ",
+        "chunked rows, but has shape ", instr->shape().ToString()));
+  }
+
+  ABSL_ASSIGN_OR_RETURN(emitters::KernelArguments kernel_arguments,
+                        emitters::KernelArguments::Create(
+                            ir_emitter_context_->buffer_assignment(),
+                            GetDefaultBufferAlignment(), instr));
+
+  if (scratch_elements == 0) {
+    return EmitTritonTopKKernel(instr, TopKKernelKind::kSingle, spec, *config,
+                                std::move(kernel_arguments));
+  }
+  // The chunk kernel writes the scratch buffer that the merge kernel reads.
+  std::optional<TopKKernelConfig> merge_config =
+      GetTopKMergeConfig(spec, *config, gpu_device_info);
+  if (!merge_config.has_value()) {
+    return absl::InternalError(absl::StrCat("No Triton TopK merge config for ",
+                                            spec.ToString(), " with ",
+                                            config->ToString()));
+  }
+  return std::move(tsl::JoinFutures(
+                       EmitTritonTopKKernel(instr, TopKKernelKind::kChunk, spec,
+                                            *config, kernel_arguments),
+                       EmitTritonTopKKernel(instr, TopKKernelKind::kMerge,
+                                            GetTopKMergeSpec(spec, *config),
+                                            *merge_config,
+                                            std::move(kernel_arguments))))
+      .Map([](std::tuple<ThunkSequence, ThunkSequence> tuple) {
+        auto [thunks, merge_thunks] = std::move(tuple);
+        for (std::unique_ptr<Thunk>& thunk : merge_thunks) {
+          thunks.Append(std::move(thunk));
+        }
+        return std::move(thunks);
+      });
+}
+
+Future<ThunkSequence> ThunkEmitter::EmitTritonTopKKernel(
+    const HloCustomCallInstruction* instr, TopKKernelKind kind,
+    const TopKKernelSpec& spec, const TopKKernelConfig& config,
+    emitters::KernelArguments kernel_arguments) {
+  absl::string_view kind_name = kind == TopKKernelKind::kChunk   ? "_chunk"
+                                : kind == TopKKernelKind::kMerge ? "_merge"
+                                                                 : "";
+  auto generate = [this, instr, kind, kind_name, spec,
+                   config]() -> Future<KernelReuseCache::Entry> {
+    std::string kernel_name = ir_emitter_context_->GetSanitizedUniqueName(
+        absl::StrCat("triton_topk", kind_name));
     VLOG(3) << "Generating " << kernel_name << " for " << spec.ToString()
             << " with " << config.ToString();
 
@@ -1653,7 +1706,7 @@ Future<ThunkSequence> ThunkEmitter::EmitTritonTopK(
     LoadMlirDialectsForTriton(**borrowed_context);
     ABSL_ASSIGN_OR_RETURN(
         mlir::OwningOpRef<mlir::ModuleOp> module,
-        BuildTopKKernel(spec, config, kernel_name, **borrowed_context));
+        BuildTopKKernel(spec, config, kind, kernel_name, **borrowed_context));
 
     BlockLevelParameters block_level_parameters;
     block_level_parameters.num_stages = 1;
@@ -1733,15 +1786,10 @@ Future<ThunkSequence> ThunkEmitter::EmitTritonTopK(
         });
   };
 
-  ABSL_ASSIGN_OR_RETURN(emitters::KernelArguments kernel_arguments,
-                        emitters::KernelArguments::Create(
-                            ir_emitter_context_->buffer_assignment(),
-                            GetDefaultBufferAlignment(), instr));
-
   auto [status_or_entry, was_cached] =
       ir_emitter_context_->kernel_cache().GetWithStatus(
-          absl::StrCat("triton_topk ", spec.ToString(), " ",
-                       config->ToString()),
+          absl::StrCat("triton_topk", kind_name, " ", spec.ToString(), " ",
+                       config.ToString()),
           generate);
 
   Thunk::ThunkInfo info = Thunk::ThunkInfo::WithProfileAnnotation(

@@ -29,11 +29,13 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "llvm/IR/Module.h"
+#include "xla/backends/gpu/codegen/triton/topk_config.h"
 #include "xla/backends/gpu/libraries/native_custom_call_thunks/native_custom_call_handler_registry.h"
 #include "xla/backends/gpu/runtime/async_execution.h"
 #include "xla/backends/gpu/runtime/collective_thunk.h"
 #include "xla/backends/gpu/runtime/host_send_recv_thunk.h"
 #include "xla/backends/gpu/runtime/thunk.h"
+#include "xla/codegen/emitters/kernel_arguments.h"
 #include "xla/codegen/llvm_kernel_source.h"
 #include "xla/future.h"
 #include "xla/hlo/ir/hlo_computation.h"
@@ -331,6 +333,12 @@ class ThunkEmitter {
   // Emits a __gpu$TopK custom call marked by TopkSpecializer for the Triton
   // TopK kernels.
   Future<ThunkSequence> EmitTritonTopK(const HloCustomCallInstruction* instr);
+  // Emits the Triton TopK kernel `kind` of `instr` with the custom call's
+  // buffers `kernel_arguments`.
+  Future<ThunkSequence> EmitTritonTopKKernel(
+      const HloCustomCallInstruction* instr, TopKKernelKind kind,
+      const TopKKernelSpec& spec, const TopKKernelConfig& config,
+      emitters::KernelArguments kernel_arguments);
 
   Future<ThunkSequence> EmitWhile(const HloInstruction* instr);
 

@@ -62,59 +62,92 @@ using ::mlir::Value;
 class TopKKernelBuilder {
  public:
   TopKKernelBuilder(const TopKKernelSpec& spec, const TopKKernelConfig& config,
-                    ImplicitLocOpBuilder& b)
+                    TopKKernelKind kind, ImplicitLocOpBuilder& b)
       : spec_(spec),
         config_(config),
+        kind_(kind),
         b_(b),
         i32_(b.getI32Type()),
         i64_(b.getI64Type()),
         rows_(config.rows_per_program),
         block_k_(static_cast<int64_t>(
             absl::bit_ceil(static_cast<uint64_t>(spec.k)))) {
-    // Rows of the last program can lie past `batch`, so the offsets are sized
-    // for the padded batch.
-    const int64_t padded_batch = config.num_programs * config.rows_per_program;
+    // Rows of the last program can lie past the end, so the offsets are sized
+    // for the padded rows.
+    const int64_t padded_rows = config.num_programs * config.rows_per_program;
+    const int64_t padded_batch = CeilOfRatio(padded_rows, config.num_chunks);
     const bool fits_i32 = padded_batch * spec.n < (int64_t{1} << 31) &&
-                          padded_batch * spec.k < (int64_t{1} << 31);
+                          padded_rows * spec.k < (int64_t{1} << 31);
     offset_type_ = fits_i32 ? i32_ : i64_;
   }
 
-  // Emits the body of a function with the arguments (input, values, indices).
-  void EmitBody(Value input, Value values, Value indices) {
+  // Emits the body of a function with the arguments `args`: (input, values,
+  // indices), plus scratch for kChunk and kMerge.
+  void EmitBody(mlir::ValueRange args) {
     const bool partial = spec_.order == ComparisonOrder::kPartial;
+    const int64_t num_chunks = config_.num_chunks;
+    Value input = kind_ == TopKKernelKind::kMerge ? args[3] : args[0];
 
     Value pid = ttir::GetProgramIdOp::create(b_, 0);
     Value first_row = arith::MulIOp::create(b_, Cast(pid, offset_type_),
                                             Const(offset_type_, rows_));
-    // [rows]
+    // [rows]: rows of the TopK, or for kChunk, chunks of them.
     Value row_ids = arith::AddIOp::create(b_, Splat(first_row, {rows_}),
                                           Cast(Range(rows_), offset_type_));
-    Value row_mask =
-        arith::CmpIOp::create(b_, arith::CmpIPredicate::slt, row_ids,
-                              Const(offset_type_, spec_.batch, {rows_}));
+    Value row_mask = arith::CmpIOp::create(
+        b_, arith::CmpIPredicate::slt, row_ids,
+        Const(offset_type_, spec_.batch * num_chunks, {rows_}));
+    Value topk_rows = row_ids;
+    Value chunk_starts;
+    if (num_chunks > 1) {
+      Value chunks = Const(offset_type_, num_chunks, {rows_});
+      topk_rows = arith::DivSIOp::create(b_, row_ids, chunks);
+      chunk_starts = ToI32(
+          arith::MulIOp::create(b_, arith::RemSIOp::create(b_, row_ids, chunks),
+                                Const(offset_type_, config_.block_n, {rows_})));
+    }
 
     // [rows, block_n]
     const llvm::SmallVector<int64_t> block = {rows_, config_.block_n};
     Value cols = Range(config_.block_n);
-    Value col_mask =
-        arith::CmpIOp::create(b_, arith::CmpIPredicate::slt, cols,
-                              Const(i32_, spec_.n, {config_.block_n}));
-    Value mask =
-        arith::AndIOp::create(b_, Rows(row_mask, block), Cols(col_mask, block));
+    // Positions within the TopK row.
+    Value col_ids;
+    Value mask;
+    Value col_offsets;
+    if (num_chunks == 1) {
+      Value col_mask =
+          arith::CmpIOp::create(b_, arith::CmpIPredicate::slt, cols,
+                                Const(i32_, spec_.n, {config_.block_n}));
+      mask = arith::AndIOp::create(b_, Rows(row_mask, block),
+                                   Cols(col_mask, block));
+      col_offsets = Cols(Cast(cols, offset_type_), block);
+      col_ids = Cols(cols, block);
+    } else {
+      col_ids = arith::AddIOp::create(b_, Rows(chunk_starts, block),
+                                      Cols(cols, block));
+      mask = arith::AndIOp::create(
+          b_, Rows(row_mask, block),
+          arith::CmpIOp::create(b_, arith::CmpIPredicate::slt, col_ids,
+                                Const(i32_, spec_.n, block)));
+      col_offsets = Cast(col_ids, offset_type_);
+    }
     Value in_offsets = arith::AddIOp::create(
         b_,
-        Rows(arith::MulIOp::create(b_, row_ids,
+        Rows(arith::MulIOp::create(b_, topk_rows,
                                    Const(offset_type_, spec_.n, {rows_})),
              block),
-        Cols(Cast(cols, offset_type_), block));
+        col_offsets);
     Type in_type =
         mlir::cast<ttir::PointerType>(input.getType()).getPointeeType();
     Value x = ttir::LoadOp::create(b_, Ptrs(input, in_offsets, block), mask,
                                    Zero(in_type, block),
                                    /*isVolatile=*/false);
-    Value col_ids = Cols(cols, block);
-    Value keys = arith::SelectOp::create(b_, mask, Pack(x, col_ids, partial),
-                                         Const(i64_, 0, block));
+    // The merge step loads keys; masked positions are already key 0.
+    Value keys = x;
+    if (kind_ != TopKKernelKind::kMerge) {
+      keys = arith::SelectOp::create(b_, mask, Pack(x, col_ids, partial),
+                                     Const(i64_, 0, block));
+    }
 
     // [rows, block_k]
     const llvm::SmallVector<int64_t> out_block = {rows_, block_k_};
@@ -157,7 +190,16 @@ class TopKKernelBuilder {
                                    Const(offset_type_, spec_.k, {rows_})),
              out_block),
         Cols(Cast(out_cols, offset_type_), out_block));
-    auto [top_values, top_indices] = Unpack(top, in_type, partial);
+    if (kind_ == TopKKernelKind::kChunk) {
+      ttir::StoreOp::create(b_, Ptrs(args[3], out_offsets, out_block), top,
+                            out_mask, /*ignore_cta=*/false);
+      return;
+    }
+    Value values = args[1];
+    Value indices = args[2];
+    Type value_type =
+        mlir::cast<ttir::PointerType>(values.getType()).getPointeeType();
+    auto [top_values, top_indices] = Unpack(top, value_type, partial);
     ttir::StoreOp::create(b_, Ptrs(values, out_offsets, out_block), top_values,
                           out_mask, /*ignore_cta=*/false);
     ttir::StoreOp::create(b_, Ptrs(indices, out_offsets, out_block),
@@ -323,6 +365,15 @@ class TopKKernelBuilder {
     return arith::ExtSIOp::create(b_, result_type, x);
   }
 
+  // Truncates an offset tensor to i32.
+  Value ToI32(Value x) {
+    auto tensor = mlir::cast<RankedTensorType>(x.getType());
+    if (tensor.getElementType() == i32_) {
+      return x;
+    }
+    return arith::TruncIOp::create(b_, Tensor(i32_, tensor.getShape()), x);
+  }
+
   // Broadcasts a [rows] tensor along the columns of `shape`.
   Value Rows(Value x, llvm::ArrayRef<int64_t> shape) {
     return Broadcast(ttir::ExpandDimsOp::create(b_, x, 1), shape);
@@ -345,6 +396,7 @@ class TopKKernelBuilder {
 
   const TopKKernelSpec& spec_;
   const TopKKernelConfig& config_;
+  const TopKKernelKind kind_;
   ImplicitLocOpBuilder& b_;
   Type i32_;
   Type i64_;
@@ -361,11 +413,19 @@ bool IsPowerOfTwo(int64_t x) {
 
 absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> BuildTopKKernel(
     const TopKKernelSpec& spec, const TopKKernelConfig& config,
-    absl::string_view name, mlir::MLIRContext& context) {
+    TopKKernelKind kind, absl::string_view name, mlir::MLIRContext& context) {
   TF_RETURN_IF_ERROR(CheckTopKKernelLimits(spec));
-  if (!IsPowerOfTwo(config.block_n) || config.block_n < spec.n ||
+  const bool chunked = kind == TopKKernelKind::kChunk;
+  // Chunks cover the row and none of them is empty.
+  const bool covers_row =
+      chunked ? config.num_chunks > 1 &&
+                    config.block_n * config.num_chunks >= spec.n &&
+                    config.block_n * (config.num_chunks - 1) < spec.n
+              : config.num_chunks == 1 && config.block_n >= spec.n;
+  if (!IsPowerOfTwo(config.block_n) || !covers_row ||
       !IsPowerOfTwo(config.rows_per_program) || config.num_programs < 1 ||
-      config.num_programs * config.rows_per_program < spec.batch) {
+      config.num_programs * config.rows_per_program <
+          spec.batch * config.num_chunks) {
     return InvalidArgument("TopK kernel config %s does not cover %s",
                            config.ToString(), spec.ToString());
   }
@@ -379,16 +439,18 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> BuildTopKKernel(
       spec.input_type == F32 ? Type(b.getF32Type()) : Type(b.getBF16Type());
   Type value_ptr = ttir::PointerType::get(value_type);
   Type index_ptr = ttir::PointerType::get(b.getI32Type());
-  auto function_type =
-      b.getFunctionType({value_ptr, value_ptr, index_ptr}, /*results=*/{});
+  llvm::SmallVector<Type> arg_types = {value_ptr, value_ptr, index_ptr};
+  if (kind != TopKKernelKind::kSingle) {
+    arg_types.push_back(ttir::PointerType::get(b.getI64Type()));
+  }
+  auto function_type = b.getFunctionType(arg_types, /*results=*/{});
   auto func = ttir::FuncOp::create(b, name, function_type);
   for (int i = 0; i < func.getNumArguments(); ++i) {
     func.setArgAttr(i, "tt.divisibility", b.getI32IntegerAttr(16));
   }
 
   b.setInsertionPointToStart(func.addEntryBlock());
-  TopKKernelBuilder(spec, config, b)
-      .EmitBody(func.getArgument(0), func.getArgument(1), func.getArgument(2));
+  TopKKernelBuilder(spec, config, kind, b).EmitBody(func.getArguments());
   ttir::ReturnOp::create(b);
 
   if (mlir::failed(mlir::verify(*module))) {

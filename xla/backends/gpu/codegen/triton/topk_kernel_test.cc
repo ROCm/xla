@@ -65,10 +65,20 @@ class TopKKernelTest : public ::testing::Test {
     return *config;
   }
 
-  // Builds the kernel with the configuration of the routing rule and returns
-  // its IR as text.
-  std::string Build(const TopKKernelSpec& spec) {
-    auto module = BuildTopKKernel(spec, Config(spec), "topk", context_);
+  // Builds the kernel `kind` with the configurations of the routing rule and
+  // returns its IR as text.
+  std::string Build(const TopKKernelSpec& spec,
+                    TopKKernelKind kind = TopKKernelKind::kSingle) {
+    TopKKernelSpec kernel_spec = spec;
+    TopKKernelConfig config = Config(spec);
+    if (kind == TopKKernelKind::kMerge) {
+      std::optional<TopKKernelConfig> merge_config = GetTopKMergeConfig(
+          spec, config, TestGpuDeviceInfo::AMDMI350DeviceInfo());
+      CHECK(merge_config.has_value()) << spec.ToString();
+      kernel_spec = GetTopKMergeSpec(spec, config);
+      config = *merge_config;
+    }
+    auto module = BuildTopKKernel(kernel_spec, config, kind, "topk", context_);
     CHECK_OK(module.status()) << spec.ToString();
     std::string ir;
     llvm::raw_string_ostream os(ir);
@@ -117,29 +127,97 @@ TEST_F(TopKKernelTest, LargeInputsUseI64Offsets) {
                             "tensor<2x2048xi64>"));
 }
 
+TEST_F(TopKKernelTest, ChunkKernelWritesKeysToScratch) {
+  // 5 chunks of 4096 per row, one chunk per program.
+  std::string ir = Build(Spec(2, 20000, 16), TopKKernelKind::kChunk);
+  EXPECT_THAT(ir,
+              HasSubstr("%arg3: !tt.ptr<i64> {tt.divisibility = 16 : i32}"));
+  EXPECT_THAT(ir, HasSubstr("arith.divsi"));
+  EXPECT_THAT(ir, HasSubstr("arith.remsi"));
+  EXPECT_THAT(ir,
+              HasSubstr(": tensor<1x4096x!tt.ptr<f32>>, tensor<1x4096xi32>"));
+  EXPECT_THAT(ir, HasSubstr("tt.store %"));
+  EXPECT_THAT(ir, HasSubstr(": tensor<1x16x!tt.ptr<i64>>"));
+  // Keys are stored, not decoded values.
+  EXPECT_THAT(ir, Not(HasSubstr("tensor<1x16x!tt.ptr<f32>>")));
+}
+
+TEST_F(TopKKernelTest, MergeKernelReadsKeysFromScratch) {
+  // 5 x 16 candidates per row, padded to 128.
+  std::string ir = Build(Spec(2, 20000, 16, BF16), TopKKernelKind::kMerge);
+  EXPECT_THAT(ir,
+              HasSubstr("%arg3: !tt.ptr<i64> {tt.divisibility = 16 : i32}"));
+  EXPECT_THAT(ir, HasSubstr(": tensor<2x128x!tt.ptr<i64>>, tensor<2x128xi32>"));
+  EXPECT_THAT(ir, Not(HasSubstr("arith.divsi")));
+  EXPECT_THAT(ir, HasSubstr("tensor<2x16xi16> -> tensor<2x16xbf16>"));
+  EXPECT_THAT(ir, HasSubstr(": tensor<2x16x!tt.ptr<i32>>"));
+}
+
+TEST_F(TopKKernelTest, RejectsChunkConfigsThatDoNotCoverTheRow) {
+  TopKKernelSpec spec = Spec(2, 20000, 16);
+  TopKKernelConfig config = Config(spec);
+  ASSERT_EQ(config.num_chunks, 5);
+  EXPECT_THAT(
+      BuildTopKKernel(spec, config, TopKKernelKind::kChunk, "topk", context_)
+          .status(),
+      IsOk());
+  EXPECT_THAT(
+      BuildTopKKernel(spec, config, TopKKernelKind::kSingle, "topk", context_)
+          .status(),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+  TopKKernelConfig few_chunks = config;
+  few_chunks.num_chunks = 4;
+  few_chunks.num_programs = 8;
+  EXPECT_THAT(BuildTopKKernel(spec, few_chunks, TopKKernelKind::kChunk, "topk",
+                              context_)
+                  .status(),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  TopKKernelConfig empty_chunk = config;
+  empty_chunk.num_chunks = 6;
+  empty_chunk.num_programs = 12;
+  EXPECT_THAT(BuildTopKKernel(spec, empty_chunk, TopKKernelKind::kChunk, "topk",
+                              context_)
+                  .status(),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  TopKKernelConfig few_programs = config;
+  few_programs.num_programs = 9;
+  EXPECT_THAT(BuildTopKKernel(spec, few_programs, TopKKernelKind::kChunk,
+                              "topk", context_)
+                  .status(),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST_F(TopKKernelTest, RejectsConfigsThatDoNotCoverTheInput) {
   TopKKernelSpec spec = Spec(64, 128, 8);
   TopKKernelConfig config = Config(spec);
   TopKKernelConfig short_rows = config;
   short_rows.block_n = 64;
-  EXPECT_THAT(BuildTopKKernel(spec, short_rows, "topk", context_).status(),
+  EXPECT_THAT(BuildTopKKernel(spec, short_rows, TopKKernelKind::kSingle, "topk",
+                              context_)
+                  .status(),
               StatusIs(absl::StatusCode::kInvalidArgument));
   TopKKernelConfig few_programs = config;
   few_programs.num_programs = 1;
-  EXPECT_THAT(BuildTopKKernel(spec, few_programs, "topk", context_).status(),
+  EXPECT_THAT(BuildTopKKernel(spec, few_programs, TopKKernelKind::kSingle,
+                              "topk", context_)
+                  .status(),
               StatusIs(absl::StatusCode::kInvalidArgument));
   TopKKernelConfig odd_rows = config;
   odd_rows.rows_per_program = 3;
   odd_rows.num_programs = 22;
-  EXPECT_THAT(BuildTopKKernel(spec, odd_rows, "topk", context_).status(),
-              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      BuildTopKKernel(spec, odd_rows, TopKKernelKind::kSingle, "topk", context_)
+          .status(),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST_F(TopKKernelTest, RejectsSpecsOutsideTheLimits) {
   TopKKernelSpec spec = Spec(64, 128, 8, F16);
   TopKKernelConfig config = Config(Spec(64, 128, 8));
-  EXPECT_THAT(BuildTopKKernel(spec, config, "topk", context_).status(),
-              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      BuildTopKKernel(spec, config, TopKKernelKind::kSingle, "topk", context_)
+          .status(),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 // Every configuration the routing rule picks must give a valid kernel.
@@ -150,7 +228,8 @@ TEST_F(TopKKernelTest, EveryConfigOfTheRuleBuilds) {
     for (ComparisonOrder order :
          {ComparisonOrder::kTotal, ComparisonOrder::kPartial}) {
       for (int64_t batch : {1, 3, 64, 1000, 24576}) {
-        for (int64_t n : {2, 16, 64, 100, 256, 1000, 4096, 8192, 32768}) {
+        for (int64_t n :
+             {2, 16, 64, 100, 256, 1000, 4096, 8192, 20000, 32768, 1 << 20}) {
           for (int64_t k : {1, 2, 6, 8, 16, 100, 128}) {
             TopKKernelSpec spec{type, order, batch, n, k};
             if (!CheckTopKKernelLimits(spec).ok()) {
@@ -161,10 +240,30 @@ TEST_F(TopKKernelTest, EveryConfigOfTheRuleBuilds) {
             if (!config.has_value()) {
               continue;
             }
-            EXPECT_THAT(
-                BuildTopKKernel(spec, *config, "topk", context_).status(),
-                IsOk())
+            if (config->num_chunks == 1) {
+              EXPECT_THAT(
+                  BuildTopKKernel(spec, *config, TopKKernelKind::kSingle,
+                                  "topk", context_)
+                      .status(),
+                  IsOk())
+                  << spec.ToString() << " " << config->ToString();
+              ++built;
+              continue;
+            }
+            EXPECT_THAT(BuildTopKKernel(spec, *config, TopKKernelKind::kChunk,
+                                        "topk", context_)
+                            .status(),
+                        IsOk())
                 << spec.ToString() << " " << config->ToString();
+            std::optional<TopKKernelConfig> merge_config =
+                GetTopKMergeConfig(spec, *config, mi350);
+            ASSERT_TRUE(merge_config.has_value()) << spec.ToString();
+            EXPECT_THAT(
+                BuildTopKKernel(GetTopKMergeSpec(spec, *config), *merge_config,
+                                TopKKernelKind::kMerge, "topk", context_)
+                    .status(),
+                IsOk())
+                << spec.ToString() << " " << merge_config->ToString();
             ++built;
           }
         }

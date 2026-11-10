@@ -223,14 +223,39 @@ INSTANTIATE_TEST_SUITE_P(
         RejectedCase{"F16", "f16[8,1000]", "f16[8,32]", "s32[8,32]"},
         RejectedCase{"KAboveLimit", "f32[8,1000]", "f32[8,129]", "s32[8,129]"},
         RejectedCase{"KCloseToN", "f32[8,16]", "f32[8,14]", "s32[8,14]"},
-        RejectedCase{"LongRow", "f32[8,65536]", "f32[8,32]", "s32[8,32]"}),
+        // 1024 chunks of 16384 leave 131072 candidates to merge.
+        RejectedCase{"TooManyCandidates", "f32[1,16777216]", "f32[1,128]",
+                     "s32[1,128]"}),
     [](const ::testing::TestParamInfo<RejectedCase>& info) {
       return info.param.name;
     });
 
-TEST_F(TopkSpecializerTritonTest, LongRowKeepsThePrebuiltKernel) {
+TEST_F(TopkSpecializerTritonTest, ForcedLongRowGetsAScratchOutput) {
+  // 16 chunks of 4096 per row, 8 candidates each.
+  auto module = ParseTopK("f32[8,65536]", "f32[8,8]", "s32[8,8]",
+                          R"({order = "PARTIAL"})", TritonTopKFlags::kForced);
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                 module.get()));
+  EXPECT_TRUE(changed);
+  const HloInstruction* root = module->entry_computation()->root_instruction();
+  ASSERT_EQ(root->opcode(), HloOpcode::kTuple);
+  ASSERT_EQ(root->operand_count(), 2);
+  auto* topk = DynCast<HloCustomCallInstruction>(root->operand(0)->operand(0));
+  ASSERT_NE(topk, nullptr) << root->ToString();
+  EXPECT_EQ(topk->custom_call_target(), "__gpu$TopK");
+  EXPECT_TRUE(IsTritonTopK(*topk));
+  EXPECT_EQ(topk->operand(0)->opcode(), HloOpcode::kParameter);
+  EXPECT_EQ(topk->shape().ToString(), "(f32[8,8], s32[8,8], u64[1024])");
+  EXPECT_EQ(hlo_instruction_utils::GetTopKOrder(topk),
+            ComparisonOrder::kPartial);
+  EXPECT_EQ(root->operand(1)->operand(0), topk);
+}
+
+TEST_F(TopkSpecializerTritonTest, LongRowKeepsThePrebuiltKernelWhenNotForced) {
   auto module = ParseTopK("f32[8,65536]", "f32[8,8]", "s32[8,8]", "",
-                          TritonTopKFlags::kForced);
+                          TritonTopKFlags::kOn);
   ASSERT_OK_AND_ASSIGN(
       bool changed,
       RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
@@ -311,17 +336,22 @@ TEST_F(TopkSpecializerTritonTest, OtherRocmArchitecturesAreRoutedWhenForced) {
 }
 
 TEST_F(TopkSpecializerTritonTest, RowLimitFollowsTheWaveSize) {
-  // 16384 keys fit a wave-64 program of 8 warps but not a wave-32 one.
-  for (const auto& [device, routed] :
-       {std::pair{TestGpuDeviceInfo::AMDMI350DeviceInfo(), true},
-        std::pair{TestGpuDeviceInfo::AMDRX7900DeviceInfo(), false}}) {
+  // 16384 keys fit a wave-64 program of 8 warps; a wave-32 device splits them
+  // into chunks.
+  for (const auto& [device, chunked] :
+       {std::pair{TestGpuDeviceInfo::AMDMI350DeviceInfo(), false},
+        std::pair{TestGpuDeviceInfo::AMDRX7900DeviceInfo(), true}}) {
     SCOPED_TRACE(device.name());
     auto module = ParseTopK("f32[8,16384]", "f32[8,32]", "s32[8,32]", "",
                             TritonTopKFlags::kForced);
     ASSERT_OK_AND_ASSIGN(bool changed,
                          RunHloPass(TopkSpecializer(device), module.get()));
-    EXPECT_EQ(changed, routed);
-    EXPECT_EQ(HasTritonTopK(*module), routed);
+    EXPECT_TRUE(changed);
+    EXPECT_TRUE(HasTritonTopK(*module));
+    const HloInstruction* root =
+        module->entry_computation()->root_instruction();
+    EXPECT_EQ(root->opcode(),
+              chunked ? HloOpcode::kTuple : HloOpcode::kCustomCall);
   }
 }
 

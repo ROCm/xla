@@ -25,24 +25,30 @@ limitations under the License.
 
 namespace xla::gpu {
 
-// Builds the Triton IR of the single-program TopK kernel: each of the
-// `config.num_programs` programs selects the top `spec.k` elements of
-// `config.rows_per_program` whole rows.
-//
-// The module holds one public function `name` with the arguments
-// (input, values, indices), in the order of the custom call's buffers.
+// Builds the Triton IR of the TopK kernel `kind` for `spec` with `config`:
+//  - kSingle: each program selects the top `spec.k` elements of
+//    `config.rows_per_program` whole rows. Arguments (input, values, indices).
+//  - kChunk: each program selects the top `spec.k` keys of one chunk of
+//    `config.block_n` elements and writes them to the scratch buffer, `k` per
+//    chunk in row and chunk order. Arguments (input, values, indices, scratch).
+//  - kMerge: `spec` and `config` are those of the merge step
+//    (GetTopKMergeSpec, GetTopKMergeConfig); each program selects the top
+//    `spec.k` of the candidate keys of its rows in the scratch buffer.
+//    Arguments as kChunk.
+// The arguments are the custom call's buffers in their order.
 //
 // Each element gets the 64-bit priority key of the stable TopK adapter
 // (openxla/xla#43913): an order-preserving form of the value in the high 32
 // bits and a reversed index in the low 32 bits, bit for bit as upstream's
 // pack in TopkSpecializer. All keys of a row differ, so `k` rounds of "take the
 // row maximum and remove it" give the stable order. Positions past the end of
-// a row get key 0, which is below every real key.
+// a row get key 0, which is below every real key. Chunks use the index within
+// the whole row, so the merge step decodes the original positions.
 //
 // `context` must have the Triton, arith and SCF dialects loaded.
 absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> BuildTopKKernel(
     const TopKKernelSpec& spec, const TopKKernelConfig& config,
-    absl::string_view name, mlir::MLIRContext& context);
+    TopKKernelKind kind, absl::string_view name, mlir::MLIRContext& context);
 
 }  // namespace xla::gpu
 

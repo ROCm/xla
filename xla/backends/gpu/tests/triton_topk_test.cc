@@ -268,9 +268,12 @@ struct GridCase {
 };
 
 std::vector<GridCase> GridCases() {
+  // Rows longer than 16384 are split into chunks (L4): a partial tail chunk,
+  // a tail of one element, 16 chunks, and chunks grown to 8192 for k = 128.
   const std::vector<std::pair<int64_t, int64_t>> batch_and_n = {
-      {0, 7},     {0, 1000}, {0, 16384}, {3, 64},  {129, 33},
-      {17, 1024}, {5, 4096}, {2, 16384}, {1000, 8}};
+      {0, 7},     {0, 1000},  {0, 16384},  {3, 64},   {129, 33},
+      {17, 1024}, {5, 4096},  {2, 16384},  {1000, 8}, {0, 20000},
+      {2, 16385}, {3, 65536}, {1, 1 << 20}};
   std::vector<GridCase> cases;
   for (PrimitiveType type : {F32, BF16}) {
     for (auto [batch, n] : batch_and_n) {
@@ -416,14 +419,19 @@ bool HasKernelInCommandBuffer(absl::string_view dump) {
   return false;
 }
 
-TEST_F(TritonTopKTest, TopKInCommandBuffer) {
+class TritonTopKCommandBufferTest
+    : public TritonTopKTest,
+      public ::testing::WithParamInterface<TopKShape> {};
+
+// Long rows run the chunk and merge kernels in the command buffer.
+TEST_P(TritonTopKCommandBufferTest, TopKInCommandBuffer) {
   ASSERT_OK_AND_ASSIGN(
       tsl::testing::TemporaryDirectory dump_dir,
       tsl::testing::TemporaryDirectory::CreateForCurrentTestcase());
   HloModuleConfig config = ConfigWithTritonTopK(true);
   config.mutable_debug_options().set_xla_dump_to(dump_dir.path());
   config.mutable_debug_options().set_xla_gpu_graph_min_graph_size(1);
-  const std::string hlo = TopKHlo(F32, {1024, 64, 6}, "TOTAL", /*stable=*/true);
+  const std::string hlo = TopKHlo(F32, GetParam(), "TOTAL", /*stable=*/true);
   ASSERT_OK_AND_ASSIGN(auto triton, CompileWithTritonTopK(hlo, config));
 
   std::vector<std::string> dump_files;
@@ -449,6 +457,15 @@ TEST_F(TritonTopKTest, TopKInCommandBuffer) {
     EXPECT_TRUE(LiteralTestUtil::Equal(expected, actual)) << "run " << run;
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(TritonTopKCommandBuffer, TritonTopKCommandBufferTest,
+                         ::testing::Values(TopKShape{1024, 64, 6},
+                                           TopKShape{8, 65536, 16}),
+                         [](const ::testing::TestParamInfo<TopKShape>& info) {
+                           return absl::StrCat("b", info.param.batch, "_n",
+                                               info.param.n, "_k",
+                                               info.param.k);
+                         });
 
 // ---- Special-value inputs (L6, L7) ----------------------------------------
 
@@ -543,8 +560,9 @@ std::vector<SpecialCase> SpecialCases(bool all_patterns) {
         if (!all_patterns && pattern != Pattern::kSpecial) {
           continue;
         }
+        // 20000 splits into chunks, so ties span chunks.
         for (auto [batch, n] : std::vector<std::pair<int64_t, int64_t>>{
-                 {1, 32}, {8, 1024}, {3, 16384}}) {
+                 {1, 32}, {8, 1024}, {3, 16384}, {2, 20000}}) {
           for (int64_t k : {2, 17, 64}) {
             if (static_cast<double>(k) / n < 0.85) {
               cases.push_back({type, partial, pattern, {batch, n, k}});
