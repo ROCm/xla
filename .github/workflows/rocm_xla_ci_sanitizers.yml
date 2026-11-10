@@ -90,7 +90,6 @@ jobs:
         --local_test_jobs=4
         --spawn_strategy=local
         --strategy=TestRunner=local
-        --run_under=//build_tools/rocm:sanitizer_wrapper_parallel_gpu_execute
         --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu
         --repo_env=TF_ROCM_RBE_MULTI_GPU_POOL=default
         --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950
@@ -126,6 +125,7 @@ jobs:
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_single_gpu \
             ${COMMON_ARGS} \
+            --run_under=//build_tools/rocm:sanitizer_wrapper_parallel_gpu_execute \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu \
             --jobs=30 \
             --bes_keywords=single_gpu \
@@ -152,7 +152,6 @@ jobs:
             ${COMMON_ARGS} \
             --config=ci_rocm_cpu \
             --local_test_jobs=10 \
-            --run_under=//build_tools/rocm:sanitizer_wrapper_parallel_gpu_execute \
             --bes_keywords=cpu \
             -- \
             //xla/...
