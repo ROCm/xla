@@ -19,11 +19,13 @@
 // CHECK:         %[[REDUCED:.*]] = xla_gpu.shuffle_reduce(%[[AMAX]]) to 2 combiner=@max_m
 // CHECK:         gpu.shuffle idx
 // CHECK:         %[[SCALE_VALUE:.*]], %[[DECODED:.*]] = xla.pure_call @fused_quantize__epilogue__scale_decoded(
+// CHECK:         %[[EXPONENT:.*]] = arith.shrui {{.*}}
+// CHECK:         %[[RECIPROCAL:.*]] = arith.bitcast {{.*}} : i32 to f32
 // CHECK:         %[[SCALE_OUT:.*]] = xla.predicated_insert %[[SCALE_VALUE]] into %[[SCALE]]
 // CHECK:         %[[DATA_OUT:.*]] = xla.loop
 // CHECK-SAME:      iter_args(%[[DATA_ITER:.*]] = %[[DATA]])
 // CHECK:           %[[Y:.*]] = vector.extract %[[VALUES]]
-// CHECK:           %[[Q:.*]] = xla.pure_call @fused_quantize__epilogue__data({{.*}}, %[[Y]], %[[DECODED]])
+// CHECK:           %[[Q:.*]] = xla.pure_call @fused_quantize__epilogue__data({{.*}}, %[[Y]], %[[RECIPROCAL]])
 // CHECK:           tensor.insert %[[Q]] into %[[DATA_ITER]]
 // CHECK:         return %[[DATA_OUT]], %[[SCALE_OUT]]
 

@@ -86,6 +86,8 @@ cc_library(
     deps = [
         ":block_scaled_quantize_analysis",
         ":mlir_kernel_emitter",
+        "//xla:comparison_util",
+        "//xla:literal",
         "//xla:shape_util",
         "//xla:util",
         "//xla/backends/gpu/codegen/emitters/ir:xla_gpu",
@@ -102,7 +104,9 @@ cc_library(
         "//xla/service/gpu:launch_dimensions",
         "//xla/stream_executor:launch_dim",
         "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",

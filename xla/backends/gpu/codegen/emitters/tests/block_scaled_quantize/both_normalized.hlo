@@ -31,6 +31,18 @@
 // CHECK:           vector.extract %[[C_VALUES]]
 // CHECK:           xla.pure_call @fused_quantize__epilogue__c_data(
 
+// CHECK-LABEL: func.func private @fused_quantize__epilogue__r_data(
+// CHECK-NOT:     arith.divf
+// CHECK:         arith.mulf
+// CHECK-NOT:     arith.divf
+// CHECK:         return
+
+// CHECK-LABEL: func.func private @fused_quantize__epilogue__c_data(
+// CHECK-NOT:     arith.divf
+// CHECK:         arith.mulf
+// CHECK-NOT:     arith.divf
+// CHECK:         return
+
 // CHECK-VEC-LABEL: func.func @main(
 // CHECK-VEC-COUNT-4: vector.transfer_read {{.*}} : tensor<32768xbf16>, vector<8xbf16>
 // CHECK-VEC-NOT:     vector.transfer_read

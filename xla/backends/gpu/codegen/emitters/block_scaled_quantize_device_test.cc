@@ -92,6 +92,9 @@ struct Quantize {
   bool tiny_operand = false;
   bool row = true;
   Column column = Column::kNone;
+  // The encode's ratio is the amax itself, so that a block of amax 2^127 or
+  // the source type's maximum gets the scale byte 254.
+  bool unit_ratio = false;
 };
 
 // JAX's E8M0 encode of `$PRE_ratio` input `$AMAXF` and the decode, divide,
@@ -173,7 +176,9 @@ Body QuantizeBody(const Quantize& q, Form form) {
                          {"$VIEW", view},
                          {"$AMAXF", amax_f32},
                          {"$XNAME", x},
-                         {"$INV", fp4 ? "0.166666672" : "0.00223214296"},
+                         {"$INV", q.unit_ratio ? "1"
+                                  : fp4        ? "0.166666672"
+                                               : "0.00223214296"},
                          {"$MAX", fp4 ? "6" : "448"},
                          {"$DTYPE", dtype},
                          {"$DLAYOUT", data_layout},
@@ -637,6 +642,13 @@ TEST_P(BlockScaledQuantizeDeviceTest, RowWithScaleOperandPartialWorkgroup) {
                            InputClass::kMixed});
 }
 
+TEST_P(BlockScaledQuantizeDeviceTest, RowWithTopScaleByte) {
+  auto [source, data] = GetParam();
+  Quantize q{source, data, 64, 128};
+  q.unit_ratio = true;
+  RunAndCompareExactly(q, kAllClasses);
+}
+
 TEST_P(BlockScaledQuantizeDeviceTest, RowLlama8bActivation) {
   auto [source, data] = GetParam();
   if (source != BF16) {
@@ -732,6 +744,14 @@ TEST_P(BlockScaledQuantizeDeviceTest, BothPartialWideTileWithScaleOperand) {
   Quantize q{source, data, 192, 256};
   q.column = Column::kNormalized;
   q.tiny_operand = true;
+  RunAndCompareExactly(q, kAllClasses, {false, true});
+}
+
+TEST_P(BlockScaledQuantizeDeviceTest, BothWithTopScaleByte) {
+  auto [source, data] = GetParam();
+  Quantize q{source, data, 128, 256};
+  q.column = Column::kNormalized;
+  q.unit_ratio = true;
   RunAndCompareExactly(q, kAllClasses, {false, true});
 }
 

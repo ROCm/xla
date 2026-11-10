@@ -23,7 +23,9 @@ limitations under the License.
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/base/casts.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
@@ -52,6 +54,7 @@ limitations under the License.
 #include "xla/codegen/emitters/ir/xla_ops.h"
 #include "xla/codegen/emitters/type_util.h"
 #include "xla/codegen/emitters/utils.h"
+#include "xla/comparison_util.h"
 #include "xla/hlo/analysis/indexing_analysis.h"
 #include "xla/hlo/analysis/indexing_map.h"
 #include "xla/hlo/analysis/symbolic_expr.h"
@@ -59,10 +62,13 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/literal.h"
 #include "xla/primitive_util.h"
 #include "xla/service/gpu/hlo_fusion_analysis.h"
 #include "xla/service/gpu/ir_emission_utils.h"
 #include "xla/service/gpu/launch_dimensions.h"
+#include "xla/shape_util.h"
 #include "xla/stream_executor/launch_dim.h"
 #include "xla/util.h"
 
@@ -110,6 +116,110 @@ Value ShuffleFromLane(Value value, Value source_lane, int64_t warp_size,
     shuffled = mlir::arith::BitcastOp::create(b, type, shuffled);
   }
   return shuffled;
+}
+
+// The bits of the f32 or u32 scalar constant that `instr` is or broadcasts.
+std::optional<uint32_t> ScalarConstantBits(const HloInstruction* instr) {
+  if (instr->opcode() == HloOpcode::kBroadcast) {
+    instr = instr->operand(0);
+  }
+  if (instr->opcode() != HloOpcode::kConstant ||
+      !ShapeUtil::IsEffectiveScalar(instr->shape())) {
+    return std::nullopt;
+  }
+  switch (instr->shape().element_type()) {
+    case F32:
+      return absl::bit_cast<uint32_t>(
+          instr->literal().GetFirstElement<float>());
+    case U32:
+      return instr->literal().GetFirstElement<uint32_t>();
+    default:
+      return std::nullopt;
+  }
+}
+
+// Whether `decoded` is JAX's decode of an E8M0 byte s, select(pow == 0,
+// 2^-127, pow) with pow = bitcast(u32(s) << 23): 2^-127 to 2^127, or inf.
+bool IsDecodedE8m0(const HloInstruction& decoded) {
+  if (decoded.opcode() != HloOpcode::kSelect ||
+      decoded.shape().element_type() != F32) {
+    return false;
+  }
+  const HloInstruction* is_zero = decoded.operand(0);
+  const HloInstruction* pow = decoded.operand(2);
+  if (is_zero->opcode() != HloOpcode::kCompare ||
+      is_zero->comparison_direction() != ComparisonDirection::kEq ||
+      is_zero->operand(0) != pow ||
+      ScalarConstantBits(is_zero->operand(1)) != 0u ||
+      ScalarConstantBits(decoded.operand(1)) != 0x00400000u) {
+    return false;
+  }
+  if (pow->opcode() != HloOpcode::kBitcast &&
+      pow->opcode() != HloOpcode::kBitcastConvert) {
+    return false;
+  }
+  const HloInstruction* shift = pow->operand(0);
+  if (shift->opcode() != HloOpcode::kShiftLeft ||
+      shift->shape().element_type() != U32 ||
+      ScalarConstantBits(shift->operand(1)) != 23u) {
+    return false;
+  }
+  const HloInstruction* byte = shift->operand(0);
+  return byte->opcode() == HloOpcode::kConvert &&
+         byte->operand(0)->shape().element_type() == U8;
+}
+
+// 1 / d for d a power of two from 2^-127 to 2^127 or inf, without a divide.
+Value ExactReciprocal(Value d, ImplicitLocOpBuilder& b) {
+  auto constant = [&](int64_t value) {
+    return mlir::arith::ConstantIntOp::create(b, value, 32);
+  };
+  Value exponent = mlir::arith::ShRUIOp::create(
+      b, mlir::arith::BitcastOp::create(b, b.getI32Type(), d), constant(23));
+  // 2^(127 - e) below e = 254; e = 0 is d = 2^-127, whose reciprocal is 2^127.
+  Value normal = mlir::arith::ShLIOp::create(
+      b, mlir::arith::SubIOp::create(b, constant(254), exponent), constant(23));
+  Value top = mlir::arith::SelectOp::create(
+      b,
+      mlir::arith::CmpIOp::create(b, mlir::arith::CmpIPredicate::eq, exponent,
+                                  constant(254)),
+      constant(0x00400000), constant(0));
+  return mlir::arith::BitcastOp::create(
+      b, b.getF32Type(),
+      mlir::arith::SelectOp::create(
+          b,
+          mlir::arith::CmpIOp::create(b, mlir::arith::CmpIPredicate::ult,
+                                      exponent, constant(254)),
+          normal, top));
+}
+
+// Replaces the divides by the injected `scale` in the data epilogue `data` by
+// multiplies, if the epilogue uses it only as a divisor. Returns whether it
+// did.
+bool MultiplyByInjected(const emitters::PartitionedComputation::Subgraph& data,
+                        const HloInstruction* scale, mlir::ModuleOp module) {
+  auto function =
+      mlir::cast<mlir::func::FuncOp>(module.lookupSymbol(data.name));
+  Value argument = function.getArgument(function.getNumArguments() -
+                                        data.num_injected_values +
+                                        data.injected_value_starts.at(scale));
+  for (mlir::OpOperand& use : argument.getUses()) {
+    if (!mlir::isa<mlir::arith::DivFOp>(use.getOwner()) ||
+        use.getOperandNumber() != 1) {
+      return false;
+    }
+  }
+  for (mlir::Operation* user :
+       llvm::make_early_inc_range(argument.getUsers())) {
+    auto divide = mlir::cast<mlir::arith::DivFOp>(user);
+    mlir::OpBuilder builder(divide);
+    divide.replaceAllUsesWith(
+        mlir::arith::MulFOp::create(builder, divide.getLoc(), divide.getLhs(),
+                                    divide.getRhs())
+            .getResult());
+    divide.erase();
+  }
+  return !argument.use_empty();
 }
 
 // Gives each call of the epilogue `name` in `entry_function` its own copy. The
@@ -489,9 +599,18 @@ class QuantizationEmitter {
         entry_function_, {{quantization_.amax, {amax}}}, clamped, b);
     HloValueMap broadcast_scales;
     for (const HloInstruction* scale : quantization_.broadcast_scales) {
-      broadcast_scales[scale] = {scale_values_.at(scale).front()};
+      Value value = scale_values_.at(scale).front();
+      broadcast_scales[scale] = {reciprocal_scales_.contains(scale)
+                                     ? ExactReciprocal(value, b)
+                                     : value};
     }
     return broadcast_scales;
+  }
+
+  // The data region multiplies by the reciprocal of `scale` instead of
+  // dividing by it.
+  void UseReciprocal(const HloInstruction* scale) {
+    reciprocal_scales_.insert(scale);
   }
 
   // Writes the scale outputs of the block last passed to `Scales`, if
@@ -573,6 +692,7 @@ class QuantizationEmitter {
   mutable mlir::func::FuncOp entry_function_;
   const HloInstruction* root_;
   absl::flat_hash_map<const HloInstruction*, ValueRange> scale_values_;
+  absl::flat_hash_set<const HloInstruction*> reciprocal_scales_;
 };
 
 Value ZeroVector(mlir::VectorType type, ImplicitLocOpBuilder& b) {
@@ -1054,6 +1174,16 @@ absl::Status BlockScaledQuantizeEmitter::EmitEntryFunction(
        ++index) {
     quantizations.emplace_back(facts, index, computations, call_targets,
                                entry_function, fusion);
+    // A divide by a decoded E8M0 scale equals a multiply by its reciprocal.
+    for (const HloInstruction* scale :
+         facts.quantizations[index].broadcast_scales) {
+      if (IsDecodedE8m0(*scale) &&
+          MultiplyByInjected(
+              computations.epilogues()[EpilogueIndex(index, kData)], scale,
+              entry_function->getParentOfType<mlir::ModuleOp>())) {
+        quantizations.back().UseReciprocal(scale);
+      }
+    }
   }
   if (mapping_ == Mapping::kRow) {
     EmitRow(quantizations.front(),
