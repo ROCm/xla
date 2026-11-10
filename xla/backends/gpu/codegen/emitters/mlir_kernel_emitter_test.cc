@@ -206,18 +206,16 @@ TEST_F(MlirKernelFusionTest, ValidPrefixExtentBoundsLoopFusion) {
     fused_computation {
       %x = f32[8,4] parameter(0)
       %n = s32[] parameter(1)
-      %extent_is_valid = pred[] compare(%n, %n), direction=EQ
-      %predicate = pred[8,4] broadcast(%extent_is_valid), dimensions={}
-      %squared = f32[8,4] multiply(%x, %x)
-      ROOT %result = f32[8,4] select(%predicate, %squared, %squared)
+      %bounded = f32[8,4] custom-call(%x, %n),
+        custom_call_target="xla.valid_prefix"
+      ROOT %result = f32[8,4] multiply(%bounded, %bounded)
     }
 
     ENTRY main {
       %x = f32[8,4] parameter(0)
       %n = s32[] parameter(1)
       ROOT %fusion = f32[8,4] fusion(%x, %n), kind=kLoop,
-        calls=fused_computation,
-        backend_config={"fusion_backend_config":{"kind":"kLoop"},"valid_prefix_extent":{"operand_index":"1","dimension":"0"}}
+        calls=fused_computation
     })";
 
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
@@ -287,19 +285,19 @@ TEST_F(MlirKernelFusionTest, ValidPrefixExtentBoundsLoopFusion) {
   EXPECT_TRUE(llvm_filecheck_result) << llvm_out;
 }
 
-TEST_F(MlirKernelFusionTest, ValidPrefixMarkerLowersAsIdentity) {
+TEST_F(MlirKernelFusionTest, ValidPrefixExtentRequiresDim0MajorLayout) {
   constexpr absl::string_view kValidPrefixModule = R"(
     fused_computation {
-      %x = f32[8,4] parameter(0)
+      %x = f32[8,4]{0,1} parameter(0)
       %n = s32[] parameter(1)
-      ROOT %bounded = f32[8,4] custom-call(%x, %n),
+      ROOT %bounded = f32[8,4]{0,1} custom-call(%x, %n),
         custom_call_target="xla.valid_prefix"
     }
 
     ENTRY main {
-      %x = f32[8,4] parameter(0)
+      %x = f32[8,4]{0,1} parameter(0)
       %n = s32[] parameter(1)
-      ROOT %fusion = f32[8,4] fusion(%x, %n), kind=kLoop,
+      ROOT %fusion = f32[8,4]{0,1} fusion(%x, %n), kind=kLoop,
         calls=fused_computation
     })";
 
@@ -310,15 +308,15 @@ TEST_F(MlirKernelFusionTest, ValidPrefixMarkerLowersAsIdentity) {
   HloFusionAnalysis analysis = HloFusionAnalysis::Create(*fusion, device_info_);
   std::unique_ptr<MlirKernelEmitter> emitter =
       std::make_unique<LoopFusion>(analysis);
-  ASSERT_OK_AND_ASSIGN(auto mlir_module, emitter->CreateMLIRModule(
-                                             mlir_context_, *fusion, "fusion",
-                                             /*buffer_assignment=*/nullptr));
+  ASSERT_OK_AND_ASSIGN(
+      mlir::OwningOpRef<mlir::ModuleOp> mlir_module,
+      emitter->CreateMLIRModule(mlir_context_, *fusion, "fusion",
+                                /*buffer_assignment=*/nullptr));
 
   std::string out;
   llvm::raw_string_ostream stream(out);
   stream << *mlir_module;
-  EXPECT_THAT(out, ::testing::HasSubstr("xla.loop"));
-  EXPECT_THAT(out, ::testing::Not(::testing::HasSubstr("xla.valid_prefix")));
+  EXPECT_THAT(out, ::testing::Not(::testing::HasSubstr("valid_prefix_extent")));
 }
 
 TEST_F(MlirKernelFusionTest, CreateLLVMModuleRejectsUnsupportedFmaTypes) {
