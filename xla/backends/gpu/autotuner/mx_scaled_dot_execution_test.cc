@@ -13,7 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <utility>
@@ -21,6 +23,8 @@ limitations under the License.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/base/casts.h"
+#include "absl/log/log.h"
 #include "absl/status/status_matchers.h"
 #include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
@@ -680,6 +684,183 @@ TEST_F(MxScaledDotExecutionTest,
       std::move(packed), std::move(reference),
       {&inputs[0], &inputs[1], &inputs[2], &inputs[3], &inputs[4], &inputs[5]},
       ErrorSpec(/*aabs=*/1e-3, /*arel=*/1e-5), /*run_hlo_passes=*/false));
+}
+
+// A unit-batch scaled-dot whose result is transposed, as the weight gradient of
+// a scan layer is, or not. Layout assignment makes the transpose a bitcast by
+// giving the scaled-dot a column-major output, which hipBLASLt computes without
+// swapping its operands; without the transpose the output is row-major.
+std::string MxUnitBatchHlo(bool fp4, bool transposed) {
+  return absl::Substitute(
+      R"(
+HloModule mx_unit_batch
+ENTRY main {
+  a = $0[1,64,512]{2,1,0$1} parameter(0)
+  b = $0[1,96,512]{2,1,0$1} parameter(1)
+  sa = f8e8m0fnu[1,64,16]{2,1,0} parameter(2)
+  sb = f8e8m0fnu[1,96,16]{2,1,0} parameter(3)
+  dot = bf16[1,64,96]{2,1,0} scaled-dot(a, b, sa, sb),
+      lhs_batch_dims={0}, lhs_contracting_dims={2},
+      rhs_batch_dims={0}, rhs_contracting_dims={2}
+  $2
+})",
+      fp4 ? "f4e2m1fn" : "f8e4m3fn", fp4 ? ":E(4)" : "",
+      transposed ? "r = bf16[64,96]{1,0} reshape(dot)\n"
+                   "  ROOT t = bf16[96,64]{1,0} transpose(r), dimensions={1,0}"
+                 : "ROOT r = bf16[64,96]{1,0} reshape(dot)");
+}
+
+// Returns the hipBLASLt MX call that the result of `module` depends on, or
+// nullptr.
+const HloInstruction* FindMxCall(const HloModule& module) {
+  std::vector<const HloInstruction*> pending{
+      module.entry_computation()->root_instruction()};
+  while (!pending.empty()) {
+    const HloInstruction* instruction = pending.back();
+    pending.pop_back();
+    if (instruction->opcode() == HloOpcode::kCustomCall &&
+        instruction->custom_call_target() == "__cublas$lt$matmul$mx") {
+      return instruction;
+    }
+    for (const HloInstruction* operand : instruction->operands()) {
+      pending.push_back(operand);
+    }
+  }
+  return nullptr;
+}
+
+// The position of a BF16 value in the order of all BF16 values, so that the
+// difference of two positions is their distance in ulps.
+int32_t Bf16Ordinal(bfloat16 value) {
+  uint16_t bits = absl::bit_cast<uint16_t>(value);
+  int32_t magnitude = bits & 0x7fff;
+  return (bits & 0x8000) != 0 ? -magnitude : magnitude;
+}
+
+TEST_F(MxScaledDotExecutionTest,
+       ColumnMajorOutputMatchesRowMajorAndDequantizedReference) {
+  const auto* rocm =
+      device_description().gpu_compute_capability().rocm_compute_capability();
+  if (rocm == nullptr || !rocm->gfx9_mi350()) {
+    GTEST_SKIP() << "Pre-swizzled scale tests require gfx950";
+  }
+  // {data type, FP8 data with exponents from 2^-5 to 2^6 and no sign}. Without
+  // it, the data and the scales are those of RunPreswizzledCorrectnessTest,
+  // whose products sum exactly in F32. The wide positive data rounds in F32,
+  // and with no cancellation two orders of the sums round to BF16 values at
+  // most one ulp apart.
+  for (auto [fp4, wide] : {std::pair{false, false}, std::pair{false, true},
+                           std::pair{true, false}}) {
+    // {scale layout policy, expected scale_mode}
+    for (auto [layout, scale_mode] :
+         {std::pair{DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_LINEAR, 2},
+          std::pair{DebugOptions::HIPBLASLT_MX_SCALE_LAYOUT_PRESWIZZLED_32X8,
+                    3}}) {
+      SCOPED_TRACE(::testing::Message() << "fp4=" << fp4 << " wide=" << wide
+                                        << " layout=" << layout);
+      const std::string column_hlo = MxUnitBatchHlo(fp4, /*transposed=*/true);
+      HloModuleConfig ref_config = GetModuleConfigForTest();
+      ref_config.mutable_debug_options()
+          .set_xla_gpu_experimental_scaled_dot_with_triton(false);
+      ref_config.mutable_debug_options().set_xla_gpu_enable_triton_gemm(false);
+      auto reference_or = GetOptimizedModule(column_hlo, ref_config);
+      ASSERT_THAT(reference_or, absl_testing::IsOk());
+      auto reference = std::move(reference_or).value();
+
+      HloModuleConfig hipblaslt_config = GetModuleConfigForTest();
+      DebugOptions& options = hipblaslt_config.mutable_debug_options();
+      options.set_xla_gpu_experimental_scaled_dot_with_triton(true);
+      options.set_xla_gpu_enable_triton_gemm(true);
+      options.set_xla_gpu_blas_max_algorithms(4);
+      options.set_xla_autotuner_preferred_backend(autotuner::HIPBLASLT);
+      options.set_xla_gpu_experimental_hipblaslt_mx_scale_layout(layout);
+      auto column_or = GetOptimizedModule(column_hlo, hipblaslt_config);
+      ASSERT_THAT(column_or, absl_testing::IsOk());
+      auto column = std::move(column_or).value();
+      auto row_or = GetOptimizedModule(MxUnitBatchHlo(fp4, /*transposed=*/false),
+                                       hipblaslt_config);
+      ASSERT_THAT(row_or, absl_testing::IsOk());
+      auto row = std::move(row_or).value();
+      // {module, expected minor_to_major of the GEMM result}
+      for (auto [module, minor_to_major] :
+           {std::pair{column.get(), std::vector<int64_t>{1, 0, 2}},
+            std::pair{row.get(), std::vector<int64_t>{2, 1, 0}}}) {
+        const HloInstruction* mx_call = FindMxCall(*module);
+        ASSERT_NE(mx_call, nullptr) << module->ToString();
+        auto config_or = mx_call->backend_config<GpuBackendConfig>();
+        ASSERT_THAT(config_or, absl_testing::IsOk());
+        ASSERT_EQ(config_or->gemm_backend_config().scale_mode(), scale_mode);
+        EXPECT_THAT(mx_call->shape().tuple_shapes(0).layout().minor_to_major(),
+                    ::testing::ElementsAreArray(minor_to_major))
+            << module->ToString();
+      }
+
+      std::vector<Literal> inputs;
+      inputs.reserve(4);
+      for (int operand = 0; operand < 4; ++operand) {
+        const Shape& shape =
+            column->entry_computation()->parameter_instruction(operand)->shape();
+        inputs.emplace_back(shape);
+        auto* bytes = static_cast<uint8_t*>(inputs.back().untyped_data());
+        int64_t rows = shape.dimensions(1);
+        int64_t cols = shape.dimensions(2);
+        for (int64_t r = 0; r < rows; ++r) {
+          for (int64_t c = 0; c < cols; ++c) {
+            uint8_t& byte = bytes[r * cols + c];
+            if (operand < 2 && fp4) {
+              // One FP4 value per byte of a host literal, as above.
+              byte = (r * 3 + c * 5 + (c / 32) * 7 + operand * 11) % 16;
+            } else if (operand < 2 && wide) {
+              byte = 0x10 + (r * 29 + c * 13 + operand * 7) % 0x60;
+            } else if (operand < 2) {
+              byte = (0x28 + (r * 17 + c * 11 + operand) % 17) |
+                     (((r + c) & 1) << 7);
+            } else {
+              byte = 125 + (r * 7 + c * 11 + operand) % (fp4 ? 3 : 5);
+            }
+          }
+        }
+      }
+      std::vector<const Literal*> arguments;
+      for (const Literal& input : inputs) {
+        arguments.push_back(&input);
+      }
+      // The tolerance of the BF16 residual test above.
+      EXPECT_TRUE(RunAndCompareTwoModules(column->Clone(), std::move(reference),
+                                          arguments,
+                                          ErrorSpec(/*aabs=*/1e-2,
+                                                    /*arel=*/1e-2),
+                                          /*run_hlo_passes=*/false));
+
+      auto column_result_or =
+          Execute(std::move(column), arguments, /*run_hlo_passes=*/false);
+      ASSERT_THAT(column_result_or, absl_testing::IsOk());
+      auto row_result_or =
+          Execute(std::move(row), arguments, /*run_hlo_passes=*/false);
+      ASSERT_THAT(row_result_or, absl_testing::IsOk());
+      int64_t num_different = 0;
+      int32_t max_ulps = 0;
+      for (int64_t m = 0; m < 64; ++m) {
+        for (int64_t n = 0; n < 96; ++n) {
+          int32_t ulps =
+              std::abs(Bf16Ordinal(column_result_or->Get<bfloat16>({n, m})) -
+                       Bf16Ordinal(row_result_or->Get<bfloat16>({m, n})));
+          num_different += ulps != 0;
+          max_ulps = std::max(max_ulps, ulps);
+        }
+      }
+      LOG(INFO) << "fp4=" << fp4 << " wide=" << wide << " layout=" << layout
+                << ": " << num_different
+                << " of 6144 elements differ between the column-major and the "
+                   "row-major result, by at most "
+                << max_ulps << " BF16 ulps";
+      if (wide) {
+        EXPECT_LE(max_ulps, 1);
+      } else {
+        EXPECT_EQ(num_different, 0);
+      }
+    }
+  }
 }
 
 }  // namespace

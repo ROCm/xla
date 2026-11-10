@@ -560,9 +560,12 @@ absl::Status GpuLayoutAssignment::AddDotBackendConstraints(
 
 absl::Status GpuLayoutAssignment::AddScaledDotBackendConstraints(
     LayoutConstraints* constraints, HloScaledDotInstruction* instruction) {
+  bool output_is_one_matrix = true;
   for (int operand_no : {0, 1}) {
     ABSL_ASSIGN_OR_RETURN(DotOperandDims dims, DotOperandDims::FromDotOperand(
                                                    instruction, operand_no));
+    output_is_one_matrix &= dims.TotalSize(DotOperandDims::kBatch) == 1 &&
+                            dims.Rank(DotOperandDims::kNonContracting) == 1;
     ABSL_RETURN_IF_ERROR(SetDotOperandLayoutToMinorContracting(
         instruction, operand_no, dims.Indices(DotOperandDims::kBatch),
         dims.Indices(DotOperandDims::kContracting),
@@ -577,6 +580,11 @@ absl::Status GpuLayoutAssignment::AddScaledDotBackendConstraints(
     ABSL_RETURN_IF_ERROR(SetArrayOperandLayout(
         LayoutUtil::MakeLayout(operand_layout.minor_to_major()), instruction,
         scale_no));
+  }
+  // As for a dot without batch dimensions, the users choose the output layout.
+  // cuDNN needs a batch-major output and has no M-minor MXFP4 output.
+  if (output_is_one_matrix && gpu_version_.IsRocm()) {
+    return absl::OkStatus();
   }
   return SetDotLayout(instruction, constraints);
 }
@@ -1081,6 +1089,26 @@ static std::unique_ptr<Layout> TryChooseReshapeBitcastLayout(
   return nullptr;
 }
 
+// Returns `layout`, which a user chose for `operand`, with the unit dimensions
+// most major if `operand` is a scaled-dot whose GEMM cannot write `layout`.
+static std::unique_ptr<Layout> SupportedScaledDotLayout(
+    const HloInstruction& operand, std::unique_ptr<Layout> layout) {
+  if (layout == nullptr || operand.opcode() != HloOpcode::kScaledDot) {
+    return layout;
+  }
+  Shape shape = operand.shape();
+  *shape.mutable_layout() = *layout;
+  if (DotCanSupportShapeWithLayout(&operand, shape)) {
+    return layout;
+  }
+  for (int64_t dim = 0; dim < shape.dimensions().size(); ++dim) {
+    if (shape.dimensions(dim) == 1) {
+      *layout = LayoutUtil::MoveDimToMajor(*layout, dim);
+    }
+  }
+  return layout;
+}
+
 std::unique_ptr<Layout>
 GpuLayoutAssignment::ChooseOperandLayoutFromOutputLayout(
     const Layout& output_layout, const HloInstruction* instruction,
@@ -1109,12 +1137,13 @@ GpuLayoutAssignment::ChooseOperandLayoutFromOutputLayout(
     auto operand_layout = TryChooseReshapeBitcastLayout(
         output_shape_with_layout, operand_shape, template_layout);
     if (operand_layout) {
-      return operand_layout;
+      return SupportedScaledDotLayout(*operand, std::move(operand_layout));
     }
   }
 
-  return LayoutAssignment::ChooseOperandLayoutFromOutputLayout(
-      output_layout, instruction, operand_no);
+  return SupportedScaledDotLayout(
+      *operand, LayoutAssignment::ChooseOperandLayoutFromOutputLayout(
+                    output_layout, instruction, operand_no));
 }
 
 std::unique_ptr<Layout>

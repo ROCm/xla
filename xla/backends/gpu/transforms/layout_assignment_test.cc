@@ -23,7 +23,10 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/status_matchers.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
@@ -57,6 +60,9 @@ namespace gpu {
 namespace {
 
 namespace m = ::xla::match;
+using ::testing::ElementsAre;
+using ::testing::ElementsAreArray;
+using ::testing::IsEmpty;
 using ::testing::NotNull;
 
 class LayoutAssignmentTest : public HloHardwareIndependentTestBase {
@@ -1630,6 +1636,236 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<ScaledDotLayoutTestCase>& info) {
       return info.param.name;
     });
+
+// One layer of a scan's weight gradient: a scaled-dot with a unit batch whose
+// transposed result is written into a carried gradient stack, which the entry
+// transposes into the layer order of its result. $0 is the layout that the
+// transpose has before layout assignment.
+constexpr absl::string_view kScanWeightGradientHlo = R"(
+HloModule ScanWeightGradient
+
+body {
+  p = (s32[], f8e4m3fn[1,128,256], f8e4m3fn[1,64,256], f8e8m0fnu[1,128,8],
+       f8e8m0fnu[1,64,8], f32[4,64,128]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  lhs = f8e4m3fn[1,128,256] get-tuple-element(p), index=1
+  rhs = f8e4m3fn[1,64,256] get-tuple-element(p), index=2
+  lhs_scale = f8e8m0fnu[1,128,8] get-tuple-element(p), index=3
+  rhs_scale = f8e8m0fnu[1,64,8] get-tuple-element(p), index=4
+  stack = f32[4,64,128] get-tuple-element(p), index=5
+  dot = bf16[1,128,64] scaled-dot(lhs, rhs, lhs_scale, rhs_scale),
+    lhs_batch_dims={0}, lhs_contracting_dims={2},
+    rhs_batch_dims={0}, rhs_contracting_dims={2}
+  transpose = bf16[64,128,1]$0 transpose(dot), dimensions={2,1,0}
+  reshape = bf16[64,128] reshape(transpose)
+  convert = f32[64,128] convert(reshape)
+  update = f32[1,64,128] reshape(convert)
+  zero = s32[] constant(0)
+  new_stack = f32[4,64,128] dynamic-update-slice(stack, update, i, zero, zero)
+  one = s32[] constant(1)
+  next = s32[] add(i, one)
+  ROOT result = (s32[], f8e4m3fn[1,128,256], f8e4m3fn[1,64,256],
+    f8e8m0fnu[1,128,8], f8e8m0fnu[1,64,8], f32[4,64,128])
+    tuple(next, lhs, rhs, lhs_scale, rhs_scale, new_stack)
+}
+
+condition {
+  p = (s32[], f8e4m3fn[1,128,256], f8e4m3fn[1,64,256], f8e8m0fnu[1,128,8],
+       f8e8m0fnu[1,64,8], f32[4,64,128]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  n = s32[] constant(4)
+  ROOT lt = pred[] compare(i, n), direction=LT
+}
+
+ENTRY main {
+  lhs = f8e4m3fn[1,128,256] parameter(0)
+  rhs = f8e4m3fn[1,64,256] parameter(1)
+  lhs_scale = f8e8m0fnu[1,128,8] parameter(2)
+  rhs_scale = f8e8m0fnu[1,64,8] parameter(3)
+  i = s32[] constant(0)
+  zero = f32[] constant(0)
+  stack = f32[4,64,128] broadcast(zero), dimensions={}
+  init = (s32[], f8e4m3fn[1,128,256], f8e4m3fn[1,64,256], f8e8m0fnu[1,128,8],
+    f8e8m0fnu[1,64,8], f32[4,64,128])
+    tuple(i, lhs, rhs, lhs_scale, rhs_scale, stack)
+  loop = (s32[], f8e4m3fn[1,128,256], f8e4m3fn[1,64,256], f8e8m0fnu[1,128,8],
+    f8e8m0fnu[1,64,8], f32[4,64,128]) while(init), condition=condition,
+    body=body
+  grad = f32[4,64,128] get-tuple-element(loop), index=5
+  ROOT grad_t = f32[64,4,128] transpose(grad), dimensions={1,0,2}
+})";
+
+class ScanWeightGradientLayoutTest : public LayoutAssignmentTest {
+ protected:
+  // Parses kScanWeightGradientHlo with `transpose_layout` and runs layout
+  // assignment for gfx950 with the entry layouts of the module.
+  absl::StatusOr<std::unique_ptr<HloModule>> RunLayoutAssignment(
+      absl::string_view transpose_layout) {
+    ABSL_ASSIGN_OR_RETURN(
+        std::unique_ptr<HloModule> module,
+        ParseAndReturnVerifiedModule(
+            absl::Substitute(kScanWeightGradientHlo, transpose_layout)));
+    ComputationLayout computation_layout(
+        module->entry_computation()->ComputeProgramShape(),
+        /*ignore_layouts=*/false);
+    GpuLayoutAssignment layout_assignment(
+        &computation_layout,
+        se::GpuComputeCapability{se::RocmComputeCapability("gfx950")},
+        default_device_description_);
+    ABSL_RETURN_IF_ERROR(layout_assignment.Run(module.get()).status());
+    return module;
+  }
+
+  // Expects the gradient stack in the layer order of the entry result, so that
+  // the entry transpose is a bitcast, and the scaled-dot output in
+  // `dot_minor_to_major`.
+  void ExpectLayouts(const HloModule& module,
+                     absl::Span<const int64_t> dot_minor_to_major) {
+    const HloInstruction* loop = FindInstruction(&module, "loop");
+    ASSERT_THAT(loop, NotNull());
+    EXPECT_THAT(loop->shape().tuple_shapes(5).layout().minor_to_major(),
+                ElementsAre(2, 0, 1))
+        << module.ToString();
+    const HloInstruction* root = module.entry_computation()->root_instruction();
+    EXPECT_TRUE(ShapeUtil::TransposeIsBitcast(
+        root->operand(0)->shape(), root->shape(), root->dimensions()))
+        << module.ToString();
+    const HloInstruction* dot = FindInstruction(&module, "dot");
+    ASSERT_THAT(dot, NotNull());
+    EXPECT_THAT(dot->shape().layout().minor_to_major(),
+                ElementsAreArray(dot_minor_to_major))
+        << module.ToString();
+  }
+
+  // Returns the copies in `module`.
+  std::vector<const HloInstruction*> Copies(const HloModule& module) {
+    std::vector<const HloInstruction*> copies;
+    for (const HloComputation* computation : module.computations()) {
+      for (const HloInstruction* instruction : computation->instructions()) {
+        if (instruction->opcode() == HloOpcode::kCopy) {
+          copies.push_back(instruction);
+        }
+      }
+    }
+    return copies;
+  }
+};
+
+// The transpose has the layout that JAX's normalization of the dot leaves
+// before layout assignment, with the unit dimension most major.
+TEST_F(ScanWeightGradientLayoutTest, ScaledDotOutputFollowsGradientStack) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       RunLayoutAssignment("{0,1,2}"));
+  ExpectLayouts(*module, {1, 0, 2});
+  EXPECT_THAT(Copies(*module), IsEmpty()) << module->ToString();
+}
+
+// With the unit dimension of the transpose most minor, the bitcast layout of
+// the dot would have the unit batch dimension most minor, which no GEMM
+// accepts. The dot gets it most major instead, and the copy that moves it is a
+// bitcast.
+TEST_F(ScanWeightGradientLayoutTest, ScaledDotOutputKeepsUnitBatchMajor) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       RunLayoutAssignment("{2,1,0}"));
+  ExpectLayouts(*module, {1, 2, 0});
+  for (const HloInstruction* copy : Copies(*module)) {
+    EXPECT_TRUE(ShapeUtil::ReshapeIsBitcast(copy->operand(0)->shape(),
+                                            copy->shape()))
+        << copy->ToString();
+  }
+}
+
+// A weight gradient whose reduce-scatter the collective pipeliner has moved to
+// the next iteration of the loop, with the first scaled-dot and the last
+// reduce-scatter peeled into the entry: the scaled-dot result reaches the
+// reduce-scatter through the loop carry.
+TEST_F(LayoutAssignmentTest, PipelinedScaledDotOutputTakesReduceScatterLayout) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(R"(
+HloModule PipelinedReduceScatter
+
+add {
+  x = bf16[] parameter(0)
+  y = bf16[] parameter(1)
+  ROOT sum = bf16[] add(x, y)
+}
+
+body {
+  p = (s32[], f8e4m3fn[1,128,256], f8e4m3fn[1,64,256], f8e8m0fnu[1,128,8],
+       f8e8m0fnu[1,64,8], bf16[1,128,64], bf16[1,128,8]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  lhs = f8e4m3fn[1,128,256] get-tuple-element(p), index=1
+  rhs = f8e4m3fn[1,64,256] get-tuple-element(p), index=2
+  lhs_scale = f8e8m0fnu[1,128,8] get-tuple-element(p), index=3
+  rhs_scale = f8e8m0fnu[1,64,8] get-tuple-element(p), index=4
+  previous = bf16[1,128,64] get-tuple-element(p), index=5
+  shard = bf16[1,128,8] reduce-scatter(previous), channel_id=1,
+    replica_groups={{0,1,2,3,4,5,6,7}}, use_global_device_ids=true,
+    dimensions={2}, to_apply=add
+  dot = bf16[1,128,64] scaled-dot(lhs, rhs, lhs_scale, rhs_scale),
+    lhs_batch_dims={0}, lhs_contracting_dims={2},
+    rhs_batch_dims={0}, rhs_contracting_dims={2}
+  one = s32[] constant(1)
+  next = s32[] add(i, one)
+  ROOT result = (s32[], f8e4m3fn[1,128,256], f8e4m3fn[1,64,256],
+    f8e8m0fnu[1,128,8], f8e8m0fnu[1,64,8], bf16[1,128,64], bf16[1,128,8])
+    tuple(next, lhs, rhs, lhs_scale, rhs_scale, dot, shard)
+}
+
+condition {
+  p = (s32[], f8e4m3fn[1,128,256], f8e4m3fn[1,64,256], f8e8m0fnu[1,128,8],
+       f8e8m0fnu[1,64,8], bf16[1,128,64], bf16[1,128,8]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  n = s32[] constant(4)
+  ROOT lt = pred[] compare(i, n), direction=LT
+}
+
+ENTRY main {
+  lhs = f8e4m3fn[1,128,256] parameter(0)
+  rhs = f8e4m3fn[1,64,256] parameter(1)
+  lhs_scale = f8e8m0fnu[1,128,8] parameter(2)
+  rhs_scale = f8e8m0fnu[1,64,8] parameter(3)
+  first = bf16[1,128,64] scaled-dot(lhs, rhs, lhs_scale, rhs_scale),
+    lhs_batch_dims={0}, lhs_contracting_dims={2},
+    rhs_batch_dims={0}, rhs_contracting_dims={2}
+  i = s32[] constant(0)
+  zero = bf16[] constant(0)
+  no_shard = bf16[1,128,8] broadcast(zero), dimensions={}
+  init = (s32[], f8e4m3fn[1,128,256], f8e4m3fn[1,64,256], f8e8m0fnu[1,128,8],
+    f8e8m0fnu[1,64,8], bf16[1,128,64], bf16[1,128,8])
+    tuple(i, lhs, rhs, lhs_scale, rhs_scale, first, no_shard)
+  loop = (s32[], f8e4m3fn[1,128,256], f8e4m3fn[1,64,256], f8e8m0fnu[1,128,8],
+    f8e8m0fnu[1,64,8], bf16[1,128,64], bf16[1,128,8]) while(init),
+    condition=condition, body=body
+  shard = bf16[1,128,8] get-tuple-element(loop), index=6
+  last = bf16[1,128,64] get-tuple-element(loop), index=5
+  last_shard = bf16[1,128,8] reduce-scatter(last), channel_id=2,
+    replica_groups={{0,1,2,3,4,5,6,7}}, use_global_device_ids=true,
+    dimensions={2}, to_apply=add
+  ROOT shards = (bf16[1,128,8]{1,0,2}, bf16[1,128,8]{1,0,2})
+    tuple(shard, last_shard)
+})",
+                                                /*replica_count=*/8));
+  ComputationLayout computation_layout(
+      module->entry_computation()->ComputeProgramShape(),
+      /*ignore_layouts=*/false);
+  GpuLayoutAssignment layout_assignment(
+      &computation_layout,
+      se::GpuComputeCapability{se::RocmComputeCapability("gfx950")},
+      default_device_description_);
+  EXPECT_THAT(layout_assignment.Run(module.get()),
+              absl_testing::IsOkAndHolds(true));
+
+  const HloInstruction* dot = FindInstruction(module.get(), "dot");
+  ASSERT_THAT(dot, NotNull());
+  EXPECT_THAT(dot->shape().layout().minor_to_major(), ElementsAre(1, 0, 2))
+      << module->ToString();
+  for (const HloComputation* computation : module->computations()) {
+    for (const HloInstruction* instruction : computation->instructions()) {
+      EXPECT_NE(instruction->opcode(), HloOpcode::kCopy) << module->ToString();
+    }
+  }
+}
 
 }  // namespace
 }  // namespace gpu
