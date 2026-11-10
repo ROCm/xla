@@ -2001,7 +2001,11 @@ message DebugOptions {
   // (ScanRewriterTriton).
   optional bool xla_gpu_experimental_enable_triton_scan = 562;
 
-  // Next id: 565
+  // Emits MX block quantizations (block amax, E8M0 scale, scaled convert) as
+  // one `__block_scaled_quantize` fusion each. Off by default.
+  optional bool xla_gpu_experimental_enable_block_scaled_quantize_fusion = 565;
+
+  // Next id: 566
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

@@ -231,6 +231,7 @@ cc_library(
         ":fusion_emitter",
         ":sort",
         "//xla:shape_util",
+        "//xla/backends/gpu/codegen/emitters:block_scaled_quantize",
         "//xla/backends/gpu/codegen/emitters:concatenate",
         "//xla/backends/gpu/codegen/emitters:in_place_dynamic_update_slice",
         "//xla/backends/gpu/codegen/emitters:loop",

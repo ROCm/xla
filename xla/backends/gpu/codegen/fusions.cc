@@ -21,6 +21,7 @@ limitations under the License.
 #include "xla/backends/gpu/codegen/copy.h"
 #include "xla/backends/gpu/codegen/cudnn.h"
 #include "xla/backends/gpu/codegen/custom.h"
+#include "xla/backends/gpu/codegen/emitters/block_scaled_quantize.h"
 #include "xla/backends/gpu/codegen/emitters/concatenate.h"
 #include "xla/backends/gpu/codegen/emitters/in_place_dynamic_update_slice.h"
 #include "xla/backends/gpu/codegen/emitters/loop.h"
@@ -109,6 +110,9 @@ std::unique_ptr<FusionInterface> GetFusionEmitter(
       return std::make_unique<CuDnnFusion>(analysis);
     case HloFusionAnalysis::EmitterFusionKind::kTensorIr:
       return std::make_unique<TensorIrFusion>();
+    case HloFusionAnalysis::EmitterFusionKind::kBlockScaledQuantize:
+      return std::make_unique<MlirKernelFusion>(
+          std::make_unique<BlockScaledQuantizeEmitter>(analysis));
   }
 }
 

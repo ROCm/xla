@@ -71,6 +71,7 @@ limitations under the License.
 #include "xla/backends/cpu/nanort/nanort_executable.h"
 #include "xla/backends/cpu/target_machine_options.h"
 #include "xla/backends/gpu/codegen/cubin_custom_kernel_compiler.h"
+#include "xla/backends/gpu/codegen/emitters/block_scaled_quantize_analysis.h"
 #include "xla/backends/gpu/codegen/emitters/mlir_kernel_emitter.h"
 #include "xla/backends/gpu/codegen/kernel_compiler.h"
 #include "xla/backends/gpu/codegen/triton/support.h"
@@ -85,6 +86,7 @@ limitations under the License.
 #include "xla/backends/gpu/transforms/algebraic_simplifier.h"
 #include "xla/backends/gpu/transforms/algorithm_checker.h"
 #include "xla/backends/gpu/transforms/async_wrapper.h"
+#include "xla/backends/gpu/transforms/block_scaled_quantize_fusion.h"
 #include "xla/backends/gpu/transforms/collectives/all_gather_combiner.h"
 #include "xla/backends/gpu/transforms/collectives/all_gather_dynamic_slice_simplifier.h"
 #include "xla/backends/gpu/transforms/collectives/all_gather_major_dimension_rewriter.h"
@@ -267,6 +269,7 @@ limitations under the License.
 #include "xla/service/cpu/executable.pb.h"
 #include "xla/service/cpu_gpu_shape_verifier.h"
 #include "xla/service/debug/unstable_reduction_detector.h"
+#include "xla/service/decision.h"
 #include "xla/service/device_assignment.h"
 #include "xla/service/dump.h"
 #include "xla/service/dynamic_dimension_inference.h"
@@ -2217,6 +2220,21 @@ absl::Status GpuCompiler::OptimizeHloPostLayoutAssignment(
     pipeline.AddPass<BroadcastCanonicalizer>();
     pipeline.AddPass<ReductionDegenerateDimRemover>();
     pipeline.AddPass<ReductionLayoutNormalizer>();
+    if (debug_options
+            .xla_gpu_experimental_enable_block_scaled_quantize_fusion()) {
+      HloPassPipeline& block_scaled_quantize =
+          pipeline.AddPass<HloPassPipeline>("block-scaled-quantize");
+      // Pairs the row and column quantizations of a source.
+      block_scaled_quantize.AddPass<HloCSE>(/*is_layout_sensitive=*/true);
+      block_scaled_quantize.AddPass<BlockScaledQuantizeFusion>(
+          [mlir_context](const HloFusionInstruction& fusion) {
+            return Decision(
+                AnalyzeBlockScaledQuantize(
+                    *fusion.fused_instructions_computation(), mlir_context)
+                    .status());
+          });
+      block_scaled_quantize.AddPass<HloDCE>();
+    }
     // Run Softmax fusion after layout normalization. We expect a default layout
     // in the softmax codegen pipeline. However we should run before
     // ReductionDimensionGrouper, as that makes matching the softmax pattern

@@ -135,6 +135,11 @@ inline constexpr absl::string_view kCuDnnFusionKind = "__cudnn$fusion";
 // FusionBackendConfig.kind equal to this string.
 inline constexpr absl::string_view kTensorIrFusionKind = "__tensorir";
 
+// Fusions of a block-scaled quantization (block amax, scale and scaled
+// convert) have FusionBackendConfig.kind equal to this string.
+inline constexpr absl::string_view kBlockScaledQuantizeFusionKind =
+    "__block_scaled_quantize";
+
 inline constexpr absl::string_view kUncompilableFusion =
     "__uncompilable_fusion";
 

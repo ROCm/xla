@@ -1,0 +1,168 @@
+// RUN: gpu_fusion_to_mlir %s | FileCheck %s
+// RUN: gpu_fusion_to_mlir %s | emitters_opt -xla-test-optimize \
+// RUN:   -xla-gpu-test-transform-loops | FileCheck %s --check-prefix=CHECK-VEC
+
+// Both orientations of one bf16 source from one read: the row blocks are
+// quantized from the loaded registers before the barrier, the column blocks
+// from the shared tile after it.
+
+// CHECK-LABEL: func.func @main(
+// CHECK-SAME:    %{{.*}}: tensor<128x256xbf16>
+// CHECK:         %[[SHARED:.*]] = xla_gpu.allocate_shared : tensor<128x130xbf16>
+// CHECK:         xla.loop
+// CHECK-SAME:      iter_args(%[[SHARED_ITER:[^ ]*]] = %[[SHARED]]
+// CHECK:           %[[X:.*]] = xla.pure_call @fused_quantize_source(
+// CHECK:           tensor.insert %[[X]] into %[[SHARED_ITER]]
+// CHECK:           xla.pure_call @fused_quantize__epilogue__r_ab({{.*}}, %[[X]])
+// CHECK:         xla_gpu.shuffle_reduce({{.*}}) to 2 combiner=@max_m
+// CHECK:         xla.pure_call @fused_quantize__epilogue__r_scale_r_decoded(
+// CHECK:         xla.predicated_insert
+// CHECK:         xla.pure_call @fused_quantize__epilogue__r_data(
+// CHECK:         %[[SYNCED:.*]] = xla_gpu.sync_threads
+// CHECK:         %[[C_AMAX:.*]], %[[C_VALUES:.*]] = xla.loop
+// CHECK-SAME:      s0 in [0, 15]
+// CHECK:           %[[Y:.*]] = tensor.extract %[[SYNCED]]
+// CHECK:           xla.pure_call @fused_quantize__epilogue__c_ab({{.*}}, %[[Y]])
+// CHECK:         xla_gpu.shuffle_reduce(%[[C_AMAX]]) to 1 combiner=@max_m
+// CHECK:         gpu.shuffle idx
+// CHECK:         xla.pure_call @fused_quantize__epilogue__c_scale_c_decoded(
+// CHECK:         xla.predicated_insert
+// CHECK:         xla.loop
+// CHECK:           vector.extract %[[C_VALUES]]
+// CHECK:           xla.pure_call @fused_quantize__epilogue__c_data(
+
+// CHECK-VEC-LABEL: func.func @main(
+// CHECK-VEC-COUNT-4: vector.transfer_read {{.*}} : tensor<32768xbf16>, vector<8xbf16>
+// CHECK-VEC-NOT:     vector.transfer_read
+// CHECK-VEC-COUNT-4: vector.transfer_write {{.*}} : vector<8xf8E4M3FN>, tensor<32768xf8E4M3FN>
+// CHECK-VEC-NOT:     vector.transfer_write
+// CHECK-VEC:         xla_gpu.sync_threads
+// CHECK-VEC-NOT:     vector.transfer_read
+// CHECK-VEC-COUNT-2: vector.transfer_write {{.*}} : vector<16xf8E4M3FN>, tensor<32768xf8E4M3FN>
+// CHECK-VEC-NOT:     vector.transfer_
+
+max {
+  a = bf16[] parameter(0)
+  b = bf16[] parameter(1)
+  ROOT m = bf16[] maximum(a, b)
+}
+
+fused_quantize {
+  source = bf16[128,256] parameter(0)
+  source_f32 = f32[128,256] convert(source)
+  abs = bf16[128,256] abs(source)
+  ninf = bf16[] constant(-inf)
+  r_x = f32[128,8,32] bitcast(source_f32)
+  r_ab = bf16[128,8,32] bitcast(abs)
+  r_amax = bf16[128,8] reduce(r_ab, ninf), dimensions={2}, to_apply=max
+  r_amax_f32 = f32[128,8] convert(r_amax)
+  r_inv = f32[] constant(0.00223214296)
+  r_inv_b = f32[128,8] broadcast(r_inv), dimensions={}
+  r_ratio = f32[128,8] multiply(r_amax_f32, r_inv_b)
+  r_bits = u32[128,8] bitcast(r_ratio)
+  r_c_mant = u32[] constant(8388607)
+  r_mant_mask = u32[128,8] broadcast(r_c_mant), dimensions={}
+  r_mant = u32[128,8] and(r_bits, r_mant_mask)
+  r_c0 = u32[] constant(0)
+  r_zero = u32[128,8] broadcast(r_c0), dimensions={}
+  r_gt = pred[128,8] compare(r_mant, r_zero), direction=GT
+  r_c23 = u32[] constant(23)
+  r_s23 = u32[128,8] broadcast(r_c23), dimensions={}
+  r_exp = u32[128,8] shift-right-logical(r_bits, r_s23)
+  r_c254 = u32[] constant(254)
+  r_e254 = u32[128,8] broadcast(r_c254), dimensions={}
+  r_ne = pred[128,8] compare(r_exp, r_e254), direction=NE
+  r_and0 = pred[128,8] and(r_gt, r_ne)
+  r_eq0 = pred[128,8] compare(r_exp, r_zero), direction=EQ
+  r_c_half = u32[] constant(4194304)
+  r_half = u32[128,8] broadcast(r_c_half), dimensions={}
+  r_le = pred[128,8] compare(r_mant, r_half), direction=LE
+  r_and1 = pred[128,8] and(r_eq0, r_le)
+  r_not = pred[128,8] not(r_and1)
+  r_round_up = pred[128,8] and(r_and0, r_not)
+  r_c1 = u32[] constant(1)
+  r_one = u32[128,8] broadcast(r_c1), dimensions={}
+  r_exp1 = u32[128,8] add(r_exp, r_one)
+  r_exp_sel = u32[128,8] select(r_round_up, r_exp1, r_exp)
+  r_scale = u8[128,8] convert(r_exp_sel)
+  r_scale32 = u32[128,8] convert(r_scale)
+  r_shl = u32[128,8] shift-left(r_scale32, r_s23)
+  r_pow = f32[128,8] bitcast(r_shl)
+  r_cf0 = f32[] constant(0)
+  r_fzero = f32[128,8] broadcast(r_cf0), dimensions={}
+  r_is_zero = pred[128,8] compare(r_pow, r_fzero), direction=EQ
+  r_tiny = f32[] constant(5.87747175e-39)
+  r_tiny_b = f32[128,8] broadcast(r_tiny), dimensions={}
+  r_decoded = f32[128,8] select(r_is_zero, r_tiny_b, r_pow)
+  r_decoded_b = f32[128,8,32] broadcast(r_decoded), dimensions={0,1}
+  r_scaled = f32[128,8,32] divide(r_x, r_decoded_b)
+  r_lo = f32[] constant(-448)
+  r_lo_b = f32[128,8,32] broadcast(r_lo), dimensions={}
+  r_hi = f32[] constant(448)
+  r_hi_b = f32[128,8,32] broadcast(r_hi), dimensions={}
+  r_clamped = f32[128,8,32] clamp(r_lo_b, r_scaled, r_hi_b)
+  r_data = f8e4m3fn[128,8,32] convert(r_clamped)
+  c_xb = f32[4,32,256] bitcast(source_f32)
+  c_x = f32[256,4,32] transpose(c_xb), dimensions={2,0,1}
+  c_ab0 = bf16[256,4,32]{0,2,1} bitcast(abs)
+  c_ab = bf16[4,32,256] bitcast(c_ab0)
+  c_amax = bf16[4,256] reduce(c_ab, ninf), dimensions={1}, to_apply=max
+  c_at0 = bf16[256,4]{0,1} bitcast(c_amax)
+  c_at1 = bf16[4,256] bitcast(c_at0)
+  c_af = f32[4,256] convert(c_at1)
+  c_amax_f32 = f32[256,4] transpose(c_af), dimensions={1,0}
+  c_inv = f32[] constant(0.00223214296)
+  c_inv_b = f32[256,4] broadcast(c_inv), dimensions={}
+  c_ratio = f32[256,4] multiply(c_amax_f32, c_inv_b)
+  c_bits = u32[256,4] bitcast(c_ratio)
+  c_c_mant = u32[] constant(8388607)
+  c_mant_mask = u32[256,4] broadcast(c_c_mant), dimensions={}
+  c_mant = u32[256,4] and(c_bits, c_mant_mask)
+  c_c0 = u32[] constant(0)
+  c_zero = u32[256,4] broadcast(c_c0), dimensions={}
+  c_gt = pred[256,4] compare(c_mant, c_zero), direction=GT
+  c_c23 = u32[] constant(23)
+  c_s23 = u32[256,4] broadcast(c_c23), dimensions={}
+  c_exp = u32[256,4] shift-right-logical(c_bits, c_s23)
+  c_c254 = u32[] constant(254)
+  c_e254 = u32[256,4] broadcast(c_c254), dimensions={}
+  c_ne = pred[256,4] compare(c_exp, c_e254), direction=NE
+  c_and0 = pred[256,4] and(c_gt, c_ne)
+  c_eq0 = pred[256,4] compare(c_exp, c_zero), direction=EQ
+  c_c_half = u32[] constant(4194304)
+  c_half = u32[256,4] broadcast(c_c_half), dimensions={}
+  c_le = pred[256,4] compare(c_mant, c_half), direction=LE
+  c_and1 = pred[256,4] and(c_eq0, c_le)
+  c_not = pred[256,4] not(c_and1)
+  c_round_up = pred[256,4] and(c_and0, c_not)
+  c_c1 = u32[] constant(1)
+  c_one = u32[256,4] broadcast(c_c1), dimensions={}
+  c_exp1 = u32[256,4] add(c_exp, c_one)
+  c_exp_sel = u32[256,4] select(c_round_up, c_exp1, c_exp)
+  c_scale = u8[256,4] convert(c_exp_sel)
+  c_scale32 = u32[256,4] convert(c_scale)
+  c_shl = u32[256,4] shift-left(c_scale32, c_s23)
+  c_pow = f32[256,4] bitcast(c_shl)
+  c_cf0 = f32[] constant(0)
+  c_fzero = f32[256,4] broadcast(c_cf0), dimensions={}
+  c_is_zero = pred[256,4] compare(c_pow, c_fzero), direction=EQ
+  c_tiny = f32[] constant(5.87747175e-39)
+  c_tiny_b = f32[256,4] broadcast(c_tiny), dimensions={}
+  c_decoded = f32[256,4] select(c_is_zero, c_tiny_b, c_pow)
+  c_decoded_b = f32[256,4,32] broadcast(c_decoded), dimensions={0,1}
+  c_scaled = f32[256,4,32] divide(c_x, c_decoded_b)
+  c_lo = f32[] constant(-448)
+  c_lo_b = f32[256,4,32] broadcast(c_lo), dimensions={}
+  c_hi = f32[] constant(448)
+  c_hi_b = f32[256,4,32] broadcast(c_hi), dimensions={}
+  c_clamped = f32[256,4,32] clamp(c_lo_b, c_scaled, c_hi_b)
+  c_data = f8e4m3fn[256,4,32] convert(c_clamped)
+  ROOT out = (f8e4m3fn[128,8,32], f8e4m3fn[256,4,32], u8[128,8], u8[256,4]) tuple(r_data, c_data, r_scale, c_scale)
+}
+
+ENTRY main {
+  p0 = bf16[128,256] parameter(0)
+  ROOT fusion = (f8e4m3fn[128,8,32], f8e4m3fn[256,4,32], u8[128,8], u8[256,4]) fusion(p0), kind=kCustom,
+      calls=fused_quantize,
+      backend_config={"fusion_backend_config":{"kind":"__block_scaled_quantize"}}
+}

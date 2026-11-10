@@ -1,0 +1,105 @@
+// RUN: gpu_fusion_to_mlir %s | FileCheck %s
+// RUN: gpu_fusion_to_mlir %s | emitters_opt -xla-test-optimize \
+// RUN:   -xla-gpu-test-transform-loops | FileCheck %s --check-prefix=CHECK-VEC
+
+// An f32 source: eight lanes per block, each loading 4 values (16 bytes).
+
+// CHECK-LABEL: func.func @main(
+// CHECK-SAME:    %{{.*}}: tensor<64x256xf32>
+// CHECK-SAME:    %[[DATA:.*]]: tensor<64x8x32xf8E4M3FN>
+// CHECK-SAME:    %[[SCALE:.*]]: tensor<64x8xi8>
+// CHECK:         %[[INIT:.*]] = xla.pure_call @fused_quantize_ninf(
+// CHECK:         %[[AMAX:.*]], %[[VALUES:.*]] = xla.loop
+// CHECK-SAME:      s0 in [0, 3]
+// CHECK-SAME:      iter_args(%[[ACC:.*]] = %[[INIT]],
+// CHECK:           %[[X:.*]] = xla.pure_call @fused_quantize_source(
+// CHECK:           %[[ABS:.*]] = xla.pure_call @fused_quantize__epilogue__abs_blocks({{.*}}, %[[X]])
+// CHECK:           xla.pure_call @max_m(%[[ACC]], %[[ABS]])
+// CHECK:           vector.insert %[[X]]
+// CHECK:         %[[REDUCED:.*]] = xla_gpu.shuffle_reduce(%[[AMAX]]) to 4 combiner=@max_m
+// CHECK:         gpu.shuffle idx
+// CHECK:         %[[SCALE_VALUE:.*]], %[[DECODED:.*]] = xla.pure_call @fused_quantize__epilogue__scale_decoded(
+// CHECK:         %[[SCALE_OUT:.*]] = xla.predicated_insert %[[SCALE_VALUE]] into %[[SCALE]]
+// CHECK:         %[[DATA_OUT:.*]] = xla.loop
+// CHECK-SAME:      iter_args(%[[DATA_ITER:.*]] = %[[DATA]])
+// CHECK:           %[[Y:.*]] = vector.extract %[[VALUES]]
+// CHECK:           %[[Q:.*]] = xla.pure_call @fused_quantize__epilogue__data({{.*}}, %[[Y]], %[[DECODED]])
+// CHECK:           tensor.insert %[[Q]] into %[[DATA_ITER]]
+// CHECK:         return %[[DATA_OUT]], %[[SCALE_OUT]]
+
+// CHECK-VEC-LABEL: func.func @main(
+// CHECK-VEC:         vector.transfer_read {{.*}} : tensor<16384xf32>, vector<4xf32>
+// CHECK-VEC-NOT:     vector.transfer_read
+// CHECK-VEC:         gpu.shuffle down
+// CHECK-VEC:         gpu.shuffle idx
+// CHECK-VEC:         vector.transfer_write {{.*}} : vector<4xf8E4M3FN>, tensor<16384xf8E4M3FN>
+// CHECK-VEC-NOT:     vector.transfer_
+
+max {
+  a = f32[] parameter(0)
+  b = f32[] parameter(1)
+  ROOT m = f32[] maximum(a, b)
+}
+
+fused_quantize {
+  source = f32[64,256] parameter(0)
+  x_blocks = f32[64,8,32] bitcast(source)
+  abs = f32[64,256] abs(source)
+  abs_blocks = f32[64,8,32] bitcast(abs)
+  ninf = f32[] constant(-inf)
+  amax = f32[64,8] reduce(abs_blocks, ninf), dimensions={2}, to_apply=max
+  inv = f32[] constant(0.00223214296)
+  inv_b = f32[64,8] broadcast(inv), dimensions={}
+  ratio = f32[64,8] multiply(amax, inv_b)
+  bits = u32[64,8] bitcast(ratio)
+  c_mant = u32[] constant(8388607)
+  mant_mask = u32[64,8] broadcast(c_mant), dimensions={}
+  mant = u32[64,8] and(bits, mant_mask)
+  c0 = u32[] constant(0)
+  zero = u32[64,8] broadcast(c0), dimensions={}
+  gt = pred[64,8] compare(mant, zero), direction=GT
+  c23 = u32[] constant(23)
+  s23 = u32[64,8] broadcast(c23), dimensions={}
+  exp = u32[64,8] shift-right-logical(bits, s23)
+  c254 = u32[] constant(254)
+  e254 = u32[64,8] broadcast(c254), dimensions={}
+  ne = pred[64,8] compare(exp, e254), direction=NE
+  and0 = pred[64,8] and(gt, ne)
+  eq0 = pred[64,8] compare(exp, zero), direction=EQ
+  c_half = u32[] constant(4194304)
+  half = u32[64,8] broadcast(c_half), dimensions={}
+  le = pred[64,8] compare(mant, half), direction=LE
+  and1 = pred[64,8] and(eq0, le)
+  not = pred[64,8] not(and1)
+  round_up = pred[64,8] and(and0, not)
+  c1 = u32[] constant(1)
+  one = u32[64,8] broadcast(c1), dimensions={}
+  exp1 = u32[64,8] add(exp, one)
+  exp_sel = u32[64,8] select(round_up, exp1, exp)
+  scale = u8[64,8] convert(exp_sel)
+  scale32 = u32[64,8] convert(scale)
+  shl = u32[64,8] shift-left(scale32, s23)
+  pow = f32[64,8] bitcast(shl)
+  cf0 = f32[] constant(0)
+  fzero = f32[64,8] broadcast(cf0), dimensions={}
+  is_zero = pred[64,8] compare(pow, fzero), direction=EQ
+  tiny = f32[] constant(5.87747175e-39)
+  tiny_b = f32[64,8] broadcast(tiny), dimensions={}
+  decoded = f32[64,8] select(is_zero, tiny_b, pow)
+  decoded_b = f32[64,8,32] broadcast(decoded), dimensions={0,1}
+  scaled = f32[64,8,32] divide(x_blocks, decoded_b)
+  lo = f32[] constant(-448)
+  lo_b = f32[64,8,32] broadcast(lo), dimensions={}
+  hi = f32[] constant(448)
+  hi_b = f32[64,8,32] broadcast(hi), dimensions={}
+  clamped = f32[64,8,32] clamp(lo_b, scaled, hi_b)
+  data = f8e4m3fn[64,8,32] convert(clamped)
+  ROOT out = (f8e4m3fn[64,8,32], u8[64,8]) tuple(data, scale)
+}
+
+ENTRY main {
+  p0 = f32[64,256] parameter(0)
+  ROOT fusion = (f8e4m3fn[64,8,32], u8[64,8]) fusion(p0), kind=kCustom,
+      calls=fused_quantize,
+      backend_config={"fusion_backend_config":{"kind":"__block_scaled_quantize"}}
+}
