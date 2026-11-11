@@ -30,7 +30,7 @@ env:
   # "[multi_gpu]", "[rocm_cpu]" - so the mode tag is the marker.
   # TODO: enable when multigpu is green (set this to an empty value).
   IGNORED_STEP_MARKER: "[multi_gpu]"
-  MONITORED_JOB_PATTERN: '^(execute-xla-ut-nightly \(therock_release|jax-upstream / (rocm-config$|JAX Upstream .*\(therock_release))'
+  MONITORED_JOB_PATTERN: '^(execute-xla-ut-nightly \(therock_release|jax-upstream / (rocm-config$|JAX Upstream .*\(therock_release)|sanitizers / (rocm-config$|execute-xla-ut-sanitizers \((asan|tsan)))'
 
 on:
   schedule:
