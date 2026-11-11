@@ -2060,7 +2060,15 @@ message DebugOptions {
   // cache miss.
   optional bool xla_fail_on_autotune_cache_miss = 583;
 
-  // Next id: 584
+  // If true, WhileLoopConstantSinking in the GPU optimization pipeline
+  // (RunOptimizationPasses) also sinks loop-invariant broadcasts of constants,
+  // such as zero buffers hoisted out of a scan body, into while loops, so the
+  // loops stop carrying them as state buffers. A broadcast stays in the loop
+  // state when no use of it in the body can fuse it (every use is an operand
+  // updated in place or a custom-call operand).
+  optional bool xla_gpu_experimental_while_loop_sink_broadcast_constants = 584;
+
+  // Next id: 585
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
