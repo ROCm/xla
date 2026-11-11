@@ -44,56 +44,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rocm-config:
-    runs-on: ubuntu-latest
-    outputs:
-      docker-image: ${{ steps.out.outputs.docker-image }}
-      therock-version: ${{ steps.therock.outputs.therock_version }}
-    steps:
-      - id: out
-        shell: bash
-        run: |
-          echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: openxla/xla
-          ref: main
-          sparse-checkout: |
-            build_tools/rocm
-          persist-credentials: false
-
-      - name: Fetch theRock version detection from ROCm/xla
-        run: |
-          wget -O build_tools/rocm/detect-therock-version.sh "https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/detect-therock-version.sh"
-          chmod +x build_tools/rocm/detect-therock-version.sh
-
-      - name: Detect latest TheRock version
-        id: therock
-        env:
-          ROCM_PIP_SOURCE: nightlies
-          GPU_TARGET: device-all
-          ROCM_SDK_VERSION: ""
-          PIP_INDEX_PATH: ""
-          THEROCK_INDEX_URL: ""
-        run: bash build_tools/rocm/detect-therock-version.sh
-
   execute-xla-ut-sanitizers:
-    needs: rocm-config
     if: inputs.run_sanitizers || github.event.label.name == 'sanitizers'
-    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-4
+    runs-on: linux-xla-do-mi350x-8
     env:
+      DOCKER_IMAGE: ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f
       COMMON_ARGS: >-
         --config=rocm_ci_hermetic
         --dynamic_mode=off
         --@rules_ml_toolchain//common:enable_xla_test_global_symbol_version=False
-        --local_test_jobs=4
+        --local_test_jobs=8
         --spawn_strategy=local
         --strategy=TestRunner=local
         --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu
         --repo_env=TF_ROCM_RBE_MULTI_GPU_POOL=default
         --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950
-        --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ needs.rocm-config.outputs.docker-image }}
+        --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ env.DOCKER_IMAGE }}
         --bes_keywords=xla
         --bes_keywords=sanitizers
     strategy:
@@ -107,7 +73,15 @@ jobs:
             configs:
               - "--config=tsan"
     container:
-      image: ${{ needs.rocm-config.outputs.docker-image }}
+      image: ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f
+      options: >-
+        --device=/dev/dri
+        --device=/dev/kfd
+        --shm-size=16G
+        --cap-add=SYS_PTRACE
+        --security-opt=seccomp=unconfined
+      volumes:
+        - /tmp/bazel-cache:/root/.cache/bazel
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -125,6 +99,7 @@ jobs:
             ${{ join(matrix.mode.configs, ' ') }} \
             --config=ci_single_gpu \
             ${COMMON_ARGS} \
+            --run_under=//build_tools/rocm:sanitizer_wrapper_parallel_gpu_execute
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu \
             --jobs=30 \
             --bes_keywords=single_gpu \
