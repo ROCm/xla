@@ -178,60 +178,21 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.monitor.outputs.new_failures) }}
-    container:
-      image: ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f
-      # RBE mTLS client certs the skill's bazel invocations need for
-      # --config=rocm_rbe/rocm_rbe_dynamic (and the bb-rbe cache config) -
-      # mounted read-only, same paths the perf-nightly pipeline references.
-      volumes:
-        - /data/temp-rbe-cert.crt:/data/temp-rbe-cert.crt:ro
-        - /data/temp-rbe-cert.key:/data/temp-rbe-cert.key:ro
-        - /data/bb-rbe-ca.crt:/data/bb-rbe-ca.crt:ro
-        - /data/bb-rbe-client.key:/data/bb-rbe-client.key:ro
-        - /data/bb-rbe-client.crt:/data/bb-rbe-client.crt:ro
+    # No job-level container: claude_auto_review.yml (also on build-only-xla)
+    # runs claude-code-action straight on the bare host with none of the
+    # workarounds this job used to need (no custom gh/jq/bun install, no
+    # "Trust the checked-out workspace" safe.directory fix, no
+    # continue-on-error on actions/upload-artifact) - those were all side
+    # effects of this self-hosted runner's custom container-exec
+    # implementation mishandling things (hyphenated boolean input names,
+    # per-step UID/ownership) specifically for job-level `container:` steps,
+    # not of the runner itself. Only the actual bazel/run_xla_ci_build.sh
+    # invocations need the rocmless toolchain, so those run via `docker exec`
+    # against a container the "Start rocmless container" step launches
+    # below - everything else (checkout, git, gh, Claude itself) runs
+    # directly on the host, same as claude_auto_review.yml.
 
     steps:
-      # The rocmless image has neither gh nor jq - every other step in this
-      # job (including the Claude agent's own `gh issue comment`/`gh api`
-      # calls) depends on both, so install them before anything else runs.
-      # Also install bun ourselves here: this self-hosted runner's custom
-      # container-exec implementation doesn't reliably pass through the
-      # hyphenated `no-cache` boolean input claude-code-action's own nested
-      # "Install Bun" (oven-sh/setup-bun) step needs, which crashes with
-      # "Input does not meet YAML 1.2 Core Schema specification: no-cache"
-      # (confirmed: setup-bun's action.yml declares `no-cache: type:
-      # boolean, default: false`, and claude-code-action passes the valid
-      # literal `no-cache: true` - the value is fine, something in the
-      # container-exec path between here and that nested step is dropping
-      # it). claude-code-action accepts `path_to_bun_executable` precisely
-      # to skip that step (it's guarded
-      # `if: inputs.path_to_bun_executable == ''`), so provisioning bun here
-      # and pointing at it directly sidesteps the bug entirely.
-      - name: Install gh, jq, and bun
-        id: install_tools
-        env:
-          # Pinned, not resolved from the GitHub API: that was an
-          # unauthenticated `wget` to api.github.com/.../releases/latest,
-          # subject to the 60-requests/hour per-IP limit - easily exhausted
-          # on a shared self-hosted runner pool, which silently produced an
-          # empty version string, a malformed download URL, and a wget exit
-          # 8 ("server issued an error response") with no indication why.
-          # Bump this occasionally; matches the pinned-version convention
-          # already used for actions/Docker images elsewhere in this file.
-          GH_VERSION: "2.103.3"
-        run: |
-          apt-get update -qq
-          apt-get install -y -qq jq ca-certificates unzip curl
-          wget -q "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" -O /tmp/gh.tar.gz
-          tar -xzf /tmp/gh.tar.gz -C /tmp
-          install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
-          gh --version
-          jq --version
-
-          curl -fsSL https://bun.sh/install | bash
-          echo "bun_path=$HOME/.bun/bin/bun" >> "$GITHUB_OUTPUT"
-          "$HOME/.bun/bin/bun" --version
-
       # Guards against debugging the same failure signature twice: a
       # re-dispatched matrix entry, a manually re-run job, or two
       # overlapping monitor runs could otherwise all redo the same work.
@@ -275,16 +236,6 @@ jobs:
           ref: ${{ matrix.head_sha }}
           persist-credentials: false
 
-      # This self-hosted runner execs each step in a fresh container session,
-      # so a UID mismatch against the files actions/checkout just wrote makes
-      # git refuse to touch them ("detected dubious ownership") in every
-      # later step unless something tells it to trust the workspace - do
-      # that once here, right after checkout, so it covers every subsequent
-      # step's own git usage (including whatever the Claude agent runs).
-      - name: Trust the checked-out workspace
-        if: steps.already_debugged.outputs.skip != 'true'
-        run: git config --global --add safe.directory '*'
-
       - name: Populate missing upstream ROCm build tools
         if: steps.already_debugged.outputs.skip != 'true' && hashFiles('build_tools/rocm/run_xla_ci_build.sh') == ''
         run: |
@@ -311,6 +262,28 @@ jobs:
           git restore --source=FETCH_HEAD --worktree -- .claude
           find .claude -type f | sort
 
+      # Only the actual bazel/run_xla_ci_build.sh invocations the skill runs
+      # need the rocmless toolchain - start it here as a long-lived sidecar
+      # the skill reaches via `docker exec rocmless-debug <command>`
+      # (SKILL.md), rather than wrapping this whole job (including
+      # claude-code-action itself) in a job-level container. The workspace
+      # is bind-mounted at the identical path, so files the skill
+      # creates/reads directly on the host (BUILD files, gdb scripts,
+      # bazel-testlogs output) are visible inside the container with no
+      # extra copying.
+      - name: Start rocmless container
+        if: steps.already_debugged.outputs.skip != 'true'
+        run: |
+          docker run -d --name rocmless-debug \
+            -v "$(pwd)":"$(pwd)" -w "$(pwd)" \
+            -v /data/temp-rbe-cert.crt:/data/temp-rbe-cert.crt:ro \
+            -v /data/temp-rbe-cert.key:/data/temp-rbe-cert.key:ro \
+            -v /data/bb-rbe-ca.crt:/data/bb-rbe-ca.crt:ro \
+            -v /data/bb-rbe-client.key:/data/bb-rbe-client.key:ro \
+            -v /data/bb-rbe-client.crt:/data/bb-rbe-client.crt:ro \
+            ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f \
+            sleep infinity
+
       - name: Debug Nightly Failure
         if: steps.already_debugged.outputs.skip != 'true'
         id: claude-code
@@ -335,9 +308,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           anthropic_api_key: "sk-ant-dummy-gateway-key"
-          # Skips the action's own nested "Install Bun" (oven-sh/setup-bun)
-          # step - see the "Install gh, jq, and bun" step above for why.
-          path_to_bun_executable: ${{ steps.install_tools.outputs.bun_path }}
           # The triggering actor is github-actions[bot] (schedule) or the PR
           # author via pull_request, neither of which is a human reviewer.
           allowed_bots: "github-actions[bot]"
