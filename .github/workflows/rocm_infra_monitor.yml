@@ -371,22 +371,12 @@ jobs:
             {
               "hasCompletedOnboarding": true
             }
-
-      - name: Upload Claude Execution Log
-        if: always() && steps.claude-code.outputs.execution_file != ''
-        # Same systemic runner bug as the setup-bun crash above: this
-        # action's include-hidden-files boolean input (an implicit default
-        # we never set) doesn't reliably pass through this self-hosted
-        # runner's custom container-exec implementation, and crashes with
-        # the same "Input does not meet YAML 1.2 Core Schema specification"
-        # error. There's no escape-hatch input to work around it like
-        # claude-code-action's path_to_bun_executable, and this artifact is
-        # a nice-to-have audit log, not essential - don't let losing it fail
-        # the whole debug run.
-        continue-on-error: true
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
-        with:
-          # issue_number alone is no longer unique per matrix entry (one
-          # shared tracking issue), so disambiguate with run_id/job_id too.
-          name: claude-debug-execution-log-${{ matrix.run_id }}-${{ matrix.job_id }}
-          path: ${{ steps.claude-code.outputs.execution_file }}
+          # No separate "Upload Claude Execution Log" artifact step: with
+          # show_full_output above, the full trace is already in this step's
+          # own console log (exactly how every debug run in this pipeline
+          # has been inspected so far, via `gh api .../jobs/<id>/logs`) - an
+          # uploaded copy is redundant. It also kept hitting the same
+          # systemic self-hosted-runner bug as the earlier setup-bun crash
+          # (actions/upload-artifact's include-hidden-files boolean input
+          # not surviving the custom container-exec path), with no
+          # escape-hatch input to route around it.
