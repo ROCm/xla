@@ -14,14 +14,15 @@
 # limitations under the License.
 # ==============================================================================
 #
-# Append a detection comment to the single tracking issue (see
-# create_infra_error_issue.sh) for every failure in a JSON Lines file (as produced
-# by collect_run_failures.sh) - always, even for a failure signature
-# (job_name/step_name) seen before, so the issue keeps a full history of
-# every occurrence. Separately, print a JSON array of the failures whose
-# signature doesn't already have a Claude debug report comment on the
-# issue, so a signature is only ever debugged once, no matter how many
-# times it recurs or how many unrelated failures share the same issue.
+# For every failure in a JSON Lines file (as produced by
+# collect_run_failures.sh), append a detection comment to the single
+# tracking issue (see create_infra_error_issue.sh) and queue it for a
+# Claude debug run - but only for a failure signature (job_name/step_name)
+# that doesn't already have a debug report comment on the issue. A
+# recurrence of an already-analyzed signature gets neither: no new
+# comment, no new debug run, so a long-standing already-understood failure
+# doesn't keep adding noise to the issue every time it shows up again.
+# Prints a JSON array of the failures that got queued.
 #
 # The caller (rocm_infra_monitor.yml) feeds this array straight into a
 # `strategy.matrix.include` on its own "debug" job, so every new failure
@@ -83,8 +84,27 @@ if [ -s "$FAILURES_FILE" ]; then
 
         echo "Processing failure: ${SIGNATURE} (run ${RUN_ID})" >&2
 
-        # Always append a detection comment - this is the append-only log of
-        # every occurrence, regardless of whether it gets debugged again.
+        # Check first, before posting anything: a recurrence of a signature
+        # already queued earlier in this same run, or already carrying a
+        # debug report comment from a previous run, gets skipped entirely -
+        # no detection comment, no debug run. Cheapest check first (no API
+        # call) to avoid the EXISTING_COMMENTS scan when it's not needed.
+        if [ -n "${QUEUED_IN_THIS_RUN[$SIGNATURE]:-}" ]; then
+            echo "  -> already queued for debug earlier in this run, skipping (no new comment)" >&2
+            continue
+        fi
+
+        DEBUG_MARKER="<!-- rocm-nightly-claude-debug:${SIGNATURE} -->"
+        ALREADY_DEBUGGED=$(printf '%s' "$EXISTING_COMMENTS" \
+            | jq --arg marker "$DEBUG_MARKER" '[.[] | select(.body | startswith($marker))] | length')
+
+        if [ "${ALREADY_DEBUGGED:-0}" -gt 0 ]; then
+            echo "  -> already has a debug report for this signature, skipping (no new comment)" >&2
+            continue
+        fi
+
+        # Not already analyzed and not queued yet this run - append a
+        # detection comment and queue it for debug.
         DETECTION_BODY="<!-- rocm-nightly-failure:${SIGNATURE} -->
 ## Nightly CI Failure Detected
 
@@ -97,20 +117,6 @@ if [ -s "$FAILURES_FILE" ]; then
 
         DETECTION_COMMENT_URL=$(gh issue comment "$ISSUE_NUMBER" --repo "$CI_REPO" --body "$DETECTION_BODY")
         echo "  -> detection comment posted: ${DETECTION_COMMENT_URL}" >&2
-
-        if [ -n "${QUEUED_IN_THIS_RUN[$SIGNATURE]:-}" ]; then
-            echo "  -> already queued for debug earlier in this run, not queuing again" >&2
-            continue
-        fi
-
-        DEBUG_MARKER="<!-- rocm-nightly-claude-debug:${SIGNATURE} -->"
-        ALREADY_DEBUGGED=$(printf '%s' "$EXISTING_COMMENTS" \
-            | jq --arg marker "$DEBUG_MARKER" '[.[] | select(.body | startswith($marker))] | length')
-
-        if [ "${ALREADY_DEBUGGED:-0}" -gt 0 ]; then
-            echo "  -> already has a debug report for this signature, not queuing" >&2
-            continue
-        fi
 
         # What this specific job actually checked out - NOT the run's own
         # head_sha/head_repository, which reflect ROCm/xla's commit at
