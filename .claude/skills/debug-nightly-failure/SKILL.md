@@ -1,6 +1,6 @@
 ---
 name: debug-nightly-failure
-description: Categorize (build/test/config/infra) and label a single ROCm XLA nightly CI failure, post a preliminary root-cause guess, check whether a later upstream commit already fixed it, analyze the code, then (if still unresolved) reproduce and debug it on real GPU hardware via RBE and report an already-found fix, a verified fix, or an analysis/callstack directly on the tracking GitHub issue. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
+description: Hard-capped at 5 minutes - quickly categorize (build/test/config/infra) and label a single ROCm XLA nightly CI failure, check whether a later upstream commit already fixed it, and do a fast code read for a likely root cause and possible fix. Full RBE reproduction/gdb debugging is optional and rarely fits the time budget. Reports a quick estimate (or an already-found fix, or a callstack/analysis) directly on the tracking GitHub issue. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
 argument-hint: [ci-repo] [run-id] [job-id] [job-name] [step-name] [failure-url] [issue-number] [detection-comment-url]
 context: fork
 agent: general-purpose
@@ -38,6 +38,16 @@ each value on its own labeled line; read the values from there.
 
 ## IMPORTANT: scope and safety
 
+- **This whole run is hard-capped at 5 minutes of wall-clock time** by the
+  workflow itself - you will be killed mid-step when it hits, with nothing
+  saved. This is a quick triage-and-estimate pass, not a full
+  investigation: budget roughly 1 minute each for Steps 1 and 2, 2-3
+  minutes for Step 3, and treat Steps 4 and 5 (full RBE reproduction, gdb)
+  as optional reference material you will almost never have time to reach
+  - do not start a Bazel build/test unless you are confident, from Step 3
+  alone, that it will complete and you can still post Step 6's report
+  afterward. Default to going straight from Step 3 to Step 6 with your best
+  estimate.
 - This runner (`build-only-xla`) has no local GPU - it's a network-access
   node, not a GPU node. Every Bazel/`run_xla_ci_build.sh` invocation you run,
   anywhere (verifying an already-found fix in Step 3, reproducing in Step 4,
@@ -52,12 +62,12 @@ each value on its own labeled line; read the values from there.
   GitHub writes you make are: one label (Step 1, corrected in Step 2 if
   needed), one preliminary comment (Step 1), and one final report comment
   (Step 6) - all via `gh issue edit`/`gh issue comment <ISSUE_NUMBER> --repo <CI_REPO>`/`gh label create`.
-- This run has a hard cap on agentic turns. If you notice you're repeating
-  the same approach without learning anything new (re-running the same
-  build, trying the same gdb script a third time with no new evidence,
-  going back and forth between two hypotheses), stop and go straight to
-  Step 6's "Not resolved" report with whatever evidence you have - don't
-  wait for the hard cap to cut you off mid-investigation with nothing
+- This run also has a hard cap on agentic turns, on top of the 5-minute
+  wall clock. If you notice you're repeating the same approach without
+  learning anything new (re-running the same build, trying the same gdb
+  script a third time with no new evidence, going back and forth between
+  two hypotheses), stop and go straight to Step 6 with whatever you have
+  (a "Possible fix" estimate or a "Not resolved" report) - don't
   posted at all. A concrete partial finding beats silence.
 - Clean up any scratch files before finishing - nothing from this debugging
   session is meant to be committed. This includes `/tmp/gdb_*`, extra build
@@ -155,13 +165,16 @@ Reread `job.log` (already fetched in Step 1) and extract:
 
 ## Step 3 — Check for an existing fix, then analyze the code
 
-Before spending any RBE build/test time, do two cheap checks using just git
-and reading code.
+Within your remaining time budget (roughly 2-3 minutes - see above), do two
+cheap checks using just git and reading code. This is the step that
+produces your estimate; by default you go straight from here to Step 6.
 
 **A. Check whether it's already fixed.** The checkout is a shallow clone of
-the exact failing commit, so get more history first: `git fetch origin
-<main-or-relevant-branch> --depth=200` (or `git fetch --unshallow` if 200
-isn't enough to reach the tip). Then:
+the exact failing commit, so get a bounded amount of extra history first:
+`git fetch origin <main-or-relevant-branch> --depth=200`. Do **not** run
+`git fetch --unshallow` - on a repo this size that alone can burn the
+entire time budget; if 200 isn't enough to reach a commit you need, that's
+a sign to stop digging and report with what you have. Then:
 - List what changed in the implicated file(s) since the failing commit:
   `git log <HEAD_SHA>..origin/<branch> --oneline -- <file(s)>`.
 - Read the diff of any commit in that list that plausibly touches the
@@ -192,16 +205,18 @@ isn't enough to reach the tip). Then:
   condition), a missing case in a switch/dispatch, a CUDA-only code path
   with no ROCm equivalent, a shape/dtype/type mismatch, a recently-changed
   default the failing configuration doesn't account for.
-- A clear culprit found here is still a *hypothesis*, not a conclusion -
-  you still must verify it in Step 5 before reporting a fix. Go straight to
-  narrowly reproducing the one target it implicates, and treat Step 5's
-  techniques as verification of this hypothesis rather than a blind search.
+- A clear culprit found here is still a *hypothesis*, not a verified fix -
+  report it as your "possible fix" estimate in Step 6 (see below) rather
+  than spending the remaining budget trying to reproduce and verify it.
+  Only attempt Steps 4/5 if you're confident, right now, that a build+test
+  will complete and you'll still have time left to post Step 6's report -
+  this will rarely be true within 5 minutes total.
 - If nothing in the code is a clear enough candidate after a genuine read
   (don't force a conclusion from a shallow skim, but don't keep reading
-  indefinitely either - see the self-limiting rule above), say so and move
-  on to Step 4 to reproduce and debug properly from scratch.
+  indefinitely either - see the self-limiting rule above), say so plainly
+  in Step 6 instead of reproducing from scratch.
 
-## Step 4 — Reproduce it, narrowed to one target
+## Step 4 (optional, rarely reached) — Reproduce it, narrowed to one target
 
 Re-run the extracted command narrowed to only the failing target (or
 `--test_filter=`/`--test_arg=--gtest_filter=` for one test case), adding:
@@ -221,7 +236,7 @@ If it does not reproduce at all after a genuine attempt (correct flags,
 correct commit, enough timeout), say so plainly in the final report instead
 of forcing an inconclusive debugging session.
 
-## Step 5 — Debugging techniques
+## Step 5 (optional, rarely reached) — Debugging techniques
 
 **`--run_under`**: Bazel's `--run_under` flag accepts either a build-target
 label (this repo's own `//build_tools/rocm:parallel_gpu_execute` and
@@ -339,9 +354,19 @@ like this:
   occurrences check), mention that too - it means the fix just hasn't
   reached this configuration/branch yet, not that it was never found.
 
-**Fix found** (you derived it yourself): before reporting, re-run the exact
-originally-failing target/test case one more time and confirm it now
-passes. Then comment with:
+**Possible fix (quick estimate, unverified)** - the expected outcome given
+the 5-minute budget, when Step 3B found a plausible culprit but there was
+no time to reproduce and confirm it: comment with:
+- The file/function you suspect and why - point at the specific lines.
+- The fix as a diff, from `git diff` if you wrote one, or described in
+  words if you didn't have time to write it out.
+- State plainly that this is an estimate from reading the code, not a
+  verified fix - nobody should merge it without reproducing first.
+
+**Fix found** (you derived it yourself *and* verified it - only reachable
+if Steps 4/5 actually ran and finished within budget): before reporting,
+re-run the exact originally-failing target/test case one more time and
+confirm it now passes. Then comment with:
 - A short root-cause summary.
 - The fix as a diff, from `git diff`, in a \`\`\`diff fenced code block.
 - The command you used to confirm it passes, and its outcome.

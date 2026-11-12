@@ -168,7 +168,12 @@ jobs:
     # the debug skill must force GPU test execution onto a remote RBE
     # worker instead (--strategy=TestRunner=remote,local) - see SKILL.md.
     runs-on: build-only-xla
-    timeout-minutes: 120
+    # This is a quick-estimate pass, not a full reproduction - see the
+    # "Debug Nightly Failure" step's own 5-minute cap below. 10 minutes
+    # total gives that a couple of minutes of setup/teardown margin
+    # (checkout, container start/stop) without reintroducing the
+    # near-2-hour runs this used to allow.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -301,7 +306,9 @@ jobs:
       - name: Debug Nightly Failure
         if: steps.already_debugged.outputs.skip != 'true'
         id: claude-code
-        timeout-minutes: 110
+        # Hard cap: this is a quick triage/estimate pass (see SKILL.md), not
+        # a full reproduction - don't let it run for hours.
+        timeout-minutes: 5
         uses: anthropics/claude-code-action@v1
         env:
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
@@ -338,16 +345,18 @@ jobs:
             your report must quote the detection comment above so readers
             can tell which occurrence it addresses.
 
-            Run the /debug-nightly-failure skill, using the values above as
-            its arguments: CI repo, run ID, job ID, job name, step name,
-            failure URL, issue number, detection comment URL, in that order.
-            The skill is responsible for reproducing the failure, debugging
-            it, and posting its findings directly to the tracking issue via
-            `gh issue comment`. Do not post anything to GitHub yourself
-            outside of what the skill does.
+            This run is hard-capped at 5 minutes. Run the
+            /debug-nightly-failure skill, using the values above as its
+            arguments: CI repo, run ID, job ID, job name, step name, failure
+            URL, issue number, detection comment URL, in that order. The
+            skill is responsible for a quick triage and root-cause estimate
+            - not a full reproduction - and for posting its findings
+            directly to the tracking issue via `gh issue comment`. Do not
+            post anything to GitHub yourself outside of what the skill
+            does.
           claude_args: |
             --allowedTools "Skill,Bash(gh issue comment *),Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
-            --max-turns 150
+            --max-turns 40
           settings: |
             {
               "hasCompletedOnboarding": true
