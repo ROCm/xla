@@ -1,10 +1,10 @@
 ---
 name: debug-nightly-failure
-description: Reproduce and debug a single ROCm XLA nightly CI failure (one build or test job/step) on real GPU hardware via RBE, then report a verified fix or an analysis/callstack directly on the tracking GitHub issue. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
+description: Categorize (build/test/config/infra) and label a single ROCm XLA nightly CI failure, post a preliminary root-cause guess, then reproduce and debug it on real GPU hardware via RBE and report a verified fix or an analysis/callstack directly on the tracking GitHub issue. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
 argument-hint: [ci-repo] [run-id] [job-id] [job-name] [step-name] [failure-url] [issue-number] [detection-comment-url]
 context: fork
 agent: general-purpose
-allowed-tools: Bash(gh issue comment *), Bash(gh api *), Bash(gh run view *), Bash(git *), Bash(build_tools/rocm/*), Bash(bazel *), Bash(gdb *), Bash(objdump *), Bash(grep *), Bash(cat *), Bash(timeout *), Read, Grep, Glob, Write, Edit
+allowed-tools: Bash(gh issue comment *), Bash(gh issue edit *), Bash(gh label create *), Bash(gh api *), Bash(gh run view *), Bash(git *), Bash(build_tools/rocm/*), Bash(bazel *), Bash(gdb *), Bash(objdump *), Bash(grep *), Bash(cat *), Bash(timeout *), Read, Grep, Glob, Write, Edit
 ---
 
 # Debug a ROCm Nightly CI Failure
@@ -32,29 +32,95 @@ each value on its own labeled line; read the values from there.
   about this specific failure, and never summarize or react to unrelated
   comments already on it.
 - `DETECTION_COMMENT_URL`: the specific comment on that issue reporting
-  *this* failure. Quote it in your report (see Step 4) so a reader can tell
-  which of the issue's many comments your analysis addresses.
+  *this* failure. Quote it in both comments you post (Steps 1 and 5) so a
+  reader can tell which of the issue's many comments your analysis
+  addresses.
 
 ## IMPORTANT: scope and safety
 
 - Debug only this one job/step. Do not try to fix unrelated red steps you
   notice along the way.
-- Never `git push`, never create a branch, never open a PR. Report findings
-  only via `gh issue comment <ISSUE_NUMBER> --repo <CI_REPO>`.
+- Never `git push`, never create a branch, never open a PR. The only
+  GitHub writes you make are: one label (Step 1, corrected in Step 2 if
+  needed), one preliminary comment (Step 1), and one final report comment
+  (Step 5) - all via `gh issue edit`/`gh issue comment <ISSUE_NUMBER> --repo <CI_REPO>`/`gh label create`.
 - Clean up any scratch files (`/tmp/gdb_*`, extra build outputs) before
   finishing - nothing from this debugging session is meant to be committed.
 - Never claim a fix works without having re-run the originally-failing
   target and observed it pass.
 
-## Step 1 — Understand what actually failed
+## Step 1 — Triage: categorize and label
 
-Fetch the failing step's raw log and read it before doing anything else:
+Fetch the failing step's raw log once, before anything else - Step 2 reuses
+this same file, so don't fetch it twice. CI logs routinely contain raw ANSI
+color codes (Bazel, gtest, ...), and `gh api` refuses to print a response
+containing them without `--allow-escape-sequences` - always pass it for
+this and any other raw-log fetch:
 
 ```
-gh api "repos/<CI_REPO>/actions/jobs/<JOB_ID>/logs" > job.log
+gh api --allow-escape-sequences "repos/<CI_REPO>/actions/jobs/<JOB_ID>/logs" > job.log
 ```
 
-From the log, extract:
+Skim it (you don't need full understanding yet, just enough to classify)
+and sort this failure into exactly one category:
+
+- **`nightly-build-failure`** - the build itself didn't compile/link: a
+  Bazel `ERROR: ... Compilation of rule '...' failed`, a linker error, a
+  missing symbol. Nothing related to test *behavior*.
+- **`nightly-test-failure`** - the build succeeded and a test genuinely
+  failed: a gtest `[ FAILED ]` assertion/expectation, a wrong numerical
+  result, a crash or hang *inside the test binary itself* (segfault,
+  assertion, deadlock in the code under test).
+- **`nightly-config-failure`** - the pipeline was configured wrong, not a
+  bug in XLA/JAX: an undefined Bazel `--config` value, an incompatible flag
+  combination, a missing `--repo_env`, a dependency/version mismatch, "no
+  such package", a bad BUILD file.
+- **`nightly-infra-failure`** - the CI infrastructure itself is at fault,
+  not the code or its configuration: runner lost/cancelled, Docker image
+  pull failure, network timeout to RBE/a registry, "No space left on
+  device", OOM-killed, GPU unavailable/busy, RBE worker pool outage. A
+  timeout counts here only if nothing in the log suggests the code itself
+  hung - if it does, that's `nightly-test-failure` instead.
+
+If more than one applies (e.g. an infra hiccup masked what might be a real
+test failure), pick the one that is the more likely root cause, and say so
+explicitly in the preliminary comment below.
+
+Then, before doing any further work:
+
+1. Ensure the label exists and apply it to the tracking issue (idempotent -
+   safe to run every time):
+   ```
+   gh label create "<category>" --repo <CI_REPO> --force \
+     --color <hex> --description "<one-line description>"
+   gh issue edit <ISSUE_NUMBER> --repo <CI_REPO> --add-label "<category>"
+   ```
+   Use `d73a4a` for `nightly-build-failure`, `fbca04` for
+   `nightly-test-failure`, `0075ca` for `nightly-config-failure`, `5319e7`
+   for `nightly-infra-failure`.
+2. Post ONE preliminary comment (separate from, and before, your final
+   report in Step 5) via
+   `gh issue comment <ISSUE_NUMBER> --repo <CI_REPO> --body-file <file>`:
+   - First line exactly `<!-- rocm-nightly-claude-triage:JOB_NAME / STEP_NAME -->`
+     (substitute the literal values, ` / ` separator, no other change). This
+     is a *different* marker from the Step 5 completion marker and is never
+     checked for dedup - it only marks this comment as the triage pass for
+     this signature, so post it even if you end up unable to finish the
+     full analysis.
+   - Quote the detection comment (same method as Step 5.2 below).
+   - `**Category:** <category>`
+   - `**Possible root cause (preliminary, unverified):** <1-3 sentences>` -
+     a concrete guess from what the log shows so far (e.g. "the step hit a
+     60-minute timeout with no output after the RBE remote_cache handshake,
+     which looks like an RBE connectivity issue rather than a hang in the
+     test itself"). This is a hypothesis, not a conclusion - say so, and
+     don't present it as certain.
+   - A closing line that full reproduction is starting and a complete
+     report will follow in a separate comment.
+
+## Step 2 — Understand what actually failed
+
+Reread `job.log` (already fetched in Step 1) and extract:
 - The exact `build_tools/rocm/run_xla_ci_build.sh ...` (or plain `bazel`)
   invocation that was run for the failing step. Reproduce that command
   verbatim rather than guessing matrix-specific flags (`rbe_config`, distro
@@ -64,9 +130,12 @@ From the log, extract:
   case/parameter.
 - The error signature: a crash with a stack trace, a hang/timeout, a wrong
   numerical result, a build error, etc. This determines which debugging
-  technique in Step 3 applies.
+  technique in Step 4 applies, and whether Step 1's category guess holds up
+  - if deeper reading changes your mind about the category, update the
+  issue's labels (`gh issue edit --remove-label <old> --add-label <new>`)
+  before finishing.
 
-## Step 2 — Reproduce it, narrowed to one target
+## Step 3 — Reproduce it, narrowed to one target
 
 Re-run the extracted command narrowed to only the failing target (or
 `--test_filter=`/`--test_arg=--gtest_filter=` for one test case), adding:
@@ -84,7 +153,7 @@ If it does not reproduce at all after a genuine attempt (correct flags,
 correct commit, enough timeout), say so plainly in the final report instead
 of forcing an inconclusive debugging session.
 
-## Step 3 — Debugging techniques
+## Step 4 — Debugging techniques
 
 **`--run_under`**: Bazel's `--run_under` flag accepts either a build-target
 label (this repo's own `//build_tools/rocm:parallel_gpu_execute` and
@@ -134,7 +203,7 @@ chmod +x /tmp/gdb_hang_wrapper.sh
 instrumentation via `--test_env=TF_CPP_VMODULE="autotuner=2,config_assigner=2,
 config_runner=2,codegen_orchestrator=2,hipblaslt=2,triton=2,
 fission_backend=2"` (adjust the module list to the subsystem implicated by
-the error signature from Step 1), as explored in the scratch
+the error signature from Step 2), as explored in the scratch
 `build_debug.sh` for an autotuner/codegen hang.
 
 **GPU-codegen bugs** (wrong result, miscompiled kernel) - disassemble the
@@ -146,9 +215,10 @@ find bazel-testlogs -name '*.hsaco' -path '*<failing_target>*'
 objdump -d <path-to.hsaco>
 ```
 
-## Step 4 — Decide the outcome and report
+## Step 5 — Decide the outcome and report
 
-Always report via exactly one comment:
+Always report via exactly one comment (your *final* report - this is in
+addition to the Step 1 preliminary comment, not a replacement for it):
 `gh issue comment <ISSUE_NUMBER> --repo <CI_REPO> --body-file <file>`, built
 like this:
 
@@ -168,7 +238,9 @@ like this:
    to it (`[Original detection](DETECTION_COMMENT_URL)`). This is what lets
    a reader tell which of the issue's many comments your analysis
    addresses.
-3. Then your actual report, as below.
+3. `**Category:** <category>` - the label from Step 1 (or the corrected one
+   from Step 2, if you changed it).
+4. Then your actual report, as below.
 
 **Fix found**: before reporting, re-run the exact originally-failing
 target/test case one more time and confirm it now passes. Then comment

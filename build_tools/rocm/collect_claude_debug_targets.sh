@@ -55,6 +55,8 @@ WORKFLOW_URL="$3"
 # Repository hosting the monitored runs and the tracking issue.
 CI_REPO="ROCm/xla"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 TARGETS="[]"
 
 if [ -s "$FAILURES_FILE" ]; then
@@ -110,16 +112,13 @@ if [ -s "$FAILURES_FILE" ]; then
             continue
         fi
 
-        # The monitored run's own source commit/repository: for scheduled or
-        # workflow_dispatch nightly runs this is openxla/xla@<sha of main at
-        # run time>; for pull_request_target-triggered runs it is the PR's
-        # own head repo/branch. Either way it is exactly what the failing
-        # job itself checked out, so the debug job can check out the
-        # identical commit.
-        RUN_JSON=$(gh api -H "Accept: application/vnd.github+json" \
-            "/repos/${CI_REPO}/actions/runs/${RUN_ID}")
-        HEAD_SHA=$(printf '%s' "$RUN_JSON" | jq -r '.head_sha')
-        HEAD_REPOSITORY=$(printf '%s' "$RUN_JSON" | jq -r '.head_repository.full_name')
+        # What this specific job actually checked out - NOT the run's own
+        # head_sha/head_repository, which reflect ROCm/xla's commit at
+        # schedule time, not the openxla/xla@main commit the job resolved
+        # and tested against. See get_checkout_source.sh for why.
+        CHECKOUT_INFO=$("${SCRIPT_DIR}/get_checkout_source.sh" "$CI_REPO" "$JOB_ID")
+        HEAD_REPOSITORY=$(printf '%s\n' "$CHECKOUT_INFO" | sed -n '1p')
+        HEAD_SHA=$(printf '%s\n' "$CHECKOUT_INFO" | sed -n '2p')
 
         echo "  -> queued for debug" >&2
         QUEUED_IN_THIS_RUN[$SIGNATURE]=1
