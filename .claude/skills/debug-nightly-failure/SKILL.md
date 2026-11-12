@@ -63,6 +63,12 @@ each value on its own labeled line; read the values from there.
   target, never the whole tree. This applies even when "reproducing the
   exact command" in Step 3/4: match the flags verbatim, but always swap the
   target list for the one target you're debugging.
+- **Never use `--config=rocm_rbe`, even if the failing job's own log did.**
+  Always use `--config=rocm_rbe_dev` instead - `rocm_rbe` is not reachable
+  from this debug runner (it fails with `Connection timed out:
+  internal.actinolite.cluster.engflow.com:443` before running anything,
+  which tells you nothing about the failure you're debugging). Applies to
+  every bazel invocation anywhere in this skill.
 - Debug only this one job/step. Do not try to fix unrelated red steps you
   notice along the way.
 - Never `git push`, never create a branch, never open a PR. The only
@@ -187,12 +193,21 @@ Then, before doing any further work:
 Reread `job.log` (already fetched in Step 2) and extract:
 - The exact `build_tools/rocm/run_xla_ci_build.sh ...` (or plain `bazel`)
   invocation that was run for the failing step. Match its *flags* verbatim
-  rather than guessing matrix-specific ones (`rbe_config`, distro URL/hash,
-  `gfx` target) - different nightly matrix legs use different values, and
-  the log already has the real ones. The *target list* is a different
-  matter - see the "never build the full sweep" rule above: that
-  invocation's own `-- //xla/...` covers the whole tree, and you always
-  replace it with just the one failing target, in Step 3 or anywhere else.
+  rather than guessing matrix-specific ones (distro URL/hash, `gfx` target)
+  - different nightly matrix legs use different values, and the log
+  already has the real ones. Two exceptions:
+  - **The target list.** See the "never build the full sweep" rule above:
+    that invocation's own `-- //xla/...` covers the whole tree, and you
+    always replace it with just the one failing target, in Step 3 or
+    anywhere else.
+  - **`--config=rocm_rbe`.** Always replace it with
+    `--config=rocm_rbe_dev`, even if the failing job's own log used
+    `rocm_rbe` - `rocm_rbe` is not reachable from this debug runner
+    (confirmed: it fails with `Connection timed out:
+    internal.actinolite.cluster.engflow.com:443`, not a real result about
+    the failure you're debugging) and the build would never get as far as
+    running anything. `rocm_rbe_dev` is. This applies to every bazel
+    invocation anywhere in this skill, same as the single-target rule.
 - The specific failing target(s) and, for a test, the specific failing test
   case/parameter - this is what you narrow every later bazel invocation to.
 - The error signature: a crash with a stack trace, a hang/timeout, a wrong
