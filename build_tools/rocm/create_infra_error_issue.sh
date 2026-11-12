@@ -35,17 +35,19 @@ ISSUE_REPO="ROCm/xla"
 LABEL="rocm-infra-error"
 TITLE="ROCm CI Nightly Failures Detected"
 
-# Exact title match against open issues carrying the label. "gh issue list
-# --search" is a fuzzy text search, so match titles exactly in jq instead.
-ISSUE_NUMBER=$(gh issue list --repo "$ISSUE_REPO" --state open --label "$LABEL" \
+# Exact title match against ALL open issues, not just ones carrying the
+# label: gh issue create's label+assignee flags fail atomically if even one
+# assignee lacks repo access (see the fallback chain below), which can
+# leave the tracking issue without the label - filtering the search on the
+# label too would then make it invisible to future runs and recreate a new
+# issue every single time. "gh issue list --search" is a fuzzy text search,
+# so match titles exactly in jq instead.
+# Default --limit is 30 (newest first); without the label filter this now
+# scans every open issue in the repo, so raise it well past realistic open
+# issue counts rather than risk missing an older, still-open tracking issue.
+ISSUE_NUMBER=$(gh issue list --repo "$ISSUE_REPO" --state open --limit 1000 \
     --json number,title \
     | jq -r --arg title "$TITLE" 'map(select(.title == $title)) | .[0].number // empty')
-
-if [ -n "$ISSUE_NUMBER" ]; then
-    echo "Using existing issue #$ISSUE_NUMBER in $ISSUE_REPO" >&2
-    echo "$ISSUE_NUMBER"
-    exit 0
-fi
 
 # Team members to assign to the tracking issue
 # Adjust this list as needed
@@ -59,11 +61,16 @@ TEAM_MEMBERS=(
     nurmukhametov
 )
 
-ASSIGNEES=""
-for member in "${TEAM_MEMBERS[@]}"; do
-    ASSIGNEES="$ASSIGNEES --assignee $member"
-done
-echo "Will assign to: ${TEAM_MEMBERS[*]}" >&2
+if [ -n "$ISSUE_NUMBER" ]; then
+    echo "Using existing issue #$ISSUE_NUMBER in $ISSUE_REPO" >&2
+    # Self-heal: an issue created before this label/assignee decoupling fix
+    # may be missing the label (see below) - make sure it has it, since the
+    # dedup search above no longer depends on it but other tooling might.
+    gh issue edit "$ISSUE_NUMBER" --repo "$ISSUE_REPO" --add-label "$LABEL" >/dev/null 2>&1 \
+        || echo "Warning: could not add label $LABEL to #$ISSUE_NUMBER" >&2
+    echo "$ISSUE_NUMBER"
+    exit 0
+fi
 
 BODY="## ROCm CI Nightly Failures
 
@@ -76,38 +83,20 @@ directly on this issue, quoting the detection comment it addresses.
 cc @ROCm/ai-fw-openxla"
 
 echo "Creating new issue in $ISSUE_REPO" >&2
-# Try with label and assignees first, fallback if it fails
-if NEW_ISSUE=$(gh issue create \
-    --repo "$ISSUE_REPO" \
-    --title "$TITLE" \
-    --body "$BODY" \
-    --label "$LABEL" \
-    $ASSIGNEES 2>&1); then
-    echo "Issue created: $NEW_ISSUE" >&2
-else
-    echo "Warning: Could not create with label/assignees, trying without label" >&2
-    if [ -n "$ASSIGNEES" ]; then
-        if NEW_ISSUE=$(gh issue create \
-            --repo "$ISSUE_REPO" \
-            --title "$TITLE" \
-            --body "$BODY" \
-            $ASSIGNEES 2>&1); then
-            echo "Issue created: $NEW_ISSUE" >&2
-        else
-            echo "Warning: Could not assign members, creating issue without assignees" >&2
-            NEW_ISSUE=$(gh issue create \
-                --repo "$ISSUE_REPO" \
-                --title "$TITLE" \
-                --body "$BODY")
-            echo "Issue created: $NEW_ISSUE" >&2
-        fi
-    else
-        NEW_ISSUE=$(gh issue create \
-            --repo "$ISSUE_REPO" \
-            --title "$TITLE" \
-            --body "$BODY")
-        echo "Issue created: $NEW_ISSUE" >&2
-    fi
-fi
+NEW_ISSUE=$(gh issue create --repo "$ISSUE_REPO" --title "$TITLE" --body "$BODY")
+echo "Issue created: $NEW_ISSUE" >&2
+NEW_ISSUE_NUMBER=$(echo "$NEW_ISSUE" | grep -oE '[0-9]+$')
 
-echo "$NEW_ISSUE" | grep -oE '[0-9]+$'
+# Label and each assignee are added separately, after creation, so one
+# invalid assignee (lacking repo access) can't make `gh issue create` fail
+# atomically and silently drop the label too - which is exactly what used
+# to make the dedup search above miss this issue and recreate a new one
+# every single run.
+gh issue edit "$NEW_ISSUE_NUMBER" --repo "$ISSUE_REPO" --add-label "$LABEL" \
+    || echo "Warning: could not add label $LABEL" >&2
+for member in "${TEAM_MEMBERS[@]}"; do
+    gh issue edit "$NEW_ISSUE_NUMBER" --repo "$ISSUE_REPO" --add-assignee "$member" \
+        || echo "Warning: could not assign $member (no repo access?)" >&2
+done
+
+echo "$NEW_ISSUE_NUMBER"
