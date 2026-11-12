@@ -14,7 +14,8 @@
 # limitations under the License.
 # ==============================================================================
 #
-# List the failures of a single pipeline run, one "job / step" per line.
+# List the failures of a single pipeline run, one JSON object per line
+# (JSON Lines), each describing one failed job/step.
 #
 # Every failure is reported: no attempt is made to tell infrastructure failures
 # apart from build or test failures, because the monitored pipeline is expected
@@ -38,8 +39,9 @@
 #                        Empty means report every job.
 #
 # Output:
-#   One indented "job / step" line per failure on stdout, nothing if the run
-#   has no reportable failure.
+#   One compact JSON object per line (JSON Lines) on stdout, each with
+#   {run_id, job_name, job_id, job_url, step_name}; nothing if the run has no
+#   reportable failure.
 #
 # Exit codes:
 #   0: Success (including "no failures found")
@@ -76,32 +78,32 @@ fi
 # ROCm tarball URL in them, so the name usually ends in a half-cut URL. Keep
 # only the first matrix value, which is the one that identifies the job
 # ("execute-xla-ut-nightly (therock_release, https://rocm.dev..." becomes
-# "execute-xla-ut-nightly (therock_release)"). The job's own URL is appended to
-# every line instead, so each failure stays one greppable, clickable line.
+# "execute-xla-ut-nightly (therock_release)"). The job's own URL is reported
+# separately, so a shortened name never loses information.
 SHORTEN_JOB_NAME='def short_job_name: if test("\\(") and test(",")
                                       then sub(",.*$"; ")")
                                       else . end;'
 
 # Failed steps, except the known-red ones. An empty marker reports everything:
 # jq's contains("") is true for every name, so it has to be special cased.
-STEP_FAILURES=$(printf '%s' "$JOBS_JSON" | jq -r --arg marker "$IGNORED_STEP_MARKER" "
+STEP_FAILURES=$(printf '%s' "$JOBS_JSON" | jq -c -r --arg marker "$IGNORED_STEP_MARKER" --arg run_id "$RUN_ID" "
     ${SHORTEN_JOB_NAME}"'
     .jobs[]
     | . as $job
     | ($job.steps // [])[]
     | select(.conclusion == "failure")
     | select($marker == "" or ((.name | contains($marker)) | not))
-    | "  - \($job.name | short_job_name) / \(.name) -> \($job.html_url)"
+    | {run_id: ($run_id | tonumber), job_name: ($job.name | short_job_name), job_id: $job.id, job_url: $job.html_url, step_name: .name}
 ')
 
 # Jobs that failed without any failed step - a startup failure, a lost runner,
 # a cancellation. There is no step to point at, so report the job itself.
-JOB_FAILURES=$(printf '%s' "$JOBS_JSON" | jq -r "
+JOB_FAILURES=$(printf '%s' "$JOBS_JSON" | jq -c -r --arg run_id "$RUN_ID" "
     ${SHORTEN_JOB_NAME}"'
     .jobs[]
     | select(.conclusion == "failure" or .conclusion == "startup_failure")
     | select([(.steps // [])[] | select(.conclusion == "failure")] | length == 0)
-    | "  - \(.name | short_job_name) / job \(.conclusion) with no failed step -> \(.html_url)"
+    | {run_id: ($run_id | tonumber), job_name: (.name | short_job_name), job_id: .id, job_url: .html_url, step_name: ("job " + .conclusion + " (no failed step)")}
 ')
 
 printf '%s\n%s\n' "$STEP_FAILURES" "$JOB_FAILURES" | grep -v '^$' | sort -u || true

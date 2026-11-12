@@ -15,9 +15,9 @@
 
 name: ROCm Nightly Failure Monitor
 permissions:
-  actions: read
   contents: read
   issues: write
+  id-token: write  # Required by claude-code-action (debug job) for OIDC auth.
 
 env:
   # Repository and workflow being monitored: our own nightly pipeline.
@@ -25,6 +25,12 @@ env:
   MONITORED_WORKFLOW: rocm_xla_ci_nightly.yml
   # This workflow, used to find out when we last looked.
   SELF_WORKFLOW: rocm_infra_monitor.yml
+  # Branch this run itself is testing/running from: the PR's own branch when
+  # triggered by a pull_request (so a PR touching the debug job exercises its
+  # own changes), rocm-dev-infra otherwise. Used below both to check out this
+  # workflow's own code and, in the debug job, to fetch the matching version
+  # of the debug skill.
+  DEBUG_PIPELINE_REF: ${{ github.event_name == 'pull_request' && github.head_ref || 'rocm-dev-infra' }}
   # Steps whose name contains this marker are known-red and not reported.
   # The pipeline already tags each test step with its mode - "[single_gpu]",
   # "[multi_gpu]", "[rocm_cpu]" - so the mode tag is the marker.
@@ -47,16 +53,28 @@ on:
       - "build_tools/rocm/get_runs_since.sh"
       - "build_tools/rocm/collect_run_failures.sh"
       - "build_tools/rocm/create_infra_error_issue.sh"
+      - "build_tools/rocm/collect_claude_debug_targets.sh"
+      - ".claude/skills/debug-nightly-failure/SKILL.md"
 
 jobs:
   monitor:
     name: Monitor ROCm Nightly Failures
     runs-on: ubuntu-latest
+    outputs:
+      # A JSON array of {issue_number, repository, head_sha, run_id, job_id,
+      # job_name, step_name, failure_url, detection_comment_url} - one per
+      # failure signature that doesn't already have a debug report this run.
+      # Fed into the "debug" job's matrix below, so each one gets its own
+      # isolated debug run. "[]" means nothing new to debug. Every detected
+      # failure gets a comment on the (single, shared) tracking issue
+      # regardless of whether it ends up here - see
+      # collect_claude_debug_targets.sh.
+      new_failures: ${{ steps.collect_targets.outputs.new_failures }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'rocm-dev-infra' }}
+          ref: ${{ env.DEBUG_PIPELINE_REF }}
           persist-credentials: false
 
       - name: Determine monitoring window
@@ -84,8 +102,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          rm -f failed_runs.txt
-          touch failed_runs.txt
+          rm -f failures.json
+          touch failures.json
 
           while read -r RUN_ID; do
             [ -z "$RUN_ID" ] && continue
@@ -95,25 +113,181 @@ jobs:
 
             if [ -n "$FAILURES" ]; then
               echo "$FAILURES"
-              {
-                echo "https://github.com/${MONITORED_REPO}/actions/runs/${RUN_ID}"
-                echo "$FAILURES"
-                echo ""
-              } >> failed_runs.txt
+              echo "$FAILURES" >> failures.json
             else
               echo "  -> no reportable failures"
             fi
           done < run_ids.txt
 
-      - name: Create or update issue for failed runs
-        if: hashFiles('failed_runs.txt') != ''
+      - name: Report failures, collect new failures to debug
+        id: collect_targets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -s failed_runs.txt ]; then
-            build_tools/rocm/create_infra_error_issue.sh \
-              failed_runs.txt \
-              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ -s failures.json ]; then
+            ISSUE_NUMBER=$(build_tools/rocm/create_infra_error_issue.sh)
+            TARGETS=$(build_tools/rocm/collect_claude_debug_targets.sh \
+              "${ISSUE_NUMBER}" \
+              failures.json \
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}")
           else
-            echo "No failures found, skipping issue creation"
+            echo "No failures found, skipping issue reporting"
+            TARGETS="[]"
           fi
+          echo "new_failures=${TARGETS}" >> "$GITHUB_OUTPUT"
+
+  debug:
+    # issue_number is shared by every matrix entry (one tracking issue for
+    # everything), so the job/step signature is what actually identifies
+    # this entry.
+    name: "Debug: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
+    needs: monitor
+    if: needs.monitor.outputs.new_failures != '[]'
+    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-4
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.monitor.outputs.new_failures) }}
+    container:
+      image: ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f
+
+    steps:
+      # Guards against debugging the same failure signature twice: a
+      # re-dispatched matrix entry, a manually re-run job, or two
+      # overlapping monitor runs could otherwise all redo the same work.
+      # collect_claude_debug_targets.sh already checks this before queuing,
+      # but the tracking issue is now shared by many unrelated failures, so
+      # this check re-verifies against THIS signature specifically (not
+      # just "does the issue have any debug report at all") right before
+      # doing anything expensive. The skill always starts its report
+      # comment with this exact, signature-specific marker (see SKILL.md
+      # Step 4).
+      - name: Check whether this signature was already debugged
+        id: already_debugged
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MARKER='<!-- rocm-nightly-claude-debug:${{ matrix.job_name }} / ${{ matrix.step_name }} -->'
+          FOUND=$(gh api --paginate \
+            "/repos/ROCm/xla/issues/${{ matrix.issue_number }}/comments" \
+            | jq --arg marker "$MARKER" '[.[] | select(.body | startswith($marker))] | length')
+          if [ "${FOUND:-0}" -gt 0 ]; then
+            echo "This signature already has a debug report ($FOUND found) - skipping" >&2
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Already debugged, nothing to do
+        if: steps.already_debugged.outputs.skip == 'true'
+        run: echo "${{ matrix.job_name }} / ${{ matrix.step_name }} was already debugged - skipping this run."
+
+      # This is the exact commit the failing job itself checked out - see
+      # collect_claude_debug_targets.sh for how `repository`/`head_sha` are
+      # derived from the monitored run (head_repository/head_sha), which
+      # covers both the scheduled nightly (openxla/xla@main-at-the-time) and
+      # a pull_request_target-triggered run (the PR's own fork/branch).
+      - name: Checkout the commit that failed
+        if: steps.already_debugged.outputs.skip != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.head_sha }}
+          persist-credentials: false
+
+      # This self-hosted runner execs each step in a fresh container session,
+      # so a UID mismatch against the files actions/checkout just wrote makes
+      # git refuse to touch them ("detected dubious ownership") in every
+      # later step unless something tells it to trust the workspace - do
+      # that once here, right after checkout, so it covers every subsequent
+      # step's own git usage (including whatever the Claude agent runs).
+      - name: Trust the checked-out workspace
+        if: steps.already_debugged.outputs.skip != 'true'
+        run: git config --global --add safe.directory '*'
+
+      - name: Populate missing upstream ROCm build tools
+        if: steps.already_debugged.outputs.skip != 'true' && hashFiles('build_tools/rocm/run_xla_ci_build.sh') == ''
+        run: |
+          tmpdir="$(mktemp -d)"
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/openxla/xla.git "$tmpdir"
+          git -C "$tmpdir" sparse-checkout set build_tools/rocm
+          cp -a "$tmpdir/build_tools/rocm/." build_tools/rocm/
+
+      # The checked-out commit may be from openxla/xla or an arbitrary
+      # historical ROCm/xla commit, neither of which is guaranteed to carry
+      # the debug skill - it only lives in this repo's .claude/ directory.
+      # Overlay it from DEBUG_PIPELINE_REF (the branch this whole workflow
+      # run is testing/running from - see env above), the same way
+      # claude_auto_review.yml does for the PR review skills, so a PR
+      # touching the skill exercises its own version of it.
+      - name: Fetch .claude config from ${{ env.DEBUG_PIPELINE_REF }}
+        if: steps.already_debugged.outputs.skip != 'true'
+        run: |
+          git remote add rocm-xla https://github.com/ROCm/xla.git
+          git fetch rocm-xla "${{ env.DEBUG_PIPELINE_REF }}"
+          # FETCH_HEAD is a single top-level ref (refs/FETCH_HEAD), not
+          # namespaced under the remote name - "rocm-xla/FETCH_HEAD" is not
+          # a valid ref.
+          git restore --source=FETCH_HEAD --worktree -- .claude
+          find .claude -type f | sort
+
+      - name: Debug Nightly Failure
+        if: steps.already_debugged.outputs.skip != 'true'
+        id: claude-code
+        timeout-minutes: 110
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          ANTHROPIC_CUSTOM_HEADERS: |
+            Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}
+            user: ${{ secrets.USER_NTID }}
+          ANTHROPIC_MODEL: "Claude-Opus-5.5"
+          ANTHROPIC_DEFAULT_OPUS_MODEL: "Claude-Opus-5.5"
+          ANTHROPIC_DEFAULT_SONNET_MODEL: "Claude-Sonnet-4.6"
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "Claude-Haiku-4.5"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          anthropic_api_key: "sk-ant-dummy-gateway-key"
+          # The triggering actor is github-actions[bot] (schedule) or the PR
+          # author via pull_request, neither of which is a human reviewer.
+          allowed_bots: "github-actions[bot]"
+          show_full_output: true
+          prompt: |
+            CI REPO (for job logs / issue comments): ROCm/xla
+            SOURCE REPO (already checked out in the working directory): ${{ matrix.repository }}
+            HEAD SHA (already checked out): ${{ matrix.head_sha }}
+            NIGHTLY RUN ID: ${{ matrix.run_id }}
+            FAILING JOB ID: ${{ matrix.job_id }}
+            FAILING JOB NAME: ${{ matrix.job_name }}
+            FAILED STEP: ${{ matrix.step_name }}
+            FAILING JOB URL: ${{ matrix.failure_url }}
+            TRACKING ISSUE NUMBER (in ROCm/xla): ${{ matrix.issue_number }}
+            DETECTION COMMENT URL (quote this in your report): ${{ matrix.detection_comment_url }}
+
+            Note: this tracking issue is shared by many unrelated failures -
+            your report must quote the detection comment above so readers
+            can tell which occurrence it addresses.
+
+            Run the /debug-nightly-failure skill, using the values above as
+            its arguments: CI repo, run ID, job ID, job name, step name,
+            failure URL, issue number, detection comment URL, in that order.
+            The skill is responsible for reproducing the failure, debugging
+            it, and posting its findings directly to the tracking issue via
+            `gh issue comment`. Do not post anything to GitHub yourself
+            outside of what the skill does.
+          claude_args: |
+            --allowedTools "Skill,Bash(gh issue comment *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
+          settings: |
+            {
+              "hasCompletedOnboarding": true
+            }
+
+      - name: Upload Claude Execution Log
+        if: always() && steps.claude-code.outputs.execution_file != ''
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          # issue_number alone is no longer unique per matrix entry (one
+          # shared tracking issue), so disambiguate with run_id/job_id too.
+          name: claude-debug-execution-log-${{ matrix.run_id }}-${{ matrix.job_id }}
+          path: ${{ steps.claude-code.outputs.execution_file }}

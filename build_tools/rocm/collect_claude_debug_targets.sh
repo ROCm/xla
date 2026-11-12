@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+#
+# Append a detection comment to the single tracking issue (see
+# create_infra_error_issue.sh) for every failure in a JSON Lines file (as produced
+# by collect_run_failures.sh) - always, even for a failure signature
+# (job_name/step_name) seen before, so the issue keeps a full history of
+# every occurrence. Separately, print a JSON array of the failures whose
+# signature doesn't already have a Claude debug report comment on the
+# issue, so a signature is only ever debugged once, no matter how many
+# times it recurs or how many unrelated failures share the same issue.
+#
+# The caller (rocm_infra_monitor.yml) feeds this array straight into a
+# `strategy.matrix.include` on its own "debug" job, so every new failure
+# signature gets its own isolated Claude Code debug run on real GPU
+# hardware - all within the same workflow run, no cross-workflow dispatch
+# involved.
+#
+# Usage: collect_claude_debug_targets.sh <issue_number> <failures_jsonl_file> <workflow_run_url>
+#
+# Output:
+#   A single compact JSON array on stdout (diagnostics on stderr), each
+#   element: {issue_number, repository, head_sha, run_id, job_id, job_name,
+#   step_name, failure_url, detection_comment_url}. "[]" if there is
+#   nothing new to debug.
+#
+# Exit codes:
+#   0: Success
+#   1: Error
+
+set -euo pipefail
+
+if [ $# -ne 3 ]; then
+    echo "Usage: $0 <issue_number> <failures_jsonl_file> <workflow_run_url>" >&2
+    exit 1
+fi
+
+ISSUE_NUMBER="$1"
+FAILURES_FILE="$2"
+WORKFLOW_URL="$3"
+
+# Repository hosting the monitored runs and the tracking issue.
+CI_REPO="ROCm/xla"
+
+TARGETS="[]"
+
+if [ -s "$FAILURES_FILE" ]; then
+    # Fetch existing comments once up front - cheaper than one API call per
+    # failure, and the set of *debug report* comments can't change while
+    # this loop runs (the debug jobs it queues haven't started yet).
+    EXISTING_COMMENTS=$(gh api --paginate "/repos/${CI_REPO}/issues/${ISSUE_NUMBER}/comments")
+
+    # Signatures queued for debug earlier in this very run: two different
+    # monitored runs in the same window can share a job/step signature, and
+    # EXISTING_COMMENTS can't see a debug job this script itself is about
+    # to queue, so that check alone would double-queue it.
+    declare -A QUEUED_IN_THIS_RUN
+
+    while IFS= read -r FAILURE; do
+        [ -z "$FAILURE" ] && continue
+
+        RUN_ID=$(printf '%s' "$FAILURE" | jq -r '.run_id')
+        JOB_NAME=$(printf '%s' "$FAILURE" | jq -r '.job_name')
+        JOB_ID=$(printf '%s' "$FAILURE" | jq -r '.job_id')
+        JOB_URL=$(printf '%s' "$FAILURE" | jq -r '.job_url')
+        STEP_NAME=$(printf '%s' "$FAILURE" | jq -r '.step_name')
+        SIGNATURE="${JOB_NAME} / ${STEP_NAME}"
+
+        echo "Processing failure: ${SIGNATURE} (run ${RUN_ID})" >&2
+
+        # Always append a detection comment - this is the append-only log of
+        # every occurrence, regardless of whether it gets debugged again.
+        DETECTION_BODY="<!-- rocm-nightly-failure:${SIGNATURE} -->
+## Nightly CI Failure Detected
+
+**Job:** ${JOB_NAME}
+**Step:** ${STEP_NAME}
+
+- Failing job: ${JOB_URL}
+- Detected by monitoring run: ${WORKFLOW_URL}
+- Detected: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+
+        DETECTION_COMMENT_URL=$(gh issue comment "$ISSUE_NUMBER" --repo "$CI_REPO" --body "$DETECTION_BODY")
+        echo "  -> detection comment posted: ${DETECTION_COMMENT_URL}" >&2
+
+        if [ -n "${QUEUED_IN_THIS_RUN[$SIGNATURE]:-}" ]; then
+            echo "  -> already queued for debug earlier in this run, not queuing again" >&2
+            continue
+        fi
+
+        DEBUG_MARKER="<!-- rocm-nightly-claude-debug:${SIGNATURE} -->"
+        ALREADY_DEBUGGED=$(printf '%s' "$EXISTING_COMMENTS" \
+            | jq --arg marker "$DEBUG_MARKER" '[.[] | select(.body | startswith($marker))] | length')
+
+        if [ "${ALREADY_DEBUGGED:-0}" -gt 0 ]; then
+            echo "  -> already has a debug report for this signature, not queuing" >&2
+            continue
+        fi
+
+        # The monitored run's own source commit/repository: for scheduled or
+        # workflow_dispatch nightly runs this is openxla/xla@<sha of main at
+        # run time>; for pull_request_target-triggered runs it is the PR's
+        # own head repo/branch. Either way it is exactly what the failing
+        # job itself checked out, so the debug job can check out the
+        # identical commit.
+        RUN_JSON=$(gh api -H "Accept: application/vnd.github+json" \
+            "/repos/${CI_REPO}/actions/runs/${RUN_ID}")
+        HEAD_SHA=$(printf '%s' "$RUN_JSON" | jq -r '.head_sha')
+        HEAD_REPOSITORY=$(printf '%s' "$RUN_JSON" | jq -r '.head_repository.full_name')
+
+        echo "  -> queued for debug" >&2
+        QUEUED_IN_THIS_RUN[$SIGNATURE]=1
+        TARGET=$(jq -nc \
+            --arg issue_number "$ISSUE_NUMBER" \
+            --arg repository "$HEAD_REPOSITORY" \
+            --arg head_sha "$HEAD_SHA" \
+            --arg run_id "$RUN_ID" \
+            --arg job_id "$JOB_ID" \
+            --arg job_name "$JOB_NAME" \
+            --arg step_name "$STEP_NAME" \
+            --arg failure_url "$JOB_URL" \
+            --arg detection_comment_url "$DETECTION_COMMENT_URL" \
+            '{issue_number: $issue_number, repository: $repository, head_sha: $head_sha,
+              run_id: $run_id, job_id: $job_id, job_name: $job_name,
+              step_name: $step_name, failure_url: $failure_url,
+              detection_comment_url: $detection_comment_url}')
+        TARGETS=$(printf '%s' "$TARGETS" | jq -c --argjson t "$TARGET" '. + [$t]')
+    done < "$FAILURES_FILE"
+fi
+
+printf '%s\n' "$TARGETS"

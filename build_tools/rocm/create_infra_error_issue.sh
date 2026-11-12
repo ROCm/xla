@@ -14,13 +14,16 @@
 # limitations under the License.
 # ==============================================================================
 #
-# Create or update GitHub issue for ROCm CI nightly failures.
+# Find or create the single, long-lived GitHub issue that tracks ROCm CI
+# nightly failures. There is never more than one open issue with this
+# title: every individual failure is appended to it as its own comment by
+# collect_claude_debug_targets.sh, rather than getting a new issue of its
+# own.
 #
-# Usage: create_infra_error_issue.sh <errors_file> <workflow_run_url>
+# Usage: create_infra_error_issue.sh
 #
-# Args:
-#   errors_file: File containing error details
-#   workflow_run_url: URL to the monitoring workflow run
+# Output:
+#   The issue number on stdout (diagnostics on stderr).
 #
 # Exit codes:
 #   0: Success
@@ -28,25 +31,23 @@
 
 set -euo pipefail
 
-if [ $# -ne 2 ]; then
-    echo "Usage: $0 <errors_file> <workflow_run_url>" >&2
-    exit 1
-fi
-
-ERRORS_FILE="$1"
-WORKFLOW_URL="$2"
-
-if [ ! -f "$ERRORS_FILE" ]; then
-    echo "Error: Errors file not found: $ERRORS_FILE" >&2
-    exit 1
-fi
-
+ISSUE_REPO="ROCm/xla"
+LABEL="rocm-infra-error"
 TITLE="ROCm CI Nightly Failures Detected"
 
-# Repository where issues should be created (ROCm fork, where the team has access)
-ISSUE_REPO="ROCm/xla"
+# Exact title match against open issues carrying the label. "gh issue list
+# --search" is a fuzzy text search, so match titles exactly in jq instead.
+ISSUE_NUMBER=$(gh issue list --repo "$ISSUE_REPO" --state open --label "$LABEL" \
+    --json number,title \
+    | jq -r --arg title "$TITLE" 'map(select(.title == $title)) | .[0].number // empty')
 
-# Team members to assign to nightly failure issues
+if [ -n "$ISSUE_NUMBER" ]; then
+    echo "Using existing issue #$ISSUE_NUMBER in $ISSUE_REPO" >&2
+    echo "$ISSUE_NUMBER"
+    exit 0
+fi
+
+# Team members to assign to the tracking issue
 # Adjust this list as needed
 TEAM_MEMBERS=(
     alekstheod
@@ -58,73 +59,55 @@ TEAM_MEMBERS=(
     nurmukhametov
 )
 
-# Build assignee flags
 ASSIGNEES=""
 for member in "${TEAM_MEMBERS[@]}"; do
     ASSIGNEES="$ASSIGNEES --assignee $member"
 done
-echo "Will assign to: ${TEAM_MEMBERS[*]}"
+echo "Will assign to: ${TEAM_MEMBERS[*]}" >&2
 
-# Check if an open issue already exists (search by title, not label)
-ISSUE_NUMBER=$(gh issue list --repo "$ISSUE_REPO" --state open --search "in:title $TITLE" --json number --jq '.[0].number')
+BODY="## ROCm CI Nightly Failures
 
-BODY="## Failures Detected in the ROCm CI Nightly Pipeline
+This issue tracks every failure the nightly pipeline monitor detects. Each
+failure is appended below as its own comment, with a link to the failing
+job. A Claude Code debug run is queued automatically for each failure
+signature that hasn't already been debugged, and comments its findings
+directly on this issue, quoting the detection comment it addresses.
 
-Monitoring run: ${WORKFLOW_URL}
+cc @ROCm/ai-fw-openxla"
 
-The nightly pipeline is expected to be green. The following runs reported
-failures (build, test or infrastructure - all of them are reported):
-
-$(cat "$ERRORS_FILE")
-
-### Next Steps
-- Click the run links above to view logs and error details
-- Fix the failing step, or quarantine the failing test, to get the nightly back to green
-
-Note: \`[multi_gpu]\` steps are known-red and are not reported yet.
-
-cc @ROCm/ai-fw-openxla
-
----
-*Last updated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")*"
-
-if [ -n "$ISSUE_NUMBER" ]; then
-    echo "Updating existing issue #$ISSUE_NUMBER in $ISSUE_REPO"
-    gh issue comment "$ISSUE_NUMBER" --repo "$ISSUE_REPO" --body "$BODY"
-    echo "Issue updated: #$ISSUE_NUMBER"
+echo "Creating new issue in $ISSUE_REPO" >&2
+# Try with label and assignees first, fallback if it fails
+if NEW_ISSUE=$(gh issue create \
+    --repo "$ISSUE_REPO" \
+    --title "$TITLE" \
+    --body "$BODY" \
+    --label "$LABEL" \
+    $ASSIGNEES 2>&1); then
+    echo "Issue created: $NEW_ISSUE" >&2
 else
-    echo "Creating new issue in $ISSUE_REPO"
-    # Try with label and assignees first, fallback if it fails
-    if NEW_ISSUE=$(gh issue create \
-        --repo "$ISSUE_REPO" \
-        --title "$TITLE" \
-        --body "$BODY" \
-        --label "rocm-infra-error" \
-        $ASSIGNEES 2>&1); then
-        echo "Issue created: $NEW_ISSUE"
-    else
-        echo "Warning: Could not create with label/assignees, trying without label"
-        if [ -n "$ASSIGNEES" ]; then
-            if NEW_ISSUE=$(gh issue create \
-                --repo "$ISSUE_REPO" \
-                --title "$TITLE" \
-                --body "$BODY" \
-                $ASSIGNEES 2>&1); then
-                echo "Issue created: $NEW_ISSUE"
-            else
-                echo "Warning: Could not assign members, creating issue without assignees"
-                NEW_ISSUE=$(gh issue create \
-                    --repo "$ISSUE_REPO" \
-                    --title "$TITLE" \
-                    --body "$BODY")
-                echo "Issue created: $NEW_ISSUE"
-            fi
+    echo "Warning: Could not create with label/assignees, trying without label" >&2
+    if [ -n "$ASSIGNEES" ]; then
+        if NEW_ISSUE=$(gh issue create \
+            --repo "$ISSUE_REPO" \
+            --title "$TITLE" \
+            --body "$BODY" \
+            $ASSIGNEES 2>&1); then
+            echo "Issue created: $NEW_ISSUE" >&2
         else
+            echo "Warning: Could not assign members, creating issue without assignees" >&2
             NEW_ISSUE=$(gh issue create \
                 --repo "$ISSUE_REPO" \
                 --title "$TITLE" \
                 --body "$BODY")
-            echo "Issue created: $NEW_ISSUE"
+            echo "Issue created: $NEW_ISSUE" >&2
         fi
+    else
+        NEW_ISSUE=$(gh issue create \
+            --repo "$ISSUE_REPO" \
+            --title "$TITLE" \
+            --body "$BODY")
+        echo "Issue created: $NEW_ISSUE" >&2
     fi
 fi
+
+echo "$NEW_ISSUE" | grep -oE '[0-9]+$'
