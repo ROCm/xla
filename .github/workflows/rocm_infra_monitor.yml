@@ -209,11 +209,19 @@ jobs:
       # and pointing at it directly sidesteps the bug entirely.
       - name: Install gh, jq, and bun
         id: install_tools
+        env:
+          # Pinned, not resolved from the GitHub API: that was an
+          # unauthenticated `wget` to api.github.com/.../releases/latest,
+          # subject to the 60-requests/hour per-IP limit - easily exhausted
+          # on a shared self-hosted runner pool, which silently produced an
+          # empty version string, a malformed download URL, and a wget exit
+          # 8 ("server issued an error response") with no indication why.
+          # Bump this occasionally; matches the pinned-version convention
+          # already used for actions/Docker images elsewhere in this file.
+          GH_VERSION: "2.103.3"
         run: |
           apt-get update -qq
           apt-get install -y -qq jq ca-certificates unzip curl
-          GH_VERSION=$(wget -qO- https://api.github.com/repos/cli/cli/releases/latest \
-            | grep -oP '"tag_name":\s*"v\K[^"]+' | head -1)
           wget -q "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" -O /tmp/gh.tar.gz
           tar -xzf /tmp/gh.tar.gz -C /tmp
           install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
