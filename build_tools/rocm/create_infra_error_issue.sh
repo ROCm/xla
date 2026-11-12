@@ -61,6 +61,15 @@ TEAM_MEMBERS=(
     nurmukhametov
 )
 
+# `gh issue edit --add-label` fails if the label doesn't exist as a repo
+# label object yet (distinct from it just not being on this issue) - ensure
+# it exists first, every time, since there's otherwise no signal that it's
+# missing (every add-label call below would silently warn-and-continue
+# forever without ever actually labeling anything).
+gh label create "$LABEL" --repo "$ISSUE_REPO" --force \
+    --color b60205 --description "ROCm CI nightly infra/test failure tracking issue" \
+    || echo "Warning: could not create/update label $LABEL" >&2
+
 if [ -n "$ISSUE_NUMBER" ]; then
     echo "Using existing issue #$ISSUE_NUMBER in $ISSUE_REPO" >&2
     # Self-heal: an issue created before this label/assignee decoupling fix

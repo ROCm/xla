@@ -1,6 +1,6 @@
 ---
 name: debug-nightly-failure
-description: Hard-capped at 5 minutes - quickly categorize (build/test/config/infra) and label a single ROCm XLA nightly CI failure, check whether a later upstream commit already fixed it, and do a fast code read for a likely root cause and possible fix. Full RBE reproduction/gdb debugging is optional and rarely fits the time budget. Reports a quick estimate (or an already-found fix, or a callstack/analysis) directly on the tracking GitHub issue. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
+description: Hard-capped at 5 minutes - first checks whether this exact failure signature was already analyzed on the tracking issue and, if so, just posts a reference to that instead of repeating the work. Otherwise quickly categorizes (build/test/config/infra) and labels a single ROCm XLA nightly CI failure, checks whether a later upstream commit already fixed it, and does a fast code read for a likely root cause and possible fix. Full RBE reproduction/gdb debugging is optional and rarely fits the time budget. Reports a quick estimate (or an already-found fix, or a callstack/analysis) directly on the tracking GitHub issue. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
 argument-hint: [ci-repo] [run-id] [job-id] [job-name] [step-name] [failure-url] [issue-number] [detection-comment-url]
 context: fork
 agent: general-purpose
@@ -40,17 +40,17 @@ each value on its own labeled line; read the values from there.
 
 - **Steps 1-3 (triage and analysis, before any build) are hard-capped at 5
   minutes of wall-clock time** - budget roughly 1 minute each for Steps 1
-  and 2, 2-3 minutes for Step 3. Building/testing afterward (Step 4+)
+  and 2, 2-3 minutes for Step 4. Building/testing afterward (Step 5+)
   doesn't count against that 5 minutes, but the whole run still has to fit
   inside this step's own (longer) timeout, so treat Steps 4 and 5 (full RBE
   reproduction, gdb) as something you only start if you're confident, from
-  Step 3 alone, that a build+test will complete and you'll still have time
-  to post Step 6's report afterward. Default to going straight from Step 3
-  to Step 6 with your best estimate.
+  Step 4 alone, that a build+test will complete and you'll still have time
+  to post Step 7's report afterward. Default to going straight from Step 4
+  to Step 7 with your best estimate.
 - This runner (`build-only-xla`) has no local GPU - it's a network-access
   node, not a GPU node. Every Bazel/`run_xla_ci_build.sh` invocation you run,
-  anywhere (verifying an already-found fix in Step 3, reproducing in Step 4,
-  debugging in Step 5) **must** include `--strategy=TestRunner=remote,local`,
+  anywhere (verifying an already-found fix in Step 4, reproducing in Step 5,
+  debugging in Step 6) **must** include `--strategy=TestRunner=remote,local`,
   so GPU test actions execute on a remote RBE worker from the GPU pool
   instead of trying (and failing) to run on this machine; `local` is kept
   only as a fallback for actions that don't need a GPU. Omitting this flag
@@ -61,32 +61,61 @@ each value on its own labeled line; read the values from there.
   --gtest_filter=` narrowed to the one failing test case) - every bazel
   invocation you run, anywhere in this skill, builds/tests exactly one
   target, never the whole tree. This applies even when "reproducing the
-  exact command" in Step 2/4: match the flags verbatim, but always swap the
+  exact command" in Step 3/4: match the flags verbatim, but always swap the
   target list for the one target you're debugging.
 - Debug only this one job/step. Do not try to fix unrelated red steps you
   notice along the way.
 - Never `git push`, never create a branch, never open a PR. The only
-  GitHub writes you make are: one label (Step 1, corrected in Step 2 if
-  needed), one preliminary comment (Step 1), and one final report comment
-  (Step 6) - all via `gh issue edit`/`gh issue comment <ISSUE_NUMBER> --repo <CI_REPO>`/`gh label create`.
+  GitHub writes you make are: one label (Step 2, corrected in Step 3 if
+  needed), one preliminary comment (Step 2), and one final report comment
+  (Step 7) - all via `gh issue edit`/`gh issue comment <ISSUE_NUMBER> --repo <CI_REPO>`/`gh label create` - **or**, if Step 1 finds this was already
+  analyzed, just the one short reference comment Step 1 describes, nothing
+  else.
 - This run also has a hard cap on agentic turns, on top of the 5-minute
   wall clock. If you notice you're repeating the same approach without
   learning anything new (re-running the same build, trying the same gdb
   script a third time with no new evidence, going back and forth between
-  two hypotheses), stop and go straight to Step 6 with whatever you have
+  two hypotheses), stop and go straight to Step 7 with whatever you have
   (a "Possible fix" estimate or a "Not resolved" report) - don't
   posted at all. A concrete partial finding beats silence.
 - Clean up any scratch files before finishing - nothing from this debugging
   session is meant to be committed. This includes `/tmp/gdb_*`, extra build
   outputs, and - unlike `/tmp` - specifically `debug_tools/claude_scratch/`
-  (Step 5's run_under wrapper target), since that one lives inside the git
+  (Step 6's run_under wrapper target), since that one lives inside the git
   working tree: `rm -rf debug_tools/claude_scratch`.
 - Never claim a fix works without having re-run the originally-failing
   target and observed it pass.
 
-## Step 1 — Triage: categorize and label
+## Step 1 — Check whether this was already analyzed
 
-Fetch the failing step's raw log once, before anything else - Step 2 reuses
+Before anything else: the workflow itself already checks this once before
+dispatching you, but check again here too, in case of a race (two runs
+queuing the same signature close together) or a manual re-run landing you
+here anyway.
+
+```
+gh api repos/<CI_REPO>/issues/<ISSUE_NUMBER>/comments --paginate
+```
+
+Look for a comment whose body starts with exactly
+`<!-- rocm-nightly-claude-debug:JOB_NAME / STEP_NAME -->` (substitute the
+literal `JOB_NAME`/`STEP_NAME` values you were given, ` / ` separator, no
+other change). If one exists:
+- **Stop here - do not repeat the analysis.** Post one short comment
+  instead: quote the detection comment (same method as Step 7.2 below),
+  then a line or two noting this exact failure was already analyzed, with
+  a link to the existing report comment (`[Previous analysis](<url>)`).
+  Do **not** start this comment with the `-claude-debug:` marker - it isn't
+  a new completed analysis, just a pointer to one, and giving it the same
+  marker would make a future check here ambiguous about which comment is
+  the real one.
+- Then stop - do not proceed to Step 2.
+
+If no such comment exists, proceed to Step 2.
+
+## Step 2 — Triage: categorize and label
+
+Fetch the failing step's raw log once, before anything else - Step 3 reuses
 this same file, so don't fetch it twice. CI logs routinely contain raw ANSI
 color codes (Bazel, gtest, ...), and `gh api` refuses to print a response
 containing them without `--allow-escape-sequences` - always pass it for
@@ -134,15 +163,15 @@ Then, before doing any further work:
    `nightly-test-failure`, `0075ca` for `nightly-config-failure`, `5319e7`
    for `nightly-infra-failure`.
 2. Post ONE preliminary comment (separate from, and before, your final
-   report in Step 6) via
+   report in Step 7) via
    `gh issue comment <ISSUE_NUMBER> --repo <CI_REPO> --body-file <file>`:
    - First line exactly `<!-- rocm-nightly-claude-triage:JOB_NAME / STEP_NAME -->`
      (substitute the literal values, ` / ` separator, no other change). This
-     is a *different* marker from the Step 6 completion marker and is never
+     is a *different* marker from the Step 7 completion marker and is never
      checked for dedup - it only marks this comment as the triage pass for
      this signature, so post it even if you end up unable to finish the
      full analysis.
-   - Quote the detection comment (same method as Step 6.2 below).
+   - Quote the detection comment (same method as Step 7.2 below).
    - `**Category:** <category>`
    - `**Possible root cause (preliminary, unverified):** <1-3 sentences>` -
      a concrete guess from what the log shows so far (e.g. "the step hit a
@@ -153,9 +182,9 @@ Then, before doing any further work:
    - A closing line that full reproduction is starting and a complete
      report will follow in a separate comment.
 
-## Step 2 — Understand what actually failed
+## Step 3 — Understand what actually failed
 
-Reread `job.log` (already fetched in Step 1) and extract:
+Reread `job.log` (already fetched in Step 2) and extract:
 - The exact `build_tools/rocm/run_xla_ci_build.sh ...` (or plain `bazel`)
   invocation that was run for the failing step. Match its *flags* verbatim
   rather than guessing matrix-specific ones (`rbe_config`, distro URL/hash,
@@ -163,21 +192,21 @@ Reread `job.log` (already fetched in Step 1) and extract:
   the log already has the real ones. The *target list* is a different
   matter - see the "never build the full sweep" rule above: that
   invocation's own `-- //xla/...` covers the whole tree, and you always
-  replace it with just the one failing target, in Step 2 or anywhere else.
+  replace it with just the one failing target, in Step 3 or anywhere else.
 - The specific failing target(s) and, for a test, the specific failing test
   case/parameter - this is what you narrow every later bazel invocation to.
 - The error signature: a crash with a stack trace, a hang/timeout, a wrong
   numerical result, a build error, etc. This determines which debugging
-  technique in Step 5 applies, and whether Step 1's category guess holds up
+  technique in Step 6 applies, and whether Step 2's category guess holds up
   - if deeper reading changes your mind about the category, update the
   issue's labels (`gh issue edit --remove-label <old> --add-label <new>`)
   before finishing.
 
-## Step 3 — Check for an existing fix, then analyze the code
+## Step 4 — Check for an existing fix, then analyze the code
 
 Within your remaining time budget (roughly 2-3 minutes - see above), do two
 cheap checks using just git and reading code. This is the step that
-produces your estimate; by default you go straight from here to Step 6.
+produces your estimate; by default you go straight from here to Step 7.
 
 **A. Check whether it's already fixed.** The checkout is a shallow clone of
 the exact failing commit, so get a bounded amount of extra history first:
@@ -206,7 +235,7 @@ a sign to stop digging and report with what you have. Then:
   changes how urgent/novel the finding is.
 
 **B. If nothing already fixes it**, analyze the code directly:
-- From the error signature (Step 2): identify the specific file(s)/
+- From the error signature (Step 3): identify the specific file(s)/
   function(s) implicated - a stack trace frame, the HLO pass or emitter
   named in the error, the assertion that fired, or (for a test failure) the
   test's own source and the production code it exercises.
@@ -216,17 +245,17 @@ a sign to stop digging and report with what you have. Then:
   with no ROCm equivalent, a shape/dtype/type mismatch, a recently-changed
   default the failing configuration doesn't account for.
 - A clear culprit found here is still a *hypothesis*, not a verified fix -
-  report it as your "possible fix" estimate in Step 6 (see below) rather
+  report it as your "possible fix" estimate in Step 7 (see below) rather
   than spending the remaining budget trying to reproduce and verify it.
   Only attempt Steps 4/5 if you're confident, right now, that a build+test
-  will complete and you'll still have time left to post Step 6's report -
+  will complete and you'll still have time left to post Step 7's report -
   this will rarely be true within 5 minutes total.
 - If nothing in the code is a clear enough candidate after a genuine read
   (don't force a conclusion from a shallow skim, but don't keep reading
   indefinitely either - see the self-limiting rule above), say so plainly
-  in Step 6 instead of reproducing from scratch.
+  in Step 7 instead of reproducing from scratch.
 
-## Step 4 (optional, rarely reached) — Reproduce it, narrowed to one target
+## Step 5 (optional, rarely reached) — Reproduce it, narrowed to one target
 
 Re-run the extracted command narrowed to only the failing target (or
 `--test_filter=`/`--test_arg=--gtest_filter=` for one test case), adding:
@@ -246,7 +275,7 @@ If it does not reproduce at all after a genuine attempt (correct flags,
 correct commit, enough timeout), say so plainly in the final report instead
 of forcing an inconclusive debugging session.
 
-## Step 5 (optional, rarely reached) — Debugging techniques
+## Step 6 (optional, rarely reached) — Debugging techniques
 
 **`--run_under`**: Bazel's `--run_under` flag accepts either a build-target
 label (this repo's own `//build_tools/rocm:parallel_gpu_execute` and
@@ -314,7 +343,7 @@ chmod +x debug_tools/claude_scratch/gdb_wrapper.sh
 instrumentation via `--test_env=TF_CPP_VMODULE="autotuner=2,config_assigner=2,
 config_runner=2,codegen_orchestrator=2,hipblaslt=2,triton=2,
 fission_backend=2"` (adjust the module list to the subsystem implicated by
-the error signature from Step 2), as explored in the scratch
+the error signature from Step 3), as explored in the scratch
 `build_debug.sh` for an autotuner/codegen hang.
 
 **GPU-codegen bugs** (wrong result, miscompiled kernel) - disassemble the
@@ -326,10 +355,10 @@ find bazel-testlogs -name '*.hsaco' -path '*<failing_target>*'
 objdump -d <path-to.hsaco>
 ```
 
-## Step 6 — Decide the outcome and report
+## Step 7 — Decide the outcome and report
 
 Always report via exactly one comment (your *final* report - this is in
-addition to the Step 1 preliminary comment, not a replacement for it):
+addition to the Step 2 preliminary comment, not a replacement for it):
 `gh issue comment <ISSUE_NUMBER> --repo <CI_REPO> --body-file <file>`, built
 like this:
 
@@ -349,23 +378,23 @@ like this:
    to it (`[Original detection](DETECTION_COMMENT_URL)`). This is what lets
    a reader tell which of the issue's many comments your analysis
    addresses.
-3. `**Category:** <category>` - the label from Step 1 (or the corrected one
-   from Step 2, if you changed it).
+3. `**Category:** <category>` - the label from Step 2 (or the corrected one
+   from Step 3, if you changed it).
 4. Then your actual report, as below.
 
-**Already fixed upstream** (found in Step 3A): comment with:
+**Already fixed upstream** (found in Step 4A): comment with:
 - The root cause, as understood from the fixing commit.
 - The fixing commit's SHA, one-line summary, and the specific lines that
   fix it (quote the relevant part of `git show <sha>`).
 - Whether you independently confirmed it (re-ran the originally-failing
   target at that commit and observed it pass) or are reporting this from
   the commit diff/message alone - say which, plainly.
-- If this signature has recurred across many prior runs (Step 3A's past-
+- If this signature has recurred across many prior runs (Step 4A's past-
   occurrences check), mention that too - it means the fix just hasn't
   reached this configuration/branch yet, not that it was never found.
 
 **Possible fix (quick estimate, unverified)** - the expected outcome given
-the 5-minute budget, when Step 3B found a plausible culprit but there was
+the 5-minute budget, when Step 4B found a plausible culprit but there was
 no time to reproduce and confirm it: comment with:
 - The file/function you suspect and why - point at the specific lines.
 - The fix as a diff, from `git diff` if you wrote one, or described in
