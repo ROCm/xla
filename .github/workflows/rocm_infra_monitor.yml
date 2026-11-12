@@ -162,7 +162,12 @@ jobs:
     name: "Debug: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
     needs: monitor
     if: needs.monitor.outputs.new_failures != '[]'
-    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-4
+    # build-only-xla, not a GPU runner: it's the only pool with network
+    # access to the LLM gateway (amd-do-linux-xla-gpu-gfx950-dpx-4 can't
+    # resolve/reach ANTHROPIC_BASE_URL). Since this node has no local GPU,
+    # the debug skill must force GPU test execution onto a remote RBE
+    # worker instead (--strategy=TestRunner=remote,local) - see SKILL.md.
+    runs-on: build-only-xla
     timeout-minutes: 120
     strategy:
       fail-fast: false
