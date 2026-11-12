@@ -45,6 +45,11 @@ on:
     # reported twice.
     - cron: "0 * * * *"
   workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Test against one specific monitored run ID instead of scanning the time window (e.g. to replay a known nightly failure)'
+        required: false
+        type: string
   pull_request:
     paths:
       - ".github/workflows/rocm_infra_monitor.yml"
@@ -79,6 +84,7 @@ jobs:
 
       - name: Determine monitoring window
         id: window
+        if: ${{ inputs.run_id == '' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -88,6 +94,7 @@ jobs:
           echo "cutoff=$CUTOFF" >> "$GITHUB_OUTPUT"
 
       - name: List runs finished since then
+        if: ${{ inputs.run_id == '' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -97,6 +104,14 @@ jobs:
             > run_ids.txt
           echo "Found $(wc -l < run_ids.txt) runs to check"
           cat run_ids.txt
+
+      # Testing escape hatch: process exactly one run regardless of the
+      # time window, e.g. to replay a known nightly failure on demand.
+      - name: Use the specified run ID instead
+        if: ${{ inputs.run_id != '' }}
+        run: |
+          echo "Testing against a specific run: ${{ inputs.run_id }}"
+          echo "${{ inputs.run_id }}" > run_ids.txt
 
       - name: Collect failures
         env:
