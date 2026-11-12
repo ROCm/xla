@@ -1,6 +1,6 @@
 ---
 name: debug-nightly-failure
-description: Categorize (build/test/config/infra) and label a single ROCm XLA nightly CI failure, post a preliminary root-cause guess, then reproduce and debug it on real GPU hardware via RBE and report a verified fix or an analysis/callstack directly on the tracking GitHub issue. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
+description: Categorize (build/test/config/infra) and label a single ROCm XLA nightly CI failure, post a preliminary root-cause guess, check whether a later upstream commit already fixed it, analyze the code, then (if still unresolved) reproduce and debug it on real GPU hardware via RBE and report an already-found fix, a verified fix, or an analysis/callstack directly on the tracking GitHub issue. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
 argument-hint: [ci-repo] [run-id] [job-id] [job-name] [step-name] [failure-url] [issue-number] [detection-comment-url]
 context: fork
 agent: general-purpose
@@ -32,20 +32,38 @@ each value on its own labeled line; read the values from there.
   about this specific failure, and never summarize or react to unrelated
   comments already on it.
 - `DETECTION_COMMENT_URL`: the specific comment on that issue reporting
-  *this* failure. Quote it in both comments you post (Steps 1 and 5) so a
+  *this* failure. Quote it in both comments you post (Steps 1 and 6) so a
   reader can tell which of the issue's many comments your analysis
   addresses.
 
 ## IMPORTANT: scope and safety
 
+- This runner (`build-only-xla`) has no local GPU - it's a network-access
+  node, not a GPU node. Every Bazel/`run_xla_ci_build.sh` invocation you run,
+  anywhere (verifying an already-found fix in Step 3, reproducing in Step 4,
+  debugging in Step 5) **must** include `--strategy=TestRunner=remote,local`,
+  so GPU test actions execute on a remote RBE worker from the GPU pool
+  instead of trying (and failing) to run on this machine; `local` is kept
+  only as a fallback for actions that don't need a GPU. Omitting this flag
+  means your test actions will not run at all.
 - Debug only this one job/step. Do not try to fix unrelated red steps you
   notice along the way.
 - Never `git push`, never create a branch, never open a PR. The only
   GitHub writes you make are: one label (Step 1, corrected in Step 2 if
   needed), one preliminary comment (Step 1), and one final report comment
-  (Step 5) - all via `gh issue edit`/`gh issue comment <ISSUE_NUMBER> --repo <CI_REPO>`/`gh label create`.
-- Clean up any scratch files (`/tmp/gdb_*`, extra build outputs) before
-  finishing - nothing from this debugging session is meant to be committed.
+  (Step 6) - all via `gh issue edit`/`gh issue comment <ISSUE_NUMBER> --repo <CI_REPO>`/`gh label create`.
+- This run has a hard cap on agentic turns. If you notice you're repeating
+  the same approach without learning anything new (re-running the same
+  build, trying the same gdb script a third time with no new evidence,
+  going back and forth between two hypotheses), stop and go straight to
+  Step 6's "Not resolved" report with whatever evidence you have - don't
+  wait for the hard cap to cut you off mid-investigation with nothing
+  posted at all. A concrete partial finding beats silence.
+- Clean up any scratch files before finishing - nothing from this debugging
+  session is meant to be committed. This includes `/tmp/gdb_*`, extra build
+  outputs, and - unlike `/tmp` - specifically `debug_tools/claude_scratch/`
+  (Step 5's run_under wrapper target), since that one lives inside the git
+  working tree: `rm -rf debug_tools/claude_scratch`.
 - Never claim a fix works without having re-run the originally-failing
   target and observed it pass.
 
@@ -99,15 +117,15 @@ Then, before doing any further work:
    `nightly-test-failure`, `0075ca` for `nightly-config-failure`, `5319e7`
    for `nightly-infra-failure`.
 2. Post ONE preliminary comment (separate from, and before, your final
-   report in Step 5) via
+   report in Step 6) via
    `gh issue comment <ISSUE_NUMBER> --repo <CI_REPO> --body-file <file>`:
    - First line exactly `<!-- rocm-nightly-claude-triage:JOB_NAME / STEP_NAME -->`
      (substitute the literal values, ` / ` separator, no other change). This
-     is a *different* marker from the Step 5 completion marker and is never
+     is a *different* marker from the Step 6 completion marker and is never
      checked for dedup - it only marks this comment as the triage pass for
      this signature, so post it even if you end up unable to finish the
      full analysis.
-   - Quote the detection comment (same method as Step 5.2 below).
+   - Quote the detection comment (same method as Step 6.2 below).
    - `**Category:** <category>`
    - `**Possible root cause (preliminary, unverified):** <1-3 sentences>` -
      a concrete guess from what the log shows so far (e.g. "the step hit a
@@ -130,15 +148,65 @@ Reread `job.log` (already fetched in Step 1) and extract:
   case/parameter.
 - The error signature: a crash with a stack trace, a hang/timeout, a wrong
   numerical result, a build error, etc. This determines which debugging
-  technique in Step 4 applies, and whether Step 1's category guess holds up
+  technique in Step 5 applies, and whether Step 1's category guess holds up
   - if deeper reading changes your mind about the category, update the
   issue's labels (`gh issue edit --remove-label <old> --add-label <new>`)
   before finishing.
 
-## Step 3 — Reproduce it, narrowed to one target
+## Step 3 — Check for an existing fix, then analyze the code
+
+Before spending any RBE build/test time, do two cheap checks using just git
+and reading code.
+
+**A. Check whether it's already fixed.** The checkout is a shallow clone of
+the exact failing commit, so get more history first: `git fetch origin
+<main-or-relevant-branch> --depth=200` (or `git fetch --unshallow` if 200
+isn't enough to reach the tip). Then:
+- List what changed in the implicated file(s) since the failing commit:
+  `git log <HEAD_SHA>..origin/<branch> --oneline -- <file(s)>`.
+- Read the diff of any commit in that list that plausibly touches the
+  failing area (`git show <sha>`) - a commit message mentioning the same
+  test, the same crash, or the same symptom is a strong signal.
+- If you find a commit that clearly fixes this exact failure: say so
+  explicitly in your report (cite the commit SHA, its one-line summary, and
+  the specific lines that fix it) instead of re-deriving the same fix from
+  scratch. If time/turn budget allows, confirm it by checking out that
+  commit and re-running the originally-failing target to observe it pass;
+  state plainly in the report whether you verified this or are reporting it
+  from the diff/commit message alone.
+- Also compare against **past** occurrences: fetch this issue's existing
+  comments (`gh api repos/<CI_REPO>/issues/<ISSUE_NUMBER>/comments`) and
+  look for earlier detection comments carrying this exact signature's
+  marker (`<!-- rocm-nightly-failure:JOB_NAME / STEP_NAME -->`). A failure
+  seen for the first time just now is a fresh regression; one that recurred
+  over many prior runs is a standing issue - say which in your report, it
+  changes how urgent/novel the finding is.
+
+**B. If nothing already fixes it**, analyze the code directly:
+- From the error signature (Step 2): identify the specific file(s)/
+  function(s) implicated - a stack trace frame, the HLO pass or emitter
+  named in the error, the assertion that fired, or (for a test failure) the
+  test's own source and the production code it exercises.
+- Read those files. Look for something that would produce *this exact*
+  symptom: a logic error (wrong comparison, off-by-one, inverted
+  condition), a missing case in a switch/dispatch, a CUDA-only code path
+  with no ROCm equivalent, a shape/dtype/type mismatch, a recently-changed
+  default the failing configuration doesn't account for.
+- A clear culprit found here is still a *hypothesis*, not a conclusion -
+  you still must verify it in Step 5 before reporting a fix. Go straight to
+  narrowly reproducing the one target it implicates, and treat Step 5's
+  techniques as verification of this hypothesis rather than a blind search.
+- If nothing in the code is a clear enough candidate after a genuine read
+  (don't force a conclusion from a shallow skim, but don't keep reading
+  indefinitely either - see the self-limiting rule above), say so and move
+  on to Step 4 to reproduce and debug properly from scratch.
+
+## Step 4 — Reproduce it, narrowed to one target
 
 Re-run the extracted command narrowed to only the failing target (or
 `--test_filter=`/`--test_arg=--gtest_filter=` for one test case), adding:
+- `--strategy=TestRunner=remote,local` (see above - mandatory, this node has
+  no GPU)
 - `--nocache_test_results` (force re-execution, don't trust the remote
   cache)
 - a generous `--test_timeout=<seconds>` if the failure might be a hang
@@ -153,41 +221,59 @@ If it does not reproduce at all after a genuine attempt (correct flags,
 correct commit, enough timeout), say so plainly in the final report instead
 of forcing an inconclusive debugging session.
 
-## Step 4 — Debugging techniques
+## Step 5 — Debugging techniques
 
 **`--run_under`**: Bazel's `--run_under` flag accepts either a build-target
 label (this repo's own `//build_tools/rocm:parallel_gpu_execute` and
 `//build_tools/rocm:sanitizer_wrapper_parallel_gpu_execute`, which is what
 the nightly/sanitizer CI itself already runs tests under) **or a plain
-command/path string**, which Bazel prepends to the test binary's argv. For
-ad hoc debugging, write a small wrapper script and point `--run_under` at
-its absolute path - it does not need to be a Bazel target.
+command/path string**, which Bazel prepends to the test binary's argv.
 
-**Crash / assertion failure** - run under gdb and capture a backtrace:
+With `--strategy=TestRunner=remote,local` in play, the test executes inside
+a remote RBE worker's sandbox, which contains only this action's declared
+Bazel inputs - **a loose script on this host's `/tmp` is not visible there**
+and `--run_under=/tmp/...` will silently do nothing useful remotely. Write
+any ad hoc wrapper as a real Bazel target instead, in a throwaway package
+inside the checkout - delete it before finishing, same as any other scratch
+file:
 
 ```bash
-cat > /tmp/gdb_commands.txt <<'EOF'
+mkdir -p debug_tools/claude_scratch
+cat > debug_tools/claude_scratch/BUILD <<'EOF'
+sh_binary(
+    name = "gdb_wrapper",
+    srcs = ["gdb_wrapper.sh"],
+    data = ["gdb_commands.txt"],
+)
+EOF
+cat > debug_tools/claude_scratch/gdb_commands.txt <<'EOF'
 run
 bt full
 info registers
 quit
 EOF
-cat > /tmp/gdb_wrapper.sh <<'EOF'
+cat > debug_tools/claude_scratch/gdb_wrapper.sh <<'EOF'
 #!/usr/bin/env bash
-exec gdb -q -batch -x /tmp/gdb_commands.txt --args "$@"
+exec gdb -q -batch -x "$(dirname "$0")/gdb_commands.txt" --args "$@"
 EOF
-chmod +x /tmp/gdb_wrapper.sh
+chmod +x debug_tools/claude_scratch/gdb_wrapper.sh
+```
 
+**Crash / assertion failure** - run under gdb and capture a backtrace:
+
+```bash
 build_tools/rocm/run_xla_ci_build.sh <...same flags as the failing step...> \
-  --run_under=/tmp/gdb_wrapper.sh \
+  --strategy=TestRunner=remote,local \
+  --run_under=//debug_tools/claude_scratch:gdb_wrapper \
   -- //path/to:failing_target
 ```
 
 **Hang** (process never exits, so a plain `run`/`bt`/`quit` script never
-gets to run) - launch in the background and attach after a delay instead:
+gets to run) - launch in the background and attach after a delay instead.
+Same BUILD target pattern as above, but with a different wrapper script:
 
 ```bash
-cat > /tmp/gdb_hang_wrapper.sh <<'EOF'
+cat > debug_tools/claude_scratch/gdb_wrapper.sh <<'EOF'
 #!/usr/bin/env bash
 "$@" &
 pid=$!
@@ -195,8 +281,8 @@ sleep 60   # tune to when the hang is expected to have occurred
 gdb -p "$pid" -batch -ex 'thread apply all bt full' -ex 'kill' -ex 'quit'
 wait "$pid" 2>/dev/null
 EOF
-chmod +x /tmp/gdb_hang_wrapper.sh
-# use --run_under=/tmp/gdb_hang_wrapper.sh the same way as above
+chmod +x debug_tools/claude_scratch/gdb_wrapper.sh
+# re-run the same build_tools/rocm/run_xla_ci_build.sh command as above
 ```
 
 **Narrowing where in the pipeline it diverges** - targeted VLOG
@@ -215,7 +301,7 @@ find bazel-testlogs -name '*.hsaco' -path '*<failing_target>*'
 objdump -d <path-to.hsaco>
 ```
 
-## Step 5 — Decide the outcome and report
+## Step 6 — Decide the outcome and report
 
 Always report via exactly one comment (your *final* report - this is in
 addition to the Step 1 preliminary comment, not a replacement for it):
@@ -242,9 +328,20 @@ like this:
    from Step 2, if you changed it).
 4. Then your actual report, as below.
 
-**Fix found**: before reporting, re-run the exact originally-failing
-target/test case one more time and confirm it now passes. Then comment
-with:
+**Already fixed upstream** (found in Step 3A): comment with:
+- The root cause, as understood from the fixing commit.
+- The fixing commit's SHA, one-line summary, and the specific lines that
+  fix it (quote the relevant part of `git show <sha>`).
+- Whether you independently confirmed it (re-ran the originally-failing
+  target at that commit and observed it pass) or are reporting this from
+  the commit diff/message alone - say which, plainly.
+- If this signature has recurred across many prior runs (Step 3A's past-
+  occurrences check), mention that too - it means the fix just hasn't
+  reached this configuration/branch yet, not that it was never found.
+
+**Fix found** (you derived it yourself): before reporting, re-run the exact
+originally-failing target/test case one more time and confirm it now
+passes. Then comment with:
 - A short root-cause summary.
 - The fix as a diff, from `git diff`, in a \`\`\`diff fenced code block.
 - The command you used to confirm it passes, and its outcome.
