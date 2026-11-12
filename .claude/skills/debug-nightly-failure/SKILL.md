@@ -38,6 +38,16 @@ each value on its own labeled line; read the values from there.
 
 ## IMPORTANT: scope and safety
 
+- **This skill itself runs on the bare `build-only-xla` host, not inside any
+  container.** A `rocmless` container named `rocmless-debug` is already
+  running as a sidecar (the workflow started it) for the ROCm/Bazel
+  toolchain - every `build_tools/rocm/run_xla_ci_build.sh`/plain `bazel`
+  command you run **must** be wrapped: `docker exec rocmless-debug
+  <command>`. Everything else - `git`, `gh`, reading/writing files (BUILD
+  files, gdb scripts, reading `bazel-testlogs` output) - runs directly on
+  the host; the workspace is bind-mounted into the container at the
+  identical path, so files created either way are visible on both sides
+  with no extra copying.
 - **Steps 1-3 (triage and analysis, before any build) are hard-capped at 5
   minutes of wall-clock time** - budget roughly 1 minute each for Steps 1
   and 2, 2-3 minutes for Step 4. Building/testing afterward (Step 5+)
@@ -286,7 +296,9 @@ a sign to stop digging and report with what you have. Then:
 ## Step 5 (optional, rarely reached) — Reproduce it, narrowed to one target
 
 Re-run the extracted command narrowed to only the failing target (or
-`--test_filter=`/`--test_arg=--gtest_filter=` for one test case), adding:
+`--test_filter=`/`--test_arg=--gtest_filter=` for one test case), wrapped in
+`docker exec rocmless-debug ...` (see above - this skill runs on the bare
+host, the ROCm/Bazel toolchain only exists inside that container), adding:
 - `--strategy=TestRunner=remote,local` (see above - mandatory, this node has
   no GPU)
 - `--nocache_test_results` (force re-execution, don't trust the remote
@@ -341,10 +353,13 @@ EOF
 chmod +x debug_tools/claude_scratch/gdb_wrapper.sh
 ```
 
-**Crash / assertion failure** - run under gdb and capture a backtrace:
+**Crash / assertion failure** - run under gdb and capture a backtrace. The
+`cat`/`chmod` steps above run directly on the host (bind-mounted into the
+container already); only the actual bazel invocation needs `docker exec`:
 
 ```bash
-build_tools/rocm/run_xla_ci_build.sh <...same flags as the failing step...> \
+docker exec rocmless-debug \
+  build_tools/rocm/run_xla_ci_build.sh <...same flags as the failing step...> \
   --strategy=TestRunner=remote,local \
   --run_under=//debug_tools/claude_scratch:gdb_wrapper \
   -- //path/to:failing_target
@@ -364,7 +379,7 @@ gdb -p "$pid" -batch -ex 'thread apply all bt full' -ex 'kill' -ex 'quit'
 wait "$pid" 2>/dev/null
 EOF
 chmod +x debug_tools/claude_scratch/gdb_wrapper.sh
-# re-run the same build_tools/rocm/run_xla_ci_build.sh command as above
+# re-run the same `docker exec rocmless-debug build_tools/rocm/run_xla_ci_build.sh ...` command as above
 ```
 
 **Narrowing where in the pipeline it diverges** - targeted VLOG
