@@ -63,12 +63,28 @@ each value on its own labeled line; read the values from there.
   target, never the whole tree. This applies even when "reproducing the
   exact command" in Step 3/4: match the flags verbatim, but always swap the
   target list for the one target you're debugging.
-- **Never use `--config=rocm_rbe`, even if the failing job's own log did.**
-  Always use `--config=rocm_rbe_dev` instead - `rocm_rbe` is not reachable
-  from this debug runner (it fails with `Connection timed out:
-  internal.actinolite.cluster.engflow.com:443` before running anything,
-  which tells you nothing about the failure you're debugging). Applies to
-  every bazel invocation anywhere in this skill.
+- **If the failing job used `--config=rocm_rbe`, keep using it, but override
+  the EngFlow hostname** to strip the `internal.` prefix - add these four
+  flags *after* `--config=rocm_rbe` on the command line (Bazel's
+  single-valued flags take the last occurrence, so these override just the
+  hostname and leave everything else `rocm_rbe` sets - certs, platform,
+  spawn strategy - untouched):
+  ```
+  --remote_cache="grpcs://actinolite.cluster.engflow.com"
+  --remote_executor="grpcs://actinolite.cluster.engflow.com"
+  --bes_backend="grpcs://actinolite.cluster.engflow.com"
+  --bes_results_url="https://actinolite.cluster.engflow.com/invocation/"
+  ```
+  `internal.actinolite.cluster.engflow.com` is not reachable from this debug
+  runner (confirmed: `Connection timed out:
+  internal.actinolite.cluster.engflow.com:443`, before running anything -
+  tells you nothing about the failure you're debugging); the same cluster
+  without the `internal.` prefix is. If the failing job used
+  `--config=rocm_rbe_dev` instead (Buildbarn), leave it alone - this
+  override only applies to `rocm_rbe`. See
+  `build_tools/rocm/rocm_xla.bazelrc` in `openxla/xla` for the full set of
+  flags each config defines, if you need to double check what else a
+  config touches.
 - Debug only this one job/step. Do not try to fix unrelated red steps you
   notice along the way.
 - Never `git push`, never create a branch, never open a PR. The only
@@ -200,14 +216,11 @@ Reread `job.log` (already fetched in Step 2) and extract:
     that invocation's own `-- //xla/...` covers the whole tree, and you
     always replace it with just the one failing target, in Step 3 or
     anywhere else.
-  - **`--config=rocm_rbe`.** Always replace it with
-    `--config=rocm_rbe_dev`, even if the failing job's own log used
-    `rocm_rbe` - `rocm_rbe` is not reachable from this debug runner
-    (confirmed: it fails with `Connection timed out:
-    internal.actinolite.cluster.engflow.com:443`, not a real result about
-    the failure you're debugging) and the build would never get as far as
-    running anything. `rocm_rbe_dev` is. This applies to every bazel
-    invocation anywhere in this skill, same as the single-target rule.
+  - **`--config=rocm_rbe`.** Keep it, but append the four host-override
+    flags from the safety rule above (strip the `internal.` prefix from
+    `actinolite.cluster.engflow.com`) - see that rule for the exact flags
+    and why. This applies to every bazel invocation anywhere in this
+    skill, same as the single-target rule.
 - The specific failing target(s) and, for a test, the specific failing test
   case/parameter - this is what you narrow every later bazel invocation to.
 - The error signature: a crash with a stack trace, a hang/timeout, a wrong
