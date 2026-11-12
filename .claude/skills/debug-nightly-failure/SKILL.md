@@ -38,16 +38,15 @@ each value on its own labeled line; read the values from there.
 
 ## IMPORTANT: scope and safety
 
-- **This whole run is hard-capped at 5 minutes of wall-clock time** by the
-  workflow itself - you will be killed mid-step when it hits, with nothing
-  saved. This is a quick triage-and-estimate pass, not a full
-  investigation: budget roughly 1 minute each for Steps 1 and 2, 2-3
-  minutes for Step 3, and treat Steps 4 and 5 (full RBE reproduction, gdb)
-  as optional reference material you will almost never have time to reach
-  - do not start a Bazel build/test unless you are confident, from Step 3
-  alone, that it will complete and you can still post Step 6's report
-  afterward. Default to going straight from Step 3 to Step 6 with your best
-  estimate.
+- **Steps 1-3 (triage and analysis, before any build) are hard-capped at 5
+  minutes of wall-clock time** - budget roughly 1 minute each for Steps 1
+  and 2, 2-3 minutes for Step 3. Building/testing afterward (Step 4+)
+  doesn't count against that 5 minutes, but the whole run still has to fit
+  inside this step's own (longer) timeout, so treat Steps 4 and 5 (full RBE
+  reproduction, gdb) as something you only start if you're confident, from
+  Step 3 alone, that a build+test will complete and you'll still have time
+  to post Step 6's report afterward. Default to going straight from Step 3
+  to Step 6 with your best estimate.
 - This runner (`build-only-xla`) has no local GPU - it's a network-access
   node, not a GPU node. Every Bazel/`run_xla_ci_build.sh` invocation you run,
   anywhere (verifying an already-found fix in Step 3, reproducing in Step 4,
@@ -56,6 +55,14 @@ each value on its own labeled line; read the values from there.
   instead of trying (and failing) to run on this machine; `local` is kept
   only as a fallback for actions that don't need a GPU. Omitting this flag
   means your test actions will not run at all.
+- **Never build or test the full `//xla/...` sweep the original CI step
+  used.** Always replace that target list with just the single failing
+  target (or, for a test binary, `--test_filter=`/`--test_arg=
+  --gtest_filter=` narrowed to the one failing test case) - every bazel
+  invocation you run, anywhere in this skill, builds/tests exactly one
+  target, never the whole tree. This applies even when "reproducing the
+  exact command" in Step 2/4: match the flags verbatim, but always swap the
+  target list for the one target you're debugging.
 - Debug only this one job/step. Do not try to fix unrelated red steps you
   notice along the way.
 - Never `git push`, never create a branch, never open a PR. The only
@@ -150,12 +157,15 @@ Then, before doing any further work:
 
 Reread `job.log` (already fetched in Step 1) and extract:
 - The exact `build_tools/rocm/run_xla_ci_build.sh ...` (or plain `bazel`)
-  invocation that was run for the failing step. Reproduce that command
-  verbatim rather than guessing matrix-specific flags (`rbe_config`, distro
-  URL/hash, `gfx` target) - different nightly matrix legs use different
-  values, and the log already has the real ones.
+  invocation that was run for the failing step. Match its *flags* verbatim
+  rather than guessing matrix-specific ones (`rbe_config`, distro URL/hash,
+  `gfx` target) - different nightly matrix legs use different values, and
+  the log already has the real ones. The *target list* is a different
+  matter - see the "never build the full sweep" rule above: that
+  invocation's own `-- //xla/...` covers the whole tree, and you always
+  replace it with just the one failing target, in Step 2 or anywhere else.
 - The specific failing target(s) and, for a test, the specific failing test
-  case/parameter.
+  case/parameter - this is what you narrow every later bazel invocation to.
 - The error signature: a crash with a stack trace, a hang/timeout, a wrong
   numerical result, a build error, etc. This determines which debugging
   technique in Step 5 applies, and whether Step 1's category guess holds up

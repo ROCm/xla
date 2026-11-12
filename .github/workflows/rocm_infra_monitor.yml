@@ -168,12 +168,12 @@ jobs:
     # the debug skill must force GPU test execution onto a remote RBE
     # worker instead (--strategy=TestRunner=remote,local) - see SKILL.md.
     runs-on: build-only-xla
-    # This is a quick-estimate pass, not a full reproduction - see the
-    # "Debug Nightly Failure" step's own 5-minute cap below. 10 minutes
-    # total gives that a couple of minutes of setup/teardown margin
-    # (checkout, container start/stop) without reintroducing the
-    # near-2-hour runs this used to allow.
-    timeout-minutes: 10
+    # The 5-minute analysis cap (see the "Debug Nightly Failure" step and
+    # SKILL.md) only covers triage/code-reading, not an actual bazel
+    # build+test - that can legitimately take much longer, so the job's own
+    # ceiling is sized to allow one real build attempt afterward, not to
+    # reintroduce the near-2-hour runs this used to allow.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -306,9 +306,14 @@ jobs:
       - name: Debug Nightly Failure
         if: steps.already_debugged.outputs.skip != 'true'
         id: claude-code
-        # Hard cap: this is a quick triage/estimate pass (see SKILL.md), not
-        # a full reproduction - don't let it run for hours.
-        timeout-minutes: 5
+        # This step's own ceiling is NOT the 5-minute cap - that cap is on
+        # the triage/analysis phase only (Steps 1-3 in SKILL.md), before any
+        # bazel build starts, and is self-enforced by the skill itself since
+        # GitHub Actions has no way to pause a step timeout around a specific
+        # subprocess. This ceiling instead bounds the whole run including an
+        # actual build+test attempt (Step 4+), which can legitimately take a
+        # while - don't let it run for hours, but don't starve a real build.
+        timeout-minutes: 30
         uses: anthropics/claude-code-action@v1
         env:
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
@@ -345,18 +350,23 @@ jobs:
             your report must quote the detection comment above so readers
             can tell which occurrence it addresses.
 
-            This run is hard-capped at 5 minutes. Run the
+            Your triage/analysis (SKILL.md Steps 1-3, before any build) is
+            hard-capped at 5 minutes - time spent on an actual bazel
+            build/test afterward doesn't count against that, but the whole
+            run still has to fit this step's own timeout. Run the
             /debug-nightly-failure skill, using the values above as its
             arguments: CI repo, run ID, job ID, job name, step name, failure
             URL, issue number, detection comment URL, in that order. The
             skill is responsible for a quick triage and root-cause estimate
-            - not a full reproduction - and for posting its findings
-            directly to the tracking issue via `gh issue comment`. Do not
+            first, a real reproduction only if that leaves enough of the
+            remaining budget to also report on it, and for posting its
+            findings directly to the tracking issue via `gh issue comment`.
+            Do not
             post anything to GitHub yourself outside of what the skill
             does.
           claude_args: |
             --allowedTools "Skill,Bash(gh issue comment *),Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
-            --max-turns 40
+            --max-turns 60
           settings: |
             {
               "hasCompletedOnboarding": true
