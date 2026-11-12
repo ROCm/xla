@@ -68,6 +68,7 @@ TEAM_MEMBERS=(
 # forever without ever actually labeling anything).
 gh label create "$LABEL" --repo "$ISSUE_REPO" --force \
     --color b60205 --description "ROCm CI nightly infra/test failure tracking issue" \
+    >/dev/null 2>&1 \
     || echo "Warning: could not create/update label $LABEL" >&2
 
 if [ -n "$ISSUE_NUMBER" ]; then
@@ -100,11 +101,15 @@ NEW_ISSUE_NUMBER=$(echo "$NEW_ISSUE" | grep -oE '[0-9]+$')
 # invalid assignee (lacking repo access) can't make `gh issue create` fail
 # atomically and silently drop the label too - which is exactly what used
 # to make the dedup search above miss this issue and recreate a new one
-# every single run.
-gh issue edit "$NEW_ISSUE_NUMBER" --repo "$ISSUE_REPO" --add-label "$LABEL" \
+# every single run. `gh issue edit` prints the issue URL to stdout on
+# success - redirect it, or it contaminates this script's own stdout, which
+# the caller captures wholesale as the issue number (confirmed in
+# production: the captured "issue number" became the URL repeated once per
+# add-label/add-assignee call, which then broke a downstream `gh api` URL).
+gh issue edit "$NEW_ISSUE_NUMBER" --repo "$ISSUE_REPO" --add-label "$LABEL" >/dev/null 2>&1 \
     || echo "Warning: could not add label $LABEL" >&2
 for member in "${TEAM_MEMBERS[@]}"; do
-    gh issue edit "$NEW_ISSUE_NUMBER" --repo "$ISSUE_REPO" --add-assignee "$member" \
+    gh issue edit "$NEW_ISSUE_NUMBER" --repo "$ISSUE_REPO" --add-assignee "$member" >/dev/null 2>&1 \
         || echo "Warning: could not assign $member (no repo access?)" >&2
 done
 
