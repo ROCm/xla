@@ -51,6 +51,13 @@ each value on its own labeled line; read the values from there.
   GitHub writes you make are: one label (Step 1, corrected in Step 2 if
   needed), one preliminary comment (Step 1), and one final report comment
   (Step 5) - all via `gh issue edit`/`gh issue comment <ISSUE_NUMBER> --repo <CI_REPO>`/`gh label create`.
+- This run has a hard cap on agentic turns. If you notice you're repeating
+  the same approach without learning anything new (re-running the same
+  build, trying the same gdb script a third time with no new evidence,
+  going back and forth between two hypotheses), stop and go straight to
+  Step 5's "Not resolved" report with whatever evidence you have - don't
+  wait for the hard cap to cut you off mid-investigation with nothing
+  posted at all. A concrete partial finding beats silence.
 - Clean up any scratch files before finishing - nothing from this debugging
   session is meant to be committed. This includes `/tmp/gdb_*`, extra build
   outputs, and - unlike `/tmp` - specifically `debug_tools/claude_scratch/`

@@ -317,6 +317,7 @@ jobs:
             outside of what the skill does.
           claude_args: |
             --allowedTools "Skill,Bash(gh issue comment *),Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
+            --max-turns 150
           settings: |
             {
               "hasCompletedOnboarding": true
