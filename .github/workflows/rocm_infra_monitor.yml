@@ -25,12 +25,16 @@ env:
   MONITORED_WORKFLOW: rocm_xla_ci_nightly.yml
   # This workflow, used to find out when we last looked.
   SELF_WORKFLOW: rocm_infra_monitor.yml
-  # Branch this run itself is testing/running from: the PR's own branch when
-  # triggered by a pull_request (so a PR touching the debug job exercises its
-  # own changes), rocm-dev-infra otherwise. Used below both to check out this
-  # workflow's own code and, in the debug job, to fetch the matching version
-  # of the debug skill.
-  DEBUG_PIPELINE_REF: ${{ github.event_name == 'pull_request' && github.head_ref || 'rocm-dev-infra' }}
+  # Branch this run itself is testing/running from, so a PR (or a manual
+  # workflow_dispatch against --ref <branch>) exercises its own changes
+  # instead of silently falling back to the default branch. github.head_ref
+  # is the PR's own branch name on a pull_request event but is empty
+  # otherwise; github.ref_name is the branch/tag a workflow_dispatch or
+  # schedule run is actually executing from (for schedule, that's always
+  # the default branch already, so no further fallback is needed). Used
+  # below both to check out this workflow's own code and, in the debug job,
+  # to fetch the matching version of the debug skill.
+  DEBUG_PIPELINE_REF: ${{ github.head_ref || github.ref_name }}
   # Steps whose name contains this marker are known-red and not reported.
   # The pipeline already tags each test step with its mode - "[single_gpu]",
   # "[multi_gpu]", "[rocm_cpu]" - so the mode tag is the marker.
