@@ -14,6 +14,11 @@
 # ============================================================================
 
 name: CI ROCm Nightly
+# Whether this run triggers the sanitizers job is visible from the
+# `sanitizers` job in the run's job list (decided once in `rocm-config`).
+run-name: >-
+  CI ROCm Nightly #${{ github.run_number }}: ${{ github.event_name }}${{
+  github.event.schedule && format(' ({0})', github.event.schedule) || '' }}
 
 permissions:
   contents: read
@@ -53,11 +58,22 @@ jobs:
     outputs:
       docker-image: ${{ steps.out.outputs.docker-image }}
       therock-version: ${{ steps.therock.outputs.therock_version }}
+      # Single source of truth for whether this run should also trigger the
+      # sanitizers job: daily cron, manual dispatch with the input checked,
+      # the "nightly-pipeline" label, or a PR to rocm-dev-infra touching the
+      # workflows.
+      run-sanitizers: ${{ steps.out.outputs.run-sanitizers }}
     steps:
       - id: out
         shell: bash
         run: |
           echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
+          echo "run-sanitizers=${{
+            github.event.schedule == '47 3 * * *' ||
+            (github.event_name == 'workflow_dispatch' && inputs.run_sanitizers) ||
+            github.event.label.name == 'nightly-pipeline' ||
+            (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'rocm-dev-infra')
+          }}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -211,16 +227,11 @@ jobs:
           path: xla_${{ matrix.mode.name }}_*_build_events.json
           if-no-files-found: warn
 
-  # Call sanitizers workflow as a separate job.
-  # Always on the daily cron (not the 2-hourly one), on the "nightly-pipeline"
-  # label, or on PRs to rocm-dev-infra touching the workflows. On a manual run
-  # only when the run_sanitizers input is checked (it defaults to off).
+  # Call sanitizers workflow as a separate job, gated on the decision made
+  # once in rocm-config above.
   sanitizers:
-    if: >-
-      github.event.schedule == '47 3 * * *' ||
-      (github.event_name == 'workflow_dispatch' && inputs.run_sanitizers) ||
-      github.event.label.name == 'nightly-pipeline' ||
-      (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'rocm-dev-infra')
+    needs: rocm-config
+    if: needs.rocm-config.outputs.run-sanitizers == 'true'
     uses: ./.github/workflows/rocm_xla_ci_sanitizers.yml
     with:
       repository: openxla/xla
