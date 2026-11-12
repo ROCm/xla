@@ -343,7 +343,7 @@ jobs:
             post anything to GitHub yourself outside of what the skill
             does.
           claude_args: |
-            --allowedTools "Skill,Bash(gh issue comment *),Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
+            --allowedTools "Skill,Bash(gh issue comment *),Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
             --max-turns 60
           settings: |
             {
@@ -358,3 +358,7 @@ jobs:
           # (actions/upload-artifact's include-hidden-files boolean input
           # not surviving the custom container-exec path), with no
           # escape-hatch input to route around it.
+
+      - name: Stop rocmless container
+        if: always()
+        run: docker rm -f rocmless-debug || true
