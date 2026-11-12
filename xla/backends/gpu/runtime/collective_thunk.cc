@@ -26,6 +26,7 @@ limitations under the License.
 
 #include "absl/algorithm/container.h"
 #include "absl/base/call_once.h"
+#include "absl/base/casts.h"
 #include "absl/functional/function_ref.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -37,6 +38,7 @@ limitations under the License.
 #include "absl/types/span.h"
 #include "tsl/profiler/lib/scoped_annotation.h"
 #include "xla/backends/gpu/collectives/gpu_clique_key.h"
+#include "xla/backends/gpu/collectives/gpu_communicator.h"
 #include "xla/backends/gpu/runtime/annotation.h"
 #include "xla/backends/gpu/runtime/collective_execution.h"
 #include "xla/backends/gpu/runtime/collective_params.h"
@@ -488,6 +490,7 @@ absl::Status CollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
 
   return RunWithCommAndRendezvous(
       params, [&](const GpuCliqueKey& clique_key, Communicator& comm) {
+        absl::down_cast<GpuCommunicator*>(&comm)->SetAsync(is_async_);
         return RunCollective(params, clique_key, *params.stream, comm);
       });
 }
