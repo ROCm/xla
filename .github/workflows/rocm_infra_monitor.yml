@@ -189,24 +189,10 @@ jobs:
       # The rocmless image has neither gh nor jq - every other step in this
       # job (including the Claude agent's own `gh issue comment`/`gh api`
       # calls) depends on both, so install them before anything else runs.
-      # Also install bun ourselves here: this self-hosted runner's custom
-      # container-exec implementation doesn't reliably pass through the
-      # hyphenated `no-cache` boolean input claude-code-action's own nested
-      # "Install Bun" (oven-sh/setup-bun) step needs, which crashes with
-      # "Input does not meet YAML 1.2 Core Schema specification: no-cache"
-      # (confirmed: setup-bun's action.yml declares `no-cache: type:
-      # boolean, default: false`, and claude-code-action passes the valid
-      # literal `no-cache: true` - the value is fine, something in the
-      # container-exec path between here and that nested step is dropping
-      # it). claude-code-action accepts `path_to_bun_executable` precisely
-      # to skip that step (it's guarded
-      # `if: inputs.path_to_bun_executable == ''`), so provisioning bun here
-      # and pointing at it directly sidesteps the bug entirely.
-      - name: Install gh, jq, and bun
-        id: install_tools
+      - name: Install gh and jq
         run: |
           apt-get update -qq
-          apt-get install -y -qq jq ca-certificates unzip curl
+          apt-get install -y -qq jq ca-certificates
           GH_VERSION=$(wget -qO- https://api.github.com/repos/cli/cli/releases/latest \
             | grep -oP '"tag_name":\s*"v\K[^"]+' | head -1)
           wget -q "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" -O /tmp/gh.tar.gz
@@ -214,10 +200,6 @@ jobs:
           install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
           gh --version
           jq --version
-
-          curl -fsSL https://bun.sh/install | bash
-          echo "bun_path=$HOME/.bun/bin/bun" >> "$GITHUB_OUTPUT"
-          "$HOME/.bun/bin/bun" --version
 
       # Guards against debugging the same failure signature twice: a
       # re-dispatched matrix entry, a manually re-run job, or two
@@ -315,9 +297,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           anthropic_api_key: "sk-ant-dummy-gateway-key"
-          # Skips the action's own nested "Install Bun" (oven-sh/setup-bun)
-          # step - see the "Install gh, jq, and bun" step above for why.
-          path_to_bun_executable: ${{ steps.install_tools.outputs.bun_path }}
           # The triggering actor is github-actions[bot] (schedule) or the PR
           # author via pull_request, neither of which is a human reviewer.
           allowed_bots: "github-actions[bot]"
