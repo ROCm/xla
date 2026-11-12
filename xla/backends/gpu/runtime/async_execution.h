@@ -18,10 +18,15 @@ limitations under the License.
 
 #include <cstdint>
 #include <memory>
+#include <vector>
 
+#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/synchronization/mutex.h"
+#include "xla/backends/gpu/collectives/gpu_clique_key.h"
+#include "xla/backends/gpu/runtime/collective_thunk.h"
 #include "xla/backends/gpu/runtime/per_device_state.h"
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/backends/gpu/runtime/thunk_id.h"
@@ -120,6 +125,24 @@ class AsyncExecution {
   // recorded by the corresponding Start call.
   absl::Status Done(Thunk::ExecutionScopedState* state, se::Stream* stream);
 
+  // Data needed to resolve the communicator of a collective launched inside
+  // this async execution scope.
+  struct CollectiveCommKey {
+    CollectiveConfig config;
+    CommunicationId communication_id;
+  };
+
+  // Registers a collective launched inside this async execution scope.
+  void SetCollective(const CollectiveCommKey& key) {
+    absl::MutexLock lock(mutex_);
+    collective_ = key;
+  }
+
+  std::optional<CollectiveCommKey> collective() const {
+    absl::MutexLock lock(mutex_);
+    return collective_;
+  }
+
  private:
   struct PoolState {
     EventPool pool{[](se::StreamExecutor* e) { return e->CreateEvent(); }};
@@ -127,6 +150,9 @@ class AsyncExecution {
 
   const Thunk::ThunkInfo start_thunk_info_;
   PerDeviceState<PoolState> event_pools_;
+
+  mutable absl::Mutex mutex_;
+  std::optional<CollectiveCommKey> collective_ ABSL_GUARDED_BY(mutex_);
 };
 
 // Map from AsyncExecutionId to shared AsyncExecution, used during
