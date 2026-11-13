@@ -1,0 +1,561 @@
+/* Perf metrics dashboard styles.
+ *
+ * Everything down to "perf-only" is a copy of ci-metrics/site/styles.css. A
+ * copy rather than a shared file: the two dashboards are separate sections of
+ * the Pages site, deployed by separate workflows, and a shared stylesheet would
+ * let a restyle of one silently repaint the other. It also keeps each site/
+ * directory servable on its own, which is how both READMEs say to preview a
+ * change locally. The perf-only rules are at the bottom.
+ *
+ * Colour roles come from the dataviz reference palette. Light and dark are both
+   selected sets, not an automatic flip: each is the same hue stepped for its own
+   surface. Declared under both the media query (OS setting) and the data-theme
+   scope (the toggle), so the toggle wins either way. */
+
+.viz-root {
+  color-scheme: light;
+  --surface-1: #fcfcfb;
+  --plane: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+  --good: #006300;
+  --critical: #d03b3b;
+
+  /* Categorical slots 1-7, in fixed order. Validated (adjacent pairlist, both
+     modes): worst CVD dE 9.1 light / 8.4 dark, normal-vision 19.6 / 19.3. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #6250d6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --plane: #0d0d0d;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --good: #0ca30c;
+    --critical: #d03b3b;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+  }
+}
+
+:root[data-theme="dark"] .viz-root {
+  color-scheme: dark;
+  --surface-1: #1a1a19;
+  --plane: #0d0d0d;
+  --text-primary: #f0efec;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255, 255, 255, 0.10);
+  --good: #0ca30c;
+  --critical: #d03b3b;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--plane);
+}
+
+.viz-root {
+  background: var(--plane);
+  color: var(--text-primary);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+  min-height: 100vh;
+}
+
+/* ---- head ---------------------------------------------------------------- */
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+h1 {
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.sub {
+  color: var(--text-secondary);
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.lede {
+  color: var(--text-secondary);
+  max-width: 68ch;
+  margin: 16px 0 24px;
+  font-size: 14px;
+}
+
+.lede code, .page-foot code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  color: var(--text-primary);
+}
+
+a { color: inherit; text-decoration-color: var(--axis); text-underline-offset: 2px; }
+a:hover { text-decoration-color: currentColor; }
+
+/* ---- filters ------------------------------------------------------------- */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 28px;
+  padding: 14px 16px;
+  margin-bottom: 24px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.filter { display: flex; align-items: center; gap: 10px; }
+.filter.grow { margin-left: auto; }
+
+.filter-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.chip, .ghost {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  /* >= 24px hit target */
+  padding: 5px 12px;
+  min-height: 30px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.chip:hover, .ghost:hover { border-color: var(--axis); color: var(--text-primary); }
+.chip.on { color: var(--text-primary); border-color: var(--axis); background: var(--plane); }
+.chip:focus-visible, .ghost:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+
+/* The colour sits in a swatch beside the label, never on the text itself. */
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--c, var(--text-muted));
+  flex: none;
+}
+
+.chip:not(.on) .swatch { opacity: 0.35; }
+
+/* The dashed-line series of a lane: same hue, so identity stays with the lane,
+   with the stroke pattern repeated in the swatch rather than left on the chart. */
+.swatch.dashed {
+  width: 14px;
+  height: 4px;
+  border-radius: 1px;
+  background: repeating-linear-gradient(90deg,
+    var(--c, var(--text-muted)) 0 5px, transparent 5px 8px);
+}
+
+/* ---- tabs ---------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 24px 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  /* >= 24px hit target, and the 2px rule sits on the container's border. */
+  padding: 8px 14px;
+  margin-bottom: -1px;
+  min-height: 34px;
+  cursor: pointer;
+}
+
+.tab:hover { color: var(--text-primary); }
+.tab.on { color: var(--text-primary); font-weight: 600; border-bottom-color: var(--series-1); }
+.tab:focus-visible { outline: 2px solid var(--series-1); outline-offset: -2px; }
+
+/* ---- KPI row ------------------------------------------------------------- */
+
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+/* Six suites rather than four lanes: narrower tiles so the row does not wrap
+   to a single orphan on a full-width screen. */
+.kpis.tight { grid-template-columns: repeat(auto-fit, minmax(152px, 1fr)); }
+
+.kpi {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.kpi-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  margin-bottom: 6px;
+}
+
+.kpi-value {
+  font-size: 27px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  /* Proportional figures: tabular-nums reads loose at display sizes. */
+}
+
+/* Coloured by whether the move is good news, not by its direction: a longer
+   wait and a bigger suite both point up and mean opposite things. */
+.kpi-delta { font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
+.kpi-delta .bad { color: var(--critical); }
+.kpi-delta .good { color: var(--good); }
+
+/* ---- cards --------------------------------------------------------------- */
+
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px 20px;
+  margin-bottom: 20px;
+}
+
+.card h2 {
+  font-size: 15.5px;
+  font-weight: 650;
+  margin: 0;
+}
+
+.note {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  margin: 5px 0 14px;
+  max-width: 76ch;
+}
+
+.note .hl { color: var(--text-primary); font-weight: 600; }
+
+/* A view whose data this trends.json does not carry. Dashed, so it reads as
+   "nothing here yet" rather than as a figure. */
+.note.empty {
+  border: 1px dashed var(--axis);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin: 0;
+  max-width: none;
+}
+
+/* Height grows with content so the x-axis band is never cropped into a
+   nested scrollbar. */
+.plot { position: relative; width: 100%; }
+.plot svg { display: block; width: 100%; overflow: visible; }
+
+/* Two columns at full width: four lanes land 2x2 rather than 3 + 1. */
+.small-multiples {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 18px 24px;
+}
+
+.panel-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0 0 2px;
+}
+
+/* ---- legend -------------------------------------------------------------- */
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-bottom: 14px;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+/* ---- tooltip ------------------------------------------------------------- */
+
+.tip {
+  position: absolute;
+  /* Anchored, not static-positioned: without this the hidden tooltip sits
+     after the SVG in flow and adds its own height to every plot. */
+  top: 0;
+  left: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  padding: 9px 11px;
+  font-size: 12.5px;
+  min-width: 190px;
+  opacity: 0;
+  transition: opacity 90ms ease;
+}
+
+.tip.on { opacity: 1; }
+.tip-head {
+  font-weight: 650;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tip-flag { color: var(--text-muted); font-weight: 500; font-size: 11.5px; }
+
+.tip-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.tip-row .v {
+  margin-left: auto;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.tip-row .n { color: var(--text-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+
+/* ---- table --------------------------------------------------------------- */
+
+.table-wrap { overflow-x: auto; }
+
+/* The p90 tail runs to a few hundred rows over a fortnight, which would be the
+   whole page: it scrolls in place, with the header pinned so the columns keep
+   their names. */
+.table-wrap.tall { max-height: 62vh; overflow-y: auto; }
+
+.table-wrap.tall thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-1);
+}
+
+/* The day a row belongs to stays with it: the group heading pins just under
+   the column names (one header row, 30px at this type size). */
+.table-wrap.tall tbody td.lane-head {
+  position: sticky;
+  top: 30px;
+  z-index: 1;
+  background: var(--surface-1);
+}
+
+/* Columns that read as names, not as figures. */
+th.lead, td.lead { text-align: left; font-variant-numeric: normal; }
+
+td .sha { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+.muted { color: var(--text-muted); font-size: 11.5px; }
+
+/* A lane-only tail commit: the two lanes disagree about the same head commit.
+   Marked with a dot *and* its own words -- never the colour alone. */
+.diff {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 9px 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.diff::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--critical);
+  flex: none;
+}
+/* Everywhere else a swatch is a flex item, which gives it its box. In a table
+   cell it is inline text, where width and height would be ignored. */
+td .swatch { display: inline-block; vertical-align: baseline; margin-right: 6px; }
+
+table { border-collapse: collapse; font-size: 12.5px; width: 100%; }
+
+th, td {
+  text-align: right;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--grid);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+th:first-child, td:first-child { text-align: left; font-variant-numeric: normal; }
+
+/* A grouped header: the series name sits over the columns it owns. */
+thead tr:first-child th[colspan] {
+  text-align: center;
+  color: var(--text-primary);
+  border-bottom-color: var(--grid);
+}
+thead th { color: var(--text-muted); font-weight: 600; border-bottom-color: var(--axis); }
+tbody tr:hover { background: var(--plane); }
+td.partial { color: var(--text-muted); }
+
+.lane-head {
+  color: var(--text-primary);
+  font-weight: 650;
+  font-size: 13px;
+  padding-top: 18px;
+}
+
+/* ---- foot ---------------------------------------------------------------- */
+
+.page-foot {
+  color: var(--text-muted);
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+  margin-top: 32px;
+  padding-top: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
+
+/* ---- perf-only ----------------------------------------------------------- */
+
+/* A module's change between two runs. Slower is the bad direction here, and
+   both directions carry an arrow as well as a colour -- the sign is never left
+   to the hue alone. */
+.delta { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.delta.slower { color: var(--critical); }
+.delta.faster { color: var(--good); }
+
+/* A module name: model, then the HLO module inside it. The module id alone is
+   not unique -- module_3910 exists in three different models -- so the model
+   is always on screen with it. */
+.mod { display: flex; flex-direction: column; gap: 1px; line-height: 1.35; }
+.mod .mod-model { color: var(--text-primary); }
+.mod .mod-id {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+/* The inference/training tag: a word, at label weight, not a second colour. */
+.leaf {
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* The module picker. Styled as a chip so the filter row stays one material. */
+.pick {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 10px;
+  min-height: 30px;
+  max-width: 460px;
+  cursor: pointer;
+}
+
+.pick:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+
+/* A row in the movers table that is the chart's current module. */
+tbody tr.picked { background: var(--plane); }
+tbody tr.picked td:first-child { box-shadow: inset 2px 0 0 var(--series-1); }
+
+/* The movers table groups by run, and a run is two lines (date, then the
+   commit it measured), so the group heading pins lower than ci-metrics'. */
+.table-wrap.tall tbody td.run-head {
+  position: sticky;
+  top: 30px;
+  z-index: 1;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  font-weight: 650;
+  font-size: 13px;
+  padding-top: 18px;
+}
+
+.run-head .sha { margin-left: 8px; font-weight: 500; }
+
+/* A run where nothing cleared the noise floor. Said, not left blank: a quiet
+   night and a night with no data look identical otherwise. */
+td.quiet { color: var(--text-muted); font-style: italic; }
