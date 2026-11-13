@@ -1,0 +1,4 @@
+# The dashboard's data file is generated: the Pages job writes it straight into
+# _pages/perf-metrics/, and the local-preview command in README.md writes it
+# here. Neither copy belongs in the repository.
+site/trends.json

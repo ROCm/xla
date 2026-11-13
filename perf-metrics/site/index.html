@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROCm perf metrics &mdash; trends</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="viz-root">
+
+  <header class="page-head">
+    <div class="head-main">
+      <h1>ROCm perf metrics</h1>
+      <p class="sub" id="subtitle">Loading&hellip;</p>
+    </div>
+    <button type="button" id="theme" class="ghost" aria-label="Switch colour theme">Theme</button>
+  </header>
+
+  <p class="lede">
+    What the <a href="https://github.com/ROCm/xla/blob/rocm-dev-infra/.github/workflows/rocm_xla_perf_nightly.yml">perf
+    nightly</a> measured, run by run: the
+    <a href="https://github.com/ROCm/xla/tree/rocm-dev-infra/perf_tools/hlo_eval_tools">HLO
+    modules of real models</a> replayed one at a time on a gfx950, on every ROCm stack
+    in the matrix, against the same pinned <code>openxla/xla</code> commit.
+    Each point is one nightly, not one day.
+    The sibling view of presubmit CI health is <a href="../ci-metrics/">ci-metrics</a>.
+  </p>
+
+  <!-- Three views over the same runs and the same mode filter. -->
+  <div class="tabs" role="tablist" aria-label="Views">
+    <button type="button" class="tab on" id="tab-models" role="tab"
+            aria-selected="true" aria-controls="view-models" data-tab="models">Models</button>
+    <button type="button" class="tab" id="tab-modules" role="tab"
+            aria-selected="false" aria-controls="view-modules" data-tab="modules">Modules</button>
+    <button type="button" class="tab" id="tab-latency" role="tab"
+            aria-selected="false" aria-controls="view-latency" data-tab="latency">Latency</button>
+  </div>
+
+  <!-- One filter row, above everything it scopes. -->
+  <div class="filters" role="group" aria-label="Chart filters">
+    <div class="filter">
+      <span class="filter-label" id="mode-label">ROCm stack</span>
+      <div class="chips" id="mode-chips" role="group" aria-labelledby="mode-label"></div>
+    </div>
+    <div class="filter" id="metric-filter" hidden>
+      <span class="filter-label" id="metric-label">Metric</span>
+      <div class="chips" id="metric-chips" role="group" aria-labelledby="metric-label"></div>
+    </div>
+    <div class="filter grow">
+      <span class="filter-label" id="table-label">Data</span>
+      <div class="chips" role="group" aria-labelledby="table-label">
+        <button type="button" class="chip" id="table-toggle" aria-pressed="false">Show table</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="view-models" role="tabpanel" aria-labelledby="tab-models">
+
+  <section class="kpis" id="kpis" aria-label="Current execution time index by stack"></section>
+
+  <section class="card">
+    <h2>Execution time index</h2>
+    <p class="note">
+      The geometric mean of every module&rsquo;s time against its own first measurement,
+      so 100 is where the window started and 104 is four percent slower. The
+      <em>typical</em> module: alphafold3 at 1.6&thinsp;s counts exactly as much as detr at
+      1.4&thinsp;ms. Lower is faster. <span id="index-stat"></span>
+    </p>
+    <div class="plot" id="chart-index"></div>
+    <p class="note" id="noise-note"></p>
+  </section>
+
+  <section class="card">
+    <h2>Total module time</h2>
+    <p class="note">
+      The same runs, summed instead of averaged &mdash; what the whole suite costs, and
+      therefore mostly what the three heavy modules cost (alphafold3, stable diffusion
+      1.5, sdxl). Read beside the index, not instead of it: a run can move here and
+      not there, which says one big module moved and nothing else did. A run that did
+      not measure the whole suite reports no total at all rather than a smaller one.
+    </p>
+    <div class="plot" id="chart-total"></div>
+  </section>
+
+  <section class="card">
+    <h2>Where the time goes</h2>
+    <p class="note">
+      Total milliseconds per run, split by model category. One panel per stack, all on
+      one scale so the panels can be read against each other.
+    </p>
+    <div class="legend" id="group-legend"></div>
+    <div class="small-multiples" id="chart-groups"></div>
+  </section>
+
+  </div><!-- /view-models -->
+
+  <div id="view-modules" role="tabpanel" aria-labelledby="tab-modules" hidden>
+
+  <section class="card">
+    <h2>One module, every run</h2>
+    <p class="note">
+      Any module&rsquo;s own measurements, on each stack. Pick one here, or click a row in
+      the table below. <span id="module-stat"></span>
+    </p>
+    <div class="filter" style="margin-bottom:14px">
+      <span class="filter-label" id="pick-label">Module</span>
+      <select class="pick" id="module-pick" aria-labelledby="pick-label"></select>
+    </div>
+    <div class="plot" id="chart-module"></div>
+  </section>
+
+  <section class="card">
+    <h2>What moved</h2>
+    <p class="note">
+      Every module whose time changed from the previous run by more than that stack&rsquo;s
+      noise floor, newest run first, the largest three named per stack. A module is
+      replayed in isolation and timed once per run, so the floor is the only evidence
+      of what a quiet night looks like: it is the 90th percentile of all run-to-run
+      changes, which means roughly one module in ten clears it on a night when nothing
+      happened. Treat a row near the floor as weather and a row far above it as news.
+    </p>
+    <p class="note">
+      All three stacks run the same modules against the same <code>openxla/xla</code>
+      commit, so <span class="muted">every stack</span> on a row means they all moved
+      the same way at once &mdash; the thing they share is the XLA commit.
+      <span class="diff">this stack only</span> means the others measured the module and
+      held still, which points at the ROCm stack rather than at XLA, and is the row
+      worth chasing. <em>vs start</em> is the other half of the story: a module that
+      comes straight back the next night was a blip, one that stays put is a regression.
+    </p>
+    <div class="table-wrap tall" id="movers-host"></div>
+  </section>
+
+  </div><!-- /view-modules -->
+
+  <div id="view-latency" role="tabpanel" aria-labelledby="tab-latency" hidden>
+
+  <section class="kpis tight" id="latency-kpis" aria-label="Current latency by stack and GPU count"></section>
+
+  <section class="card">
+    <h2>HIP request latency</h2>
+    <p class="note">
+      <a href="https://github.com/ROCm/xla/tree/rocm-dev-infra/perf_tools/rocm_latency_check_tool">rocm_latency_check_tool</a>,
+      which times a H2D &rarr; busy-kernel &rarr; D2D &rarr; busy-kernel &rarr; D2H round trip
+      against a fixed-duration GPU kernel. The compute is deliberately constant, so what
+      moves here is HIP runtime and copy overhead, not kernel selection. Colour is the
+      stack, dash is the GPU count. <span id="latency-stat"></span>
+    </p>
+    <div class="legend" id="latency-legend"></div>
+    <div class="plot" id="chart-latency"></div>
+    <p class="note">
+      Each figure is one 10-second run per GPU count. The median holds steady; the
+      <strong>p99 is a handful of requests</strong> and a single stall moves it by an order of
+      magnitude, so read it as a count of stalls rather than as latency.
+      The nightly runs this tool on the newest stack only &mdash; the figure characterises
+      the ROCm runtime rather than the XLA tree, so re-measuring it on the release stacks
+      would only re-measure the same interconnect &mdash; which is why the other stacks&rsquo;
+      lines stop where that changed rather than running on.
+    </p>
+  </section>
+
+  </div><!-- /view-latency -->
+
+  <section class="card" id="table-card" hidden>
+    <h2>Data table</h2>
+    <p class="note">Every plotted value, as text.</p>
+    <div class="table-wrap" id="table-host"></div>
+  </section>
+
+  <footer class="page-foot">
+    <p>
+      Built by <code>perf-metrics/trends.py</code> from the
+      <a href="https://github.com/ROCm/xla/tree/perf-metrics-data"><code>perf-metrics-data</code></a>
+      branch. <span id="provenance"></span>
+    </p>
+  </footer>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>
