@@ -835,10 +835,10 @@ absl::StatusOr<Tiles> PropagateTileToInputForConvOp(
         out_tile.offset * CreateSymbolicConstant(w.stride(), ctx) +
         k_tile.offset * CreateSymbolicConstant(w.window_dilation(), ctx) +
         CreateSymbolicConstant(-w.padding_low(), ctx);
-    // `size` and `stride` below are only correct when the window stride is 1,
-    // the base dilation is 1, and the kernel spatial tile size is 1.
+    // `size` is only correct when the kernel spatial tile size is 1
     input_dim_tiles[in_spatial_dim] = DimTile{
-        offset, out_tile.size, /*stride=*/CreateSymbolicConstant(1, ctx),
+        offset, out_tile.size,
+        /*stride=*/CreateSymbolicConstant(w.stride(), ctx),
         CreateSymbolicConstant(input_shape.dimensions(in_spatial_dim), ctx)};
   }
 
