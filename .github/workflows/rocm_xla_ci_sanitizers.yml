@@ -81,20 +81,24 @@ jobs:
   execute-xla-ut-sanitizers:
     needs: rocm-config
     if: inputs.run_sanitizers || github.event.label.name == 'sanitizers'
-    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-4
+    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-8
     env:
       COMMON_ARGS: >-
         --config=rocm_ci_hermetic
+        --config=rocm_rbe
         --dynamic_mode=off
         --@rules_ml_toolchain//common:enable_xla_test_global_symbol_version=False
-        --local_test_jobs=4
-        --spawn_strategy=local
+        --local_test_jobs=8
         --strategy=TestRunner=local
+        --strategy=CppLink=local
+        --jobs=150
+        --nocache_test_results
         --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu
         --repo_env=TF_ROCM_RBE_MULTI_GPU_POOL=default
         --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950
         --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=${{ needs.rocm-config.outputs.docker-image }}
         --bes_keywords=xla
+        --bes_keywords=nightly
         --bes_keywords=sanitizers
     strategy:
       fail-fast: false
@@ -127,7 +131,6 @@ jobs:
             ${COMMON_ARGS} \
             --run_under=//build_tools/rocm:sanitizer_wrapper_parallel_gpu_execute \
             --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu \
-            --jobs=30 \
             --bes_keywords=single_gpu \
             -- \
             //xla/...
@@ -151,7 +154,7 @@ jobs:
             ${{ join(matrix.mode.configs, ' ') }} \
             ${COMMON_ARGS} \
             --config=ci_rocm_cpu \
-            --local_test_jobs=10 \
+            --local_test_jobs=20 \
             --bes_keywords=cpu \
             -- \
             //xla/...
