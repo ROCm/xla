@@ -1,0 +1,85 @@
+# Deploys the Pages site when new perf metrics are published.
+#
+# A Pages deployment replaces the entire site, so this builds every section,
+# not just the dashboard -- otherwise each perf nightly would delete
+# /scaling-book and /ci-metrics. The build itself lives in the composite action
+# all three Pages workflows share; see
+# .github/actions/build-pages-site/action.yml.
+#
+# The companion workflows, ci_metrics_pages.yml and scaling_book_pages.yml, are
+# the same deployment driven from their own sides. All three are serialised by
+# the `pages` concurrency group, so whichever runs last simply republishes the
+# same complete site.
+#
+#   rocm.github.io/xla/scaling-book
+#   rocm.github.io/xla/ci-metrics
+#   rocm.github.io/xla/perf-metrics
+
+name: Deploy perf metrics dashboard
+
+on:
+  push:
+    branches: [rocm-dev-infra]
+    paths:
+      - perf-metrics/**
+      - .github/workflows/perf_metrics_pages.yml
+      - .github/actions/build-pages-site/**
+  # Redeploy once the perf nightly has published new results, so the trend page
+  # picks them up without waiting for a push. Note that `workflow_run` only
+  # fires for workflow files on the default branch.
+  workflow_run:
+    workflows: ["ROCm Perf Nightly"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a queued run supersede an in-progress one, but never cancel a deploy
+# midway. Shared with the other two Pages workflows, which deploy the same site.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # A perf nightly that loses one matrix mode still publishes the modes that
+    # finished -- `publish-perf-metrics` runs `if: always()` -- so a `failure`
+    # conclusion routinely carries new results and must still deploy. Only a
+    # cancelled run is certain to have published nothing. The build is a no-op
+    # when there is genuinely nothing new: it rebuilds the same site from the
+    # same data branch.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Pin the ref: on a `workflow_run` event the checkout would otherwise
+          # follow the event's commit rather than the branch the site is built
+          # from.
+          ref: rocm-dev-infra
+
+      - uses: actions/configure-pages@v6
+        id: pages
+
+      - uses: ./.github/actions/build-pages-site
+        with:
+          base_path: ${{ steps.pages.outputs.base_path }}
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _pages
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

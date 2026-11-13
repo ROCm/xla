@@ -83,6 +83,16 @@ question -- what changed over the last fortnight -- and
 [`ci_metrics_pages.yml`](../.github/workflows/ci_metrics_pages.yml) publishes it
 to <https://rocm.github.io/xla/ci-metrics/> after every nightly.
 
+> **Not the perf trends.** The site carries two trend dashboards, and this is
+> the one about **CI**: how long CI takes to answer a pull request. Its sibling
+> [`perf-metrics/`](../perf-metrics) is about how fast the code CI builds
+> actually runs -- different question, different data branch, different
+> collector, and a point there is one benchmark run rather than one day. They
+> share chart primitives, a stylesheet and a layout so that knowing one is
+> knowing the other, and nothing else: neither reads the other's data, and no
+> figure on one has a counterpart on the other. The two are compared
+> side by side in the [root README](../README.md#dashboards).
+
 ```bash
 git clone --branch ci-metrics-data --depth 1 <repo> /tmp/ci-data
 python3 trends.py --data /tmp/ci-data/data --out site/trends.json
@@ -90,11 +100,12 @@ python3 -m http.server -d site 8000     # then open localhost:8000
 ```
 
 GitHub Pages serves one deployment per repository, and a deployment replaces
-the whole site, so **both** Pages workflows -- `scaling_book_pages.yml` and
-`ci_metrics_pages.yml` -- build **both** sections through the shared
+the whole site, so **all three** Pages workflows -- `scaling_book_pages.yml`,
+`ci_metrics_pages.yml` and `perf_metrics_pages.yml` -- build **all three**
+sections through the shared
 [`build-pages-site`](../.github/actions/build-pages-site/action.yml) action.
-A workflow that published only its own half would delete the other. The two are
-serialised by the `pages` concurrency group.
+A workflow that published only its own section would delete the others. The
+three are serialised by the `pages` concurrency group.
 
 Two things about the snapshots shape the output:
 

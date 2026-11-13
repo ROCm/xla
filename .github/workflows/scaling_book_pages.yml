@@ -2,11 +2,13 @@
 #
 # A Pages deployment replaces the entire site, so this builds every section,
 # not just the scaling book -- otherwise publishing a scaling-book edit would
-# delete /ci-metrics. The build itself lives in the composite action both Pages
-# workflows share; see .github/actions/build-pages-site/action.yml.
+# delete /ci-metrics and /perf-metrics. The build itself lives in the composite
+# action all three Pages workflows share; see
+# .github/actions/build-pages-site/action.yml.
 #
-# The companion workflow, ci_metrics_pages.yml, is the same deployment driven
-# by the CI-metrics side. Both are serialised by the `pages` concurrency group.
+# The companion workflows, ci_metrics_pages.yml and perf_metrics_pages.yml, are
+# the same deployment driven from their own sides. All three are serialised by
+# the `pages` concurrency group.
 
 name: Deploy scaling book
 

@@ -15,6 +15,7 @@ contain fork-specific commits. This separation ensures the `merge-upstream` API
 - [Debug Tools](#debug-tools)
 - [Performance Tools](#performance-tools)
 - [Scaling Book](#scaling-book)
+- [Dashboards](#dashboards)
 - [Workflows](#workflows)
 
 ## XLA Branches for JAX
@@ -199,6 +200,29 @@ Reference reproductions for the case studies can be found at the following locat
 | [`scaling_book/llama70b-mixed-precision-training`](scaling_book/llama70b-mixed-precision-training) | Mixed quantization experiments in BF16, FP16, FP8, MXFP8, and MXFP4 |
 | [`scaling_book/mixtral8-22b-distributed-strategies`](scaling_book/mixtral8-22b-distributed-strategies) | Sharding and grouped GEMM experiments |
 
+## Dashboards
+
+Three sections are published to GitHub Pages from this branch. Two of them are
+trend dashboards, and they are easy to mix up by name — they measure different
+things and share nothing but a layout:
+
+| | [ci-metrics](https://rocm.github.io/xla/ci-metrics/) | [perf-metrics](https://rocm.github.io/xla/perf-metrics/) |
+|---|---|---|
+| **Question** | How long does CI take to answer a pull request? | How fast does the top of tree openxla/main runs 1gpu training and inference on collected hlo dumps? Secondly how fast `rocm_latency_check_tool` runs with the latest theRock nightly |
+| **Measures** | time to signal, queue wait, pass rate, suite size, per lane | HLO module execution time and HIP latency, per ROCm stack |
+| **Source** | the GitHub Actions API and job logs, per PR head commit | [`perf_tools/`](perf_tools/) replayed on a gfx950 |
+| **A point is** | one **day**, pooled from overlapping nightly snapshots | one **run**, against one pinned `openxla/xla` commit |
+| **Collected by** | `rocm_xla_jax_metrics_nightly.yml` → `ci-metrics-data` | `rocm_xla_perf_nightly.yml` → `perf-metrics-data` |
+| **Built from** | [`ci-metrics/`](ci-metrics/) | [`perf-metrics/`](perf-metrics/) |
+| **Published by** | `ci_metrics_pages.yml` | `perf_metrics_pages.yml` |
+
+The third section is the [scaling book](https://rocm.github.io/xla/scaling-book/),
+built from [`scaling_book/`](scaling_book/).
+
+A Pages deployment replaces the *whole* site, so each of the three workflows
+rebuilds all three sections through the shared `build-pages-site` action; a
+workflow that published only its own section would delete the other two.
+
 ## Workflows
 
 GitHub Actions workflows and PR labels that drive automation in this fork.
@@ -214,7 +238,8 @@ GitHub Actions workflows and PR labels that drive automation in this fork.
 | `rocm_xla_jax_metrics_nightly.yml` | Daily at 3:47 AM UTC                                                                       | Analyzes 1 day window of PRs submitted to upstream openxla/xla and jax-ml/jax. Collects CI latency, time to signal, mean and p90 values for ROCm and vendor CI actions. Dumps markdown report at [ci-metrics-report](https://github.com/ROCm/xla/blob/ci-metrics-reports/reports) and data at [ci-metrics-data](https://github.com/ROCm/xla/tree/ci-metrics-data/data)                                                                                                                                 |
 | `rocm_xla_perf_nightly.yml`        | Daily at 2:00 AM UTC                                                                       | Runs on upstream openxla/xla hlo_eval_tools on 1 gpu for the collected inference and training hlo workloads and rocm_latency_check_tools on 1, 2 and 4 gpus on theRock 10.0 10.1 and 10.2 (rc). Perf data is pushed to [perf-metrics-data](https://github.com/ROCm/xla/tree/perf-metrics-data/data)                                                                                                                                                                                                    |
 | `scaling_book_pages.yml`           | Push to `rocm-dev-infra` when `scaling_book/` changes                                      | Builds the scaling book from `scaling_book/` and deploys to GitHub Pages at [rocm.github.io/xla/scaling-book](https://rocm.github.io/xla/scaling-book/)                                                                                                                                                                                                                                                                                                                                                |
-| `ci_metrics_pages.yml`             | After each `rocm_xla_jax_metrics_nightly.yml` run completes, and on push to `rocm-dev-infra` when `ci-metrics/` changes | Builds the CI metrics dashboard from `ci-metrics/` and deploys to GitHub Pages at [rocm.github.io/xla/ci-metrics](https://rocm.github.io/xla/ci-metrics/). A Pages deployment replaces the whole site, so it rebuilds every section (including the scaling book) via the shared `build-pages-site` action                                                                                                                                                                                              |
+| `ci_metrics_pages.yml`             | After each `rocm_xla_jax_metrics_nightly.yml` run completes, and on push to `rocm-dev-infra` when `ci-metrics/` changes | Builds the **CI** trend dashboard - how long CI takes to answer a PR - from `ci-metrics/` and the `ci-metrics-data` branch, and deploys to GitHub Pages at [rocm.github.io/xla/ci-metrics](https://rocm.github.io/xla/ci-metrics/). A Pages deployment replaces the whole site, so it rebuilds every section (the scaling book and the perf dashboard too) via the shared `build-pages-site` action                                                                                                       |
+| `perf_metrics_pages.yml`           | After each `rocm_xla_perf_nightly.yml` run completes, and on push to `rocm-dev-infra` when `perf-metrics/` changes | Builds the **perf** trend dashboard - how fast the benchmarked modules run, per ROCm stack - from `perf-metrics/` and the `perf-metrics-data` branch, and deploys to GitHub Pages at [rocm.github.io/xla/perf-metrics](https://rocm.github.io/xla/perf-metrics/). Rebuilds every section for the same reason as above. Deploys on a *failed* perf nightly too, since a nightly that loses one matrix mode still publishes the others; only a cancelled run is skipped                                      |
 
 ### Opt-in PR labels
 

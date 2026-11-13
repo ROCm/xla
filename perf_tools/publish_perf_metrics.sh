@@ -16,6 +16,11 @@
 #                       the assembled payload.
 #   STAMP, SHA6         Run stamp and short XLA commit; name the run directory.
 #   ISO, XLA_SHA        Full timestamp and commit, recorded in run.json.
+#   MODES_JSON          The benchmark matrix as JSON, exactly as rocm-config
+#                       built it, recorded in run.json. Optional: unset outside
+#                       the workflow, where the matrix is not knowable.
+#   THEROCK_VERSION     The nightly TheRock version rocm-config detected, also
+#                       recorded in run.json. Optional, as above.
 #   GITHUB_OUTPUT       Step outputs; `assemble` writes `empty` here.
 #   GITHUB_REPOSITORY   owner/repo, for the push URL and the artifact API.
 #   GITHUB_RUN_ID       Recorded in run.json; also selects the artifacts to
@@ -60,19 +65,41 @@ cmd_assemble() {
     return 0
   fi
 
-  # Per-run manifest, so the directory is self-describing too.
+  # Per-run manifest, so the directory is self-describing too. Written to one
+  # side and moved into place, so a run directory never holds a half-written
+  # manifest: `> run.json` truncates before python runs, and a manifest that
+  # exists but does not parse is worse than one that is missing.
   printf '%s\n' "${modes[@]}" |
     python3 -I -c '
 import json, os, sys
+
+# The benchmark matrix, as rocm-config built it: every mode with the TheRock
+# release it pulled and the digest that pinned it. Recorded here because the
+# results are only meaningful against the ROCm build that produced them, and
+# nothing in the TSV or CSV rows says which that was.
+#
+# This is the *whole* matrix, including any mode that failed before it
+# published anything -- that is what the run set out to measure. `modes` below
+# is the subset that actually landed, so the two together say which failed.
+#
+# Absent when assemble is run by hand outside the workflow; an unparseable
+# value is a bug in the workflow and fails rather than publishing a run whose
+# provenance is silently empty.
+raw = os.environ.get("MODES_JSON")
+matrix = json.loads(raw) if raw else []
+
 print(json.dumps({
     "timestamp": os.environ["ISO"],
     "commit": os.environ["SHA6"],
     "xla_sha": os.environ["XLA_SHA"],
     "repository": "openxla/xla",
     "workflow_run": os.environ["GITHUB_RUN_ID"],
+    "therock_version": os.environ.get("THEROCK_VERSION") or None,
     "modes": sorted(l.strip() for l in sys.stdin if l.strip()),
+    "matrix": matrix,
 }, indent=2))
-' > "$run_dir/run.json"
+' > "$run_dir/.run.json.tmp"
+  mv "$run_dir/.run.json.tmp" "$run_dir/run.json"
 
   echo "empty=false" >> "$GITHUB_OUTPUT"
   find "$run_dir" -type f | sort
