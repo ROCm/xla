@@ -82,7 +82,7 @@ Three figures describe a run, because none of them is honest alone:
 |---|---|---|
 | **Index** | `100 x geomean(d / d_baseline)`. The typical module, with alphafold3 at 1.6s counting exactly as much as detr at 1.4ms. | That one big module can swing the suite's real cost without moving this. |
 | **Total** | The plain sum. What the suite actually costs. | That it is mostly the three heavy modules (alphafold3, stable diffusion 1.5, sdxl). |
-| **Movers** | The modules whose time changed from the previous run. | Nothing -- this is the view that names a cause, which is why the page opens the Modules tab on the latest one. |
+| **Per module** | Every module's own line, one panel each, split into the inference and training suites. | Nothing -- this is where a regression is actually visible, which is why it gets a tab per suite. |
 
 A geometric mean because these are ratios: an arithmetic mean of a module that
 halved (0.5) and one that doubled (2.0) is 1.25, reporting a 25% regression
@@ -101,33 +101,43 @@ module count in the tooltip.
 **The noise floor** is the 90th percentile of every module's change between
 consecutive runs: about 2.4% on the release stacks and 3.1% on nightly, against
 medians near 0.5%. The tool times each module once per run, so that spread is
-the only evidence available for what a quiet night looks like. Nothing smaller
-is called a move. It follows that roughly one module in ten clears the floor on
-a night when nothing happened, which is why the movers table shows how far above
-the floor each row sits rather than just that it is above it.
+the only evidence available for what a quiet night looks like, and it is the
+level a per-module line has to clear to be worth chasing. Every card that plots
+a module quotes it, because the panels are close-ups and a close-up makes 1%
+look like an event. A window of one run has no floor at all -- there is no
+previous run to difference against -- and the page says so rather than leaving
+the sentence blank.
 
-**`vs start` beside `vs previous`** is what separates a blip from a regression:
-a module that jumps and comes straight back the next night was the runner, one
-that jumps and stays is the change. The branch has both -- qwen3 `module_0082`
-went to 451ms on 2026-11-07 and back to 44.7ms the next night; the same module
-reads 44.6-45.0ms on every other run and on both release stacks.
+**Reading a per-module panel.** Each has its **own** y axis, bounded by its own
+highest and lowest readings. The suite runs from detr at 1.4ms to alphafold3 at
+1597ms, so a shared scale would flatten all but the heaviest into one flat line;
+the cost is that panels are comparable with themselves over time and never with
+each other. That is the division of labour on the page: the Models tab compares
+modules with each other, these tabs compare a module with its own past.
 
-**`Other stacks`** is the column worth reading first. All three stacks replay
-the same modules against the same commit, so a module that moved on every stack
-at once points at the thing they share -- the XLA commit under test -- and one
-that moved on a single stack points at that ROCm stack. On the runs published
-so far almost every mover is `this stack only`, which is itself the finding:
-these are one-off measurement excursions on a shared runner, not XLA
-regressions.
+The branch shows what that is for. qwen3 `module_0082` went to 451ms on
+2026-11-07 and back to 44.7ms the next night, while reading 44.6-45.0ms on every
+other run and on both release stacks -- a single-stack excursion on a shared
+runner, which is what nearly every large move on these charts turns out to be.
+A module that jumps and *stays* is the other kind, and the panel shows the
+difference at a glance where an aggregate would not.
 
 **Latency** is `rocm_latency_check_tool`, read from its `final` rows only --
 the tool also appends an `interval` row every few seconds, and pooling those
-would weight a run by how long it happened to take. The p50 holds steady near
-4ms; the **p99 is a handful of requests** and one stall moves it by an order of
-magnitude (4.4ms to 67ms on 2026-11-12), so the page defaults to p50 and says
-so. The `rocm_version` column is not used: the tool writes the `--label` value
-into it, so on these snapshots it reads `therock_nightly`. `hip_version` beside
-it is correct, and is where the stack chips get their tooltip.
+would weight a run by how long it happened to take. **Only the nightly stack is
+plotted**: the figure characterises the ROCm runtime rather than the XLA tree,
+so the workflow runs the tool on the newest stack alone, and the three early
+runs that measured all three stacks are discarded rather than drawn as lines
+that stop in November and never resume. The stack filter therefore does not
+apply to that tab and is hidden on it. The p50 holds steady near 4ms; the **p99
+is a handful of requests** and one stall moves it by an order of magnitude
+(4.4ms to 67ms on 2026-11-12), so the page defaults to p50 and says so.
+
+The `rocm_version` column is not used: the tool writes the `--label` value into
+it, so on these snapshots it reads `therock_nightly`. `hip_version` beside it is
+correct and *is* read for every stack, including the ones whose timings are
+discarded -- a pinned release's HIP version is a fact that does not go stale, so
+it still names the build behind each stack chip.
 
 ## The page
 
@@ -137,9 +147,17 @@ site/app.js       plain SVG built in the DOM -- no chart library, no build step
 site/styles.css   a copy of ci-metrics/site/styles.css, perf rules appended
 ```
 
-Three tabs over one stack filter: **Models** (the index, the total, and the
-total split by model category), **Modules** (one module's own series, and the
-movers table, which is clickable into that chart), **Latency**.
+Four tabs over one stack filter:
+
+- **Models** -- the index, the total, and the total split by model category.
+- **Inference** and **Training** -- one small chart per HLO module of that
+  suite, grouped by model category, one line per stack. Two tabs rather than
+  one list because they are two suites: training HLO carries the backward pass,
+  the gradient all-reduce and the optimizer update, so a training module has no
+  inference counterpart to sit beside. A tab whose suite the data does not carry
+  is removed rather than shown empty.
+- **Latency** -- the HIP latency tool, nightly stack only. The stack filter is
+  hidden here, since it would scope nothing.
 
 `styles.css` is a copy rather than a shared file. The two dashboards are
 separate sections of the Pages site deployed by separate workflows, a shared
