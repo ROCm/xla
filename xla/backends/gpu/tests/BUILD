@@ -1868,6 +1868,10 @@ xla_test(
     backends = [
         "gpu",
     ],
+    # RCCL symmetric memory (NCCL windows) requires NCCL_CUMEM_ENABLE=1 on ROCm,
+    # where it defaults to 0. Without it the one-shot collective kernel path fails
+    # at runtime.
+    env = {"NCCL_CUMEM_ENABLE": "1"},
     deps = [
         ":multi_process_gpu_test_base",
         ":multi_process_gpu_test_main",
@@ -1888,6 +1892,7 @@ xla_test(
         "//xla/service/gpu:backend_configs_cc",
         "//xla/stream_executor:device_description",
         "//xla/stream_executor:platform",
+        "//xla/stream_executor:semantic_version",
         "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor/cuda:cuda_compute_capability",
         "//xla/tests:literal_test_util",
@@ -1941,6 +1946,10 @@ xla_test(
     backends = [
         "gpu",
     ],
+    # RCCL symmetric memory (NCCL windows) requires NCCL_CUMEM_ENABLE=1 on ROCm,
+    # where it defaults to 0. Without it the one-shot collective kernel path fails
+    # at runtime.
+    env = {"NCCL_CUMEM_ENABLE": "1"},
     deps = [
         ":multi_process_gpu_test_base",
         ":multi_process_gpu_test_main",
@@ -1961,6 +1970,7 @@ xla_test(
         "//xla/service/gpu:backend_configs_cc",
         "//xla/stream_executor:device_description",
         "//xla/stream_executor:platform",
+        "//xla/stream_executor:semantic_version",
         "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor/cuda:cuda_compute_capability",
         "//xla/tests:literal_test_util",
@@ -1982,6 +1992,10 @@ xla_test(
     backends = [
         "gpu",
     ],
+    # RCCL symmetric memory (NCCL windows) requires NCCL_CUMEM_ENABLE=1 on ROCm,
+    # where it defaults to 0. Without it the one-shot collective kernel path fails
+    # at runtime.
+    env = {"NCCL_CUMEM_ENABLE": "1"},
     deps = [
         ":multi_process_gpu_test_base",
         ":multi_process_gpu_test_main",
@@ -2002,6 +2016,7 @@ xla_test(
         "//xla/service/gpu:backend_configs_cc",
         "//xla/stream_executor:device_description",
         "//xla/stream_executor:platform",
+        "//xla/stream_executor:semantic_version",
         "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor/cuda:cuda_compute_capability",
         "//xla/tests:literal_test_util",
