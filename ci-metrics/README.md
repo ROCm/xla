@@ -73,7 +73,7 @@ For this nightly previous day to current timestamp is used as time window
 | `metrics_lib.py` | `REPOS` (the repo/lane config) plus shared definitions: how a step maps to a phase, the time zone. Every CI naming convention lives here. | - |
 | `report.py` | Computes all statistics (`build()`) and fills the templates (`render()`). | `pr_lookup.json` (cache) |
 | `templates/*.md` | The document structure: `report.md` (whole report), `repo_section.md` (one repo), `same_commit.md`. | - |
-| `trends.py` | Rolls *every* published snapshot up into one day-by-day series for the web dashboard. Calls `report.build()`, so it adds no definitions of its own. | `trends.json` |
+| `trends.py` | Rolls *every* published snapshot up into one day-by-day series for the web dashboard. Calls `report.build()` for the timing series and the p90 tail, and reads the sampled `logs.jsonl` and the cached `pr_lookup.json` for the test counts and PR numbers, so it adds no definitions of its own. | `trends.json` |
 | `site/*` | The dashboard: `index.html`, `app.js`, `styles.css`. Plain SVG, no dependencies. | - |
 
 ## The trend dashboard
@@ -118,6 +118,58 @@ the parts would not sum to the median of the whole.
 Low-sample days are kept but drawn hollow: weekends really do fall to a handful
 of commits, where a p90 is one slow run. The count is in every tooltip.
 
+Both tabs are always shown, including against a `trends.json` that predates
+them: the view then says which key its data lacks and when that file was
+generated, rather than disappearing. A tab that is simply absent looks
+identical to a deploy that never happened, which is a slow thing to diagnose --
+the site and its `trends.json` are built by two different steps of
+`build-pages-site`, from whatever `ci-metrics/` is on `rocm-dev-infra`.
+
+The page has two tabs over that one day axis, sharing the lane filter:
+
+- **Timing** -- time to signal, queue wait, where the time goes, commit volume
+  and pass rate. The percentile chips scope this tab only.
+- **Tests** -- how many tests one test job of each lane runs, from the
+  `Executed X out of Y tests` lines `sample_logs.py` pulled out of the logs: a
+  job's suite is the sum of `Y` over its bazel invocations, which is the suite
+  size `report.coverage()` reports, taken per job instead of per 48h window.
+  One series per suite, so the `openxla/xla` lanes are split into their XLA and
+  JAX job families (`TEST_CATS`); the family is drawn as a dash on the lane's
+  own colour, never as a new hue, so a lane keeps one identity across both tabs.
+  Cached tests count -- the suite is what the lane covers, not what it had to
+  re-run.
+
+  The day's figure is the **largest** of its sampled jobs, not a median or a
+  mean. A job that fails early reports only the tests it reached (`Executed 1
+  out of 1 tests` is a common sample), and the XLA lanes run a second bazel
+  invocation that not every job gets to, so a central statistic measures how
+  the day's jobs ended rather than how big the suite is: on 2026-11-11 the
+  median for the ROCm XLA jobs is 549 where the Markdown report publishes
+  576 (419 + 157) -- which is the max. It is still a max over a *sample*, so a
+  thin day can fall short of the real suite; `n` is in every tooltip and those
+  days are drawn hollow. The table carries the median beside it, where the gap
+  between the two is the day's truncation rate.
+
+  Never a sum: `sample_logs.py` caps how many logs it downloads per category,
+  so a total would plot that cap rather than the lane.
+
+  The same tab carries **what the p90 is made of**: per day and lane, the
+  slowest three commits at or above that lane's p90 time to signal, with the
+  cut, how many commits sat at or above it, how many of those the other lane
+  also put in its tail, and the phase group that took most of each wait. A percentile is a position in a sorted list, so those commits
+  are the tail -- move them and the p90 moves. `TAIL_PCT` must stay the
+  percentile the page plots as its tail, or the table would explain a number
+  that is not on screen.
+
+  Naming them has to work offline, because the Pages job has no token: a branch
+  PR's run carries its PR number, a fork or copybara-export run carries none,
+  and for those the row falls back to the head branch linked to the workflow
+  run, which names the pull request on its own page. `report.build()` therefore
+  keeps `run` and `branch` on every commit. Whatever fork PRs the snapshots
+  already resolved into their `pr_lookup.json` (the report looks a few up for
+  its own tables) are merged in and shown as numbers; nothing new is fetched.
+  On a representative fortnight that is about half the tail by number.
+
 As the data branch grows (~14 MB a night), `--window-days N` limits the read to
 recent snapshots, which also allows a narrower sparse checkout in CI.
 
@@ -161,11 +213,30 @@ recent snapshots, which also allows a narrower sparse checkout in CI.
 - **Peak and nominal hours.** The 8 busiest and 8 quietest hours of the day by
 - **Like-for-like.* comparisons use matched job types (`PAIRS`
   in `report.py`).
+- **The p90 tail.** The commits of a lane-day whose time to signal is at or
+  above that day's p90 for that lane. They are what the percentile is made of,
+  so the dashboard names the slowest three; a commit's "mostly" is the phase
+  group that took the largest share of its wait. One PR can own several, one
+  per head commit that reached a signal.
+- **ROCm and NV tails compared.** A repo's two lanes run on the same head
+  commits, so each tail commit is also placed in the other lane: in its tail
+  too (`both`), signalled there but outside it (`only`), or never signalled
+  there at all. `only` is the case the page marks, because the lanes disagree
+  about one commit and the difference is therefore the lane, not the PR. It
+  does not mean the commit was fast on the other lane -- only that it was not
+  among that lane's own slowest tenth. `shared` counts the whole tail this way,
+  not just the three named, and is computed over all lanes regardless of what
+  the page's lane filter is showing.
 - **Re-runs.** When "re-run failed jobs" copies finished jobs into a new attempt,
   the copy keeps the old start/end but gets a new creation time. Those copies are
   dropped (`carried_over()` in `metrics_lib.py`).
 - **Test counts and cost per test.** Taken from the sampled logs, not from every
   job. Seconds per test only uses runs that executed at least 90% of the suite.
+  The report takes the suite size from the most common shape in the last 48h;
+  the dashboard's Tests tab takes the same per-job count a day at a time, as
+  the largest in that day's sample. Both answer "how big is the suite", so they
+  agree to within a test or two; a median would not, because the sample
+  includes jobs that ended before the suite did.
 
 ## Adapting it
 

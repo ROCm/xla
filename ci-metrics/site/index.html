@@ -24,13 +24,21 @@
     defines &mdash; this view only adds the time axis.
   </p>
 
+  <!-- Two views over the same days and the same lane filter. -->
+  <div class="tabs" role="tablist" aria-label="Views">
+    <button type="button" class="tab on" id="tab-timing" role="tab"
+            aria-selected="true" aria-controls="view-timing" data-tab="timing">Timing</button>
+    <button type="button" class="tab" id="tab-tests" role="tab"
+            aria-selected="false" aria-controls="view-tests" data-tab="tests">Tests</button>
+  </div>
+
   <!-- One filter row, above everything it scopes. -->
   <div class="filters" role="group" aria-label="Chart filters">
     <div class="filter">
       <span class="filter-label" id="lane-label">Lanes</span>
       <div class="chips" id="lane-chips" role="group" aria-labelledby="lane-label"></div>
     </div>
-    <div class="filter">
+    <div class="filter" id="pct-filter">
       <span class="filter-label" id="pct-label">Percentile</span>
       <div class="chips" id="pct-chips" role="group" aria-labelledby="pct-label">
         <button type="button" class="chip on" data-pct="p50" aria-pressed="true">Median (p50)</button>
@@ -44,6 +52,8 @@
       </div>
     </div>
   </div>
+
+  <div id="view-timing" role="tabpanel" aria-labelledby="tab-timing">
 
   <section class="kpis" id="kpis" aria-label="Current time to signal by lane"></section>
 
@@ -83,6 +93,62 @@
     </p>
     <div class="plot" id="chart-pass"></div>
   </section>
+
+  </div><!-- /view-timing -->
+
+  <div id="view-tests" role="tabpanel" aria-labelledby="tab-tests" hidden>
+
+  <section class="kpis tight" id="test-kpis" aria-label="Current suite size by lane"></section>
+
+  <section class="card">
+    <h2>Tests in the suite</h2>
+    <p class="note">
+      How many tests one test job of the lane runs, from bazel's
+      <code>Executed X out of Y tests</code>: the largest <em>Y</em> of the day's sampled
+      jobs, cached results included. The largest, not the median, because a job that
+      fails early reports only what it reached &mdash; a median would track how the day's
+      jobs ended rather than the size of the suite.
+      <code>openxla/xla</code> runs two suites in one workflow, so its lanes are drawn one
+      line per job family &mdash; solid for the XLA jobs, dashed for the JAX ones.
+      <span id="tests-stat"></span>
+    </p>
+    <div class="legend" id="test-legend"></div>
+    <div class="plot" id="chart-tests"></div>
+    <p class="note">
+      A sample of each day's jobs, not all of them (<code>sample_logs.py</code> caps how
+      many logs it downloads), so this is what one job runs &mdash; never the lane's total
+      for the day, and a day with few samples can fall short of the real suite. Every
+      tooltip carries the number of jobs behind the figure; the table adds the median
+      beside it.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>What the <span class="tail-pct">p90</span> is made of</h2>
+    <p class="note">
+      A percentile is a position in a sorted list, so the commits at or above it are
+      what it is: move them and the tail moves. Per day and lane, the slowest three at
+      or above that lane's <span class="tail-pct">p90</span> time to signal, newest day
+      first, with the phase that took most of the wait. A PR listed twice is two of its
+      head commits, each in the tail on its own.
+    </p>
+    <p class="note">
+      Both lanes of a repo run on the <em>same</em> head commits, so
+      <span class="diff">ROCm only</span> marks one this lane put in its tail while the
+      other lane did not: the two disagree about the same commit, which points at the
+      lane rather than at the PR. A row reading <span class="muted">shared with NV</span>
+      is in both tails &mdash; a heavy PR, not a lane problem. Outside the other lane's
+      tail does not mean fast there, only not among its own slowest tenth. The comparison
+      is against the whole other lane, so filtering it off the charts does not change it.
+    </p>
+    <div class="table-wrap tall" id="tail-host"></div>
+    <p class="note">
+      Fork and export PRs run without a PR number attached, so those rows link to the
+      workflow run, which names the pull request on its own page.
+    </p>
+  </section>
+
+  </div><!-- /view-tests -->
 
   <section class="card" id="table-card" hidden>
     <h2>Data table</h2>
