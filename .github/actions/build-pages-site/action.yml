@@ -2,22 +2,27 @@
 #
 # GitHub Pages serves one deployment per repository, and a deployment replaces
 # the whole site. Any workflow that deploys must therefore publish *every*
-# section, or it deletes the ones it left out. Both Pages workflows call this
-# action so that each one produces a complete site and neither can clobber the
-# other:
+# section, or it deletes the ones it left out. All three Pages workflows call
+# this action so that each one produces a complete site and none can clobber
+# the others:
 #
 #   _pages/scaling-book   the scaling book (Jekyll)
-#   _pages/ci-metrics     the CI trend dashboard, built from the data branch
+#   _pages/ci-metrics     presubmit CI health, from the ci-metrics-data branch
+#   _pages/perf-metrics   benchmark results, from the perf-metrics-data branch
 #
-# Keeping the steps here rather than copied into both workflows is what stops
-# the two from drifting apart -- a copy that is updated in one file but not the
-# other would quietly start publishing a stale half of the site.
+# The two dashboards are different measurements, not two views of one:
+# ci-metrics tracks how long CI takes to answer a pull request, perf-metrics
+# tracks how fast the code it built runs. They share a layout and nothing else.
+#
+# Keeping the steps here rather than copied into all three workflows is what
+# stops them from drifting apart -- a copy that is updated in one file but not
+# the others would quietly start publishing a stale third of the site.
 #
 # The caller must have checked out the repository already, and must run
 # actions/configure-pages before this, to supply base_path.
 
 name: Build the Pages site
-description: Build the scaling book and the CI metrics dashboard into _pages/.
+description: Build the scaling book and the CI and perf metrics dashboards into _pages/.
 
 inputs:
   base_path:
@@ -27,6 +32,10 @@ inputs:
     description: Branch holding the published ci-metrics snapshots.
     required: false
     default: ci-metrics-data
+  perf_data_branch:
+    description: Branch holding the published perf-metrics runs.
+    required: false
+    default: perf-metrics-data
 
 runs:
   using: composite
@@ -92,3 +101,42 @@ runs:
            ci-metrics/site/app.js \
            ci-metrics/site/styles.css \
            _pages/ci-metrics/
+
+    # ---- perf metrics trends -----------------------------------------------
+    #
+    # The perf nightly's own series: HLO module execution times and HIP
+    # latency, per ROCm stack. Built from a different branch, by a different
+    # script, than the CI trends above -- the only thing the two sections share
+    # is that a Pages deployment has to carry both.
+
+    - name: Check out the ${{ inputs.perf_data_branch }} branch
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ inputs.perf_data_branch }}
+        path: perf-metrics-data
+        # Only the published runs are needed, and only at their latest state.
+        sparse-checkout: data
+        fetch-depth: 1
+        persist-credentials: false
+
+    - name: Build the perf trend series
+      shell: bash
+      working-directory: perf-metrics
+      # No pip install: unlike its ci-metrics counterpart, perf-metrics/trends.py
+      # reads the published TSV and CSV directly and imports nothing outside the
+      # standard library.
+      run: |
+        set -euo pipefail
+        mkdir -p "$GITHUB_WORKSPACE/_pages/perf-metrics"
+        python3 trends.py \
+          --data "$GITHUB_WORKSPACE/perf-metrics-data/data" \
+          --out  "$GITHUB_WORKSPACE/_pages/perf-metrics/trends.json"
+
+    - name: Place the dashboard at /perf-metrics
+      shell: bash
+      run: |
+        set -euo pipefail
+        cp perf-metrics/site/index.html \
+           perf-metrics/site/app.js \
+           perf-metrics/site/styles.css \
+           _pages/perf-metrics/
