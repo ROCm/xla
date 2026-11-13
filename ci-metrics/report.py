@@ -140,6 +140,11 @@ def build(data_dir):
             total = (ts(crit["completed_at"]) - t0).total_seconds()
             assert abs(sum(ph.values()) - total) < 1e-6, (sha, ph, total)
             commits[key].append({"sha": sha, "t0": t0, "band": band(t0), "total": total, "phases": ph,
+                                 # A fork PR's run carries no `prs`, so the run
+                                 # id and branch are what name it without an
+                                 # API call; `lookup_pr()` is the one that costs
+                                 # a request.
+                                 "run": r["run"]["id"], "branch": r["run"]["head_branch"],
                                  "njobs": njobs, "attempt": r["run"]["run_attempt"], "prs": r["run"]["prs"],
                                  "passed": all(j["conclusion"] == "success" for j in lj),
                                  "jobs": [{"type": job_type(key, j["name"]),

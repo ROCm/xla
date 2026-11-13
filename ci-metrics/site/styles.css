@@ -185,6 +185,43 @@ a:hover { text-decoration-color: currentColor; }
 
 .chip:not(.on) .swatch { opacity: 0.35; }
 
+/* The dashed-line series of a lane: same hue, so identity stays with the lane,
+   with the stroke pattern repeated in the swatch rather than left on the chart. */
+.swatch.dashed {
+  width: 14px;
+  height: 4px;
+  border-radius: 1px;
+  background: repeating-linear-gradient(90deg,
+    var(--c, var(--text-muted)) 0 5px, transparent 5px 8px);
+}
+
+/* ---- tabs ---------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 24px 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  /* >= 24px hit target, and the 2px rule sits on the container's border. */
+  padding: 8px 14px;
+  margin-bottom: -1px;
+  min-height: 34px;
+  cursor: pointer;
+}
+
+.tab:hover { color: var(--text-primary); }
+.tab.on { color: var(--text-primary); font-weight: 600; border-bottom-color: var(--series-1); }
+.tab:focus-visible { outline: 2px solid var(--series-1); outline-offset: -2px; }
+
 /* ---- KPI row ------------------------------------------------------------- */
 
 .kpis {
@@ -193,6 +230,10 @@ a:hover { text-decoration-color: currentColor; }
   gap: 12px;
   margin-bottom: 24px;
 }
+
+/* Six suites rather than four lanes: narrower tiles so the row does not wrap
+   to a single orphan on a full-width screen. */
+.kpis.tight { grid-template-columns: repeat(auto-fit, minmax(152px, 1fr)); }
 
 .kpi {
   background: var(--surface-1);
@@ -217,9 +258,11 @@ a:hover { text-decoration-color: currentColor; }
   /* Proportional figures: tabular-nums reads loose at display sizes. */
 }
 
+/* Coloured by whether the move is good news, not by its direction: a longer
+   wait and a bigger suite both point up and mean opposite things. */
 .kpi-delta { font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
-.kpi-delta .up { color: var(--critical); }
-.kpi-delta .down { color: var(--good); }
+.kpi-delta .bad { color: var(--critical); }
+.kpi-delta .good { color: var(--good); }
 
 /* ---- cards --------------------------------------------------------------- */
 
@@ -245,6 +288,16 @@ a:hover { text-decoration-color: currentColor; }
 }
 
 .note .hl { color: var(--text-primary); font-weight: 600; }
+
+/* A view whose data this trends.json does not carry. Dashed, so it reads as
+   "nothing here yet" rather than as a figure. */
+.note.empty {
+  border: 1px dashed var(--axis);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin: 0;
+  max-width: none;
+}
 
 /* Height grows with content so the x-axis band is never cropped into a
    nested scrollbar. */
@@ -335,6 +388,59 @@ a:hover { text-decoration-color: currentColor; }
 
 .table-wrap { overflow-x: auto; }
 
+/* The p90 tail runs to a few hundred rows over a fortnight, which would be the
+   whole page: it scrolls in place, with the header pinned so the columns keep
+   their names. */
+.table-wrap.tall { max-height: 62vh; overflow-y: auto; }
+
+.table-wrap.tall thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-1);
+}
+
+/* The day a row belongs to stays with it: the group heading pins just under
+   the column names (one header row, 30px at this type size). */
+.table-wrap.tall tbody td.lane-head {
+  position: sticky;
+  top: 30px;
+  z-index: 1;
+  background: var(--surface-1);
+}
+
+/* Columns that read as names, not as figures. */
+th.lead, td.lead { text-align: left; font-variant-numeric: normal; }
+
+td .sha { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+.muted { color: var(--text-muted); font-size: 11.5px; }
+
+/* A lane-only tail commit: the two lanes disagree about the same head commit.
+   Marked with a dot *and* its own words -- never the colour alone. */
+.diff {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 9px 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.diff::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--critical);
+  flex: none;
+}
+/* Everywhere else a swatch is a flex item, which gives it its box. In a table
+   cell it is inline text, where width and height would be ignored. */
+td .swatch { display: inline-block; vertical-align: baseline; margin-right: 6px; }
+
 table { border-collapse: collapse; font-size: 12.5px; width: 100%; }
 
 th, td {
@@ -346,6 +452,13 @@ th, td {
 }
 
 th:first-child, td:first-child { text-align: left; font-variant-numeric: normal; }
+
+/* A grouped header: the series name sits over the columns it owns. */
+thead tr:first-child th[colspan] {
+  text-align: center;
+  color: var(--text-primary);
+  border-bottom-color: var(--grid);
+}
 thead th { color: var(--text-muted); font-weight: 600; border-bottom-color: var(--axis); }
 tbody tr:hover { background: var(--plane); }
 td.partial { color: var(--text-muted); }

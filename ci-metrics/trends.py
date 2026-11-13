@@ -15,6 +15,13 @@ behaviour, so every snapshot is pooled and deduplicated by (lane, head sha) and
 each commit is then bucketed by its own arrival time. The result depends on
 when CI ran, not on when the collector did.
 
+Test counts come from the same snapshots but not from `build()`: the jobs API
+carries none, so they are read from the sampled logs `sample_logs.py` wrote,
+pooled and deduplicated by job id the same way. That sample is capped per
+category, so the series is the suite size of the day's largest sampled job --
+what one test job runs when nothing truncates it -- and never a lane-wide
+total.
+
 A day is only comparable to its neighbours if the snapshots actually cover all
 of it. Each snapshot covers the 24h before its stamp; the union of those
 windows is the covered span, and any day not wholly inside it -- the first, the
@@ -28,8 +35,8 @@ import datetime as dt
 import json
 import os
 
-from metrics_lib import ALL_LANES, CDT, PHASES
-from report import build, pct
+from metrics_lib import ALL_LANES, CDT, PHASES, REPO_BY_SHORT, ts
+from report import build, load_logs, pct
 
 # The lanes the dashboard plots, in a fixed order. The order is also the
 # categorical colour order on the page, so a lane keeps its hue no matter how
@@ -53,6 +60,28 @@ PHASE_GROUPS = (
 
 assert {p for _, _, group in PHASE_GROUPS for p in group} == {k for k, _ in PHASES}, \
     "PHASE_GROUPS no longer covers PHASES; a phase would be silently dropped"
+
+
+def test_cats():
+    """The log-sample categories whose suite sizes the dashboard plots.
+
+    One per lane, except where the repo splits into job families -- openxla/xla
+    runs its own tests and the JAX integration tests in one workflow, and they
+    are separate suites, so they are separate series. These are the keys
+    `log_category()` writes into `logs.jsonl`, in lane order.
+    """
+    out = []
+    for lane in LANES:
+        R = REPO_BY_SHORT[lane.rsplit("_", 1)[0]]
+        if R["families"]:
+            out += [{"key": f"{lane}:{fam}", "lane": lane, "label": label}
+                    for label, fam in R["families"]]
+        else:
+            out.append({"key": lane, "lane": lane, "label": "Tests"})
+    return out
+
+
+TEST_CATS = test_cats()
 
 
 def snapshots(data_dir, window_days=None):
@@ -92,6 +121,51 @@ def pool(data_dir, names):
             for c in m["commits"][lane]:
                 seen[lane].setdefault(c["sha"], c)
     return seen
+
+
+def pr_index(data_dir, names):
+    """Every `<repo>@<sha> -> PR number` the snapshots resolved, merged.
+
+    A run triggered by a branch PR names its PR; a fork PR's run does not, and
+    `report.lookup_pr()` asks the API and caches the answer in the snapshot's
+    `pr_lookup.json`. Reading those caches gets the fork PRs here without a
+    token and without a request, which matters because the Pages job that runs
+    this has neither.
+    """
+    out = {}
+    for name in names:
+        path = os.path.join(data_dir, name, "pr_lookup.json")
+        if os.path.exists(path):
+            with open(path) as f:
+                out.update({k: v for k, v in json.load(f).items() if v})
+    return out
+
+
+def test_samples(data_dir, names):
+    """Tests per test job, per category per day, from the sampled logs.
+
+    `sample_logs.py` records every bazel `Executed X out of Y tests` line of a
+    sampled job, so one job's suite is the sum of `Y` over its invocations --
+    the same quantity `report.coverage()` reports as the suite size, taken per
+    job rather than per 48h window. Cached tests count: the suite is what the
+    lane covers, not what it had to re-run.
+
+    Samples are pooled across snapshots and deduplicated by job id, exactly as
+    commits are, and bucketed by the day the job finished. A sampled job, not
+    every job: the counts here are a sample of each day, never a lane-wide
+    total.
+    """
+    seen = {}
+    for name in names:
+        for l in load_logs(os.path.join(data_dir, name)):
+            if l["executed"]:
+                seen.setdefault(l["job_id"], l)
+    by = {c["key"]: collections.defaultdict(list) for c in TEST_CATS}
+    for l in seen.values():
+        if l["cat"] in by:
+            by[l["cat"]][ts(l["completed_at"]).astimezone(CDT).date()].append(
+                sum(total for _, total in l["executed"]))
+    return by
 
 
 def day_of(commit):
@@ -153,26 +227,165 @@ def summarise(commits):
     return out
 
 
-def series(pooled, spans):
-    """The per-day series for every lane, over one shared day axis."""
-    by_lane_day = {lane: collections.defaultdict(list) for lane in LANES}
+def by_day(pooled):
+    """Every lane's commits, grouped by the day they arrived."""
+    out = {lane: collections.defaultdict(list) for lane in LANES}
     for lane in LANES:
         for c in pooled[lane].values():
-            by_lane_day[lane][day_of(c)].append(c)
+            out[lane][day_of(c)].append(c)
+    return out
 
-    days = sorted({d for lane in LANES for d in by_lane_day[lane]})
 
+def series(commit_days, days):
+    """The per-day series for every lane, over one shared day axis."""
     metrics = ["n", "ttl_p50", "ttl_p90", "queue_p50", "queue_p90", "pass_rate"]
     metrics += [f"phase_{key}" for key, _, _ in PHASE_GROUPS]
 
     out = {}
     for lane in LANES:
-        rows = {d: summarise(cs) for d, cs in by_lane_day[lane].items() if cs}
+        rows = {d: summarise(cs) for d, cs in commit_days[lane].items() if cs}
         # A day with no commits in this lane is a hole, not a zero.
         out[lane] = {m: [rows[d][m] if d in rows else None for d in days] for m in metrics}
-    return ([d.isoformat() for d in days],
-            [is_complete(d, spans) for d in days],
-            out)
+    return out
+
+
+# The tail the dashboard names. `TAIL_PCT` has to be the percentile the page
+# plots as the tail, or the table would explain a number that is not on screen.
+TAIL_PCT = 90
+# Three is what a day's row can show without the table becoming the page. The
+# count of everything at or above the cut travels with them, so a day where the
+# tail is deeper than three is not mistaken for one where it is not.
+TAIL_SHOW = 3
+
+
+def dominant(phases):
+    """The phase group that took the most of one commit's time to signal.
+
+    Groups, not raw phases, so the word here is the word the stacked chart and
+    its legend already use for that colour.
+    """
+    key, _, group = max(PHASE_GROUPS, key=lambda g: sum(phases[p] for p in g[2]))
+    return key, sum(phases[p] for p in group)
+
+
+def counterpart(lane):
+    """The other side of the same repo's presubmit: ROCm <-> NV, or None."""
+    short, side = lane.rsplit("_", 1)
+    other = f"{short}_{'nv' if side == 'rocm' else 'rocm'}"
+    return other if other in LANES else None
+
+
+def tail_series(commit_days, days, prs):
+    """The commits that put each lane's p90 where it is, day by day.
+
+    A percentile is a position in a sorted list, so the commits at or above it
+    are what it is made of: move them and the p90 moves. Each day reports the
+    cut, how many commits sat at or above it, and the slowest `TAIL_SHOW` of
+    them by name -- the PR, the head sha, and the phase that took the most of
+    the wait, which is usually the whole explanation.
+
+    A PR can appear twice in a day: two of its head commits each got a signal,
+    and each is its own entry in the lane. That repetition is the finding, not
+    a duplicate.
+
+    Both lanes of a repo run on the same head commits, so each commit also
+    carries where it sits in the other lane that day, which is the difference
+    between a slow PR and a slow lane:
+
+      `both`    in the other lane's tail too -- the commit is heavy everywhere,
+                and nothing about this lane put it here.
+      `only`    the other lane signalled this commit and did *not* put it in
+                its tail -- the lanes disagree about it, which is the row worth
+                chasing.
+      `None`    the other lane never reached a signal on it, so there is
+                nothing to compare against.
+
+    `shared` counts the whole tail that way, not just the named three, so a day
+    can be read as "ours alone" or "the same PRs as theirs" at a glance.
+    """
+    cuts, tails, signalled = {}, {}, {}
+    for lane in LANES:
+        for d in days:
+            cs = commit_days[lane].get(d)
+            if not cs:
+                continue
+            cut = pct([c["total"] for c in cs], TAIL_PCT)
+            cuts[lane, d] = cut
+            tails[lane, d] = sorted((c for c in cs if c["total"] >= cut),
+                                    key=lambda c: -c["total"])
+            signalled[lane, d] = {c["sha"] for c in cs}
+
+    out = {}
+    for lane in LANES:
+        repo = REPO_BY_SHORT[lane.rsplit("_", 1)[0]]["repo"]
+        other = counterpart(lane)
+        rows = []
+        for d in days:
+            tail = tails.get((lane, d))
+            if not tail:
+                rows.append(None)
+                continue
+            their_tail = {c["sha"] for c in tails.get((other, d), ())}
+            their_commits = signalled.get((other, d), set())
+
+            def against(sha):
+                if sha in their_tail:
+                    return "both"
+                return "only" if sha in their_commits else None
+
+            rows.append({
+                "cut": cuts[lane, d],
+                "n": len(tail),
+                "other": other,
+                "shared": sum(1 for c in tail if c["sha"] in their_tail),
+                "commits": [{
+                    "also": against(c["sha"]),
+                    "pr": c["prs"][0] if c["prs"] else prs.get(f"{repo}@{c['sha']}"),
+                    # Half the tail is fork or export PRs, whose runs name no
+                    # PR; the run does, on its own page, and costs no request.
+                    "run": c["run"],
+                    "branch": c["branch"],
+                    "sha": c["sha"][:10],
+                    "total": c["total"],
+                    "phase": dominant(c["phases"])[0],
+                    "phase_s": dominant(c["phases"])[1],
+                    "passed": c["passed"],
+                    # A re-run starts the clock again on the same commit, so it
+                    # is a common reason for one to land in the tail.
+                    "rerun": c["rerun"],
+                } for c in tail[:TAIL_SHOW]],
+            })
+        out[lane] = rows
+    return out
+
+
+def test_series(samples, days):
+    """The per-day suite size for every test category, over the same day axis.
+
+    The headline is the day's **largest** sampled job, not a central statistic:
+    a job that fails early reports what it got through (`Executed 1 out of 1
+    tests` is a common value in the sample), and the XLA lanes run a second
+    bazel invocation that not every job reaches, so a median tracks the day's
+    mix of job outcomes rather than the suite. The largest is the suite with
+    nothing truncating it, which is the figure `report.coverage()` publishes:
+    on 2026-11-11 the report says 576 (419 + 157) for the ROCm XLA jobs, where
+    the max is 576 and the median 549.
+
+    It is still a maximum over a *sample*, so a thin day can under-report the
+    suite; `n` travels with it, and the page draws those days hollow. `p50` is
+    kept for the table, where the gap between the two is the truncation rate.
+
+    Never a sum: the sample is capped per category per snapshot, so a total
+    would plot the sampling cap rather than the lane.
+    """
+    return {cat["key"]: {
+        "tests_max": [max(samples[cat["key"]][d]) if samples[cat["key"]].get(d) else None
+                      for d in days],
+        "tests_p50": [pct(samples[cat["key"]][d], 50) if samples[cat["key"]].get(d) else None
+                      for d in days],
+        "n": [len(samples[cat["key"]][d]) if samples[cat["key"]].get(d) else None
+              for d in days],
+    } for cat in TEST_CATS}
 
 
 def main():
@@ -189,9 +402,19 @@ def main():
         raise SystemExit(f"no snapshot directories under {args.data}")
     pooled = pool(args.data, names)
     spans = covered_spans(names)
-    days, complete, lanes = series(pooled, spans)
+    commit_days = by_day(pooled)
+    samples = test_samples(args.data, names)
+    # One day axis for both tabs. A sampled job whose day carries no commit
+    # (the edge of the window) still gets a column rather than being dropped.
+    days = sorted({d for lane in LANES for d in commit_days[lane]}
+                  | {d for cat in samples.values() for d in cat})
     if not days:
         raise SystemExit("no commits found in any snapshot")
+    complete = [is_complete(d, spans) for d in days]
+    lanes = series(commit_days, days)
+    tests = test_series(samples, days)
+    tail = tail_series(commit_days, days, pr_index(args.data, names))
+    days = [d.isoformat() for d in days]
 
     doc = {
         "generated": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -200,13 +423,22 @@ def main():
         "first_snapshot": names[0],
         "last_snapshot": names[-1],
         "unique_commits": {lane: len(pooled[lane]) for lane in LANES},
-        "lanes": [{"key": lane, "label": ALL_LANES[lane][3]} for lane in LANES],
+        # `repo` is here so the page can link a PR number to its pull request.
+        "lanes": [{"key": lane, "label": ALL_LANES[lane][3], "repo": ALL_LANES[lane][0]}
+                  for lane in LANES],
         "phases": [{"key": key, "label": label} for key, label, _ in PHASE_GROUPS],
+        # The test suites, one series per lane or per job family within a lane.
+        "test_cats": TEST_CATS,
         "days": days,
         # False where the snapshots do not cover the whole day, so the page can
         # mark it provisional rather than let a short day read as an improvement.
         "complete": complete,
         "series": lanes,
+        # Suite size per sampled test job, on the same day axis as `series`.
+        "tests": tests,
+        # The commits the p90 of `ttl_p90` is made of, same day axis again.
+        "tail_pct": TAIL_PCT,
+        "tail": tail,
     }
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
@@ -218,6 +450,19 @@ def main():
         print(f"  partial (flagged, not dropped): {', '.join(partial)}")
     for lane in LANES:
         print(f"  {lane:9s} {len(pooled[lane]):5d} unique commits")
+    for cat in TEST_CATS:
+        got = [v for v in tests[cat["key"]]["tests_max"] if v is not None]
+        n = sum(x for x in tests[cat["key"]]["n"] if x)
+        print(f"  {cat['key']:13s} {n:5d} sampled jobs over {len(got)} days"
+              + (f", {got[0]:.0f} -> {got[-1]:.0f} tests" if got else ", no suite sizes"))
+    named = sum(1 for lane in LANES for r in tail[lane] if r for c in r["commits"] if c["pr"])
+    total = sum(len(r["commits"]) for lane in LANES for r in tail[lane] if r)
+    print(f"  p{TAIL_PCT} tail: {total} commits over {len(days)} days, {named} with a PR "
+          f"number, {total - named} shown by run (fork and export PRs name none)")
+    seen = collections.Counter(c["also"] for lane in LANES for r in tail[lane] if r
+                               for c in r["commits"])
+    print(f"    of those, {seen['only']} are in this lane's tail alone, {seen['both']} in both "
+          f"lanes', {seen[None]} have no signal on the other lane")
     print(f"wrote {args.out} ({os.path.getsize(args.out)} bytes)")
 
 
