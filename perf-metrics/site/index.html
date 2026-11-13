@@ -27,19 +27,22 @@
     The sibling view of presubmit CI health is <a href="../ci-metrics/">ci-metrics</a>.
   </p>
 
-  <!-- Three views over the same runs and the same mode filter. -->
+  <!-- Four views over the same runs. The stack filter scopes the first three;
+       latency is measured on one stack only and says so. -->
   <div class="tabs" role="tablist" aria-label="Views">
     <button type="button" class="tab on" id="tab-models" role="tab"
             aria-selected="true" aria-controls="view-models" data-tab="models">Models</button>
-    <button type="button" class="tab" id="tab-modules" role="tab"
-            aria-selected="false" aria-controls="view-modules" data-tab="modules">Modules</button>
+    <button type="button" class="tab" id="tab-inference_1gpu" role="tab" data-leaf
+            aria-selected="false" aria-controls="view-inference_1gpu" data-tab="inference_1gpu">Inference</button>
+    <button type="button" class="tab" id="tab-training" role="tab" data-leaf
+            aria-selected="false" aria-controls="view-training" data-tab="training">Training</button>
     <button type="button" class="tab" id="tab-latency" role="tab"
             aria-selected="false" aria-controls="view-latency" data-tab="latency">Latency</button>
   </div>
 
   <!-- One filter row, above everything it scopes. -->
   <div class="filters" role="group" aria-label="Chart filters">
-    <div class="filter">
+    <div class="filter" id="mode-filter">
       <span class="filter-label" id="mode-label">ROCm stack</span>
       <div class="chips" id="mode-chips" role="group" aria-labelledby="mode-label"></div>
     </div>
@@ -95,48 +98,57 @@
 
   </div><!-- /view-models -->
 
-  <div id="view-modules" role="tabpanel" aria-labelledby="tab-modules" hidden>
+  <div id="view-inference_1gpu" role="tabpanel" aria-labelledby="tab-inference_1gpu" hidden>
 
   <section class="card">
-    <h2>One module, every run</h2>
+    <h2>Every inference module, run by run</h2>
     <p class="note">
-      Any module&rsquo;s own measurements, on each stack. Pick one here, or click a row in
-      the table below. <span id="module-stat"></span>
+      One panel per HLO module, one line per ROCm stack. This is the view the two
+      aggregates on the Models tab average away: a suite that holds still can still
+      contain a module that doubled, and only this says which one.
+      Inference HLO is the forward pass only, dumped on one GPU.
     </p>
-    <div class="filter" style="margin-bottom:14px">
-      <span class="filter-label" id="pick-label">Module</span>
-      <select class="pick" id="module-pick" aria-labelledby="pick-label"></select>
-    </div>
-    <div class="plot" id="chart-module"></div>
+    <p class="note">
+      <strong>Each panel has its own y axis</strong>, zoomed to that module's own range —
+      these modules run from under 2&thinsp;ms to over 1.5&thinsp;s, so a shared scale would
+      flatten all but the largest into a single line. Panels are therefore comparable
+      with themselves over time, never with each other; the figures at the top and
+      bottom of each are its own highest and lowest readings.
+    </p>
+    <div class="legend" id="legend-inference_1gpu"></div>
+    <p class="note" id="noise-inference_1gpu"></p>
+    <div id="grid-inference_1gpu"></div>
   </section>
+
+  </div><!-- /view-inference_1gpu -->
+
+  <div id="view-training" role="tabpanel" aria-labelledby="tab-training" hidden>
 
   <section class="card">
-    <h2>What moved</h2>
+    <h2>Every training module, run by run</h2>
     <p class="note">
-      Every module whose time changed from the previous run by more than that stack&rsquo;s
-      noise floor, newest run first, the largest three named per stack. A module is
-      replayed in isolation and timed once per run, so the floor is the only evidence
-      of what a quiet night looks like: it is the 90th percentile of all run-to-run
-      changes, which means roughly one module in ten clears it on a night when nothing
-      happened. Treat a row near the floor as weather and a row far above it as news.
+      One panel per HLO module, one line per ROCm stack. This is the view the two
+      aggregates on the Models tab average away: a suite that holds still can still
+      contain a module that doubled, and only this says which one.
+      Training HLO is a separate dump and a separate suite: it carries the backward pass, the gradient all-reduce and the optimizer update, none of which inference runs, so a module here has no inference counterpart.
     </p>
     <p class="note">
-      All three stacks run the same modules against the same <code>openxla/xla</code>
-      commit, so <span class="muted">every stack</span> on a row means they all moved
-      the same way at once &mdash; the thing they share is the XLA commit.
-      <span class="diff">this stack only</span> means the others measured the module and
-      held still, which points at the ROCm stack rather than at XLA, and is the row
-      worth chasing. <em>vs start</em> is the other half of the story: a module that
-      comes straight back the next night was a blip, one that stays put is a regression.
+      <strong>Each panel has its own y axis</strong>, zoomed to that module's own range —
+      these modules run from under 2&thinsp;ms to over 1.5&thinsp;s, so a shared scale would
+      flatten all but the largest into a single line. Panels are therefore comparable
+      with themselves over time, never with each other; the figures at the top and
+      bottom of each are its own highest and lowest readings.
     </p>
-    <div class="table-wrap tall" id="movers-host"></div>
+    <div class="legend" id="legend-training"></div>
+    <p class="note" id="noise-training"></p>
+    <div id="grid-training"></div>
   </section>
 
-  </div><!-- /view-modules -->
+  </div><!-- /view-training -->
 
   <div id="view-latency" role="tabpanel" aria-labelledby="tab-latency" hidden>
 
-  <section class="kpis tight" id="latency-kpis" aria-label="Current latency by stack and GPU count"></section>
+  <section class="kpis tight" id="latency-kpis" aria-label="Current latency by GPU count"></section>
 
   <section class="card">
     <h2>HIP request latency</h2>
@@ -144,19 +156,24 @@
       <a href="https://github.com/ROCm/xla/tree/rocm-dev-infra/perf_tools/rocm_latency_check_tool">rocm_latency_check_tool</a>,
       which times a H2D &rarr; busy-kernel &rarr; D2D &rarr; busy-kernel &rarr; D2H round trip
       against a fixed-duration GPU kernel. The compute is deliberately constant, so what
-      moves here is HIP runtime and copy overhead, not kernel selection. Colour is the
-      stack, dash is the GPU count. <span id="latency-stat"></span>
+      moves here is HIP runtime and copy overhead, not kernel selection. One line per GPU
+      count. <span id="latency-stat"></span>
     </p>
     <div class="legend" id="latency-legend"></div>
     <div class="plot" id="chart-latency"></div>
     <p class="note">
+      <strong>One stack, not three.</strong> This figure characterises the ROCm runtime
+      rather than the XLA tree, so the nightly runs the tool on the newest stack only;
+      re-measuring it on the pinned releases would only re-measure the same interconnect.
+      A handful of early runs did measure all three, before that condition was added, and
+      those rows are discarded rather than drawn as two lines that stop in November and
+      never resume. The stack filter above does not apply here, and is hidden on this tab
+      for that reason.
+    </p>
+    <p class="note">
       Each figure is one 10-second run per GPU count. The median holds steady; the
       <strong>p99 is a handful of requests</strong> and a single stall moves it by an order of
       magnitude, so read it as a count of stalls rather than as latency.
-      The nightly runs this tool on the newest stack only &mdash; the figure characterises
-      the ROCm runtime rather than the XLA tree, so re-measuring it on the release stacks
-      would only re-measure the same interconnect &mdash; which is why the other stacks&rsquo;
-      lines stop where that changed rather than running on.
     </p>
   </section>
 

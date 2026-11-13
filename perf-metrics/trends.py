@@ -16,18 +16,25 @@ and that commit is the thing a regression gets blamed on. Two runs on one day
 are therefore two points, and the x axis is labelled by date only where the date
 changes.
 
-Three figures describe a run, because no single one is honest on its own:
+Three views of the same measurements, because no single one is honest alone:
 
   index     geomean of each module's ratio to its baseline. The typical module,
             with alphafold3 (1597ms) counting exactly as much as detr (1.4ms).
   total_ms  the sum. What the suite actually costs, and therefore dominated by
             the three heavy modules.
-  movers    the modules that moved, which is the only view that names a cause.
+  per-module  every module's own series, which is where a regression is
+            actually visible -- the two aggregates above average it away.
 
-Nothing is called a move until it clears `noise_pct`, the p90 of the
-module-level run-to-run change -- about 2.4% on the release stacks and 3.1% on
-nightly. The tool reports one duration per module per run, so that spread is the
-only evidence available for what run-to-run quiet looks like.
+`noise_pct` is the p90 of the module-level run-to-run change -- about 2.4% on
+the release stacks and 3.1% on nightly. The tool reports one duration per module
+per run, so that spread is the only evidence available for what run-to-run quiet
+looks like, and it is what any wobble on these charts has to beat to mean
+anything.
+
+Latency is read from the nightly stack only. The tool characterises the ROCm
+runtime rather than the XLA tree, the nightly is the only stack the workflow
+still runs it on, and the handful of early runs that measured the release
+stacks would otherwise draw three stubs that stop in November.
 """
 import argparse
 import collections
@@ -72,14 +79,25 @@ LATENCY_METRICS = (
     ("qps", "Throughput", "qps"),
 )
 
-# How many movers one run's row can show without the table becoming the page.
-# The count of everything that moved travels with them, so a run where more
-# moved is not mistaken for one where it did not.
-MOVERS_SHOW = 3
+# The one stack whose latency figures are plotted. The tool measures the ROCm
+# runtime, not the XLA tree, so the workflow runs it on the newest stack only --
+# re-measuring it on the pinned releases would only re-measure the same
+# interconnect. Three early runs did measure all three stacks, before that
+# condition was added; those rows are dropped rather than drawn as three lines
+# that stop in November and never resume.
+LATENCY_MODE = "therock_nightly"
+
+# The leaves `run_1gpu_perf.sh` emits, in the order the page shows them. The
+# two are separate suites: training HLO carries the backward pass, the
+# gradient all-reduce and the optimizer update, none of which inference runs.
+LEAVES = (
+    ("inference_1gpu", "Inference"),
+    ("training", "Training"),
+)
 
 # The percentile of the module-level run-to-run change that counts as noise.
 # At p90, one module-pair in ten clears the floor on a quiet night, which is
-# what keeps a quiet night from filling the movers table.
+# the level any wobble on a per-module chart has to beat to be worth reading.
 NOISE_PCT = 90
 
 
@@ -177,6 +195,12 @@ def read_latency(run):
     row per invocation; the interval rows are snapshots of the same run, so
     pooling them would weight a run by how long it happened to take. `final` is
     the figure the tool prints as its result.
+
+    Every mode is read, not just `LATENCY_MODE`. The *figures* of the other
+    stacks are discarded downstream, but the `hip_version` column beside them
+    is a correct and unchanging fact about a pinned release -- ROCm 10.0 is
+    HIP 7.15 whenever it was measured -- so it is worth keeping for the mode
+    chips even though the timings are not.
     """
     out = {}
     for mode, _ in MODES:
@@ -300,83 +324,14 @@ def module_key(key):
     return "|".join(key)
 
 
-def movers(per_run, mode, core, base, noise, others):
-    """What moved between each run and the one before it, newest change first.
-
-    A percentile tail answers "which commits are slow"; this answers the
-    question a perf series is actually opened for, "what changed last night".
-    Each run reports every core module whose change from the previous run
-    clears the noise floor, and names the largest `MOVERS_SHOW` of them.
-
-    Each named module carries where the *other* stacks stand on it in the same
-    run, which is the difference between an XLA regression and a ROCm one:
-
-      `all`    every stack that measured this module moved the same way, so the
-               cause is the thing they share -- the XLA commit under test.
-      `only`   the other stacks measured it and held still. The stack is the
-               variable, and this is the row worth chasing.
-      None     no other stack measured it this run, so there is nothing to
-               compare against.
-    """
-    rows = []
-    for i, run in enumerate(per_run):
-        now = run.get(mode, {})
-        prev = per_run[i - 1].get(mode, {}) if i else {}
-        if not now or not prev or noise is None:
-            rows.append(None)
-            continue
-
-        moved = []
-        for key in core:
-            if key not in now or key not in prev or prev[key] <= 0:
-                continue
-            delta = now[key] / prev[key] - 1
-            if abs(delta) > noise:
-                moved.append((key, delta))
-        if not moved:
-            rows.append({"n": 0, "noise": noise, "modules": []})
-            continue
-        moved.sort(key=lambda m: -abs(m[1]))
-
-        named = []
-        for key, delta in moved[:MOVERS_SHOW]:
-            elsewhere = []
-            for other in others:
-                a, b = per_run[i - 1].get(other, {}), run.get(other, {})
-                if key in a and key in b and a[key] > 0:
-                    elsewhere.append(b[key] / a[key] - 1)
-            if not elsewhere:
-                also = None
-            elif all(abs(d) > noise and (d > 0) == (delta > 0) for d in elsewhere):
-                also = "all"
-            else:
-                also = "only"
-            named.append({
-                "key": module_key(key),
-                "model": key[0],
-                "leaf": key[1],
-                "module": key[2],
-                "group": group_of(key[0]),
-                "ms": now[key],
-                "was": prev[key],
-                "delta": delta,
-                "also": also,
-                # Where it stands against the start of the window: a module
-                # that comes straight back the next night was a blip, and one
-                # that stays put is the regression.
-                "vs_base": (now[key] / base[key][0] - 1
-                            if key in base and base[key][0] > 0 else None),
-            })
-        rows.append({"n": len(moved), "noise": noise, "modules": named})
-    return rows
-
-
 def module_table(per_run, modes):
-    """Every core module's whole series, per mode, for the table and the picker.
+    """Every core module's whole series, per mode.
 
-    This is the raw material the two aggregates are made of, published as it is
-    so that any figure on the page can be traced back to the durations the
-    runner wrote.
+    This is the raw material the two aggregates are made of, and what the
+    per-module charts plot directly: an aggregate answers "did the suite move",
+    a module's own line answers "which one moved", and only the second names
+    anything. Published as it is, so every figure on the page traces back to a
+    duration the runner wrote.
     """
     keys = sorted({k for mode in modes for k in core_set(per_run, mode)})
     return (
@@ -388,22 +343,26 @@ def module_table(per_run, modes):
     )
 
 
-def latency_series(per_latency, modes):
-    """`{"<mode>:<gpus>": {metric: [...]}}` plus the GPU counts in play."""
-    gpu_counts = sorted({g for run in per_latency for by in run.values() for g in by})
+def latency_series(per_latency):
+    """`{"<gpus>": {metric: [...]}}` for `LATENCY_MODE`, plus its GPU counts.
+
+    One stack only, so the series are keyed by GPU count alone and the chart
+    has one dimension rather than two. See `LATENCY_MODE` for why the others
+    are dropped rather than plotted.
+    """
+    gpu_counts = sorted({g for run in per_latency for g in run.get(LATENCY_MODE, {})})
     series = {}
-    for mode in modes:
-        for gpus in gpu_counts:
-            row = {metric: [] for metric, _, _ in LATENCY_METRICS}
-            for run in per_latency:
-                found = run.get(mode, {}).get(gpus)
-                for metric, _, _ in LATENCY_METRICS:
-                    try:
-                        row[metric].append(float(found[metric]))
-                    except (TypeError, KeyError, ValueError):
-                        row[metric].append(None)
-            if any(v is not None for v in row["p50_us"]):
-                series[f"{mode}:{gpus}"] = row
+    for gpus in gpu_counts:
+        row = {metric: [] for metric, _, _ in LATENCY_METRICS}
+        for run in per_latency:
+            found = run.get(LATENCY_MODE, {}).get(gpus)
+            for metric, _, _ in LATENCY_METRICS:
+                try:
+                    row[metric].append(float(found[metric]))
+                except (TypeError, KeyError, ValueError):
+                    row[metric].append(None)
+        if any(v is not None for v in row["p50_us"]):
+            series[str(gpus)] = row
     return gpu_counts, series
 
 
@@ -456,16 +415,11 @@ def main():
             if g not in groups:
                 groups.append(g)
 
-    move_rows = {}
-    for mode in modes:
-        core = core_set(per_run, mode)
-        move_rows[mode] = movers(per_run, mode, core,
-                                 baselines(per_run, mode, core),
-                                 series[mode]["noise_pct"],
-                                 [m for m in modes if m != mode])
-
     modules, module_values = module_table(per_run, modes)
-    gpu_counts, latency = latency_series(per_latency, modes)
+    gpu_counts, latency = latency_series(per_latency)
+    # Only the leaves that actually appear, in LEAVES order, so the page draws
+    # a tab per suite the runner produced rather than an empty one.
+    leaves = [(k, l) for k, l in LEAVES if any(m["leaf"] == k for m in modules)]
 
     labels = dict(MODES)
     group_labels = dict(GROUPS)
@@ -483,14 +437,19 @@ def main():
         } for r in runs],
         "modes": [{"key": m, "label": labels[m]} for m in modes],
         "groups": [{"key": g, "label": group_labels.get(g, g)} for g in groups],
+        # The two suites, one per-module tab each.
+        "leaves": [{"key": k, "label": l} for k, l in leaves],
         "series": series,
-        # The modules the aggregates are made of, and what moved between runs.
+        # The modules the aggregates are made of, and every module's own series:
+        # what the per-module charts plot straight out of the file.
         "modules": modules,
         "module_values": module_values,
-        "movers": move_rows,
-        "movers_show": MOVERS_SHOW,
         "hip": hip_versions(per_latency, modes),
         "latency": {
+            # Named, because the chart is one stack's and the page has to say
+            # which -- the mode filter above does not scope it.
+            "mode": LATENCY_MODE,
+            "mode_label": labels.get(LATENCY_MODE, LATENCY_MODE),
             "gpus": gpu_counts,
             "metrics": [{"key": k, "label": l, "unit": u} for k, l, u in LATENCY_METRICS],
             "series": latency,
@@ -507,15 +466,16 @@ def main():
         s = series[mode]
         idx = [v for v in s["index"] if v is not None]
         partial = sum(1 for c in s["complete"] if not c)
-        moved = sum(r["n"] for r in move_rows[mode] if r)
         where = (f"index {min(idx):.1f}-{max(idx):.1f} (now {idx[-1]:.1f})"
                  if idx else "no index")
         print(f"  {mode:21s} {s['core']:3d} modules, {where}")
-        print(f"  {'':21s} noise p{NOISE_PCT} "
-              f"{(s['noise_pct'] or 0) * 100:.1f}%, {moved} module changes above it"
+        print(f"  {'':21s} noise p{NOISE_PCT} {(s['noise_pct'] or 0) * 100:.1f}%"
               + (f", {partial} partial run(s)" if partial else ""))
+    for key, label in leaves:
+        n = sum(1 for m in modules if m["leaf"] == key)
+        print(f"  {label.lower():21s} {n:3d} per-module charts")
     if latency:
-        print(f"  latency: {len(latency)} series over {len(gpu_counts)} GPU counts "
+        print(f"  latency: {LATENCY_MODE} only, {len(latency)} GPU counts "
               f"{gpu_counts}")
     else:
         print("  latency: no final rows found")

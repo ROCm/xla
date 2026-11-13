@@ -19,7 +19,6 @@ const state = {
   tab: 'models',
   modes: new Set(),
   metric: 'p50_us',
-  module: null,
   table: false,
 };
 
@@ -39,9 +38,6 @@ const fmtUs = (v) => (v == null ? '--' : v >= 1000 ? `${(v / 1000).toFixed(2)}ms
 const fmtQps = (v) => (v == null ? '--' : Math.round(v).toLocaleString());
 const fmtIndex = (v) => (v == null ? '--' : v.toFixed(1));
 const fmtInt = (v) => (v == null ? '--' : Math.round(v).toLocaleString());
-
-/* A change, always with its sign: these are read as directions first. */
-const fmtDelta = (v) => (v == null ? '--' : `${v > 0 ? '+' : ''}${(v * 100).toFixed(1)}%`);
 
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -71,10 +67,6 @@ const modeColor = (i) => `var(--series-${i + 1})`;
 /* Group colours continue after the modes, so a category band is never the same
  * hue as a stack's line on the chart above it. */
 const groupColor = (i) => `var(--series-${((i + 3) % 7) + 1})`;
-
-/* The dash patterns the GPU counts take, in order. Colour stays with the
- * stack, so filtering a stack off never repaints the rest. */
-const DASHES = [null, '6 4', '2 3', '10 3 2 3'];
 
 /* ---- tiny DOM helpers ---------------------------------------------------- */
 
@@ -582,7 +574,19 @@ function indexStat() {
   const vals = state.data.series[m.key].index;
   const a = firstIndex(vals);
   const b = lastIndex(vals);
-  if (a < 0 || b < 0 || a === b) return;
+  if (a < 0 || b < 0) return;
+  if (a === b) {
+    // Every stack's baseline is its own first measurement, so on a one-point
+    // window they all read exactly 100. Three identical tiles otherwise look
+    // like three stacks of identical speed, which is not what this measures:
+    // the index compares a stack with its own past, never with another stack.
+    host.append(el('span', {
+      text: 'One run in the window, so every stack sits at its own baseline of 100. '
+        + 'The index compares a stack with its own past, not with the other stacks — '
+        + 'it will separate from the next run on.',
+    }));
+    return;
+  }
   const change = vals[b] - vals[a];
   const word = Math.abs(change) < 0.5 ? 'level with'
     : change < 0 ? 'faster than' : 'slower than';
@@ -592,6 +596,18 @@ function indexStat() {
   }));
 }
 
+/* The noise floor needs two runs to exist, so a first run has none. Said out
+ * loud wherever it is quoted: a blank line there reads as a missing figure,
+ * and a chart with no floor under it invites reading every wobble as a move. */
+const NO_NOISE_YET = 'No run-to-run noise floor yet — it is measured from the change '
+  + 'between consecutive runs, so it appears once a second run is published. Until then, '
+  + 'treat every movement on these charts as unexplained.';
+
+const noiseSentence = (parts) =>
+  `Run-to-run noise floor, the 90th percentile of every module's change between `
+  + `consecutive runs: ${parts.join(', ')}. A move smaller than that is the measurement, `
+  + `not the stack.`;
+
 /** The noise floor, in the card that needs it to be read correctly. */
 function noiseNote() {
   const host = document.getElementById('noise-note');
@@ -600,12 +616,7 @@ function noiseNote() {
     .map((m) => [m, state.data.series[m.key].noise_pct])
     .filter(([, v]) => v != null)
     .map(([m, v]) => `${m.label} ±${(v * 100).toFixed(1)}%`);
-  if (!parts.length) return;
-  host.append(el('span', {
-    text: `Run-to-run noise floor, the 90th percentile of every module's change between `
-      + `consecutive runs: ${parts.join(', ')}. A move on this chart smaller than that is `
-      + `the measurement, not the stack.`,
-  }));
+  host.append(el('span', { text: parts.length ? noiseSentence(parts) : NO_NOISE_YET }));
 }
 
 function renderGroups() {
@@ -645,211 +656,242 @@ function renderModels() {
   renderGroups();
 }
 
-/* ---- modules tab --------------------------------------------------------- */
+/* ---- per-module tabs ----------------------------------------------------- */
 
-const moduleById = (key) => state.data.modules.find((m) => m.key === key);
-
-/** `model · module`, stacked, because the module id alone is not unique. */
-function moduleName(m) {
-  return el('div', { class: 'mod' }, [
-    el('span', { class: 'mod-model', text: m.model }),
-    el('span', { class: 'mod-id', text: m.module || '(single module)' }),
-  ]);
+/** The modules of one suite, in the group order the page uses elsewhere. */
+function leafModules(leaf) {
+  const order = state.data.groups.map((g) => g.key);
+  return state.data.modules
+    .filter((m) => m.leaf === leaf)
+    .sort((a, b) => (order.indexOf(a.group) - order.indexOf(b.group))
+                 || a.model.localeCompare(b.model)
+                 || a.module.localeCompare(b.module));
 }
 
-function buildModulePicker() {
-  const host = document.getElementById('module-pick');
-  host.textContent = '';
-  const byGroup = new Map();
-  for (const m of state.data.modules) {
-    if (!byGroup.has(m.group)) byGroup.set(m.group, []);
-    byGroup.get(m.group).push(m);
-  }
-  const labels = Object.fromEntries(state.data.groups.map((g) => [g.key, g.label]));
-  for (const [group, mods] of byGroup) {
-    const og = el('optgroup', { label: labels[group] || group });
-    for (const m of mods) {
-      og.append(el('option', {
-        value: m.key,
-        text: `${m.model} · ${m.leaf} · ${m.module || 'single module'}`,
-        selected: m.key === state.module ? '' : null,
-      }));
-    }
-    host.append(og);
-  }
-  host.value = state.module;
-  // render(), not renderModules(): the data table below is scoped by the
-  // picked module too, and only render() knows whether it is open.
-  host.onchange = () => { state.module = host.value; render(); };
-}
-
-function renderModuleChart() {
-  const host = document.getElementById('chart-module');
-  const d = state.data;
-  const mod = moduleById(state.module);
-  const stat = document.getElementById('module-stat');
-  stat.textContent = '';
-  if (!mod) { emptyState(host, 'module series'); return; }
-
-  const series = activeModes().map((m) => ({
-    label: m.label,
-    color: m.color,
-    values: d.module_values[m.key]?.[state.module] ?? d.runs.map(() => null),
-  }));
-  stat.append(el('span', {
-    html: `<span class="hl">${mod.model}</span> · ${mod.leaf}`
-      + (mod.module ? ` · <span class="hl">${mod.module}</span>` : ''),
-  }));
-  lineChart(host, { series, fmt: fmtMs, zeroBased: false });
-}
+/** The model name without the category it is already filed under. */
+const shortModel = (m) =>
+  (m.model.startsWith(`${m.group}_`) ? m.model.slice(m.group.length + 1) : m.model);
 
 /**
- * Where a module's move stands on the other stacks in the same run.
+ * One module's own chart: small, its own y scale, no axis furniture.
  *
- * All three stacks replay the same modules against the same XLA commit, so
- * this separates a change in XLA -- which moves every stack at once -- from
- * one in a single ROCm stack. The second is the row to chase, and the only one
- * that gets a mark.
+ * Deliberately *not* zero-based and not shared with its neighbours. These
+ * panels exist to show a module against itself over time -- the aggregates on
+ * the Models tab are what compare modules with each other -- so each is zoomed
+ * to its own range. That magnifies noise by construction, which is why the
+ * card states the run-to-run floor: a wobble under it is the measurement.
  */
-function agreement(also) {
-  if (also === 'all') return el('span', { class: 'muted', text: 'every stack' });
-  if (also === 'only') {
-    return el('span', {
-      class: 'diff', text: 'this stack only',
-      title: 'The other stacks measured this module in the same run and did not move with it',
-    });
-  }
-  return el('span', { class: 'muted', text: 'not measured elsewhere' });
-}
+function miniChart(host, series) {
+  const runs = state.data.runs;
+  const width = Math.max(180, host.clientWidth);
+  const M = { top: 10, right: 10, bottom: 14, left: 46 };
+  const H = 104;
+  const plotW = width - M.left - M.right;
+  const plotH = H - M.top - M.bottom;
 
-const deltaCell = (v) => el('span', {
-  class: v == null ? 'delta' : `delta ${v > 0 ? 'slower' : 'faster'}`,
-  text: fmtDelta(v),
-});
-
-/**
- * What moved between each run and the one before it, newest run first.
- *
- * Grouped by run rather than by stack: the question this answers is "what
- * changed last night", and the chart above it is already per-module.
- */
-function renderMovers() {
-  const host = document.getElementById('movers-host');
-  host.textContent = '';
-  const d = state.data;
-  const modes = activeModes();
-
-  const cols = [
-    { h: 'Stack', lead: true }, { h: 'Module', lead: true }, { h: 'Now' },
-    { h: 'vs previous run' }, { h: 'vs start' }, { h: 'Other stacks', lead: true },
-  ];
-  const cell = (i, children) => el('td', { class: cols[i].lead ? 'lead' : null },
-                                   typeof children === 'string' ? [el('span', { text: children })] : children);
-
-  const table = el('table');
-  const thead = el('thead');
-  thead.append(el('tr', {}, cols.map((c) =>
-    el('th', { text: c.h, scope: 'col', class: c.lead ? 'lead' : null }))));
-  table.append(thead);
-
-  const tbody = el('tbody');
-  let any = false;
-  for (let i = d.runs.length - 1; i >= 0; i--) {
-    const rows = modes.map((m) => [m, d.movers[m.key]?.[i]]).filter(([, t]) => t);
-    if (!rows.length) continue;
-    any = true;
-    const r = d.runs[i];
-
-    tbody.append(el('tr', {}, [el('td', { class: 'run-head', colspan: cols.length }, [
-      el('span', { text: `${fmtDay(r.day)} ${hhmm(r.iso)}` }),
-      link(r.sha ? `https://github.com/${d.repository}/commit/${r.sha}` : null,
-           `xla ${r.commit || ''}`, 'The upstream commit this run benchmarked', 'sha'),
-    ])]));
-
-    for (const [m, t] of rows) {
-      if (!t.modules.length) {
-        tbody.append(el('tr', {}, [
-          cell(0, [el('div', {}, [swatch(m.color), el('span', { text: m.label })])]),
-          el('td', { class: 'quiet', colspan: cols.length - 1 },
-             [el('span', { text: `nothing above ±${(t.noise * 100).toFixed(1)}%` })]),
-        ]));
-        continue;
-      }
-      t.modules.forEach((c, k) => {
-        const tr = el('tr', { class: c.key === state.module ? 'picked' : null }, [
-          // The stack is named once per group of its own movers, and carries
-          // the floor those movers cleared: a per-run fact, not a per-row one.
-          cell(0, k ? [] : [
-            el('div', {}, [swatch(m.color), el('span', { text: m.label })]),
-            el('div', {
-              class: 'muted',
-              text: `${t.n} above ±${(t.noise * 100).toFixed(1)}%`,
-            }),
-          ]),
-          cell(1, [moduleName(c), el('span', { class: 'leaf', text: c.leaf })]),
-          cell(2, [
-            el('span', { text: fmtMs(c.ms) }),
-            el('span', { class: 'tip-flag', text: ` was ${fmtMs(c.was)}` }),
-          ]),
-          cell(3, [deltaCell(c.delta)]),
-          cell(4, [deltaCell(c.vs_base)]),
-          cell(5, [agreement(c.also)]),
-        ]);
-        // The table is the index into the chart above it.
-        tr.style.cursor = 'pointer';
-        tr.title = 'Plot this module';
-        tr.addEventListener('click', () => {
-          state.module = c.key;
-          document.getElementById('module-pick').value = c.key;
-          render();
-        });
-        tbody.append(tr);
-      });
-    }
-  }
-  // A change is a comparison, so the first run of a window has nothing to
-  // report and a one-run window has nothing at all. An empty table with a
-  // header and no rows reads as broken; this says which it is.
-  if (!any) {
-    host.append(el('p', { class: 'note empty' }, [el('span', {
-      text: d.runs.length < 2
-        ? 'Only one run published so far. A change is measured against the run before it, '
-          + 'so this fills in from the second run on.'
-        : 'No stack in view reported a comparison on any run. Turn a stack back on above.',
-    })]));
+  const flat = series.flatMap((s) => s.values).filter((v) => v != null);
+  if (!flat.length) {
+    host.append(el('p', { class: 'mini-empty', text: 'not measured' }));
     return;
   }
-  table.append(tbody);
-  host.append(table);
+  const hi = Math.max(...flat);
+  const lo = Math.min(...flat);
+  // A flat series still needs a band, or every point lands on one pixel row.
+  const pad = hi > lo ? (hi - lo) * 0.18 : Math.max(hi * 0.02, 1e-9);
+  const top = hi + pad;
+  const bot = Math.max(0, lo - pad);
+  const x = (i) => (runs.length === 1 ? plotW / 2 : (i / (runs.length - 1)) * plotW);
+  const y = (v) => plotH - ((v - bot) / (top - bot)) * plotH;
+
+  const root = svg('svg', { viewBox: `0 0 ${width} ${H}`, height: H, role: 'img' });
+  const g = svg('g', { transform: `translate(${M.left},${M.top})` });
+  root.append(g);
+
+  // Two gridlines only: the panel is 104px tall and a ladder would fill it.
+  for (const v of [hi, lo]) {
+    g.append(svg('line', {
+      x1: 0, x2: plotW, y1: y(v), y2: y(v), stroke: 'var(--grid)', 'stroke-width': 1,
+    }));
+    const t = svg('text', {
+      x: -7, y: y(v) + 3.5, 'text-anchor': 'end', fill: 'var(--text-muted)',
+      'font-size': 9.5, 'font-variant-numeric': 'tabular-nums',
+    });
+    t.textContent = fmtMs(v);
+    g.append(t);
+  }
+
+  for (const s of series) {
+    let run = [];
+    const flush = () => {
+      if (run.length > 1) {
+        g.append(svg('path', {
+          d: run.map((p, k) => `${k ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(''),
+          fill: 'none', stroke: s.color, 'stroke-width': 1.75,
+          'stroke-linejoin': 'round', 'stroke-linecap': 'round',
+        }));
+      } else if (run.length === 1) {
+        // A lone reading is a dot; a one-point path draws nothing.
+        g.append(svg('circle', { cx: run[0][0], cy: run[0][1], r: 2.5, fill: s.color }));
+      }
+      run = [];
+    };
+    s.values.forEach((v, i) => (v == null ? flush() : run.push([x(i), y(v)])));
+    flush();
+  }
+
+  const rule = svg('line', { y1: 0, y2: plotH, stroke: 'var(--axis)', 'stroke-width': 1, opacity: 0 });
+  g.append(rule);
+  const dots = svg('g', { opacity: 0 });
+  g.append(dots);
+  host.append(root);
+  const tip = el('div', { class: 'tip' });
+  host.append(tip);
+
+  const show = (i) => {
+    rule.setAttribute('x1', x(i));
+    rule.setAttribute('x2', x(i));
+    rule.setAttribute('opacity', 1);
+    dots.textContent = '';
+    for (const s of series) {
+      if (s.values[i] == null) continue;
+      dots.append(svg('circle', {
+        cx: x(i), cy: y(s.values[i]), r: 3.5, fill: s.color,
+        stroke: 'var(--surface-1)', 'stroke-width': 1.5,
+      }));
+    }
+    dots.setAttribute('opacity', 1);
+
+    const r = runs[i];
+    tip.textContent = '';
+    tip.append(el('div', { class: 'tip-head' }, [
+      el('span', { text: `${fmtDay(r.day)} ${hhmm(r.iso)}` }),
+      el('span', { class: 'tip-flag', text: r.commit ? `xla ${r.commit}` : '' }),
+    ]));
+    for (const s of series) {
+      tip.append(el('div', { class: 'tip-row' }, [
+        swatch(s.color),
+        el('span', { text: s.label }),
+        el('span', { class: 'v', text: fmtMs(s.values[i]) }),
+      ]));
+    }
+    tip.classList.add('on');
+    const tw = tip.offsetWidth || 190;
+    tip.style.left = `${Math.min(Math.max(M.left + x(i) - tw / 2, 0), Math.max(width - tw, 0))}px`;
+    tip.style.top = `${H - 4}px`;
+  };
+
+  g.append(svg('rect', {
+    x: 0, y: 0, width: plotW, height: plotH, fill: 'transparent', style: 'cursor:crosshair',
+  }));
+  root.addEventListener('mousemove', (e) => {
+    const box = root.getBoundingClientRect();
+    const px = ((e.clientX - box.left) / box.width) * width - M.left;
+    show(Math.max(0, Math.min(runs.length - 1, Math.round((px / plotW) * (runs.length - 1)))));
+  });
+  root.addEventListener('mouseleave', () => {
+    rule.setAttribute('opacity', 0);
+    dots.setAttribute('opacity', 0);
+    tip.classList.remove('on');
+  });
 }
 
-function renderModules() {
-  if (!state.data.modules || !state.data.module_values) {
-    emptyState(document.getElementById('chart-module'), 'per-module series');
-  } else {
-    renderModuleChart();
+/** The run-to-run floor, for the card that has to be read against it. */
+function leafNoise(host) {
+  host.textContent = '';
+  const parts = activeModes()
+    .map((m) => [m, state.data.series[m.key].noise_pct])
+    .filter(([, v]) => v != null)
+    .map(([m, v]) => `${m.label} ±${(v * 100).toFixed(1)}%`);
+  host.append(el('span', {
+    text: parts.length
+      ? `Each panel is scaled to its own module, so these are close-ups: a line that `
+        + `looks dramatic may be moving by less than the run-to-run noise floor, which is `
+        + `${parts.join(', ')}.`
+      : `Each panel is scaled to its own module, so these are close-ups. ${NO_NOISE_YET}`,
+  }));
+}
+
+/** One stack, one colour -- the same hue it has on every other tab. */
+function moduleSeries(key) {
+  return activeModes().map((m) => ({
+    label: m.label,
+    color: m.color,
+    values: state.data.module_values[m.key]?.[key] ?? state.data.runs.map(() => null),
+  }));
+}
+
+/**
+ * Every module of one suite, grouped by model category.
+ *
+ * Inference and training are separate tabs because they are separate suites:
+ * a training module carries the backward pass, the gradient all-reduce and the
+ * optimizer update, and has no inference counterpart to be plotted beside.
+ */
+function renderLeaf(leaf) {
+  const legend = document.getElementById(`legend-${leaf}`);
+  legend.textContent = '';
+  for (const m of activeModes()) {
+    legend.append(el('span', { class: 'legend-item' }, [
+      swatch(m.color), el('span', { text: m.label }),
+    ]));
   }
-  if (state.data.movers) renderMovers();
-  else emptyState(document.getElementById('movers-host'), 'module changes');
+  leafNoise(document.getElementById(`noise-${leaf}`));
+
+  const host = document.getElementById(`grid-${leaf}`);
+  host.textContent = '';
+  const mods = leafModules(leaf);
+  if (!mods.length) {
+    emptyState(host, `${leaf} modules`);
+    return;
+  }
+  const labels = Object.fromEntries(state.data.groups.map((g) => [g.key, g.label]));
+
+  // Every panel is built before any is drawn: a panel measured while it is its
+  // grid's only child reports the full width, and the grid then reflows to
+  // several columns under it, leaving that panel's viewBox scaled down.
+  const plots = [];
+  let group = null;
+  let grid = null;
+  for (const m of mods) {
+    if (m.group !== group) {
+      group = m.group;
+      host.append(el('h3', { class: 'grid-head', text: labels[group] || group }));
+      grid = el('div', { class: 'module-grid' });
+      host.append(grid);
+    }
+    const panel = el('div', { class: 'module-panel' });
+    panel.append(el('p', { class: 'panel-title', text: shortModel(m) }));
+    panel.append(el('p', { class: 'panel-sub', text: m.module || 'single module' }));
+    const plot = el('div', { class: 'plot' });
+    panel.append(plot);
+    grid.append(panel);
+    plots.push([plot, m.key]);
+  }
+  for (const [plot, key] of plots) miniChart(plot, moduleSeries(key));
 }
 
 /* ---- latency tab --------------------------------------------------------- */
 
-/** One series per (stack, GPU count): colour is the stack, dash is the count. */
+/**
+ * One series per GPU count, from one stack.
+ *
+ * `trends.py` reads the latency tool on `latency.mode` only -- it measures the
+ * ROCm runtime rather than the XLA tree, and the nightly is the only stack the
+ * workflow still runs it on. So there is no stack dimension here, the GPU
+ * count takes the colour, and the mode chips do not scope this tab at all.
+ */
 function latencySeries() {
   const d = state.data;
   if (!d.latency) return [];
-  return activeModes().flatMap((m) =>
-    d.latency.gpus
-      .map((g, gi) => ({ g, gi, row: d.latency.series[`${m.key}:${g}`] }))
-      .filter((s) => s.row)
-      .map((s) => ({
-        key: `${m.key}:${s.g}`,
-        label: `${m.label} · ${s.g} GPU${s.g === 1 ? '' : 's'}`,
-        color: m.color,
-        dash: DASHES[s.gi % DASHES.length],
-        values: s.row[state.metric],
-      })));
+  return d.latency.gpus
+    .map((g, i) => ({ g, i, row: d.latency.series[String(g)] }))
+    .filter((s) => s.row)
+    .map((s) => ({
+      key: String(s.g),
+      label: `${s.g} GPU${s.g === 1 ? '' : 's'}`,
+      color: modeColor(s.i),
+      values: s.row[state.metric],
+    }));
 }
 
 function renderLatencyLegend(series) {
@@ -857,7 +899,7 @@ function renderLatencyLegend(series) {
   host.textContent = '';
   for (const s of series) {
     host.append(el('span', { class: 'legend-item' }, [
-      swatch(s.color, !!s.dash), el('span', { text: s.label }),
+      swatch(s.color), el('span', { text: s.label }),
     ]));
   }
 }
@@ -871,29 +913,29 @@ const latencyFmt = () => (metricDef().unit === 'qps' ? fmtQps : fmtUs);
 /**
  * The headline the latency card leads with: how the figure scales with GPUs.
  *
- * Both halves come from the *same* stack, so the sentence compares GPU counts
- * and nothing else; mixing stacks would read as a scaling result when it was
- * really a version difference.
+ * One stack, so the sentence compares GPU counts and nothing else. It also
+ * names the stack, because the mode chips above do not apply here and a reader
+ * would otherwise assume they did.
  */
 function latencyStat(series) {
   const host = document.getElementById('latency-stat');
   host.textContent = '';
+  const d = state.data;
   const now = (s) => {
     const i = lastIndex(s.values);
     return i < 0 ? null : s.values[i];
   };
   const measured = series.filter((s) => now(s) != null);
-  const mode = measured.map((s) => s.key.split(':')[0]).pop();
-  const mine = measured.filter((s) => s.key.split(':')[0] === mode);
-  const one = mine.find((s) => s.key.endsWith(':1'));
-  const many = mine[mine.length - 1];
+  const one = measured.find((s) => s.key === '1');
+  const many = measured[measured.length - 1];
+  const hip = d.hip?.[d.latency.mode]?.filter(Boolean).pop();
   if (!one || !many || one === many) return;
   const fmt = latencyFmt();
-  const gpus = many.key.split(':')[1];
   host.append(el('span', {
-    html: `Latest on <span class="hl">${many.label.split(' · ')[0]}</span>: `
+    html: `Measured on <span class="hl">${d.latency.mode_label}</span>`
+      + `${hip ? ` (HIP ${hip})` : ''} only. Latest: `
       + `<span class="hl">${fmt(now(one))}</span> at 1 GPU against `
-      + `<span class="hl">${fmt(now(many))}</span> at ${gpus}.`,
+      + `<span class="hl">${fmt(now(many))}</span> at ${many.label}.`,
   }));
 }
 
@@ -959,31 +1001,46 @@ function renderModelsTable(host) {
   }));
 }
 
-function renderModulesTable(host) {
+/**
+ * Every panel of one suite, as text: a row per module per stack, a column per
+ * run. Wide rather than tall, because the thing being read across is time.
+ */
+function renderLeafTable(host, leaf) {
   const d = state.data;
-  const mod = moduleById(state.module);
-  if (!mod) { emptyState(host, 'per-module series'); return; }
-  const modes = activeModes();
+  const mods = leafModules(leaf);
+  if (!mods.length) { emptyState(host, `${leaf} modules`); return; }
 
   const table = el('table');
   const thead = el('thead');
-  thead.append(el('tr', {}, [el('th', { text: 'Run', scope: 'col' }),
-                             el('th', { text: 'XLA', scope: 'col' })].concat(
-    modes.map((m) => el('th', { text: m.label, scope: 'col' })))));
+  thead.append(el('tr', {}, [
+    el('th', { text: 'Module', scope: 'col', class: 'lead' }),
+    el('th', { text: 'Stack', scope: 'col', class: 'lead' }),
+  ].concat(d.runs.map((r) => el('th', { text: fmtDay(r.day), scope: 'col', title: r.commit })))));
   table.append(thead);
 
   const tbody = el('tbody');
-  d.runs.forEach((r, i) => {
-    tbody.append(el('tr', {}, [
-      el('td', { text: `${fmtDay(r.day)} ${hhmm(r.iso)}` }),
-      el('td', {}, [link(r.sha ? `https://github.com/${d.repository}/commit/${r.sha}` : null,
-                         r.commit || '--', null, 'sha')]),
-    ].concat(modes.map((m) =>
-      el('td', { text: fmtMs(d.module_values[m.key]?.[state.module]?.[i]) })))));
-  });
+  for (const m of mods) {
+    activeModes().forEach((mode, k) => {
+      const vals = d.module_values[mode.key]?.[m.key] ?? d.runs.map(() => null);
+      tbody.append(el('tr', {}, [
+        // The module is named once per group of its own stacks.
+        el('td', { class: 'lead' }, k ? [] : [
+          el('div', { class: 'mod' }, [
+            el('span', { class: 'mod-model', text: shortModel(m) }),
+            el('span', { class: 'mod-id', text: m.module || 'single module' }),
+          ]),
+        ]),
+        el('td', { class: 'lead' }, [swatch(mode.color), el('span', { text: mode.label })]),
+      ].concat(vals.map((v) => el('td', { text: fmtMs(v) })))));
+    });
+  }
   table.append(tbody);
-  host.append(el('p', { class: 'note', text: `${mod.model} · ${mod.leaf} · ${mod.module || 'single module'}` }));
   host.append(table);
+  host.append(el('p', {
+    class: 'note',
+    text: 'Milliseconds per module per run, exactly as the runner reported them. '
+      + 'Columns are runs, oldest first; two runs on one day share a column label.',
+  }));
 }
 
 function renderLatencyTable(host) {
@@ -1015,11 +1072,14 @@ function renderLatencyTable(host) {
   host.append(table);
 }
 
+/** Whether a tab name is one of the per-module suites. */
+const isLeafTab = (tab) => (state.data.leaves ?? []).some((l) => l.key === tab);
+
 /** The table the open tab's charts are made of. */
 function renderTable() {
   const host = document.getElementById('table-host');
   host.textContent = '';
-  if (state.tab === 'modules') renderModulesTable(host);
+  if (isLeafTab(state.tab)) renderLeafTable(host, state.tab);
   else if (state.tab === 'latency') renderLatencyTable(host);
   else renderModelsTable(host);
 }
@@ -1029,7 +1089,7 @@ function renderTable() {
 function render() {
   // Only the open tab is drawn: a chart measured while its panel is hidden
   // reports zero width and lays itself out against that.
-  if (state.tab === 'modules') renderModules();
+  if (isLeafTab(state.tab)) renderLeaf(state.tab);
   else if (state.tab === 'latency') renderLatency();
   else renderModels();
   if (state.table) renderTable();
@@ -1087,16 +1147,22 @@ function showTab(tab) {
     const on = b.dataset.tab === tab;
     b.classList.toggle('on', on);
     b.setAttribute('aria-selected', String(on));
-    document.getElementById(`view-${b.dataset.tab}`).hidden = !on;
+    // A tab `hideMissingTabs` retired has had its panel removed with it.
+    const panel = document.getElementById(`view-${b.dataset.tab}`);
+    if (panel) panel.hidden = !on;
   }
   // The metric chips pick between the latency tool's own figures; on the other
   // tabs there is one figure per chart and they would scope nothing.
   document.getElementById('metric-filter').hidden = tab !== 'latency';
+  // The stack chips scope everything *except* latency, which is measured on
+  // one stack only. Leaving them visible there would invite the reading that
+  // the chart is filtered by them when it is not.
+  document.getElementById('mode-filter').hidden = tab === 'latency';
   render();
 }
 
 function wireControls() {
-  const tabs = [...document.querySelectorAll('.tab')];
+  const tabs = [...document.querySelectorAll('.tab')].filter((t) => !t.hidden);
   for (const b of tabs) {
     b.addEventListener('click', () => showTab(b.dataset.tab));
     // A tablist is driven by the arrow keys, not by Tab.
@@ -1139,15 +1205,21 @@ function wireControls() {
 
 /* ---- boot ---------------------------------------------------------------- */
 
-/** The module the Modules tab opens on: the largest mover of the latest run. */
-function openingModule(data) {
-  for (let i = data.runs.length - 1; i >= 0; i--) {
-    for (const m of data.modes) {
-      const row = data.movers?.[m.key]?.[i];
-      if (row && row.modules.length) return row.modules[0].key;
-    }
+/**
+ * Hide the tab of a suite this trends.json does not carry.
+ *
+ * The leaves come from the data -- `run_1gpu_perf.sh` writes one CSV per
+ * model and leaf, and a run that produced no training modules has no training
+ * tab to show. Unlike a missing *card*, a missing suite is not a deploy skew
+ * worth explaining on screen: there is simply nothing to put in it.
+ */
+function hideMissingTabs(data) {
+  const have = new Set((data.leaves ?? []).map((l) => l.key));
+  for (const b of document.querySelectorAll('.tab[data-leaf]')) {
+    const missing = !have.has(b.dataset.tab);
+    b.hidden = missing;
+    if (missing) document.getElementById(`view-${b.dataset.tab}`)?.remove();
   }
-  return data.modules?.[0]?.key ?? null;
 }
 
 (async function main() {
@@ -1169,7 +1241,7 @@ function openingModule(data) {
 
   state.data = data;
   for (const m of data.modes) state.modes.add(m.key);
-  state.module = openingModule(data);
+  hideMissingTabs(data);
 
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const first = fmtDay(data.runs[0].day);
@@ -1184,7 +1256,6 @@ function openingModule(data) {
 
   buildModeChips();
   buildMetricChips();
-  buildModulePicker();
   wireControls();
   showTab(state.tab);
 })();

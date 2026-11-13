@@ -495,12 +495,66 @@ td.partial { color: var(--text-muted); }
 
 /* ---- perf-only ----------------------------------------------------------- */
 
-/* A module's change between two runs. Slower is the bad direction here, and
-   both directions carry an arrow as well as a colour -- the sign is never left
-   to the hue alone. */
-.delta { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.delta.slower { color: var(--critical); }
-.delta.faster { color: var(--good); }
+/* The per-module grid. Four columns at full width, down to one on a phone:
+   28 inference panels want to be scannable in a couple of screens, and each
+   panel only has to carry a shape, not a readable axis. */
+.module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: 14px 16px;
+  margin-bottom: 22px;
+}
+
+/* The model category a block of panels belongs to. */
+.grid-head {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 4px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.module-panel {
+  /* No card chrome: 43 bordered boxes would read as 43 separate things rather
+     than one grid. The title and the shared gap do the separating. */
+  min-width: 0;
+}
+
+.module-panel .panel-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  /* A long model name truncates rather than rewrapping the whole grid row. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-sub {
+  margin: 0 0 1px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+}
+
+/* A module no stack measured. Said in the panel, so the grid keeps its shape
+   rather than silently dropping a cell. */
+.mini-empty {
+  margin: 0;
+  padding: 34px 0;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* The panel tooltips are anchored below their chart, so they must float over
+   the row beneath rather than being clipped by it. */
+.module-panel .plot { overflow: visible; }
+.module-panel .tip { min-width: 150px; z-index: 6; }
 
 /* A module name: model, then the HLO module inside it. The module id alone is
    not unique -- module_3910 exists in three different models -- so the model
@@ -512,50 +566,3 @@ td.partial { color: var(--text-muted); }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
 }
-
-/* The inference/training tag: a word, at label weight, not a second colour. */
-.leaf {
-  color: var(--text-muted);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-/* The module picker. Styled as a chip so the filter row stays one material. */
-.pick {
-  font: inherit;
-  font-size: 13px;
-  color: var(--text-primary);
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 5px 10px;
-  min-height: 30px;
-  max-width: 460px;
-  cursor: pointer;
-}
-
-.pick:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
-
-/* A row in the movers table that is the chart's current module. */
-tbody tr.picked { background: var(--plane); }
-tbody tr.picked td:first-child { box-shadow: inset 2px 0 0 var(--series-1); }
-
-/* The movers table groups by run, and a run is two lines (date, then the
-   commit it measured), so the group heading pins lower than ci-metrics'. */
-.table-wrap.tall tbody td.run-head {
-  position: sticky;
-  top: 30px;
-  z-index: 1;
-  background: var(--surface-1);
-  color: var(--text-primary);
-  font-weight: 650;
-  font-size: 13px;
-  padding-top: 18px;
-}
-
-.run-head .sha { margin-left: 8px; font-weight: 500; }
-
-/* A run where nothing cleared the noise floor. Said, not left blank: a quiet
-   night and a night with no data look identical otherwise. */
-td.quiet { color: var(--text-muted); font-style: italic; }
