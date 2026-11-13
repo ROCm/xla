@@ -27,26 +27,26 @@ on:
   workflow_dispatch:
     inputs:
       run_sanitizers:
-        description: 'Also run the sanitizers jobs'
+        description: "Also run the sanitizers jobs"
         required: false
         type: boolean
         default: false
   schedule:
     # Main XLA UT + JAX run: every 6 hours at :47 (even hours UTC)
-    - cron: '47 */6 * * *'
+    - cron: "47 */6 * * *"
     # Daily run at 03:47 UTC. The hour is odd, so it never coincides with the
     # even-hour entry above (two matching entries would start two runs).
     # This is the only schedule that also triggers the sanitizers job.
-    - cron: '47 3 * * *'
+    - cron: "47 3 * * *"
   pull_request_target:
     types: [labeled]
   pull_request:
     branches:
       - rocm-dev-infra
     paths:
-      - '.github/workflows/rocm_xla_ci_nightly.yml'
-      - '.github/workflows/rocm_xla_ci_sanitizers.yml'
-      - '.github/workflows/rocm_xla_ci_jax.yml'
+      - ".github/workflows/rocm_xla_ci_nightly.yml"
+      - ".github/workflows/rocm_xla_ci_sanitizers.yml"
+      - ".github/workflows/rocm_xla_ci_jax.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
@@ -93,9 +93,9 @@ jobs:
         env:
           ROCM_PIP_SOURCE: prerelease
           GPU_TARGET: device-all
-          ROCM_SDK_VERSION: '10.2'
-          PIP_INDEX_PATH: ''
-          THEROCK_INDEX_URL: 'https://rc.repo.amd.com/rocm/whl-next/'
+          ROCM_SDK_VERSION: "10.2"
+          PIP_INDEX_PATH: ""
+          THEROCK_INDEX_URL: "https://rc.repo.amd.com/rocm/whl-next/"
         run: bash build_tools/rocm/detect-therock-version.sh
 
   execute-xla-ut-nightly:
@@ -116,10 +116,6 @@ jobs:
         --bes_keywords=nightly
         --keep_going
         --nocache_test_results
-      ROCM_DISTRO_ARGS: >-
-        --repo_env=ROCM_PATH=
-        --repo_env=ROCM_DISTRO_URL=${{ matrix.mode.distro_url }}
-        --repo_env=ROCM_DISTRO_HASH=${{ matrix.mode.distro_hash }}
     strategy:
       fail-fast: false
       matrix:
@@ -182,7 +178,6 @@ jobs:
             --bes_keywords=single_gpu \
             --build_event_json_file=xla_${{ matrix.mode.name }}_single_gpu_build_events.json \
             ${COMMON_ARGS} \
-            ${ROCM_DISTRO_ARGS} \
             -- \
             //xla/...
 
@@ -196,7 +191,6 @@ jobs:
             --bes_keywords=multi_gpu \
             --build_event_json_file=xla_${{ matrix.mode.name }}_multi_gpu_build_events.json \
             ${COMMON_ARGS} \
-            ${ROCM_DISTRO_ARGS} \
             --spawn_strategy=local \
             --strategy=TestRunner=local \
             -- \
@@ -212,7 +206,6 @@ jobs:
             --bes_keywords=cpu \
             --build_event_json_file=xla_${{ matrix.mode.name }}_rocm_cpu_build_events.json \
             ${COMMON_ARGS} \
-            ${ROCM_DISTRO_ARGS} \
             --spawn_strategy=local \
             -- \
             //xla/...
