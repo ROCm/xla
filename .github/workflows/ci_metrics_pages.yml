@@ -1,16 +1,22 @@
 # Deploys the Pages site when new CI metrics are published.
 #
-# A Pages deployment replaces the entire site, so this builds every section,
-# not just the dashboard -- otherwise each nightly would delete /scaling-book.
-# The build itself lives in the composite action both Pages workflows share;
-# see .github/actions/build-pages-site/action.yml.
+# This is the *CI* dashboard: how long CI takes to answer a pull request. The
+# perf nightly's benchmark results are a separate section with its own data
+# branch and its own workflow; see perf_metrics_pages.yml.
 #
-# The companion workflow, scaling_book_pages.yml, is the same deployment driven
-# by the scaling-book side. Both are serialised by the `pages` concurrency
-# group, so whichever runs second simply republishes the same complete site.
+# A Pages deployment replaces the entire site, so this builds every section,
+# not just this dashboard -- otherwise each nightly would delete /scaling-book
+# and /perf-metrics. The build itself lives in the composite action all three
+# Pages workflows share; see .github/actions/build-pages-site/action.yml.
+#
+# The companion workflows, scaling_book_pages.yml and perf_metrics_pages.yml,
+# are the same deployment driven from their own sides. All three are serialised
+# by the `pages` concurrency group, so whichever runs last simply republishes
+# the same complete site.
 #
 #   rocm.github.io/xla/scaling-book
 #   rocm.github.io/xla/ci-metrics
+#   rocm.github.io/xla/perf-metrics
 
 name: Deploy CI metrics dashboard
 
