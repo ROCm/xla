@@ -73,6 +73,8 @@ bool MaybeConv1dToConv2d(HloInstruction* conv) {
   return false;
 }
 
+}  // namespace
+
 bool LooksLikeForwardConvolution(const HloInstruction* conv) {
   const ConvolutionDimensionNumbers& dnums =
       conv->convolution_dimension_numbers();
@@ -108,8 +110,6 @@ bool LooksLikeForwardConvolution(const HloInstruction* conv) {
 
   return true;
 }
-
-}  // namespace
 
 bool CanImplementAsGpuForwardConv(HloInstruction* conv) {
   const ConvolutionDimensionNumbers& dnums =
