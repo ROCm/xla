@@ -19,6 +19,10 @@ permissions:
   contents: read
 
 on:
+  schedule:
+    # Daily run at 03:47 UTC. The hour is odd, so it never coincides with the
+    # even-hour XLA UT + JAX cron in rocm_xla_ci_nightly.yml.
+    - cron: "47 3 * * *"
   workflow_call:
     inputs:
       repository:
@@ -31,13 +35,11 @@ on:
         required: false
         type: string
         default: "main"
-      run_sanitizers:
-        description: "Set to true to run sanitizers"
-        required: false
-        type: boolean
-        default: true
   pull_request_target:
     types: [labeled]
+  pull_request:
+    paths:
+      - ".github/workflows/rocm_xla_ci_sanitizers.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_number }}-${{ github.run_id }}
@@ -80,7 +82,7 @@ jobs:
 
   execute-xla-ut-sanitizers:
     needs: rocm-config
-    if: inputs.run_sanitizers || github.event.label.name == 'sanitizers'
+    if: github.event_name != 'pull_request_target' || github.event.label.name == 'sanitizers'
     runs-on: amd-do-linux-xla-gpu-gfx950-dpx-8
     env:
       COMMON_ARGS: >-
@@ -117,8 +119,8 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ inputs.repository || github.event.pull_request.head.repo.full_name }}
-          ref: ${{ inputs.ref || github.event.pull_request.head.sha }}
+          repository: ${{ inputs.repository || github.event.pull_request.head.repo.full_name || 'openxla/xla' }}
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || 'main' }}
           persist-credentials: false
 
       - name: CPU Info

@@ -14,8 +14,6 @@
 # ============================================================================
 
 name: CI ROCm Nightly
-# Whether this run triggers the sanitizers job is visible from the
-# `sanitizers` job in the run's job list (decided once in `rocm-config`).
 run-name: >-
   CI ROCm Nightly #${{ github.run_number }}: ${{ github.event_name }}${{
   github.event.schedule && format(' ({0})', github.event.schedule) || '' }}
@@ -25,19 +23,9 @@ permissions:
 
 on:
   workflow_dispatch:
-    inputs:
-      run_sanitizers:
-        description: "Also run the sanitizers jobs"
-        required: false
-        type: boolean
-        default: false
   schedule:
     # Main XLA UT + JAX run: every 6 hours at :47 (even hours UTC)
     - cron: "47 */6 * * *"
-    # Daily run at 03:47 UTC. The hour is odd, so it never coincides with the
-    # even-hour entry above (two matching entries would start two runs).
-    # This is the only schedule that also triggers the sanitizers job.
-    - cron: "47 3 * * *"
   pull_request_target:
     types: [labeled]
   pull_request:
@@ -45,7 +33,6 @@ on:
       - rocm-dev-infra
     paths:
       - ".github/workflows/rocm_xla_ci_nightly.yml"
-      - ".github/workflows/rocm_xla_ci_sanitizers.yml"
       - ".github/workflows/rocm_xla_ci_jax.yml"
 
 concurrency:
@@ -58,22 +45,11 @@ jobs:
     outputs:
       docker-image: ${{ steps.out.outputs.docker-image }}
       therock-version: ${{ steps.therock.outputs.therock_version }}
-      # Single source of truth for whether this run should also trigger the
-      # sanitizers job: daily cron, manual dispatch with the input checked,
-      # the "nightly-pipeline" label, or a PR to rocm-dev-infra touching the
-      # workflows.
-      run-sanitizers: ${{ steps.out.outputs.run-sanitizers }}
     steps:
       - id: out
         shell: bash
         run: |
           echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
-          echo "run-sanitizers=${{
-            github.event.schedule == '47 3 * * *' ||
-            (github.event_name == 'workflow_dispatch' && inputs.run_sanitizers) ||
-            github.event.label.name == 'nightly-pipeline' ||
-            (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'rocm-dev-infra')
-          }}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -219,17 +195,6 @@ jobs:
           name: xla-bep-${{ matrix.mode.name }}
           path: xla_${{ matrix.mode.name }}_*_build_events.json
           if-no-files-found: warn
-
-  # Call sanitizers workflow as a separate job, gated on the decision made
-  # once in rocm-config above.
-  sanitizers:
-    needs: rocm-config
-    if: needs.rocm-config.outputs.run-sanitizers == 'true'
-    uses: ./.github/workflows/rocm_xla_ci_sanitizers.yml
-    with:
-      repository: openxla/xla
-      ref: main
-      run_sanitizers: true
 
   # Call JAX upstream workflow as a separate job (runs on every trigger, i.e. every 2 hours)
   jax-upstream:
