@@ -262,9 +262,14 @@ const RawDusCase kRawDusCases[] = {
   dus = bf16[4,8] dynamic-update-slice(acc, update4, idx, z))"),
 
     // init + (trip - 1) * step overflows int64: skip before computing the IV
-    // range (signed overflow).
+    // range (signed overflow). The full-height slice covers the buffer for any
+    // start, so only the overflow guard rejects this loop.
     RawDusCase("IvRangeOverflowSkipped", false, 0)
-        .WithIv("9223372036854775000", "1000", "4", "4"),
+        .WithIv("9223372036854775806", "1", "4", "4")
+        .WithBodyDus(R"(  z = s32[] constant(0)
+  c1 = bf16[] constant(1)
+  update4 = bf16[4,8] broadcast(c1), dimensions={}
+  dus = bf16[4,8] dynamic-update-slice(acc, update4, it, z))"),
 
     RawDusCase("ShardedWhileSkipped", false, 0)
         .WithWhileExtra(
