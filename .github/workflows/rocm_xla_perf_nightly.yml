@@ -115,10 +115,10 @@ jobs:
 
           modes = [
               {
-                  "name": "therock_release_10.0",
+                  "name": "therock_lts_release_7.14.1",
                   "release": "10.0.0",
-                  "distro_url": "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.0.0.tar.gz",
-                  "distro_hash": "1c5e807875d26a2470ecc7323daa5b5b9009208a55c3290ac255a909cde15fc6",
+                  "distro_url": "https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-multiarch-7.14.1.tar.gz",
+                  "distro_hash": "no_hash",
                   "runner": RUNNER,
               },
               {
