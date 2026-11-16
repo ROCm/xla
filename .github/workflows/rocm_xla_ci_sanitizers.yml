@@ -19,6 +19,7 @@ permissions:
   contents: read
 
 on:
+  workflow_dispatch:
   schedule:
     # Daily run at 03:47 UTC. The hour is odd, so it never coincides with the
     # even-hour XLA UT + JAX cron in rocm_xla_ci_nightly.yml.
@@ -119,8 +120,8 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: ${{ inputs.repository || github.event.pull_request.head.repo.full_name || 'openxla/xla' }}
-          ref: ${{ inputs.ref || github.event.pull_request.head.sha || 'main' }}
+          repository: ${{ inputs.repository || 'openxla/xla' }}
+          ref: ${{ inputs.ref || 'main' }}
           persist-credentials: false
 
       - name: CPU Info
