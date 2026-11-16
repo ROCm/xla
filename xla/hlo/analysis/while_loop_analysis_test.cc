@@ -1534,5 +1534,126 @@ ENTRY main {
   EXPECT_EQ(eval("random_init"), std::nullopt);
 }
 
+TEST_F(WhileLoopAnalysisTest, EvaluateScalarPerIterationTripCount) {
+  // The induction variable runs over INT64_MAX - 10, - 7, - 4 (step 3, which
+  // does not divide max - min), and over all of s64.
+  const char* const kHlo = R"(
+HloModule m
+body {
+  p = (s64[]) parameter(0)
+  i = s64[] get-tuple-element(p), index=0
+  base = s64[] constant(9223372036854775797)
+  offset = s64[] subtract(i, base)
+  three = s64[] constant(3)
+  next = s64[] add(i, three)
+  ROOT t = (s64[]) tuple(next)
+}
+cond {
+  p = (s64[]) parameter(0)
+  i = s64[] get-tuple-element(p), index=0
+  n = s64[] constant(9223372036854775806)
+  ROOT lt = pred[] compare(i, n), direction=LT
+}
+wide_body {
+  p = (s64[]) parameter(0)
+  i = s64[] get-tuple-element(p), index=0
+  one = s64[] constant(1)
+  next = s64[] add(i, one)
+  ROOT t = (s64[]) tuple(next)
+}
+wide_cond {
+  p = (s64[]) parameter(0)
+  i = s64[] get-tuple-element(p), index=0
+  n = s64[] constant(9223372036854775807)
+  ROOT lt = pred[] compare(i, n), direction=LT
+}
+ENTRY main {
+  start = s64[] constant(9223372036854775797)
+  init = (s64[]) tuple(start)
+  loop = (s64[]) while(init), condition=cond, body=body
+  min = s64[] constant(-9223372036854775808)
+  wide_init = (s64[]) tuple(min)
+  wide = (s64[]) while(wide_init), condition=wide_cond, body=wide_body
+  ROOT r = ((s64[]), (s64[])) tuple(loop, wide)
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(kHlo));
+  const HloInstruction* loop = FindInstruction(module.get(), "loop");
+  const HloInstruction* wide = FindInstruction(module.get(), "wide");
+  ASSERT_TRUE(MatchTrivialLoopRange(wide).has_value());
+  EXPECT_THAT(EvaluateScalarPerIteration(
+                  loop, FindInstruction(module.get(), "offset"), 3),
+              ::testing::Optional(::testing::ElementsAre(0, 3, 6)));
+  EXPECT_EQ(EvaluateScalarPerIteration(
+                loop, FindInstruction(module.get(), "offset"), 2),
+            std::nullopt);
+  EXPECT_EQ(EvaluateScalarPerIteration(
+                wide, wide->while_body()->root_instruction()->operand(0), 4),
+            std::nullopt);
+}
+
+TEST_F(WhileLoopAnalysisTest, EvaluateScalarPerIterationNestedLoop) {
+  // The inner loop reads two arrays that are invariant in the outer loop: one
+  // initialized from a constant, one from rng.
+  const char* const kHlo = R"(
+HloModule m
+inner_body {
+  p = (s32[], s32[4], s32[4]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  li = s32[4] get-tuple-element(p), index=1
+  ri = s32[4] get-tuple-element(p), index=2
+  li_i = s32[1] dynamic-slice(li, i), dynamic_slice_sizes={1}
+  from_constant = s32[] reshape(li_i)
+  ri_i = s32[1] dynamic-slice(ri, i), dynamic_slice_sizes={1}
+  from_rng = s32[] reshape(ri_i)
+  one = s32[] constant(1)
+  next = s32[] add(i, one)
+  ROOT t = (s32[], s32[4], s32[4]) tuple(next, li, ri)
+}
+inner_cond {
+  p = (s32[], s32[4], s32[4]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  n = s32[] constant(4)
+  ROOT lt = pred[] compare(i, n), direction=LT
+}
+outer_cond {
+  p = (s32[], s32[4], s32[4]) parameter(0)
+  j = s32[] get-tuple-element(p), index=0
+  n = s32[] constant(4)
+  ROOT lt = pred[] compare(j, n), direction=LT
+}
+outer_body {
+  p = (s32[], s32[4], s32[4]) parameter(0)
+  j = s32[] get-tuple-element(p), index=0
+  li = s32[4] get-tuple-element(p), index=1
+  ri = s32[4] get-tuple-element(p), index=2
+  zero = s32[] constant(0)
+  inner_init = (s32[], s32[4], s32[4]) tuple(zero, li, ri)
+  inner = (s32[], s32[4], s32[4]) while(inner_init), condition=inner_cond,
+      body=inner_body
+  one = s32[] constant(1)
+  next = s32[] add(j, one)
+  ROOT t = (s32[], s32[4], s32[4]) tuple(next, li, ri)
+}
+ENTRY main {
+  zero = s32[] constant(0)
+  li = s32[4] constant({3, 1, 2, 0})
+  four = s32[] constant(4)
+  ri = s32[4] rng(zero, four), distribution=rng_uniform
+  init = (s32[], s32[4], s32[4]) tuple(zero, li, ri)
+  ROOT outer = (s32[], s32[4], s32[4]) while(init), condition=outer_cond,
+      body=outer_body
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(kHlo));
+  const HloInstruction* inner = FindInstruction(module.get(), "inner");
+  EXPECT_THAT(EvaluateScalarPerIteration(
+                  inner, FindInstruction(module.get(), "from_constant"), 4),
+              ::testing::Optional(::testing::ElementsAre(3, 1, 2, 0)));
+  EXPECT_EQ(EvaluateScalarPerIteration(
+                inner, FindInstruction(module.get(), "from_rng"), 4),
+            std::nullopt);
+}
+
 }  // namespace
 }  // namespace xla

@@ -1297,40 +1297,82 @@ optional<int64_t> ComputeWhileLoopTripCountUpperBound(
 
 namespace {
 
-// Whether `scalar`, an instruction of the loop body, depends on a side effect
-// (which includes random numbers), following loop state elements into their
-// initial values: HloEvaluator would make up a value for it.
-bool DependsOnSideEffect(const HloInstruction* while_op,
-                         const HloInstruction* scalar) {
-  const HloInstruction* param =
-      while_op->while_body()->parameter_instruction(0);
-  const HloInstruction* init = while_op->operand(0);
-  std::vector<const HloInstruction*> stack = {scalar};
-  absl::flat_hash_set<const HloInstruction*> visited = {scalar};
-  auto push = [&](const HloInstruction* h) {
-    if (visited.insert(h).second) {
-      stack.push_back(h);
+// Whether `instruction` depends on a side effect (which includes random
+// numbers), for which HloEvaluator would make up a value. Like HloEvaluator,
+// follows tuple elements through tuple and get-tuple-element, and the
+// parameter of a computation with a single caller into the caller's operands,
+// so this also covers values that come from enclosing loops.
+bool DependsOnSideEffect(const HloInstruction* instruction) {
+  // An instruction and the tuple element of its result that is used.
+  using Use = std::pair<const HloInstruction*, std::vector<int64_t>>;
+  std::vector<Use> stack = {{instruction, {}}};
+  absl::flat_hash_set<Use> visited = {stack.back()};
+  auto push = [&](const HloInstruction* h, std::vector<int64_t> index) {
+    Use use(h, std::move(index));
+    if (visited.insert(use).second) {
+      stack.push_back(std::move(use));
     }
   };
   while (!stack.empty()) {
-    const HloInstruction* h = stack.back();
+    auto [h, index] = std::move(stack.back());
     stack.pop_back();
     if (h->HasSideEffect()) {
       return true;
     }
-    if (h->opcode() == HloOpcode::kGetTupleElement && h->operand(0) == param) {
-      push(init->operand(h->tuple_index()));
-      continue;
-    }
-    if (h == param) {
-      push(init);
-      continue;
-    }
-    for (const HloInstruction* operand : h->operands()) {
-      push(operand);
+    if (h->opcode() == HloOpcode::kGetTupleElement) {
+      index.insert(index.begin(), h->tuple_index());
+      push(h->operand(0), std::move(index));
+    } else if (h->opcode() == HloOpcode::kTuple && !index.empty()) {
+      const HloInstruction* operand = h->operand(index.front());
+      index.erase(index.begin());
+      push(operand, std::move(index));
+    } else if (h->opcode() == HloOpcode::kParameter) {
+      auto callers = h->parent()->caller_instructions();
+      if (callers.size() != 1) {
+        continue;
+      }
+      if (callers[0]->opcode() == HloOpcode::kWhile) {
+        push(callers[0]->operand(0), std::move(index));
+      } else {
+        for (const HloInstruction* operand : callers[0]->operands()) {
+          push(operand, {});
+        }
+      }
+    } else {
+      for (const HloInstruction* operand : h->operands()) {
+        push(operand, {});
+      }
     }
   }
   return false;
+}
+
+// The loop state elements that `scalar`, an instruction of the loop body,
+// reads, or nullopt if it reads the loop state other than through
+// get-tuple-element or has a side effect in the loop body.
+optional<absl::flat_hash_set<int64_t>> LoopStateElementsRead(
+    const HloInstruction* scalar) {
+  const HloInstruction* param = scalar->parent()->parameter_instruction(0);
+  absl::flat_hash_set<int64_t> indices;
+  std::vector<const HloInstruction*> stack = {scalar};
+  absl::flat_hash_set<const HloInstruction*> visited = {scalar};
+  while (!stack.empty()) {
+    const HloInstruction* h = stack.back();
+    stack.pop_back();
+    if (h == param || h->HasSideEffect()) {
+      return nullopt;
+    }
+    if (h->opcode() == HloOpcode::kGetTupleElement && h->operand(0) == param) {
+      indices.insert(h->tuple_index());
+      continue;
+    }
+    for (const HloInstruction* operand : h->operands()) {
+      if (visited.insert(operand).second) {
+        stack.push_back(operand);
+      }
+    }
+  }
+  return indices;
 }
 
 }  // namespace
@@ -1341,18 +1383,18 @@ std::optional<std::vector<int64_t>> EvaluateScalarPerIteration(
   const HloComputation* body = while_op->while_body();
   const HloInstruction* param = body->parameter_instruction(0);
   const HloInstruction* root = body->root_instruction();
+  const HloInstruction* init = while_op->operand(0);
   if (scalar->parent() != body || !ShapeUtil::IsScalar(scalar->shape()) ||
       !primitive_util::IsIntegralType(scalar->shape().element_type()) ||
-      while_op->operand(0)->opcode() != HloOpcode::kTuple ||
-      root->opcode() != HloOpcode::kTuple) {
+      init->opcode() != HloOpcode::kTuple ||
+      root->opcode() != HloOpcode::kTuple || max_trip_count <= 0) {
     return nullopt;
   }
   optional<int64_t> iv_index = GetLoopInductionVarTupleIdx(while_op);
   optional<Range> range = MatchTrivialLoopRange(while_op);
   if (!iv_index.has_value() || !range.has_value() || range->IsEmpty() ||
       !range->IsBounded() || !range->IsStepKnown() ||
-      range->step()->GetSignedValue() <= 0 ||
-      DependsOnSideEffect(while_op, scalar)) {
+      range->step()->GetSignedValue() <= 0) {
     return nullopt;
   }
   // max >= min, so the difference fits in uint64_t even when it overflows
@@ -1364,41 +1406,52 @@ std::optional<std::vector<int64_t>> EvaluateScalarPerIteration(
       (static_cast<uint64_t>(range->max()->GetSignedValue()) -
        static_cast<uint64_t>(min)) /
       step;
-  if (max_trip_count <= 0 ||
-      last_iteration >= static_cast<uint64_t>(max_trip_count)) {
+  if (last_iteration >= static_cast<uint64_t>(max_trip_count)) {
     return nullopt;
   }
-  // Substitutes the induction variable and loop-invariant integer arrays with
-  // an initial value that can be evaluated. Any other element of the loop
-  // state makes the evaluation fail.
+  optional<absl::flat_hash_set<int64_t>> read = LoopStateElementsRead(scalar);
+  if (!read.has_value()) {
+    return nullopt;
+  }
+  // Every loop state element that `scalar` reads is substituted, so that the
+  // evaluator never resolves the loop state from the while init on its own:
+  // the induction variable with its value in each iteration, and loop-invariant
+  // integer arrays with their initial value, evaluated once.
   HloEvaluator evaluator(/*max_loop_iterations=*/0);
+  absl::flat_hash_map<int64_t, Literal> invariants;
+  for (int64_t index : *read) {
+    if (index == *iv_index) {
+      continue;
+    }
+    const Shape& shape = param->shape().tuple_shapes(index);
+    const HloInstruction* next = root->operand(index);
+    if (!shape.IsArray() ||
+        !primitive_util::IsIntegralType(shape.element_type()) ||
+        ShapeUtil::ElementsIn(shape) > max_trip_count ||
+        next->opcode() != HloOpcode::kGetTupleElement ||
+        next->operand(0) != param || next->tuple_index() != index ||
+        DependsOnSideEffect(init->operand(index))) {
+      return nullopt;
+    }
+    absl::StatusOr<Literal> value =
+        evaluator.Evaluate(init->operand(index), /*precomputed_analyses=*/{},
+                           /*recursively_evaluate_nonconstant_operands=*/true);
+    if (!value.ok() || !value->IsKnown()) {
+      return nullopt;
+    }
+    invariants[index] = *std::move(value);
+  }
   absl::flat_hash_map<const HloInstruction*, const LiteralBase*> subs;
-  std::vector<Literal> invariants;
-  invariants.reserve(param->user_count());
   std::vector<const HloInstruction*> iv_gtes;
   for (const HloInstruction* gte : param->users()) {
     if (gte->opcode() != HloOpcode::kGetTupleElement) {
       continue;
     }
-    const int64_t index = gte->tuple_index();
-    if (index == *iv_index) {
+    if (gte->tuple_index() == *iv_index) {
       iv_gtes.push_back(gte);
-      continue;
-    }
-    const HloInstruction* next = root->operand(index);
-    if (!gte->shape().IsArray() ||
-        !primitive_util::IsIntegralType(gte->shape().element_type()) ||
-        ShapeUtil::ElementsIn(gte->shape()) > max_trip_count ||
-        next->opcode() != HloOpcode::kGetTupleElement ||
-        next->operand(0) != param || next->tuple_index() != index) {
-      continue;
-    }
-    absl::StatusOr<Literal> init = evaluator.Evaluate(
-        while_op->operand(0)->operand(index), /*precomputed_analyses=*/{},
-        /*recursively_evaluate_nonconstant_operands=*/true);
-    if (init.ok()) {
-      invariants.push_back(*std::move(init));
-      subs[gte] = &invariants.back();
+    } else if (auto it = invariants.find(gte->tuple_index());
+               it != invariants.end()) {
+      subs[gte] = &it->second;
     }
   }
   const PrimitiveType iv_type =

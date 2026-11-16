@@ -89,11 +89,13 @@ std::optional<Range> MatchLoopRangeWithKnownValues(
 
 // Evaluates `scalar`, a scalar integer instruction of the loop body, in every
 // iteration of a loop that MatchTrivialLoopRange matches with at most
-// `max_trip_count` iterations. `scalar` may depend on constants, the induction
+// `max_trip_count` iterations. `scalar` may read constants, the induction
 // variable, and loop-invariant integer arrays of at most `max_trip_count`
 // elements whose initial value can be evaluated (such as a scan's layer
-// indices). Returns nullopt if it, or the initial value of such an array,
-// depends on anything else or on a random number or side effect.
+// indices); each such array is evaluated once. Returns nullopt if `scalar`
+// reads any other loop state element, or if it or the initial value of such
+// an array depends on a random number or another side effect, including
+// through enclosing loops.
 std::optional<std::vector<int64_t>> EvaluateScalarPerIteration(
     const HloInstruction* while_op, const HloInstruction* scalar,
     int64_t max_trip_count);
