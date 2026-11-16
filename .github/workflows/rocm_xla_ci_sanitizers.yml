@@ -89,7 +89,7 @@ jobs:
       COMMON_ARGS: >-
         --config=rocm_ci_hermetic
         --config=rocm_rbe
-        --repo_env='GLOBAL_SYMBOLS_TO_VERSION=*llvm::*,*LLVM*'
+        --repo_env='GLOBAL_SYMBOLS_TO_VERSION=*llvm::*,*LLVM*,*std::*'
         --local_test_jobs=8
         --strategy=TestRunner=local
         --strategy=CppLink=local
