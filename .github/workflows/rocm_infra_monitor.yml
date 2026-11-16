@@ -20,9 +20,11 @@ permissions:
   id-token: write  # Required by claude-code-action (debug job) for OIDC auth.
 
 env:
-  # Repository and workflow being monitored: our own nightly pipeline.
+  # Repository and workflows being monitored: our own nightly and sanitizers
+  # pipelines (the latter runs standalone - scheduled, labeled, or on a PR
+  # touching its own file - not as a job called from the nightly run).
   MONITORED_REPO: ROCm/xla
-  MONITORED_WORKFLOW: rocm_xla_ci_nightly.yml
+  MONITORED_WORKFLOWS: "rocm_xla_ci_nightly.yml rocm_xla_ci_sanitizers.yml"
   # This workflow, used to find out when we last looked.
   SELF_WORKFLOW: rocm_infra_monitor.yml
   # Branch this run itself is testing/running from, so a PR (or a manual
@@ -40,7 +42,10 @@ env:
   # "[multi_gpu]", "[rocm_cpu]" - so the mode tag is the marker.
   # TODO: enable when multigpu is green (set this to an empty value).
   IGNORED_STEP_MARKER: "[multi_gpu]"
-  MONITORED_JOB_PATTERN: '^(execute-xla-ut-nightly \(therock_release|jax-upstream / (rocm-config$|JAX Upstream .*\(therock_release)|sanitizers / (rocm-config$|execute-xla-ut-sanitizers \((asan|tsan)))'
+  # The sanitizers workflow now runs standalone rather than as a job called
+  # from nightly, so its jobs are no longer prefixed "sanitizers / ..." -
+  # they appear exactly as named in rocm_xla_ci_sanitizers.yml.
+  MONITORED_JOB_PATTERN: '^(execute-xla-ut-nightly \(therock_release|jax-upstream / (rocm-config$|JAX Upstream .*\(therock_release)|rocm-config$|execute-xla-ut-sanitizers \((asan|tsan))'
 
 on:
   schedule:
@@ -102,10 +107,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Monitoring $MONITORED_WORKFLOW in $MONITORED_REPO"
-          build_tools/rocm/get_runs_since.sh \
-            "${MONITORED_REPO}" "${MONITORED_WORKFLOW}" "${{ steps.window.outputs.cutoff }}" \
-            > run_ids.txt
+          rm -f run_ids.txt
+          touch run_ids.txt
+          for WORKFLOW in $MONITORED_WORKFLOWS; do
+            echo "Monitoring $WORKFLOW in $MONITORED_REPO"
+            build_tools/rocm/get_runs_since.sh \
+              "${MONITORED_REPO}" "${WORKFLOW}" "${{ steps.window.outputs.cutoff }}" \
+              >> run_ids.txt
+          done
           echo "Found $(wc -l < run_ids.txt) runs to check"
           cat run_ids.txt
 
