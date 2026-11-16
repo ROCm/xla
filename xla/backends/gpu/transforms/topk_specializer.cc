@@ -47,6 +47,7 @@ limitations under the License.
 #include "xla/service/topk_rewriter.h"
 #include "xla/service/tuple_util.h"
 #include "xla/shape.h"
+#include "xla/shape_util.h"
 #include "xla/status_macros.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/util.h"
@@ -486,6 +487,129 @@ absl::StatusOr<HloInstruction*> RewriteTopKForRocmTriton(
   return new_topk;
 }
 
+// Returns the Triton TopK whose output `index` `inst` reads, also through the
+// tuple that drops the scratch output, or nullptr.
+const HloCustomCallInstruction* ReadTritonTopKOutput(const HloInstruction* inst,
+                                                     int64_t index) {
+  if (inst->opcode() != HloOpcode::kGetTupleElement ||
+      inst->tuple_index() != index) {
+    return nullptr;
+  }
+  const HloInstruction* producer = inst->operand(0);
+  if (producer->opcode() == HloOpcode::kTuple) {
+    const HloInstruction* element = producer->operand(index);
+    if (element->opcode() != HloOpcode::kGetTupleElement ||
+        element->tuple_index() != index) {
+      return nullptr;
+    }
+    producer = element->operand(0);
+  }
+  auto* topk = DynCast<HloCustomCallInstruction>(producer);
+  if (topk == nullptr || topk->custom_call_target() != "__gpu$TopK" ||
+      !IsTritonTopK(*topk)) {
+    return nullptr;
+  }
+  return topk;
+}
+
+// Returns the Triton TopK whose indices `inst` holds, plus the same offset for
+// every index (as SPMD partitioning adds per partition), or nullptr. The offset
+// keeps the order of the indices as long as their sum stays below 2^31, which
+// holds for partition offsets into a row of fewer than 2^31 elements.
+const HloCustomCallInstruction* ReadTritonTopKIndices(
+    const HloInstruction* inst) {
+  if (inst->opcode() == HloOpcode::kAdd) {
+    for (int64_t i : {0, 1}) {
+      const HloInstruction* offset = inst->operand(1 - i);
+      if (offset->opcode() == HloOpcode::kBroadcast &&
+          ShapeUtil::IsEffectiveScalar(offset->operand(0)->shape())) {
+        if (const HloCustomCallInstruction* topk =
+                ReadTritonTopKOutput(inst->operand(i), 1)) {
+          return topk;
+        }
+      }
+    }
+    return nullptr;
+  }
+  return ReadTritonTopKOutput(inst, 1);
+}
+
+bool IsParameterCompare(const HloInstruction* inst,
+                        ComparisonDirection direction, int64_t lhs,
+                        int64_t rhs) {
+  return inst->opcode() == HloOpcode::kCompare &&
+         inst->comparison_direction() == direction &&
+         inst->operand(0)->opcode() == HloOpcode::kParameter &&
+         inst->operand(0)->parameter_number() == lhs &&
+         inst->operand(1)->opcode() == HloOpcode::kParameter &&
+         inst->operand(1)->parameter_number() == rhs;
+}
+
+bool IsTotalOrderParameterCompare(const HloInstruction* inst,
+                                  ComparisonDirection direction) {
+  return IsParameterCompare(inst, direction, 0, 1) &&
+         Cast<HloCompareInstruction>(inst)->order() == ComparisonOrder::kTotal;
+}
+
+// Returns true if `sort` reorders the rows of a TOTAL-order Triton TopK by
+// value in descending total order, ties by ascending index (the merge sort that
+// SPMD partitioning adds after a TopK). The kernels already return rows in that
+// order, so the sort does not change them. Sorts with control dependencies are
+// left alone; ReplaceInstruction would not replace them.
+bool IsIdentitySortOfTritonTopK(const HloInstruction* inst) {
+  if (inst->opcode() != HloOpcode::kSort || inst->operand_count() > 2 ||
+      inst->HasControlDependencies()) {
+    return false;
+  }
+  const auto* sort = Cast<HloSortInstruction>(inst);
+  const HloInstruction* values = sort->operand(0);
+  const HloCustomCallInstruction* topk = ReadTritonTopKOutput(values, 0);
+  if (topk == nullptr ||
+      hlo_instruction_utils::GetTopKOrder(topk) != ComparisonOrder::kTotal ||
+      sort->sort_dimension() !=
+          static_cast<int64_t>(values->shape().dimensions().size()) - 1) {
+    return false;
+  }
+  const HloInstruction* root = sort->to_apply()->root_instruction();
+  if (sort->operand_count() == 1) {
+    return IsTotalOrderParameterCompare(root, ComparisonDirection::kGt);
+  }
+  if (ReadTritonTopKIndices(sort->operand(1)) != topk) {
+    return false;
+  }
+  // select(values equal, lower index first, larger value first)
+  return root->opcode() == HloOpcode::kSelect &&
+         IsTotalOrderParameterCompare(root->operand(0),
+                                      ComparisonDirection::kEq) &&
+         IsParameterCompare(root->operand(1), ComparisonDirection::kLt, 2, 3) &&
+         IsTotalOrderParameterCompare(root->operand(2),
+                                      ComparisonDirection::kGt);
+}
+
+absl::StatusOr<bool> RemoveIdentitySortsOfTritonTopK(
+    HloModule* module,
+    const absl::flat_hash_set<absl::string_view>& execution_threads) {
+  bool changed = false;
+  for (HloComputation* comp :
+       module->MakeNonfusionComputations(execution_threads)) {
+    for (HloInstruction* inst : comp->MakeInstructionPostOrder()) {
+      if (!IsIdentitySortOfTritonTopK(inst)) {
+        continue;
+      }
+      VLOG(2) << "Removing " << inst->name() << ": its Triton TopK rows are "
+              << "already in that order";
+      HloInstruction* replacement =
+          inst->operand_count() == 1
+              ? inst->mutable_operand(0)
+              : comp->AddInstruction(HloInstruction::CreateTuple(
+                    {inst->mutable_operand(0), inst->mutable_operand(1)}));
+      ABSL_RETURN_IF_ERROR(comp->ReplaceInstruction(inst, replacement));
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
  public:
   explicit SpecializeTopkVisitor(se::DeviceDescription device_description)
@@ -555,8 +679,17 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
 absl::StatusOr<bool> TopkSpecializer::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
-  return SpecializeTopkVisitor(device_description_)
-      .RunOnModule(module, execution_threads);
+  ABSL_ASSIGN_OR_RETURN(bool changed,
+                        SpecializeTopkVisitor(device_description_)
+                            .RunOnModule(module, execution_threads));
+  if (!module->config()
+           .debug_options()
+           .xla_gpu_experimental_enable_triton_topk()) {
+    return changed;
+  }
+  ABSL_ASSIGN_OR_RETURN(bool removed_sorts, RemoveIdentitySortsOfTritonTopK(
+                                                module, execution_threads));
+  return changed || removed_sorts;
 }
 
 }  // namespace xla::gpu
