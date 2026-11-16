@@ -485,6 +485,7 @@ absl::StatusOr<HloInstruction*> RewritePeeledInit(HloInstruction* init,
           init->shape(), /*operands=*/{}, "AllocateBuffer"));
   alloc->set_metadata(init->metadata());
   alloc->set_frontend_attributes(init->frontend_attributes());
+  alloc->set_statistics_viz(init->statistics_viz());
 
   HloComputation* dus_comp = parent;
   HloInstruction* buffer = alloc;
@@ -505,7 +506,10 @@ absl::StatusOr<HloInstruction*> RewritePeeledInit(HloInstruction* init,
       dus_comp->AddInstruction(HloInstruction::CreateDynamicUpdateSlice(
           pad->shape(), buffer, pad->mutable_operand(0), start_indices));
   dus->set_metadata(pad->metadata());
+  dus->set_frontend_attributes(pad->frontend_attributes());
   if (fusion == nullptr) {
+    // The DUS replaces the pad itself.
+    dus->set_original_value(pad->original_value());
     return dus;
   }
   dus_comp->set_root_instruction(dus);
