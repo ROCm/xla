@@ -17,7 +17,12 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const state = {
   data: null,
   tab: 'models',
+  // Every stack the trends.json names, in one order, whichever tab carries it.
+  allModes: [],
   modes: new Set(),
+  // The latency tab's second dimension; the other tabs have one series per
+  // stack and ignore it.
+  gpus: new Set(),
   metric: 'p50_us',
   table: false,
 };
@@ -67,6 +72,27 @@ const modeColor = (i) => `var(--series-${i + 1})`;
 /* Group colours continue after the modes, so a category band is never the same
  * hue as a stack's line on the chart above it. */
 const groupColor = (i) => `var(--series-${((i + 3) % 7) + 1})`;
+/* GPU counts take slots 5-7, clear of the stacks in 1-3. The latency tab draws
+ * both dimensions on one screen -- stacks as the lines of one set of panels,
+ * GPU counts as the lines of the other -- so a hue that means "ROCm 10.1" in
+ * one card must not mean "2 GPUs" in the next. Validated as a set, all pairs,
+ * in both themes: worst CVD dE 17.6 light / 13.0 dark, normal-vision 28.1 /
+ * 19.7. */
+const gpuColor = (i) => `var(--series-${((i + 4) % 7) + 1})`;
+
+/**
+ * A stack's colour, by identity rather than by its rank in whatever list is
+ * being drawn.
+ *
+ * `state.allModes` is the page's one ordered list of stacks, so a stack keeps
+ * its hue across tabs and a filter that drops one never repaints the others.
+ */
+const modeColorOf = (key) => modeColor(state.allModes.findIndex((m) => m.key === key));
+
+/** A GPU count's colour, likewise fixed to the count and not to its position. */
+const gpuColorOf = (g) => gpuColor((state.data.latency?.gpus ?? []).indexOf(g));
+
+const gpuLabel = (g) => `${g} GPU${g === 1 ? '' : 's'}`;
 
 /* ---- tiny DOM helpers ---------------------------------------------------- */
 
@@ -143,13 +169,24 @@ function labelIndices(n, x, minGap) {
  * `zeroBased` is false for indices and latencies, whose interesting range is a
  * few percent above a large floor: a zero-based axis would flatten every one
  * of them into the same straight line.
+ *
+ * `range` forces the y extent instead of taking it from this chart's own
+ * values, which is what makes a row of panels share one axis: every panel is
+ * handed the extent of the whole set, so the same height means the same figure
+ * in all of them. `height` shrinks a panel; `directLabels` is dropped there,
+ * since end labels from a neighbouring panel's lines have nowhere to go.
  */
-function lineChart(host, { series, fmt, zeroBased = true, directLabels = true }) {
+function lineChart(host, {
+  series, fmt, zeroBased = true, directLabels = true, height = 252, range = null,
+}) {
   const runs = state.data.runs;
   host.textContent = '';
   const width = Math.max(320, host.clientWidth);
-  const M = { top: 14, right: directLabels ? 92 : 16, bottom: 30, left: 62 };
-  const H = 252;
+  // Without end labels the right margin only has to hold the last x-axis
+  // label's overhang: those are centred on the final run, and "Nov 13 02:12"
+  // is half as wide again as "Nov 13".
+  const M = { top: 14, right: directLabels ? 92 : 34, bottom: 30, left: 62 };
+  const H = height;
   const plotW = width - M.left - M.right;
   const plotH = H - M.top - M.bottom;
 
@@ -158,8 +195,8 @@ function lineChart(host, { series, fmt, zeroBased = true, directLabels = true })
     host.append(el('p', { class: 'note empty', text: 'Nothing measured for this selection.' }));
     return;
   }
-  const hi = Math.max(...flat);
-  const lo = Math.min(...flat);
+  const hi = range ? Math.max(range[1], ...flat) : Math.max(...flat);
+  const lo = range ? Math.min(range[0], ...flat) : Math.min(...flat);
   // A little headroom below the lowest point, so a line never rides the axis.
   // A series that never moves has no range to clip to, so it falls back to a
   // zero-based axis rather than to a band of zero height.
@@ -471,8 +508,20 @@ function stackPanel(host, mode, sharedMax) {
 
 function activeModes() {
   return state.data.modes
-    .map((m, i) => ({ ...m, color: modeColor(i) }))
+    .map((m) => ({ ...m, color: modeColorOf(m.key) }))
     .filter((m) => state.modes.has(m.key));
+}
+
+/** The stacks the latency tool measured, filtered by the same stack chips. */
+function latencyModes() {
+  return (state.data.latency?.modes ?? [])
+    .map((m) => ({ ...m, color: modeColorOf(m.key) }))
+    .filter((m) => state.modes.has(m.key));
+}
+
+/** The GPU counts the latency tool was run on, filtered by the GPU chips. */
+function activeGpus() {
+  return (state.data.latency?.gpus ?? []).filter((g) => state.gpus.has(g));
 }
 
 /** The index/total series for the active stacks, with their coverage flags. */
@@ -872,32 +921,73 @@ function renderLeaf(leaf) {
 
 /* ---- latency tab --------------------------------------------------------- */
 
-/**
- * One series per GPU count, from one stack.
+/*
+ * The latency tool measures two dimensions, and the tab draws both.
  *
- * `trends.py` reads the latency tool on `latency.mode` only -- it measures the
- * ROCm runtime rather than the XLA tree, and the nightly is the only stack the
- * workflow still runs it on. So there is no stack dimension here, the GPU
- * count takes the colour, and the mode chips do not scope this tab at all.
+ * The nightly runs it on every stack in the matrix at 1, 2 and 4 GPUs, so a
+ * figure is addressed by a (stack, GPU count) pair -- nine series, which on one
+ * chart would be a thicket that says nothing about which dimension moved. Each
+ * dimension gets its own set of panels instead, over the same numbers: a panel
+ * per stack with the GPU counts as lines, and a panel per GPU count with the
+ * stacks as lines. Colour always encodes the lines *within* a panel and the
+ * panel title names the other dimension, which is why the two dimensions never
+ * share a hue (see `gpuColor`).
  */
-function latencySeries() {
-  const d = state.data;
-  if (!d.latency) return [];
-  return d.latency.gpus
-    .map((g, i) => ({ g, i, row: d.latency.series[String(g)] }))
+
+/** The row the tool wrote for one (stack, GPU count) pair, or undefined. */
+const latencyRow = (mode, gpus) => state.data.latency?.series?.[mode]?.[String(gpus)];
+
+/** One panel's lines: every selected GPU count, on one stack. */
+function latencyLinesByGpu(mode) {
+  return activeGpus()
+    .map((g) => ({ g, row: latencyRow(mode, g) }))
     .filter((s) => s.row)
     .map((s) => ({
-      key: String(s.g),
-      label: `${s.g} GPU${s.g === 1 ? '' : 's'}`,
-      color: modeColor(s.i),
+      key: `${mode}|${s.g}`,
+      label: gpuLabel(s.g),
+      color: gpuColorOf(s.g),
       values: s.row[state.metric],
     }));
 }
 
-function renderLatencyLegend(series) {
-  const host = document.getElementById('latency-legend');
+/** One panel's lines: every selected stack, at one GPU count. */
+function latencyLinesByMode(gpus) {
+  return latencyModes()
+    .map((m) => ({ m, row: latencyRow(m.key, gpus) }))
+    .filter((s) => s.row)
+    .map((s) => ({
+      key: `${s.m.key}|${gpus}`,
+      label: s.m.label,
+      color: s.m.color,
+      values: s.row[state.metric],
+    }));
+}
+
+/**
+ * The y extent of everything currently selected.
+ *
+ * Handed to every panel in both cards, so all of them share one axis: the two
+ * cards are the same measurements transposed, and panels on their own scales
+ * would make a 4-GPU panel and a 1-GPU panel look alike when the figures
+ * behind them differ by milliseconds.
+ */
+function latencyRange() {
+  const vals = [];
+  for (const m of latencyModes()) {
+    for (const g of activeGpus()) {
+      for (const v of latencyRow(m.key, g)?.[state.metric] ?? []) {
+        if (v != null) vals.push(v);
+      }
+    }
+  }
+  return vals.length ? [Math.min(...vals), Math.max(...vals)] : null;
+}
+
+function renderLegendInto(id, items) {
+  const host = document.getElementById(id);
+  if (!host) return;
   host.textContent = '';
-  for (const s of series) {
+  for (const s of items) {
     host.append(el('span', { class: 'legend-item' }, [
       swatch(s.color), el('span', { text: s.label }),
     ]));
@@ -910,54 +1000,150 @@ const metricDef = () =>
 
 const latencyFmt = () => (metricDef().unit === 'qps' ? fmtQps : fmtUs);
 
+/** The HIP runtime a stack was last measured with, or null. */
+const hipOf = (mode) => state.data.hip?.[mode]?.filter(Boolean).pop() ?? null;
+
 /**
- * The headline the latency card leads with: how the figure scales with GPUs.
+ * The headline the latency card leads with: how the figure scales with GPUs on
+ * the newest stack, and how the stacks compare at a matched GPU count.
  *
- * One stack, so the sentence compares GPU counts and nothing else. It also
- * names the stack, because the mode chips above do not apply here and a reader
- * would otherwise assume they did.
+ * Each stack's figure is dated. The stacks are not measured in lockstep -- the
+ * tool ran on the nightly alone for most of November -- so "latest" can mean
+ * different nights for different stacks, and a sentence that quietly compared
+ * last night with a fortnight ago would be the wrong kind of true.
  */
-function latencyStat(series) {
+function latencyStat() {
   const host = document.getElementById('latency-stat');
   host.textContent = '';
   const d = state.data;
-  const now = (s) => {
-    const i = lastIndex(s.values);
-    return i < 0 ? null : s.values[i];
-  };
-  const measured = series.filter((s) => now(s) != null);
-  const one = measured.find((s) => s.key === '1');
-  const many = measured[measured.length - 1];
-  const hip = d.hip?.[d.latency.mode]?.filter(Boolean).pop();
-  if (!one || !many || one === many) return;
+  const modes = latencyModes();
+  const gpus = activeGpus();
+  if (!modes.length || !gpus.length) return;
+
   const fmt = latencyFmt();
-  host.append(el('span', {
-    html: `Measured on <span class="hl">${d.latency.mode_label}</span>`
-      + `${hip ? ` (HIP ${hip})` : ''} only. Latest: `
-      + `<span class="hl">${fmt(now(one))}</span> at 1 GPU against `
-      + `<span class="hl">${fmt(now(many))}</span> at ${many.label}.`,
+  const latest = (mode, g) => {
+    const vals = latencyRow(mode, g)?.[state.metric];
+    if (!vals) return null;
+    const i = lastIndex(vals);
+    return i < 0 ? null : { v: vals[i], day: fmtDay(d.runs[i].day) };
+  };
+
+  // The newest stack carries the scaling sentence: it is the one measured on
+  // every run, so its figures are the ones that are certainly current.
+  const newest = modes[modes.length - 1];
+  const one = latest(newest.key, gpus[0]);
+  const many = latest(newest.key, gpus[gpus.length - 1]);
+  if (one && many && gpus.length > 1) {
+    host.append(el('span', {
+      html: `On <span class="hl">${newest.label}</span>`
+        + `${hipOf(newest.key) ? ` (HIP ${hipOf(newest.key)})` : ''}: `
+        + `<span class="hl">${fmt(one.v)}</span> at ${gpuLabel(gpus[0])} against `
+        + `<span class="hl">${fmt(many.v)}</span> at ${gpuLabel(gpus[gpus.length - 1])}. `,
+    }));
+  }
+
+  // The cross-stack sentence, at the narrowest selected GPU count.
+  const across = modes
+    .map((m) => ({ m, now: latest(m.key, gpus[0]) }))
+    .filter((r) => r.now);
+  if (across.length > 1) {
+    host.append(el('span', {
+      html: `At ${gpuLabel(gpus[0])}, latest per stack: `
+        + across.map((r) => `${r.m.label} <span class="hl">${fmt(r.now.v)}</span> `
+                            + `(${r.now.day})`).join(' · ') + '.',
+    }));
+  }
+}
+
+/**
+ * One card of panels, built in two passes.
+ *
+ * Every panel is created before any is drawn: a panel measured while it is the
+ * grid's only child reports the full width, and the grid then reflows to two
+ * columns under it, leaving that panel's viewBox scaled down.
+ */
+function panelRow(host, panels, { fmt, range }) {
+  host.textContent = '';
+  if (!panels.length) {
+    host.append(el('p', { class: 'note empty', text: 'Nothing measured for this selection.' }));
+    return;
+  }
+  const plots = panels.map((p) => {
+    const panel = el('div', {});
+    panel.append(el('p', { class: 'panel-title', text: p.title }));
+    // A non-breaking space where a panel has no sub-label: a panel missing a
+    // line of heading would otherwise sit higher than the ones beside it.
+    panel.append(el('p', { class: 'panel-sub', text: p.sub || ' ' }));
+    const plot = el('div', { class: 'plot' });
+    panel.append(plot);
+    host.append(panel);
+    return plot;
+  });
+  panels.forEach((p, i) => lineChart(plots[i], {
+    series: p.series, fmt, range, zeroBased: false, directLabels: false, height: 206,
   }));
+}
+
+/** One tile per (stack, GPU count) pair, stack-major so the swatches group. */
+function latencyKpis() {
+  const tiles = [];
+  for (const m of latencyModes()) {
+    for (const g of activeGpus()) {
+      const row = latencyRow(m.key, g);
+      if (!row) continue;
+      tiles.push({
+        label: `${m.label} · ${gpuLabel(g)}`,
+        color: gpuColorOf(g),
+        values: row[state.metric],
+      });
+    }
+  }
+  return tiles;
 }
 
 function renderLatency() {
   const d = state.data;
-  const host = document.getElementById('chart-latency');
-  if (!d.latency || !Object.keys(d.latency.series).length) {
+  const byStack = document.getElementById('chart-latency-stacks');
+  const byGpu = document.getElementById('chart-latency-gpus');
+  // `latency.modes` is what a trends.json built after the latency tool started
+  // running on every stack carries; an older one keyed its series by GPU count
+  // alone and has nothing to put in these panels.
+  if (!d.latency?.modes || !Object.keys(d.latency.series ?? {}).length) {
     document.getElementById('latency-kpis').hidden = true;
-    document.getElementById('latency-legend').textContent = '';
-    emptyState(host, 'latency measurements');
+    renderLegendInto('latency-legend', []);
+    renderLegendInto('latency-mode-legend', []);
+    emptyState(byStack, 'per-stack latency measurements');
+    emptyState(byGpu, 'per-stack latency measurements');
     return;
   }
+
+  const fmt = latencyFmt();
+  const range = latencyRange();
+  const modes = latencyModes();
+  const gpus = activeGpus();
+
   document.getElementById('latency-kpis').hidden = false;
-  const series = latencySeries();
-  renderLatencyLegend(series);
-  latencyStat(series);
-  kpiRow(document.getElementById('latency-kpis'), series, {
-    fmt: latencyFmt(),
+  latencyStat();
+  kpiRow(document.getElementById('latency-kpis'), latencyKpis(), {
+    fmt,
     better: metricDef().unit === 'qps' ? 'up' : 'down',
     fallback: metricDef().label,
   });
-  lineChart(host, { series, fmt: latencyFmt(), zeroBased: false });
+
+  renderLegendInto('latency-legend', gpus.map((g) => ({
+    label: gpuLabel(g), color: gpuColorOf(g),
+  })));
+  panelRow(byStack, modes.map((m) => ({
+    title: m.label,
+    sub: hipOf(m.key) ? `HIP ${hipOf(m.key)}` : '',
+    series: latencyLinesByGpu(m.key),
+  })), { fmt, range });
+
+  renderLegendInto('latency-mode-legend', modes);
+  panelRow(byGpu, gpus.map((g) => ({
+    title: gpuLabel(g),
+    series: latencyLinesByMode(g),
+  })), { fmt, range });
 }
 
 /* ---- tables -------------------------------------------------------------- */
@@ -1043,33 +1229,57 @@ function renderLeafTable(host, leaf) {
   }));
 }
 
+/**
+ * Every latency figure as text: a lane per stack, a column per GPU count, and
+ * every metric under each -- not just the one the chips scope the charts to,
+ * because the p99 beside the p50 is the point of reading it. It is also the
+ * relief the palette's contrast check asks for: every value on the tab is
+ * readable here without relying on a hue.
+ */
 function renderLatencyTable(host) {
   const d = state.data;
-  const series = latencySeries();
-  if (!series.length) { emptyState(host, 'latency measurements'); return; }
+  const modes = latencyModes();
+  const gpus = activeGpus();
+  if (!d.latency?.modes || !modes.length || !gpus.length) {
+    emptyState(host, 'latency measurements');
+    return;
+  }
   const metrics = d.latency.metrics;
 
-  // Every metric for every series, so the table is not scoped by the chip the
-  // chart is scoped by: the p99 beside the p50 is the point of reading it.
   const table = el('table');
   const thead = el('thead');
   thead.append(el('tr', {}, [el('th', {})].concat(
-    series.map((s) => el('th', { text: s.label, scope: 'col', colspan: metrics.length })))));
+    gpus.map((g) => el('th', { text: gpuLabel(g), scope: 'col', colspan: metrics.length })))));
   thead.append(el('tr', {}, [el('th', { text: 'Run', scope: 'col' })].concat(
-    series.flatMap(() => metrics.map((m) => el('th', { text: m.label, scope: 'col' }))))));
+    gpus.flatMap(() => metrics.map((m) => el('th', { text: m.label, scope: 'col' }))))));
   table.append(thead);
 
   const tbody = el('tbody');
-  d.runs.forEach((r, i) => {
-    const row = series.flatMap((s) => metrics.map((m) => {
-      const v = d.latency.series[s.key][m.key][i];
-      return el('td', { text: m.unit === 'qps' ? fmtQps(v) : fmtUs(v) });
-    }));
-    if (row.every((td) => td.textContent === '--')) return;
-    tbody.append(el('tr', {}, [el('td', { text: `${fmtDay(r.day)} ${hhmm(r.iso)}` })].concat(row)));
-  });
+  const width = 1 + gpus.length * metrics.length;
+  for (const m of modes) {
+    tbody.append(el('tr', {}, [
+      el('td', { class: 'lane-head', colspan: width }, [
+        swatch(m.color), el('span', { text: m.label }),
+      ]),
+    ]));
+    d.runs.forEach((r, i) => {
+      const row = gpus.flatMap((g) => metrics.map((mt) => {
+        const v = latencyRow(m.key, g)?.[mt.key]?.[i];
+        return el('td', { text: mt.unit === 'qps' ? fmtQps(v) : fmtUs(v) });
+      }));
+      // A run this stack was not measured on is left out rather than printed
+      // as a row of dashes: for most of November that is most of the runs.
+      if (row.every((td) => td.textContent === '--')) return;
+      tbody.append(el('tr', {}, [el('td', { text: `${fmtDay(r.day)} ${hhmm(r.iso)}` })].concat(row)));
+    });
+  }
   table.append(tbody);
   host.append(table);
+  host.append(el('p', {
+    class: 'note',
+    text: 'One row per run per stack, microseconds as the tool reported them. A stack '
+      + 'shows only the runs it was measured on.',
+  }));
 }
 
 /** Whether a tab name is one of the per-module suites. */
@@ -1098,15 +1308,18 @@ function render() {
 function buildModeChips() {
   const host = document.getElementById('mode-chips');
   host.textContent = '';
-  state.data.modes.forEach((m, i) => {
+  // Every stack the page knows about, not just the ones with HLO timings: the
+  // chips scope the latency tab too, and a stack measured only there would
+  // otherwise have no way to be switched off.
+  state.allModes.forEach((m) => {
     const on = state.modes.has(m.key);
-    const hip = state.data.hip?.[m.key]?.filter(Boolean).pop();
+    const hip = hipOf(m.key);
     const b = el('button', {
       type: 'button', class: `chip${on ? ' on' : ''}`, 'aria-pressed': String(on),
       // The only place the page can say which ROCm a stack actually was: the
       // latency tool records it, and nothing else in the run does.
       title: hip ? `HIP ${hip}` : null,
-    }, [swatch(modeColor(i)), el('span', { text: m.label })]);
+    }, [swatch(modeColorOf(m.key)), el('span', { text: m.label })]);
     b.addEventListener('click', () => {
       if (state.modes.has(m.key)) {
         // Never leave every chart empty.
@@ -1120,6 +1333,37 @@ function buildModeChips() {
     });
     host.append(b);
   });
+}
+
+/**
+ * The GPU-count chips, the latency tab's second dimension.
+ *
+ * They scope both of its cards at once -- the panels-per-stack card loses a
+ * line, the panels-per-GPU card loses a whole panel -- because the two are one
+ * set of measurements drawn twice, and a filter that applied to only one of
+ * them would put two different selections on one screen.
+ */
+function buildGpuChips() {
+  const host = document.getElementById('gpu-chips');
+  host.textContent = '';
+  for (const g of state.data.latency?.gpus ?? []) {
+    const on = state.gpus.has(g);
+    const b = el('button', {
+      type: 'button', class: `chip${on ? ' on' : ''}`, 'aria-pressed': String(on),
+    }, [swatch(gpuColorOf(g)), el('span', { text: gpuLabel(g) })]);
+    b.addEventListener('click', () => {
+      if (state.gpus.has(g)) {
+        // Never leave the tab empty.
+        if (state.gpus.size === 1) return;
+        state.gpus.delete(g);
+      } else {
+        state.gpus.add(g);
+      }
+      buildGpuChips();
+      render();
+    });
+    host.append(b);
+  }
 }
 
 function buildMetricChips() {
@@ -1151,13 +1395,13 @@ function showTab(tab) {
     const panel = document.getElementById(`view-${b.dataset.tab}`);
     if (panel) panel.hidden = !on;
   }
-  // The metric chips pick between the latency tool's own figures; on the other
-  // tabs there is one figure per chart and they would scope nothing.
+  // The metric and GPU-count chips pick between the latency tool's own
+  // figures and its GPU counts; on the other tabs there is one figure per
+  // chart and one series per stack, so both would scope nothing.
   document.getElementById('metric-filter').hidden = tab !== 'latency';
-  // The stack chips scope everything *except* latency, which is measured on
-  // one stack only. Leaving them visible there would invite the reading that
-  // the chart is filtered by them when it is not.
-  document.getElementById('mode-filter').hidden = tab === 'latency';
+  document.getElementById('gpu-filter').hidden = tab !== 'latency';
+  // The stack chips scope every tab, latency included: the tool is run on each
+  // stack in the matrix, so a stack is a line there as much as it is here.
   render();
 }
 
@@ -1240,7 +1484,16 @@ function hideMissingTabs(data) {
   }
 
   state.data = data;
-  for (const m of data.modes) state.modes.add(m.key);
+  // One ordered list of stacks for the whole page. Both lists come from the
+  // same MODES order in trends.py and are normally identical; a stack that
+  // published latency but no HLO timings (or the reverse) appears once, here,
+  // so it gets a chip and a hue either way.
+  state.allModes = [...data.modes];
+  for (const m of data.latency?.modes ?? []) {
+    if (!state.allModes.some((o) => o.key === m.key)) state.allModes.push(m);
+  }
+  for (const m of state.allModes) state.modes.add(m.key);
+  for (const g of data.latency?.gpus ?? []) state.gpus.add(g);
   hideMissingTabs(data);
 
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -1250,11 +1503,12 @@ function hideMissingTabs(data) {
   document.getElementById('subtitle').textContent =
     `${first === last ? first : `${first} – ${last}`} · ${plural(data.runs.length, 'run')} · `
     + `${plural((data.modules ?? []).length, 'module')} from ${plural(models, 'model')} · `
-    + `${plural(data.modes.length, 'ROCm stack')}`;
+    + `${plural(state.allModes.length, 'ROCm stack')}`;
   document.getElementById('provenance').textContent =
     `Generated ${data.generated}. Times are UTC.`;
 
   buildModeChips();
+  buildGpuChips();
   buildMetricChips();
   wireControls();
   showTab(state.tab);

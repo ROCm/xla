@@ -231,10 +231,14 @@ jobs:
             //xla/tools/multihost_hlo_runner:hlo_runner_main
 
       - name: Build and run rocm_latency_check_tool [${{ matrix.mode.name }}]
-        # The latency numbers characterise the ROCm runtime rather than the XLA
-        # tree, so measuring them once -- on the newest stack -- is enough; the
-        # release modes would only re-measure the same interconnect.
-        if: matrix.mode.name == 'therock_nightly'
+        # Measured on *every* stack in the matrix, not just the newest. These
+        # numbers characterise the ROCm runtime rather than the XLA tree, which
+        # is exactly why each stack has to measure them itself: the dispatch and
+        # copy overhead the tool times is the part that differs between a pinned
+        # release and the nightly, and a figure from one stack says nothing
+        # about another. One binary per mode, compiled with that mode's own
+        # hipcc out of its own ROCm distribution, so the runtime under test is
+        # the one the rest of this job built against.
         working-directory: perf-tools-src
         run: |
           mkdir -p "$RUNNER_TEMP/raw"

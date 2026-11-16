@@ -208,7 +208,7 @@ things and share nothing but a layout:
 
 | | [ci-metrics](https://rocm.github.io/xla/ci-metrics/) | [perf-metrics](https://rocm.github.io/xla/perf-metrics/) |
 |---|---|---|
-| **Question** | How long does CI take to answer a pull request? | How fast does the top of tree openxla/main runs 1gpu training and inference on collected hlo dumps? Secondly how fast `rocm_latency_check_tool` runs with the latest theRock nightly |
+| **Question** | How long does CI take to answer a pull request? | How fast does the top of tree openxla/main runs 1gpu training and inference on collected hlo dumps? Secondly how fast `rocm_latency_check_tool` runs on each theRock stack, at 1, 2 and 4 GPUs |
 | **Measures** | time to signal, queue wait, pass rate, suite size, per lane | HLO module execution time and HIP latency, per ROCm stack |
 | **Source** | the GitHub Actions API and job logs, per PR head commit | [`perf_tools/`](perf_tools/) replayed on a gfx950 |
 | **A point is** | one **day**, pooled from overlapping nightly snapshots | one **run**, against one pinned `openxla/xla` commit |

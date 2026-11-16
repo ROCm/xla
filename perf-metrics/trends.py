@@ -31,10 +31,18 @@ per run, so that spread is the only evidence available for what run-to-run quiet
 looks like, and it is what any wobble on these charts has to beat to mean
 anything.
 
-Latency is read from the nightly stack only. The tool characterises the ROCm
-runtime rather than the XLA tree, the nightly is the only stack the workflow
-still runs it on, and the handful of early runs that measured the release
-stacks would otherwise draw three stubs that stop in November.
+Latency is read for every stack, at every GPU count the tool was run on, so the
+published series carry both dimensions: `latency.series[mode][gpus][metric]`.
+The tool characterises the ROCm runtime rather than the XLA tree, which is what
+makes the stack axis the interesting one -- a release and the nightly differ in
+exactly the dispatch and copy overhead it times -- and the GPU axis says how
+that overhead grows as the pipeline is spread wider.
+
+The release stacks carry a gap. The nightly ran the tool on all three stacks
+until 2026-11-04, then on the nightly alone until the condition was lifted, so
+the release series break across that stretch. A break is drawn as a break:
+nothing interpolates across it, and the two ends are measurements of the same
+pinned release either side of a hole.
 """
 import argparse
 import collections
@@ -78,14 +86,6 @@ LATENCY_METRICS = (
     ("mean_us", "Mean", "us"),
     ("qps", "Throughput", "qps"),
 )
-
-# The one stack whose latency figures are plotted. The tool measures the ROCm
-# runtime, not the XLA tree, so the workflow runs it on the newest stack only --
-# re-measuring it on the pinned releases would only re-measure the same
-# interconnect. Three early runs did measure all three stacks, before that
-# condition was added; those rows are dropped rather than drawn as three lines
-# that stop in November and never resume.
-LATENCY_MODE = "therock_nightly"
 
 # The leaves `run_1gpu_perf.sh` emits, in the order the page shows them. The
 # two are separate suites: training HLO carries the backward pass, the
@@ -196,11 +196,10 @@ def read_latency(run):
     pooling them would weight a run by how long it happened to take. `final` is
     the figure the tool prints as its result.
 
-    Every mode is read, not just `LATENCY_MODE`. The *figures* of the other
-    stacks are discarded downstream, but the `hip_version` column beside them
-    is a correct and unchanging fact about a pinned release -- ROCm 10.0 is
-    HIP 7.15 whenever it was measured -- so it is worth keeping for the mode
-    chips even though the timings are not.
+    Every mode is read and every mode is plotted. The `hip_version` column
+    beside the timings is what names the build each stack actually was -- ROCm
+    10.0 is HIP 7.15 whenever it was measured -- and it is the only column in
+    the published run that says so.
     """
     out = {}
     for mode, _ in MODES:
@@ -344,25 +343,38 @@ def module_table(per_run, modes):
 
 
 def latency_series(per_latency):
-    """`{"<gpus>": {metric: [...]}}` for `LATENCY_MODE`, plus its GPU counts.
+    """`{mode: {"<gpus>": {metric: [...]}}}`, plus the GPU counts measured.
 
-    One stack only, so the series are keyed by GPU count alone and the chart
-    has one dimension rather than two. See `LATENCY_MODE` for why the others
-    are dropped rather than plotted.
+    Two dimensions, because the nightly measures both: every stack in the
+    matrix, at every GPU count the workflow runs the tool on. The page draws
+    them as two sets of panels over the same series -- a stack per panel with
+    the GPU counts as lines, and a GPU count per panel with the stacks as lines
+    -- so neither dimension is the one that has to be held in the reader's
+    head.
+
+    A run that did not measure a (mode, GPU count) pair contributes `None`
+    there rather than being skipped, so every series is one value per run and
+    lines up with `runs` positionally. A pair no run ever measured is left out
+    altogether instead of publishing a column of nulls.
     """
-    gpu_counts = sorted({g for run in per_latency for g in run.get(LATENCY_MODE, {})})
+    gpu_counts = sorted({g for run in per_latency for by_gpus in run.values()
+                         for g in by_gpus})
     series = {}
-    for gpus in gpu_counts:
-        row = {metric: [] for metric, _, _ in LATENCY_METRICS}
-        for run in per_latency:
-            found = run.get(LATENCY_MODE, {}).get(gpus)
-            for metric, _, _ in LATENCY_METRICS:
-                try:
-                    row[metric].append(float(found[metric]))
-                except (TypeError, KeyError, ValueError):
-                    row[metric].append(None)
-        if any(v is not None for v in row["p50_us"]):
-            series[str(gpus)] = row
+    for mode, _ in MODES:
+        by_gpus = {}
+        for gpus in gpu_counts:
+            row = {metric: [] for metric, _, _ in LATENCY_METRICS}
+            for run in per_latency:
+                found = run.get(mode, {}).get(gpus)
+                for metric, _, _ in LATENCY_METRICS:
+                    try:
+                        row[metric].append(float(found[metric]))
+                    except (TypeError, KeyError, ValueError):
+                        row[metric].append(None)
+            if any(v is not None for v in row["p50_us"]):
+                by_gpus[str(gpus)] = row
+        if by_gpus:
+            series[mode] = by_gpus
     return gpu_counts, series
 
 
@@ -417,6 +429,11 @@ def main():
 
     modules, module_values = module_table(per_run, modes)
     gpu_counts, latency = latency_series(per_latency)
+    # The stacks the tool measured, which need not be the stacks that produced
+    # HLO timings: a mode can lose one step and publish the other.
+    latency_modes = [m for m, _ in MODES if m in latency]
+    # Every stack either half of the run produced, in MODES order.
+    all_modes = [m for m, _ in MODES if m in modes or m in latency_modes]
     # Only the leaves that actually appear, in LEAVES order, so the page draws
     # a tab per suite the runner produced rather than an empty one.
     leaves = [(k, l) for k, l in LEAVES if any(m["leaf"] == k for m in modules)]
@@ -444,12 +461,15 @@ def main():
         # what the per-module charts plot straight out of the file.
         "modules": modules,
         "module_values": module_values,
-        "hip": hip_versions(per_latency, modes),
+        # Not just the stacks with HLO timings: the page labels the latency
+        # panels with the HIP version too.
+        "hip": hip_versions(per_latency, all_modes),
         "latency": {
-            # Named, because the chart is one stack's and the page has to say
-            # which -- the mode filter above does not scope it.
-            "mode": LATENCY_MODE,
-            "mode_label": labels.get(LATENCY_MODE, LATENCY_MODE),
+            # Its own mode list rather than the one above: the latency tool and
+            # the HLO runner are separate steps of the same job, so a stack can
+            # appear in one and not the other, and the latency charts are drawn
+            # from this one.
+            "modes": [{"key": m, "label": labels[m]} for m in latency_modes],
             "gpus": gpu_counts,
             "metrics": [{"key": k, "label": l, "unit": u} for k, l, u in LATENCY_METRICS],
             "series": latency,
@@ -475,8 +495,16 @@ def main():
         n = sum(1 for m in modules if m["leaf"] == key)
         print(f"  {label.lower():21s} {n:3d} per-module charts")
     if latency:
-        print(f"  latency: {LATENCY_MODE} only, {len(latency)} GPU counts "
-              f"{gpu_counts}")
+        print(f"  latency: GPU counts {gpu_counts}")
+        for mode in latency_modes:
+            # How many runs actually carry each pair, so a stack that only
+            # started being measured recently is visible here rather than only
+            # as a short line on the page.
+            covered = ", ".join(
+                f"{g}gpu {sum(1 for v in latency[mode][g]['p50_us'] if v is not None)}"
+                f"/{len(runs)}"
+                for g in sorted(latency[mode], key=int))
+            print(f"  {mode:21s} {covered}")
     else:
         print("  latency: no final rows found")
     print(f"wrote {args.out} ({os.path.getsize(args.out)} bytes)")
