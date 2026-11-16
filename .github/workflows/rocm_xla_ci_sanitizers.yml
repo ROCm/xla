@@ -89,7 +89,6 @@ jobs:
       COMMON_ARGS: >-
         --config=rocm_ci_hermetic
         --config=rocm_rbe
-        --dynamic_mode=off
         --@rules_ml_toolchain//common:enable_xla_test_global_symbol_version=False
         --local_test_jobs=8
         --strategy=TestRunner=local
