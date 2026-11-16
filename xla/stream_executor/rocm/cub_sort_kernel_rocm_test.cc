@@ -28,7 +28,6 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/cleanup/cleanup.h"
 #include "absl/status/status_matchers.h"
-#include "absl/status/statusor.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/platform.h"
@@ -44,20 +43,12 @@ using ::absl_testing::IsOk;
 class CubSortKernelRocmTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    absl::StatusOr<Platform*> platform =
-        PlatformManager::PlatformWithName("ROCM");
-    ASSERT_THAT(platform, IsOk());
-    platform_ = *platform;
-    absl::StatusOr<StreamExecutor*> executor = platform_->ExecutorForDevice(0);
-    ASSERT_THAT(executor, IsOk());
-    executor_ = *executor;
-    absl::StatusOr<std::unique_ptr<Stream>> stream =
-        executor_->CreateStream(std::nullopt);
-    ASSERT_THAT(stream, IsOk());
-    stream_ = *std::move(stream);
+    ASSERT_OK_AND_ASSIGN(platform_, PlatformManager::PlatformWithName("ROCM"));
+    ASSERT_OK_AND_ASSIGN(executor_, platform_->ExecutorForDevice(0));
+    ASSERT_OK_AND_ASSIGN(stream_, executor_->CreateStream(std::nullopt));
   }
 
-  hipStream_t hip_stream() {
+  hipStream_t hip_stream() const {
     return static_cast<hipStream_t>(stream_->platform_specific_handle().stream);
   }
 
@@ -88,7 +79,9 @@ class CubSortKernelRocmTest : public ::testing::Test {
           });
     }
     std::vector<float> expected_keys(n);
-    for (size_t i = 0; i < n; ++i) expected_keys[i] = keys[expected_values[i]];
+    for (size_t i = 0; i < n; ++i) {
+      expected_keys[i] = keys[expected_values[i]];
+    }
 
     size_t temp_bytes = 0;
     if (with_values) {
@@ -147,11 +140,13 @@ class CubSortKernelRocmTest : public ::testing::Test {
     }
     ASSERT_THAT(stream_->BlockHostUntilDone(), IsOk());
     EXPECT_EQ(out_keys, expected_keys);
-    if (with_values) EXPECT_EQ(out_values, expected_values);
+    if (with_values) {
+      EXPECT_EQ(out_values, expected_values);
+    }
   }
 
-  Platform* platform_;
-  StreamExecutor* executor_;
+  Platform* platform_ = nullptr;
+  StreamExecutor* executor_ = nullptr;
   std::unique_ptr<Stream> stream_;
 };
 

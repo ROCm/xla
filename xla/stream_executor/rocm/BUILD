@@ -1438,7 +1438,6 @@ cc_library(
     ],
     deps = [
         ":cub_sort_kernel_rocm_header",
-        ":rocm_status",
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla/backends/gpu:ffi",
@@ -1473,7 +1472,6 @@ xla_test(
         "//xla/stream_executor:stream_executor_h",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status:status_matchers",
-        "@com_google_absl//absl/status:statusor",
         "@com_google_googletest//:gtest_main",
         "@local_config_rocm//rocm:rocm_headers",
     ],

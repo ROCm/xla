@@ -31,7 +31,6 @@ limitations under the License.
 #include "xla/ffi/ffi_api.h"  // IWYU pragma: keep
 #include "xla/primitive_util.h"
 #include "xla/service/gpu/cublas_cudnn.h"
-#include "xla/stream_executor/rocm/rocm_status.h"
 #include "xla/xla_data.pb.h"
 
 namespace stream_executor {
@@ -138,14 +137,30 @@ absl::Status VerifySortPairsBuffers(ffi::AnyBuffer keys, ffi::AnyBuffer values,
                      ffi::match::Buffer().Like(values));
 }
 
-// Computes the scratch buffer size needed for CUB sort. The segment offsets of
-// a batched sort are computed on the device and need no scratch.
+// Adds to the hipCUB scratch size the (batch_size + 1) int32 segment offsets
+// that older runtimes copy to the end of the scratch buffer of a batched sort.
+// The segment offsets are now computed on the device, but the scratch size is
+// fixed at compile time, so the space stays reserved for GPU AOT forward
+// compatibility (docs/gpu_aot_compatibility.md): an older runtime shrinks the
+// hipCUB scratch by that amount before sorting.
+// TODO(mminutoli): drop the reservation once the forward-compatibility
+// window has passed.
+int64_t AddLegacyOffsetsSize(size_t temp_bytes, int64_t batch_size) {
+  int64_t scratch_size = temp_bytes;
+  if (batch_size > 1) {
+    scratch_size += sizeof(int32_t) - scratch_size % sizeof(int32_t);
+    scratch_size += (batch_size + 1) * sizeof(int32_t);
+  }
+  return scratch_size;
+}
+
+// Computes the scratch buffer size needed for CUB sort.
 absl::StatusOr<int64_t> ComputeScratchSize(SortKeysFn fn, int64_t num_items,
                                            int64_t batch_size) {
   size_t temp_bytes = 0;
   ABSL_RETURN_IF_ERROR(fn(nullptr, temp_bytes, nullptr, nullptr, num_items,
                           false, batch_size, nullptr));
-  return temp_bytes;
+  return AddLegacyOffsetsSize(temp_bytes, batch_size);
 }
 
 absl::StatusOr<int64_t> ComputeScratchSize(SortPairsFn fn, int64_t num_items,
@@ -153,7 +168,7 @@ absl::StatusOr<int64_t> ComputeScratchSize(SortPairsFn fn, int64_t num_items,
   size_t temp_bytes = 0;
   ABSL_RETURN_IF_ERROR(fn(nullptr, temp_bytes, nullptr, nullptr, nullptr,
                           nullptr, num_items, false, batch_size, nullptr));
-  return temp_bytes;
+  return AddLegacyOffsetsSize(temp_bytes, batch_size);
 }
 
 //===----------------------------------------------------------------------===//
