@@ -78,6 +78,10 @@ absl::StatusOr<mori::ccl::DataType> ToMoriDataType(PrimitiveType dtype) {
     MORI_TYPE_DISPATCH(BF16)
     MORI_TYPE_DISPATCH(S8)
     MORI_TYPE_DISPATCH(U8)
+    // XLA PRED is a 1-byte boolean. RCCL maps it to ncclUint8; MORI has no
+    // PRED enum, so treat it as U8 for all-reduce / reduce-scatter of masks.
+    case PRED:
+      return mori::ccl::DataType::U8;
     MORI_TYPE_DISPATCH(S32)
     MORI_TYPE_DISPATCH(U32)
     MORI_TYPE_DISPATCH(S64)
@@ -437,13 +441,6 @@ absl::Status MoriCommunicator::LaunchRaggedAllToAll(
         "updates for %d ranks; disable "
         "--xla_gpu_enable_gxl_ragged_all_to_all",
         mori::ccl::kRaggedMaxUpdates, num_total_updates, num_ranks);
-  }
-  if (!facade_->InHeap(output.opaque(), output.size())) {
-    return FailedPrecondition(
-        "MORI ragged-all-to-all output buffer %p (%d bytes) is not in the MORI "
-        "heap; enable --xla_gpu_experimental_enable_nccl_symmetric_buffers or "
-        "disable --xla_gpu_enable_gxl_ragged_all_to_all",
-        output.opaque(), output.size());
   }
 
   return LaunchOrDefer(
