@@ -33,6 +33,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/ir/hlo_sharding.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
 
@@ -89,8 +90,14 @@ std::optional<StackWrite> MatchStackWrite(const HloInstruction* while_op,
   return StackWrite{index, dus, SkipCopiesAndReshapes(dus->operand(1))};
 }
 
-bool SameWriteShapes(const StackWrite& a, const StackWrite& b) {
+// Also compares the loop elements themselves: copies are skipped, and a copy
+// can change the layout.
+bool SameWriteShapes(const HloInstruction* while_op, const StackWrite& a,
+                     const StackWrite& b) {
+  const Shape& shape = while_op->shape();
   return a.update == b.update &&
+         ShapeUtil::Equal(shape.tuple_shapes(a.index),
+                          shape.tuple_shapes(b.index)) &&
          ShapeUtil::Equal(a.dus->shape(), b.dus->shape()) &&
          ShapeUtil::Equal(a.dus->operand(1)->shape(),
                           b.dus->operand(1)->shape());
@@ -166,7 +173,7 @@ absl::StatusOr<bool> RunOnLoop(HloInstruction* while_op) {
   std::vector<std::pair<int64_t, int64_t>> pairs;
   for (int64_t a = 0; a < writes.size(); ++a) {
     for (int64_t b = a + 1; b < writes.size(); ++b) {
-      if (SameWriteShapes(writes[a], writes[b])) {
+      if (SameWriteShapes(while_op, writes[a], writes[b])) {
         pairs.push_back({a, b});
       }
     }
@@ -215,6 +222,14 @@ absl::StatusOr<bool> RunOnLoop(HloInstruction* while_op) {
     if (keep_gte == nullptr) {
       keep_gte = parent->AddInstruction(
           HloInstruction::CreateGetTupleElement(while_op, keep));
+      keep_gte->set_metadata(drop_gtes[0]->metadata());
+      if (while_op->has_sharding()) {
+        const HloSharding& sharding = while_op->sharding();
+        keep_gte->set_sharding(
+            sharding.IsTuple()
+                ? sharding.GetSubSharding(while_op->shape(), {keep})
+                : sharding);
+      }
     }
     VLOG(2) << "While loop " << while_op->name() << ": output " << drop
             << " duplicates output " << keep;

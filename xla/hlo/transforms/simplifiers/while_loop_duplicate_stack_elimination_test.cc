@@ -46,7 +46,7 @@ namespace {
 // carried buffer `buf` (at layer_indices[i], with jnp's negative-index wrap)
 // and into the residual stack `res` (at $RES_INDEX), as jax.lax.scan lowers
 // buf.at[layer_indices[i]].set(w) with w also saved for the backward pass.
-constexpr absl::string_view kScan = R"(
+constexpr absl::string_view kScan = R"hlo(
 HloModule scan
 
 body {
@@ -96,13 +96,13 @@ ENTRY main {
   $INDICES
   i0 = s32[] constant(0)
   init = (s32[], f32[4,2,3], f32[4,2,3], s32[4], f32[2,3]) tuple(i0, $INITS, indices, shard)
-  loop = (s32[], f32[4,2,3], f32[4,2,3], s32[4], f32[2,3]) while(init), condition=cond, body=body
-  buf_out = f32[4,2,3] get-tuple-element(loop), index=1
-  res_out = f32[4,2,3] get-tuple-element(loop), index=2
+  loop = (s32[], f32[4,2,3], f32[4,2,3], s32[4], f32[2,3]) while(init), condition=cond, body=body$LOOP_ATTRS
+  $BUF_OUT
+  res_out = f32[4,2,3] get-tuple-element(loop), index=2$RES_OUT_ATTRS
   sum = f32[4,2,3] add(res_out, res_out)
   ROOT out = $ROOT
 }
-)";
+)hlo";
 
 using Replacements = std::vector<std::pair<std::string, std::string>>;
 
@@ -118,6 +118,9 @@ std::string Scan(const Replacements& replacements = {}) {
       {"$LI_NEXT", "layer_indices"},
       {"$INDICES", "indices = s32[4] iota(), iota_dimension=0"},
       {"$INITS", "buf0, res0"},
+      {"$LOOP_ATTRS", ""},
+      {"$BUF_OUT", "buf_out = f32[4,2,3] get-tuple-element(loop), index=1"},
+      {"$RES_OUT_ATTRS", ""},
       {"$ROOT", "(f32[4,2,3], f32[4,2,3]) tuple(buf_out, sum)"}};
   for (const auto& [key, value] : replacements) {
     values[key] = value;
@@ -134,6 +137,71 @@ TEST_F(WhileLoopDuplicateStackEliminationTest, ResidualReadsCarriedBuffer) {
     // CHECK-NOT: get-tuple-element(%loop), index=2
     // CHECK:     add(%[[BUF]], %[[BUF]])
   )");
+}
+
+// Only the dropped element is read: the pass adds a get-tuple-element of the
+// kept one, with the metadata of the replaced one and the loop's sharding.
+TEST_F(WhileLoopDuplicateStackEliminationTest, AddsGteOfKeptElement) {
+  RunAndFilecheckHloRewrite(
+      Scan({{"$BUF_OUT", ""},
+            {"$LOOP_ATTRS",
+             ", sharding={{replicated}, {maximal device=0}, {maximal "
+             "device=1}, {replicated}, {replicated}}"},
+            {"$RES_OUT_ATTRS", R"(, metadata={op_name="res"})"},
+            {"$ROOT", "f32[4,2,3] copy(sum)"}}),
+      WhileLoopDuplicateStackElimination(), R"(
+    // CHECK:     ENTRY
+    // CHECK-NOT: get-tuple-element(%loop), index=2
+    // CHECK:     %[[BUF:.*]] = f32[4,2,3]{2,1,0} get-tuple-element(%loop), index=1, sharding={maximal device=0}, metadata={op_name="res"}
+    // CHECK:     add(%[[BUF]], %[[BUF]])
+  )");
+}
+
+// The two elements are equal up to layout: a copy in the body changes the
+// layout of the residual stack, which the kept element would not have.
+TEST_F(WhileLoopDuplicateStackEliminationTest, DifferentLayouts) {
+  constexpr absl::string_view kHlo = R"hlo(
+HloModule layouts
+
+body {
+  p = (s32[], f32[4,3]{1,0}, f32[4,3]{0,1}) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  buf = f32[4,3]{1,0} get-tuple-element(p), index=1
+  res = f32[4,3]{0,1} get-tuple-element(p), index=2
+  i_f = f32[] convert(i)
+  w = f32[1,3]{1,0} broadcast(i_f), dimensions={}
+  zero = s32[] constant(0)
+  one = s32[] constant(1)
+  buf_new = f32[4,3]{1,0} dynamic-update-slice(buf, w, i, zero)
+  res_row_major = f32[4,3]{1,0} copy(res)
+  res_dus = f32[4,3]{1,0} dynamic-update-slice(res_row_major, w, i, zero)
+  res_new = f32[4,3]{0,1} copy(res_dus)
+  next = s32[] add(i, one)
+  ROOT t = (s32[], f32[4,3]{1,0}, f32[4,3]{0,1}) tuple(next, buf_new, res_new)
+}
+
+cond {
+  p = (s32[], f32[4,3]{1,0}, f32[4,3]{0,1}) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  limit = s32[] constant(4)
+  ROOT lt = pred[] compare(i, limit), direction=LT
+}
+
+ENTRY main {
+  buf0 = f32[4,3]{1,0} parameter(0)
+  c0 = f32[] constant(0)
+  res0 = f32[4,3]{0,1} broadcast(c0), dimensions={}
+  i0 = s32[] constant(0)
+  init = (s32[], f32[4,3]{1,0}, f32[4,3]{0,1}) tuple(i0, buf0, res0)
+  loop = (s32[], f32[4,3]{1,0}, f32[4,3]{0,1}) while(init), condition=cond, body=body
+  buf_out = f32[4,3]{1,0} get-tuple-element(loop), index=1
+  res_out = f32[4,3]{0,1} get-tuple-element(loop), index=2
+  ROOT out = (f32[4,3]{1,0}, f32[4,3]{0,1}) tuple(buf_out, res_out)
+}
+)hlo";
+  ASSERT_OK(RunAndCheckHloRewrite(kHlo, WhileLoopDuplicateStackElimination(),
+                                  /*expect_change=*/false)
+                .status());
 }
 
 // The kept element is the one whose initial value is not a fresh buffer, even
@@ -200,6 +268,10 @@ INSTANTIATE_TEST_SUITE_P(
     Cases, WhileLoopDuplicateStackEliminationCaseTest,
     ::testing::Values(
         Case{"Scan", {}, true},
+        // Only the dropped element is read.
+        Case{"OnlyDroppedElementRead",
+             {{"$BUF_OUT", ""}, {"$ROOT", "f32[4,2,3] copy(sum)"}},
+             true},
         // Equal only after the dynamic-update-slice clamps 7 to 3.
         Case{"ClampedStarts",
              {{"$RES_INDEX", "big"},
