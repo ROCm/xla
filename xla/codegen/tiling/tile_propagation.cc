@@ -770,9 +770,9 @@ Tiles PropagateTileToInputForDotOp(const TilingSpace& tiling_space,
           output_tile.CloneWithNewDims(std::move(rhs_dim_tiles))};
 }
 
-Tiles PropagateTileToInputForConvOp(const TilingSpace& tiling_space,
-                                    const HloConvolutionInstruction& conv,
-                                    const Tile& output_tile) {
+absl::StatusOr<Tiles> PropagateTileToInputForConvOp(
+    const TilingSpace& tiling_space, const HloConvolutionInstruction& conv,
+    const Tile& output_tile) {
   MLIRContext* ctx = output_tile.mlir_context();
   const ConvolutionDimensionNumbers& dnums =
       conv.convolution_dimension_numbers();
@@ -801,6 +801,11 @@ Tiles PropagateTileToInputForConvOp(const TilingSpace& tiling_space,
   for (int64_t i = 0; i < spatial_rank; ++i) {
     const TilingSpace::DimensionInfo& info =
         tiling_space.GetDimensionInfo(conv, output_rank + i);
+    if (info.tile_size.has_value() && *info.tile_size != 1) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Kernel spatial tile size must be 1, got ",
+                       *info.tile_size, " for spatial axis ", i));
+    }
     CHECK(info.type == TilingSpace::DimensionSemantics::kSequential)
         << "Expected a sequential dimension info for kernel spatial dimension "
         << i << " in conv op " << conv.ToString();
@@ -844,8 +849,8 @@ Tiles PropagateTileToInputForConvOp(const TilingSpace& tiling_space,
   kernel_dim_tiles[dnums.kernel_input_feature_dimension()] = c_in_tile;
   kernel_dim_tiles[dnums.kernel_output_feature_dimension()] = out_feature_tile;
 
-  return {output_tile.CloneWithNewDims(std::move(input_dim_tiles)),
-          output_tile.CloneWithNewDims(std::move(kernel_dim_tiles))};
+  return Tiles{output_tile.CloneWithNewDims(std::move(input_dim_tiles)),
+               output_tile.CloneWithNewDims(std::move(kernel_dim_tiles))};
 }
 
 // Helper function for PropagateTileToInputForScaledDotOp to compute the
