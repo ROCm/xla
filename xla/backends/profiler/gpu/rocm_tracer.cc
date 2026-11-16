@@ -22,11 +22,13 @@ limitations under the License.
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/base/call_once.h"
 #include "absl/base/optimization.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/log/log.h"
@@ -37,6 +39,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
+#include "rocm/include/hip/hip_runtime_api.h"
 #include "rocm/include/rocprofiler-sdk/agent.h"
 #include "rocm/include/rocprofiler-sdk/buffer.h"
 #include "rocm/include/rocprofiler-sdk/buffer_tracing.h"
@@ -49,11 +52,11 @@ limitations under the License.
 #include "rocm/include/rocprofiler-sdk/marker.h"
 #include "rocm/include/rocprofiler-sdk/registration.h"
 #include "rocm/include/rocprofiler-sdk/rocprofiler.h"
-#include "tsl/platform/abi.h"
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/profiler/backends/cpu/annotation_stack.h"
+#include "tsl/platform/abi.h"
 
 namespace xla {
 namespace profiler {
@@ -157,7 +160,56 @@ bool RocmTracer::IsAvailable() const {
   return ts;
 }
 
+void RocmTracer::SortAgentsByHipDevice() {
+  int count = 0;
+  if (hipGetDeviceCount(&count) != hipSuccess) {
+    count = 0;
+  }
+  // A HIP device with no agent at its address keeps an all-zero placeholder,
+  // so its rows are dropped and later devices keep their numbers.
+  std::vector<rocprofiler_agent_v0_t> sorted(count);
+  std::vector<bool> taken(gpu_agents_.size(), false);
+  for (int k = 0; k < count; ++k) {
+    // Only the bus-id string has the PCI function, which tells the partitions
+    // of one GPU apart.
+    char bus_id[64];
+    unsigned int dom, bus, dev, fn;
+    if (hipDeviceGetPCIBusId(bus_id, sizeof(bus_id), k) != hipSuccess ||
+        std::sscanf(bus_id, "%x:%x:%x.%x", &dom, &bus, &dev, &fn) != 4) {
+      continue;
+    }
+    const uint32_t location_id = bus << 8 | dev << 3 | fn;
+    // The first agent at this address that no earlier HIP device took. For
+    // partitions that share an address (GC 9.4.4 on ROCm 6.2.x drivers or
+    // Linux 6.11), this assumes HIP and KFD list them in the same order.
+    for (size_t i = 0; i < gpu_agents_.size(); ++i) {
+      const rocprofiler_agent_v0_t& agent = gpu_agents_[i];
+      if (!taken[i] && agent.domain == dom &&
+          agent.location_id == location_id) {
+        sorted[k] = agent;
+        taken[i] = true;
+        break;
+      }
+    }
+  }
+  gpu_agents_ = std::move(sorted);
+  num_gpus_ = gpu_agents_.size();
+}
+
+uint32_t RocmTracer::HipDeviceOf(rocprofiler_agent_id_t agent) const {
+  for (uint32_t k = 0; k < gpu_agents_.size(); ++k) {
+    if (gpu_agents_[k].type == ROCPROFILER_AGENT_TYPE_GPU &&
+        gpu_agents_[k].id.handle == agent.handle) {
+      return k;
+    }
+  }
+  return RocmTracerEvent::kInvalidDeviceId;
+}
+
 absl::Status RocmTracer::Enable(RocmTraceCollector* collector) {
+  // Before rocprofiler_start_context: the record callbacks read gpu_agents_,
+  // which never changes after this.
+  absl::call_once(hip_order_once_, &RocmTracer::SortAgentsByHipDevice, this);
   absl::MutexLock lock(collector_mutex_);
   if (collector_ != nullptr) {
     return absl::AlreadyExistsError("ROCM tracer is already running");
@@ -274,30 +326,31 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
       trace_event->type = RocmTracerEventType::MemcpyOther;
   }
 #undef OO
-  const auto &src_gpu = agents_[static_cast<uint32_t>(rec.src_agent_id.handle)],
-             &dst_gpu = agents_[static_cast<uint32_t>(rec.dst_agent_id.handle)];
+  constexpr uint32_t kNoGpu = RocmTracerEvent::kInvalidDeviceId;
+  const uint32_t src_gpu = HipDeviceOf(rec.src_agent_id),
+                 dst_gpu = HipDeviceOf(rec.dst_agent_id);
 
   // Assign device_id based on copy direction
   if (trace_event->type == RocmTracerEventType::MemcpyH2D &&
-      dst_gpu.type == ROCPROFILER_AGENT_TYPE_GPU) {
-    trace_event->device_id = dst_gpu.id.handle;  // Destination is GPU
+      dst_gpu != kNoGpu) {
+    trace_event->device_id = dst_gpu;  // Destination is GPU
   } else if (trace_event->type == RocmTracerEventType::MemcpyD2H &&
-             src_gpu.type == ROCPROFILER_AGENT_TYPE_GPU) {
-    trace_event->device_id = src_gpu.id.handle;  // Source is GPU
+             src_gpu != kNoGpu) {
+    trace_event->device_id = src_gpu;  // Source is GPU
   } else if (trace_event->type == RocmTracerEventType::MemcpyD2D) {
     // Prefer destination GPU for D2D
-    trace_event->device_id = dst_gpu.id.handle;
+    trace_event->device_id = dst_gpu;
   } else {
     // Fallback for MemcpyOther or HOST_TO_HOST
-    if (dst_gpu.type == ROCPROFILER_AGENT_TYPE_GPU) {
-      trace_event->device_id = dst_gpu.id.handle;
-    } else if (src_gpu.type == ROCPROFILER_AGENT_TYPE_GPU) {
-      trace_event->device_id = src_gpu.id.handle;
+    if (dst_gpu != kNoGpu) {
+      trace_event->device_id = dst_gpu;
+    } else if (src_gpu != kNoGpu) {
+      trace_event->device_id = src_gpu;
     } else {
       LOG(WARNING) << "No GPU ID available for memory copy operation: "
-                   << trace_event->name << ", src_agent_type=" << src_gpu.type
-                   << ", dst_agent_type=" << dst_gpu.type;
-      trace_event->device_id = 0;  // Invalid ID or default
+                   << trace_event->name << ", src=" << rec.src_agent_id.handle
+                   << ", dst=" << rec.dst_agent_id.handle;
+      trace_event->device_id = kNoGpu;
     }
   }
 
@@ -317,7 +370,7 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
   trace_event->stream_id = rec.correlation_id.external.value;
   trace_event->memcpy_info = MemcpyDetails{
       .num_bytes = rec.bytes,
-      .destination = static_cast<uint32_t>(dst_gpu.id.handle),
+      .destination = trace_event->device_id,  // As CUPTI does for copies.
       .async = false,
   };
 
@@ -340,7 +393,7 @@ void RocmTracer::KernelEvent(const rocprofiler_record_header_t* hdr,
   trace_event->name = "??";
   trace_event->start_time_ns = rec.start_timestamp;
   trace_event->end_time_ns = rec.end_timestamp;
-  trace_event->device_id = agents_[kinfo.agent_id.handle].id.handle;
+  trace_event->device_id = HipDeviceOf(kinfo.agent_id);
   trace_event->correlation_id = rec.correlation_id.internal;
   trace_event->annotation =
       annotation_map()->LookUp(trace_event->correlation_id);
@@ -625,7 +678,6 @@ absl::Status RocmTracer::InitProfiling(void* tool_data) {
   for (const auto& agent : GetGpuDeviceAgents()) {
     VLOG(1) << "agent id = " << agent.id.handle << ", dev = " << agent.device_id
             << ", name = " << (agent.name ? agent.name : "null");
-    agents_[agent.id.handle] = agent;
     if (agent.type == ROCPROFILER_AGENT_TYPE_GPU) {
       gpu_agents_.push_back(agent);
       num_gpus_++;

@@ -57,7 +57,7 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
   options.max_callback_api_events = 100;
   options.max_activity_api_events = 100;
   options.max_annotation_strings = 100;
-  options.num_gpus = 1;
+  options.num_gpus = 2;
 
   constexpr uint64_t kStartWallTimeNs = 1000;
   constexpr uint64_t kStartGpuTimeNs = 2000;
@@ -90,7 +90,8 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
   activity_event.correlation_id = kCorrelationId;
   activity_event.start_time_ns = kStartTimeNs;
   activity_event.end_time_ns = kEndTimeNs;
-  activity_event.device_id = 100;
+  // The only row is on HIP device 1, so it must export on GPU:1.
+  activity_event.device_id = 1;
   activity_event.stream_id = 123;
   activity_event.kernel_info = KernelDetails{};
 
@@ -105,7 +106,7 @@ TEST(RocmCollectorTest, TestAddKernelEventAndExport) {
   // === 4. Check results ===
   ASSERT_GE(space.planes_size(), 1);
   const auto* gpu_plane =
-      FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+      FindOrAddMutablePlaneWithName(&space, "/device:GPU:1");
   ASSERT_NE(gpu_plane, nullptr);
 
   ASSERT_GT(gpu_plane->lines_size(), 0);
@@ -139,7 +140,7 @@ TEST(RocmCollectorTest, MultipleActivitiesPerCorrelationIdAllExported) {
   // that replays a captured graph: one API call, many kernel-dispatch
   // records emitted by rocprofiler-sdk under the same correlation_id.
   constexpr uint32_t kCorrelationId = 7;
-  constexpr uint32_t kDeviceId = 100;
+  constexpr uint32_t kDeviceId = 0;
   constexpr uint64_t kStreamId = 123;
 
   RocmTracerEvent api_event;

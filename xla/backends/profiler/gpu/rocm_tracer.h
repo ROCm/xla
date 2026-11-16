@@ -20,6 +20,7 @@ limitations under the License.
 #include <cstdint>
 #include <string>
 
+#include "absl/base/call_once.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
@@ -51,8 +52,14 @@ class RocmTracer {
   void Disable();
 
   static uint64_t GetTimestamp();
-  uint32_t NumGpus() const { return num_gpus_; }
-  const std::vector<rocprofiler_agent_v0_t>& GpuAgents() const {
+  // GPU k is HIP device k. The first call of NumGpus(), GpuAgents() or
+  // Enable() sorts the agents into HIP order, so it makes HIP calls.
+  uint32_t NumGpus() {
+    absl::call_once(hip_order_once_, &RocmTracer::SortAgentsByHipDevice, this);
+    return num_gpus_;
+  }
+  const std::vector<rocprofiler_agent_v0_t>& GpuAgents() {
+    absl::call_once(hip_order_once_, &RocmTracer::SortAgentsByHipDevice, this);
     return gpu_agents_;
   }
   RocmTraceCollector* collector() { return collector_; }
@@ -104,7 +111,13 @@ class RocmTracer {
 
  private:
   absl::Status InitProfiling(void* tool_data);
+  // Replaces gpu_agents_ with the agent of each HIP device, in HIP order,
+  // matched by PCI address.
+  void SortAgentsByHipDevice();
+  // The HIP device number of `agent`, or kInvalidDeviceId.
+  uint32_t HipDeviceOf(rocprofiler_agent_id_t agent) const;
 
+  absl::once_flag hip_order_once_;
   uint32_t num_gpus_{0};
   RocmTraceCollector* collector_{nullptr};
   absl::Mutex collector_mutex_;
@@ -141,9 +154,6 @@ class RocmTracer {
   using kernel_info_map_t =
       absl::flat_hash_map<rocprofiler_kernel_id_t, ProfilerKernelInfo>;
 
-  using agent_info_map_t =
-      absl::flat_hash_map<uint64_t, rocprofiler_agent_v0_t>;
-
   using callback_name_info = rocprofiler::sdk::callback_name_info;
 
   rocprofiler_client_id_t* client_id_{nullptr};
@@ -161,7 +171,6 @@ class RocmTracer {
   absl::Mutex kernel_lock_;
 
   callback_name_info name_info_;
-  agent_info_map_t agents_;
   std::vector<rocprofiler_agent_v0_t> gpu_agents_;
 
  public:
