@@ -1295,4 +1295,137 @@ optional<int64_t> ComputeWhileLoopTripCountUpperBound(
   return nullopt;
 }
 
+namespace {
+
+// Whether `scalar`, an instruction of the loop body, depends on a side effect
+// (which includes random numbers), following loop state elements into their
+// initial values: HloEvaluator would make up a value for it.
+bool DependsOnSideEffect(const HloInstruction* while_op,
+                         const HloInstruction* scalar) {
+  const HloInstruction* param =
+      while_op->while_body()->parameter_instruction(0);
+  const HloInstruction* init = while_op->operand(0);
+  std::vector<const HloInstruction*> stack = {scalar};
+  absl::flat_hash_set<const HloInstruction*> visited = {scalar};
+  auto push = [&](const HloInstruction* h) {
+    if (visited.insert(h).second) {
+      stack.push_back(h);
+    }
+  };
+  while (!stack.empty()) {
+    const HloInstruction* h = stack.back();
+    stack.pop_back();
+    if (h->HasSideEffect()) {
+      return true;
+    }
+    if (h->opcode() == HloOpcode::kGetTupleElement && h->operand(0) == param) {
+      push(init->operand(h->tuple_index()));
+      continue;
+    }
+    if (h == param) {
+      push(init);
+      continue;
+    }
+    for (const HloInstruction* operand : h->operands()) {
+      push(operand);
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+std::optional<std::vector<int64_t>> EvaluateScalarPerIteration(
+    const HloInstruction* while_op, const HloInstruction* scalar,
+    int64_t max_trip_count) {
+  const HloComputation* body = while_op->while_body();
+  const HloInstruction* param = body->parameter_instruction(0);
+  const HloInstruction* root = body->root_instruction();
+  if (scalar->parent() != body || !ShapeUtil::IsScalar(scalar->shape()) ||
+      !primitive_util::IsIntegralType(scalar->shape().element_type()) ||
+      while_op->operand(0)->opcode() != HloOpcode::kTuple ||
+      root->opcode() != HloOpcode::kTuple) {
+    return nullopt;
+  }
+  optional<int64_t> iv_index = GetLoopInductionVarTupleIdx(while_op);
+  optional<Range> range = MatchTrivialLoopRange(while_op);
+  if (!iv_index.has_value() || !range.has_value() || range->IsEmpty() ||
+      !range->IsBounded() || !range->IsStepKnown() ||
+      range->step()->GetSignedValue() <= 0 ||
+      DependsOnSideEffect(while_op, scalar)) {
+    return nullopt;
+  }
+  // max >= min, so the difference fits in uint64_t even when it overflows
+  // int64_t; iterating over the trip count avoids overflowing the induction
+  // variable.
+  const int64_t min = range->min().GetSignedValue();
+  const uint64_t step = range->step()->GetSignedValue();
+  const uint64_t last_iteration =
+      (static_cast<uint64_t>(range->max()->GetSignedValue()) -
+       static_cast<uint64_t>(min)) /
+      step;
+  if (max_trip_count <= 0 ||
+      last_iteration >= static_cast<uint64_t>(max_trip_count)) {
+    return nullopt;
+  }
+  // Substitutes the induction variable and loop-invariant integer arrays with
+  // an initial value that can be evaluated. Any other element of the loop
+  // state makes the evaluation fail.
+  HloEvaluator evaluator(/*max_loop_iterations=*/0);
+  absl::flat_hash_map<const HloInstruction*, const LiteralBase*> subs;
+  std::vector<Literal> invariants;
+  invariants.reserve(param->user_count());
+  std::vector<const HloInstruction*> iv_gtes;
+  for (const HloInstruction* gte : param->users()) {
+    if (gte->opcode() != HloOpcode::kGetTupleElement) {
+      continue;
+    }
+    const int64_t index = gte->tuple_index();
+    if (index == *iv_index) {
+      iv_gtes.push_back(gte);
+      continue;
+    }
+    const HloInstruction* next = root->operand(index);
+    if (!gte->shape().IsArray() ||
+        !primitive_util::IsIntegralType(gte->shape().element_type()) ||
+        ShapeUtil::ElementsIn(gte->shape()) > max_trip_count ||
+        next->opcode() != HloOpcode::kGetTupleElement ||
+        next->operand(0) != param || next->tuple_index() != index) {
+      continue;
+    }
+    absl::StatusOr<Literal> init = evaluator.Evaluate(
+        while_op->operand(0)->operand(index), /*precomputed_analyses=*/{},
+        /*recursively_evaluate_nonconstant_operands=*/true);
+    if (init.ok()) {
+      invariants.push_back(*std::move(init));
+      subs[gte] = &invariants.back();
+    }
+  }
+  const PrimitiveType iv_type =
+      param->shape().tuple_shapes(*iv_index).element_type();
+  std::vector<int64_t> values;
+  values.reserve(last_iteration + 1);
+  for (uint64_t k = 0; k <= last_iteration; ++k) {
+    const int64_t i =
+        static_cast<int64_t>(static_cast<uint64_t>(min) + k * step);
+    absl::StatusOr<Literal> iv =
+        LiteralUtil::CreateR0<int64_t>(i).Convert(iv_type);
+    if (!iv.ok()) {
+      return nullopt;
+    }
+    for (const HloInstruction* gte : iv_gtes) {
+      subs[gte] = &*iv;
+    }
+    absl::StatusOr<Literal> value = evaluator.Evaluate(
+        scalar, /*precomputed_analyses=*/{},
+        /*recursively_evaluate_nonconstant_operands=*/true, subs);
+    optional<int64_t> v = value.ok() ? value->GetFirstInteger() : nullopt;
+    if (!v.has_value()) {
+      return nullopt;
+    }
+    values.push_back(*v);
+  }
+  return values;
+}
+
 }  // namespace xla

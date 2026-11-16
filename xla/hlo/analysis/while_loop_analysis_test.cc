@@ -1475,5 +1475,64 @@ TEST_F(WhileLoopAnalysisTest,
   EXPECT_EQ(MatchTrivialLoopRange(while_u32), std::nullopt);
 }
 
+TEST_F(WhileLoopAnalysisTest, EvaluateScalarPerIteration) {
+  const char* const kHlo = R"(
+HloModule m
+body {
+  p = (s32[], s32[4], s32[], s32[4]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  li = s32[4] get-tuple-element(p), index=1
+  x = s32[] get-tuple-element(p), index=2
+  ri = s32[4] get-tuple-element(p), index=3
+  zero = s32[] constant(0)
+  two = s32[] constant(2)
+  n = s32[] constant(4)
+  twice = s32[] multiply(i, two)
+  li_i = s32[1] dynamic-slice(li, i), dynamic_slice_sizes={1}
+  li_s = s32[] reshape(li_i)
+  neg = pred[] compare(li_s, zero), direction=LT
+  li_n = s32[] add(li_s, n)
+  wrapped = s32[] select(neg, li_n, li_s)
+  varying = s32[] add(x, i)
+  random = s32[] rng(zero, n), distribution=rng_uniform
+  ri_i = s32[1] dynamic-slice(ri, i), dynamic_slice_sizes={1}
+  random_init = s32[] reshape(ri_i)
+  one = s32[] constant(1)
+  next = s32[] add(i, one)
+  ROOT t = (s32[], s32[4], s32[], s32[4]) tuple(next, li, varying, ri)
+}
+cond {
+  p = (s32[], s32[4], s32[], s32[4]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  n = s32[] constant(4)
+  ROOT lt = pred[] compare(i, n), direction=LT
+}
+ENTRY main {
+  zero = s32[] constant(0)
+  li = s32[4] constant({3, 1, 2, -1})
+  x = s32[] parameter(0)
+  four = s32[] constant(4)
+  ri = s32[4] rng(zero, four), distribution=rng_uniform
+  init = (s32[], s32[4], s32[], s32[4]) tuple(zero, li, x, ri)
+  ROOT loop = (s32[], s32[4], s32[], s32[4]) while(init), condition=cond,
+      body=body
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(kHlo));
+  const HloInstruction* loop = module->entry_computation()->root_instruction();
+  auto eval = [&](absl::string_view name, int64_t max_trip_count = 4) {
+    return EvaluateScalarPerIteration(loop, FindInstruction(module.get(), name),
+                                      max_trip_count);
+  };
+  EXPECT_THAT(eval("twice"),
+              ::testing::Optional(::testing::ElementsAre(0, 2, 4, 6)));
+  EXPECT_THAT(eval("wrapped"),
+              ::testing::Optional(::testing::ElementsAre(3, 1, 2, 3)));
+  EXPECT_EQ(eval("twice", /*max_trip_count=*/3), std::nullopt);
+  EXPECT_EQ(eval("varying"), std::nullopt);
+  EXPECT_EQ(eval("random"), std::nullopt);
+  EXPECT_EQ(eval("random_init"), std::nullopt);
+}
+
 }  // namespace
 }  // namespace xla

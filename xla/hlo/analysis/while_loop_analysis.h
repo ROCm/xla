@@ -86,6 +86,17 @@ std::optional<Range> MatchTrivialLoopRange(const HloInstruction* while_op);
 std::optional<Range> MatchLoopRangeWithKnownValues(
     const HloInstruction* while_op, int64_t induction_var_idx,
     const absl::flat_hash_map<const HloInstruction*, Range>& known_values);
+
+// Evaluates `scalar`, a scalar integer instruction of the loop body, in every
+// iteration of a loop that MatchTrivialLoopRange matches with at most
+// `max_trip_count` iterations. `scalar` may depend on constants, the induction
+// variable, and loop-invariant integer arrays of at most `max_trip_count`
+// elements whose initial value can be evaluated (such as a scan's layer
+// indices). Returns nullopt if it, or the initial value of such an array,
+// depends on anything else or on a random number or side effect.
+std::optional<std::vector<int64_t>> EvaluateScalarPerIteration(
+    const HloInstruction* while_op, const HloInstruction* scalar,
+    int64_t max_trip_count);
 }  // namespace xla
 
 #endif  // XLA_HLO_ANALYSIS_WHILE_LOOP_ANALYSIS_H_
