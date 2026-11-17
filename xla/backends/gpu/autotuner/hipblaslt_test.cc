@@ -15,16 +15,19 @@ limitations under the License.
 
 #include "xla/backends/gpu/autotuner/hipblaslt.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <tuple>
 #include <vector>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_replace.h"
@@ -37,11 +40,14 @@ limitations under the License.
 #include "xla/service/compiler.h"
 #include "xla/service/executable.h"
 #include "xla/service/gpu/amdgpu_compiler.h"
+#include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/platform_util.h"
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/device_description.pb.h"
+#include "xla/stream_executor/gpu/blas_lt_matmul_algorithm.pb.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/util/proto/proto_matchers.h"
 #include "xla/xla.pb.h"
 
 namespace xla {
@@ -61,6 +67,7 @@ se::StreamExecutor* GetDefaultStreamExecutor() {
 }  // namespace
 
 using HipblasLtBackendConfig = AutotuneResult::GemmKey;
+using ::tsl::proto_testing::EqualsProto;
 
 const char kHipblasLtCustomCallHlo[] = R"(
 HloModule module
@@ -241,6 +248,82 @@ TEST_F(HipblasLtBackendTest, Compile) {
   absl::StatusOr<std::unique_ptr<Executable>> executable = backend_.Compile(
       *(module->entry_computation()->root_instruction()->operand(0)), *config);
   EXPECT_THAT(executable, absl_testing::IsOk());
+}
+
+TEST_F(HipblasLtBackendTest, GetSupportedConfigsRecordsDescriptors) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> hlo_module,
+                       ParseAndReturnVerifiedModule(kHipblasLtCustomCallHlo));
+  const HloInstruction& gemm =
+      *hlo_module->entry_computation()->root_instruction()->operand(0);
+  ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> recorded,
+                       backend_.GetSupportedConfigs(gemm));
+  ASSERT_FALSE(recorded.empty());
+  absl::flat_hash_set<int32_t> solutions;
+  for (int64_t i = 0; i < static_cast<int64_t>(recorded.size()); ++i) {
+    const AutotuneResult::GemmKey& key = recorded[i]->gemm();
+    EXPECT_EQ(key.algorithm(), i);
+    ASSERT_TRUE(key.algorithm_proto().has_hipblaslt()) << "at " << i;
+    EXPECT_NE(key.algorithm_proto().library_version(), 0);
+    EXPECT_TRUE(
+        solutions.insert(key.algorithm_proto().hipblaslt().solution_index())
+            .second)
+        << "at " << i;
+  }
+
+  // The thunk is emitted from the descriptor of the last candidate.
+  EXPECT_OK(backend_.Compile(gemm, *recorded.back()));
+}
+
+// Complex GEMMs may run on the rocBLAS fallback, whose plan has no hipBLASLt
+// descriptor (kUnimplemented); its configs keep only the index.
+TEST_F(HipblasLtBackendTest, GetSupportedConfigsForComplexGemm) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> hlo_module,
+                       ParseAndReturnVerifiedModule(absl::StrReplaceAll(
+                           kHipblasLtCustomCallHlo, {{"f32[", "c64["}})));
+  const HloInstruction& gemm =
+      *hlo_module->entry_computation()->root_instruction()->operand(0);
+  ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> configs,
+                       backend_.GetSupportedConfigs(gemm));
+  ASSERT_FALSE(configs.empty());
+  LOG(INFO) << configs.size() << " configs, first "
+            << (configs[0]->gemm().has_algorithm_proto() ? "with" : "without")
+            << " a descriptor";
+  EXPECT_OK(backend_.Compile(gemm, *configs[0]));
+}
+
+TEST_F(HipblasLtBackendTest, ApplyConfigPropagatesDescriptor) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> hlo_module,
+                       ParseAndReturnVerifiedModule(kHipblasLtCustomCallHlo));
+  HloInstruction* instr =
+      hlo_module->entry_computation()->root_instruction()->mutable_operand(0);
+  BackendConfig config;
+  config.mutable_gemm()->set_algorithm(2);
+  config.mutable_gemm()->set_autotune_workspace_size(42);
+  se::gpu::BlasLtMatmulAlgorithmProto* descriptor =
+      config.mutable_gemm()->mutable_algorithm_proto();
+  descriptor->set_library_version(100500);
+  descriptor->mutable_hipblaslt()->set_solution_index(14828);
+  auto applied = [&]() -> absl::StatusOr<GemmBackendConfig> {
+    ABSL_RETURN_IF_ERROR(backend_.ApplyConfig(*instr, config));
+    ABSL_ASSIGN_OR_RETURN(GpuBackendConfig gpu_config,
+                          instr->backend_config<GpuBackendConfig>());
+    return gpu_config.gemm_backend_config();
+  };
+
+  ASSERT_OK_AND_ASSIGN(GemmBackendConfig gemm_config, applied());
+  EXPECT_EQ(gemm_config.selected_algorithm(), 2);
+  EXPECT_EQ(gemm_config.autotune_workspace_size(), 42);
+  EXPECT_THAT(gemm_config.algorithm_proto(), EqualsProto(R"pb(
+                library_version: 100500
+                hipblaslt { solution_index: 14828 }
+              )pb"));
+
+  // A config without a descriptor clears the one applied before.
+  config.mutable_gemm()->clear_algorithm_proto();
+  config.mutable_gemm()->set_algorithm(3);
+  ASSERT_OK_AND_ASSIGN(gemm_config, applied());
+  EXPECT_EQ(gemm_config.selected_algorithm(), 3);
+  EXPECT_FALSE(gemm_config.has_algorithm_proto());
 }
 
 const char kScaledDotFp8FusionHlo[] = R"(

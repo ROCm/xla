@@ -48,6 +48,7 @@ limitations under the License.
 #include "xla/shape_util.h"
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/gpu/blas_lt_matmul_algorithm.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
 #include "xla/tools/hlo_decomposer.h"
 #include "xla/tsl/platform/errors.h"
@@ -426,6 +427,15 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
       auto* gemm_key = config->mutable_gemm();
       gemm_key->set_algorithm(i);
       gemm_key->set_autotune_workspace_size(workspace_size);
+      // Plans without hipBLASLt solutions (the rocBLAS fallback for complex
+      // types) have no descriptor; their configs keep only the index.
+      absl::StatusOr<se::gpu::BlasLtMatmulAlgorithm> descriptor =
+          plan->GetBlasLtMatmulAlgorithm(algorithms[i]);
+      if (descriptor.ok()) {
+        *gemm_key->mutable_algorithm_proto() = descriptor->ToProto();
+      } else if (!absl::IsUnimplemented(descriptor.status())) {
+        return descriptor.status();
+      }
       configs.push_back(std::move(config));
     }
     if (configs.empty()) {
@@ -630,6 +640,11 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
     backend_config.set_selected_algorithm(gemm_key.algorithm());
     backend_config.set_autotune_workspace_size(
         gemm_key.autotune_workspace_size());
+    if (gemm_key.has_algorithm_proto()) {
+      *backend_config.mutable_algorithm_proto() = gemm_key.algorithm_proto();
+    } else {
+      backend_config.clear_algorithm_proto();
+    }
     ABSL_RETURN_IF_ERROR(instr.set_backend_config(std::move(gpu_config)));
 
     if (instr.shape().IsTuple() && !instr.shape().tuple_shapes().empty()) {
