@@ -1,0 +1,52 @@
+name: CI ROCm Firmware Check
+
+on:
+  pull_request:
+    branches:
+      - rocm-dev-infra
+    paths:
+      - .github/workflows/rocm_xla_ci_firmware_check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.pool }}
+    runs-on: amd-do-linux-xla-gpu-gfx950-dpx-1
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        pool:
+          - linux_x64_gpu
+    # rocmless; ROCm comes from the 10.0 dev tarball below
+    container:
+      image: ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: openxla/xla
+          ref: main
+          persist-credentials: false
+
+      - name: Test XLA [single_gpu] on ${{ matrix.pool }}
+        run: |
+          build_tools/rocm/run_xla_ci_build.sh \
+            --config=rocm_ci_hermetic \
+            --config=rocm_rbe_dynamic \
+            --config=ci_single_gpu \
+            --jobs=50 \
+            --strategy=TestRunner=remote \
+            --cache_test_results=no \
+            --keep_going \
+            --local_test_jobs=1 \
+            --repo_env=TF_ROCM_RBE_DOCKER_IMAGE=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f \
+            --repo_env=TF_ROCM_AMDGPU_TARGETS=gfx950 \
+            --repo_env=ROCM_PATH= \
+            --repo_env=ROCM_DISTRO_URL=https://rocm.devreleases.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-10.0.0.dev0%2Bc247febed686e713051e4cf7bcce437a8dcbfad9.tar.gz \
+            --repo_env=ROCM_DISTRO_HASH=1c5beccd46d06ae9b68602b955eae9f4ddf5b0dbb561e521c8040a1c87b1c555 \
+            --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=${{ matrix.pool }} \
+            --bes_keywords=firmware_check \
+            -- \
+            //xla/...
