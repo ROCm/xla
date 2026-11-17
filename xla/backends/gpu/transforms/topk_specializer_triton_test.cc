@@ -123,7 +123,7 @@ TEST_F(TopkSpecializerTritonTest, FlagOffKeepsTopK) {
 }
 
 TEST_F(TopkSpecializerTritonTest, FlagOnKeepsShapesOutsideTheSpeedTable) {
-  auto module = ParseTopK("f32[8,1000]", "f32[8,32]", "s32[8,32]", "",
+  auto module = ParseTopK("f32[8,16384]", "f32[8,128]", "s32[8,128]", "",
                           TritonTopKFlags::kOn);
   ASSERT_OK_AND_ASSIGN(
       bool changed,
@@ -538,7 +538,7 @@ TEST_F(TopkSpecializerTritonSortTest, KeepsTheSortAfterAPartialOrderTopK) {
 TEST_F(TopkSpecializerTritonSortTest, KeepsTheSortAfterTodaysTopK) {
   // Not in the speed table, so the TopK keeps today's path.
   auto module =
-      ParseTopKThenSort("f32", "8,1000", "8,32", "", TritonTopKFlags::kOn);
+      ParseTopKThenSort("f32", "8,16384", "8,128", "", TritonTopKFlags::kOn);
   ASSERT_OK(RunOnMi350(module.get()));
   EXPECT_FALSE(HasTritonTopK(*module));
   EXPECT_TRUE(HasSort(*module));

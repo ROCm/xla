@@ -175,6 +175,38 @@ TEST(TopKKernelConfigTest, SingleKernelHasNoMergeOrScratch) {
   EXPECT_FALSE(GetTopKMergeConfig(spec, *config, mi350).has_value());
 }
 
+TEST(TopKKernelConfigTest, SelectionDependsOnKAndTheRowLength) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  auto selection = [&](const TopKKernelSpec& spec) {
+    std::optional<TopKKernelConfig> config = GetTopKKernelConfig(spec, mi350);
+    EXPECT_TRUE(config.has_value());
+    return config.has_value() ? config->selection : TopKSelection::kRounds;
+  };
+  EXPECT_EQ(selection(Spec(24576, 64, 6, BF16)), TopKSelection::kRounds);
+  EXPECT_EQ(selection(Spec(8, 64, 9)), TopKSelection::kBitonic);
+  EXPECT_EQ(selection(Spec(8, 65, 16)), TopKSelection::kRounds);
+  EXPECT_EQ(selection(Spec(8, 2048, 17)), TopKSelection::kBitonic);
+  EXPECT_EQ(selection(Spec(8, 2049, 32)), TopKSelection::kRounds);
+  EXPECT_EQ(selection(Spec(8, 4096, 33)), TopKSelection::kBitonic);
+  EXPECT_EQ(selection(Spec(8, 8192, 128)), TopKSelection::kBitonic);
+  EXPECT_EQ(selection(Spec(8, 8193, 128)), TopKSelection::kRounds);
+}
+
+TEST(TopKKernelConfigTest, ChunkAndMergeChooseTheirSelectionsApart) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  // Chunks of 4096 for k = 9, and a merge of 5 * 9 candidates.
+  const TopKKernelSpec spec = Spec(2, 16385, 9);
+  std::optional<TopKKernelConfig> config = GetTopKKernelConfig(spec, mi350);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_EQ(config->block_n, 4096);
+  EXPECT_EQ(config->selection, TopKSelection::kRounds);
+  std::optional<TopKKernelConfig> merge_config =
+      GetTopKMergeConfig(spec, *config, mi350);
+  ASSERT_TRUE(merge_config.has_value());
+  EXPECT_EQ(merge_config->block_n, 64);
+  EXPECT_EQ(merge_config->selection, TopKSelection::kBitonic);
+}
+
 TEST(TopKKernelConfigTest, ToStringShowsChunksOnlyWhenSplit) {
   TopKKernelConfig config{4096, 1, 8, 64};
   EXPECT_EQ(config.ToString(),
@@ -183,6 +215,14 @@ TEST(TopKKernelConfigTest, ToStringShowsChunksOnlyWhenSplit) {
   EXPECT_EQ(config.ToString(),
             "block_n=4096 rows_per_program=1 num_warps=8 num_programs=64 "
             "num_chunks=8");
+}
+
+TEST(TopKKernelConfigTest, ToStringShowsOnlyTheBitonicSelection) {
+  TopKKernelConfig config{4096, 1, 8, 64};
+  config.selection = TopKSelection::kBitonic;
+  EXPECT_EQ(config.ToString(),
+            "block_n=4096 rows_per_program=1 num_warps=8 num_programs=64 "
+            "selection=bitonic");
 }
 
 TEST(TopKSpeedTableTest, Mi350TakesTheMoEShapes) {
@@ -196,13 +236,21 @@ TEST(TopKSpeedTableTest, Mi350TakesTheMoEShapes) {
 
 TEST(TopKSpeedTableTest, Mi350KeepsSlowerShapes) {
   se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
-  // Large k: the k rounds cost more than today's sort.
-  EXPECT_FALSE(IsTritonTopKFaster(Spec(512, 1024, 128), mi350));
+  // Large k on a row too long for the bitonic selection: the k rounds cost
+  // more than today's sort.
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(8, 16384, 128), mi350));
   // Batches beyond the measured ones.
   EXPECT_FALSE(IsTritonTopKFaster(Spec(1 << 20, 64, 6, BF16), mi350));
   // Short rows that are not a power of two pad to the next one.
   EXPECT_FALSE(IsTritonTopKFaster(Spec(262144, 33, 8), mi350));
   EXPECT_TRUE(IsTritonTopKFaster(Spec(262144, 64, 8), mi350));
+}
+
+TEST(TopKSpeedTableTest, Mi350TakesLargeKWithTheBitonicSelection) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(512, 1024, 128), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(8, 65536, 128), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(8, 32768, 64, BF16), mi350));
 }
 
 TEST(TopKSpeedTableTest, Mi350TakesLongRowsWithSmallK) {
@@ -211,9 +259,8 @@ TEST(TopKSpeedTableTest, Mi350TakesLongRowsWithSmallK) {
   EXPECT_TRUE(IsTritonTopKFaster(Spec(4096, 32768, 8), mi350));
   EXPECT_TRUE(IsTritonTopKFaster(Spec(1, 1 << 20, 16, BF16), mi350));
   EXPECT_TRUE(IsTritonTopKFaster(Spec(8, 1 << 24, 16), mi350));
-  // The k rounds of the chunk and merge kernels cost more for large k.
-  EXPECT_FALSE(IsTritonTopKFaster(Spec(8, 65536, 128), mi350));
-  EXPECT_FALSE(IsTritonTopKFaster(Spec(8, 32768, 64, BF16), mi350));
+  // The merge of 128 chunks x 128 candidates runs the k rounds.
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(8, 1 << 20, 128), mi350));
   // Not measured: 1024 chunks x 17 candidates do not fit the merge.
   EXPECT_FALSE(IsTritonTopKFaster(Spec(8, 1 << 24, 17), mi350));
 }

@@ -152,32 +152,8 @@ class TopKKernelBuilder {
     // [rows, block_k]
     const llvm::SmallVector<int64_t> out_block = {rows_, block_k_};
     Value out_cols = Range(block_k_);
-    Value out_col_ids = Cols(out_cols, out_block);
-    Value top_init = Const(i64_, 0, out_block);
-
-    // Round j moves the largest remaining key of each row to column j. Keys
-    // within a row are distinct, so exactly one element is removed per row.
-    auto loop = mlir::scf::ForOp::create(b_, Const(i32_, 0),
-                                         Const(i32_, spec_.k), Const(i32_, 1),
-                                         mlir::ValueRange{keys, top_init});
-    {
-      mlir::OpBuilder::InsertionGuard guard(b_);
-      b_.setInsertionPointToStart(loop.getBody());
-      Value j = loop.getInductionVar();
-      Value cur_keys = loop.getRegionIterArgs()[0];
-      Value cur_top = loop.getRegionIterArgs()[1];
-      Value row_max = RowMax(cur_keys);
-      Value is_max = arith::CmpIOp::create(b_, arith::CmpIPredicate::eq,
-                                           cur_keys, Rows(row_max, block));
-      Value next_keys =
-          arith::SelectOp::create(b_, is_max, Const(i64_, 0, block), cur_keys);
-      Value is_col_j = arith::CmpIOp::create(b_, arith::CmpIPredicate::eq,
-                                             out_col_ids, Splat(j, out_block));
-      Value next_top = arith::SelectOp::create(
-          b_, is_col_j, Rows(row_max, out_block), cur_top);
-      mlir::scf::YieldOp::create(b_, mlir::ValueRange{next_keys, next_top});
-    }
-    Value top = loop.getResult(1);
+    Value top = config_.selection == TopKSelection::kBitonic ? BitonicTopK(keys)
+                                                             : RoundsTopK(keys);
 
     Value out_mask = arith::AndIOp::create(
         b_, Rows(row_mask, out_block),
@@ -207,6 +183,150 @@ class TopKKernelBuilder {
   }
 
  private:
+  // The [rows, block_k] largest keys of each row of the [rows, block_n] `keys`,
+  // largest first, in `spec_.k` rounds. Round j moves the largest remaining key
+  // of each row to column j. Keys within a row are distinct, so exactly one
+  // element is removed per row.
+  Value RoundsTopK(Value keys) {
+    const llvm::SmallVector<int64_t> block = {rows_, config_.block_n};
+    const llvm::SmallVector<int64_t> out_block = {rows_, block_k_};
+    Value out_col_ids = Cols(Range(block_k_), out_block);
+    Value top_init = Const(i64_, 0, out_block);
+    auto loop = mlir::scf::ForOp::create(b_, Const(i32_, 0),
+                                         Const(i32_, spec_.k), Const(i32_, 1),
+                                         mlir::ValueRange{keys, top_init});
+    mlir::OpBuilder::InsertionGuard guard(b_);
+    b_.setInsertionPointToStart(loop.getBody());
+    Value j = loop.getInductionVar();
+    Value cur_keys = loop.getRegionIterArgs()[0];
+    Value cur_top = loop.getRegionIterArgs()[1];
+    Value row_max = RowMax(cur_keys);
+    Value is_max = arith::CmpIOp::create(b_, arith::CmpIPredicate::eq, cur_keys,
+                                         Rows(row_max, block));
+    Value next_keys =
+        arith::SelectOp::create(b_, is_max, Const(i64_, 0, block), cur_keys);
+    Value is_col_j = arith::CmpIOp::create(b_, arith::CmpIPredicate::eq,
+                                           out_col_ids, Splat(j, out_block));
+    Value next_top = arith::SelectOp::create(b_, is_col_j,
+                                             Rows(row_max, out_block), cur_top);
+    mlir::scf::YieldOp::create(b_, mlir::ValueRange{next_keys, next_top});
+    return loop.getResult(1);
+  }
+
+  // The same result as RoundsTopK by the bitonic top-k of Triton's tl.topk
+  // (https://www.doc.ic.ac.uk/~hlgr/pdfs/MassivelyParallelTopK.pdf). The rows
+  // are viewed as a hypercube [2, ..., 2] whose innermost dimensions are the
+  // positions within a row. Groups of block_k keys are sorted, alternately
+  // descending and ascending; then each step keeps the larger key of each pair
+  // of groups and sorts the groups again, until one group is left. Padding
+  // keys are 0, below every real key.
+  Value BitonicTopK(Value keys) {
+    const int64_t log_n = Log2(config_.block_n);
+    const int64_t log_k = Log2(block_k_);
+    if (log_k == 0) {
+      return ttir::ExpandDimsOp::create(b_, RowMax(keys), 1);
+    }
+    Value cube =
+        Reshape(keys, llvm::SmallVector<int64_t>(Log2(rows_) + log_n, 2));
+    for (int64_t stage = 1; stage <= log_k; ++stage) {
+      cube = BitonicMerge(cube, stage, /*descending=*/stage == log_n);
+    }
+    for (int64_t i = log_k + 1; i <= log_n; ++i) {
+      cube = MaxAlong(cube, Rank(cube) - 1 - log_k);
+      cube = BitonicMerge(cube, log_k, /*descending=*/i == log_n);
+    }
+    return Reshape(cube, {rows_, block_k_});
+  }
+
+  // Sorts the groups of 2^stage keys along the innermost `stage` dimensions of
+  // the hypercube `cube`: all descending, or alternately descending and
+  // ascending by the next dimension. Each group must be bitonic.
+  Value BitonicMerge(Value cube, int64_t stage, bool descending) {
+    const int64_t rank = Rank(cube);
+    Value flip = descending ? Const(b_.getI1Type(), 1, Shape(cube))
+                            : Indicator(rank, stage, Shape(cube));
+    for (int64_t i = stage - 1; i >= 0; --i) {
+      cube = CompareAndSwap(cube, flip, i);
+    }
+    return cube;
+  }
+
+  // Orders each pair of keys along the `i`-th innermost dimension of `cube`:
+  // the larger key goes to the right where `flip` is false, to the left where
+  // it is true.
+  Value CompareAndSwap(Value cube, Value flip, int64_t i) {
+    const int64_t rank = Rank(cube);
+    const int64_t axis = rank - 1 - i;
+    llvm::SmallVector<int64_t> shape = Shape(cube);
+    // a ^ (a ^ b) = b: the xor of each pair gives every key its partner.
+    Value pair_xor = XorAlong(cube, axis);
+    pair_xor =
+        rank == 1
+            ? Splat(pair_xor, shape)
+            : Broadcast(ttir::ExpandDimsOp::create(b_, pair_xor, axis), shape);
+    Value partner = arith::XOrIOp::create(b_, cube, pair_xor);
+    Value is_larger =
+        arith::CmpIOp::create(b_, arith::CmpIPredicate::ugt, cube, partner);
+    Value take_partner = arith::XOrIOp::create(
+        b_, is_larger,
+        arith::XOrIOp::create(b_, flip, Indicator(rank, i, shape)));
+    return arith::SelectOp::create(b_, take_partner, partner, cube);
+  }
+
+  // An i1 tensor of `shape` (a hypercube of `rank` dimensions) that is true at
+  // the right position of the `j`-th innermost dimension.
+  Value Indicator(int64_t rank, int64_t j, llvm::ArrayRef<int64_t> shape) {
+    llvm::SmallVector<int64_t> pair_shape(rank, 1);
+    pair_shape[rank - 1 - j] = 2;
+    Value is_right = arith::CmpIOp::create(b_, arith::CmpIPredicate::eq,
+                                           Range(2), Const(i32_, 1, {2}));
+    return Broadcast(Reshape(is_right, pair_shape), shape);
+  }
+
+  // Reduces `x` along `axis` with an i64 combiner; a rank 1 `x` gives a
+  // scalar.
+  template <typename CombineOp>
+  Value ReduceAlong(Value x, int64_t axis) {
+    llvm::SmallVector<int64_t> shape = Shape(x);
+    shape.erase(shape.begin() + axis);
+    Type result_type = shape.empty() ? i64_ : Type(Tensor(i64_, shape));
+    auto reduce = ttir::ReduceOp::create(b_, result_type, x, axis);
+    mlir::OpBuilder::InsertionGuard guard(b_);
+    mlir::Block* combiner =
+        b_.createBlock(&reduce.getCombineOp(), reduce.getCombineOp().begin(),
+                       {i64_, i64_}, {b_.getLoc(), b_.getLoc()});
+    ttir::ReduceReturnOp::create(
+        b_, mlir::ValueRange{CombineOp::create(b_, combiner->getArgument(0),
+                                               combiner->getArgument(1))});
+    return reduce->getResult(0);
+  }
+
+  Value MaxAlong(Value x, int64_t axis) {
+    return ReduceAlong<arith::MaxUIOp>(x, axis);
+  }
+
+  Value XorAlong(Value x, int64_t axis) {
+    return ReduceAlong<arith::XOrIOp>(x, axis);
+  }
+
+  Value Reshape(Value x, llvm::ArrayRef<int64_t> shape) {
+    return ttir::ReshapeOp::create(b_, shape, x);
+  }
+
+  static llvm::SmallVector<int64_t> Shape(Value x) {
+    return llvm::to_vector(
+        mlir::cast<RankedTensorType>(x.getType()).getShape());
+  }
+
+  static int64_t Rank(Value x) {
+    return mlir::cast<RankedTensorType>(x.getType()).getRank();
+  }
+
+  // log2 of a power of two.
+  static int64_t Log2(int64_t x) {
+    return absl::bit_width(static_cast<uint64_t>(x)) - 1;
+  }
+
   // The key of upstream's BuildPackF32ToU64. BF16 bits shifted left by 16 are
   // the F32 bits of the same value, so BF16 uses the F32 key.
   //   radix = bits ^ ((bits >>s 31) | 0x80000000)
@@ -302,18 +422,7 @@ class TopKKernelBuilder {
   }
 
   // The unsigned maximum of each row of a [rows, n] tensor of keys.
-  Value RowMax(Value keys) {
-    Type row_type = Tensor(i64_, {rows_});
-    auto reduce = ttir::ReduceOp::create(b_, row_type, keys, /*axis=*/1);
-    mlir::OpBuilder::InsertionGuard guard(b_);
-    mlir::Block* combiner =
-        b_.createBlock(&reduce.getCombineOp(), reduce.getCombineOp().begin(),
-                       {i64_, i64_}, {b_.getLoc(), b_.getLoc()});
-    ttir::ReduceReturnOp::create(
-        b_, mlir::ValueRange{arith::MaxUIOp::create(
-                b_, combiner->getArgument(0), combiner->getArgument(1))});
-    return reduce->getResult(0);
-  }
+  Value RowMax(Value keys) { return MaxAlong(keys, /*axis=*/1); }
 
   RankedTensorType Tensor(Type element_type, llvm::ArrayRef<int64_t> shape) {
     return RankedTensorType::get(shape, element_type);
