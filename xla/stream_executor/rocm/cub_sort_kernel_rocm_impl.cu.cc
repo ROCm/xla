@@ -16,8 +16,8 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 
-#include "Eigen/Core"
 #include "absl/status/status.h"
+#include "Eigen/Core"
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/include/hipcub/backend/rocprim/device/device_radix_sort.hpp"
 #include "rocm/include/hipcub/backend/rocprim/device/device_segmented_radix_sort.hpp"
@@ -25,9 +25,9 @@ limitations under the License.
 #include "rocm/include/rocprim/iterator/transform_iterator.hpp"
 #include "rocm/include/rocprim/thread/radix_key_codec.hpp"
 #include "rocm/include/rocprim/type_traits.hpp"
-#include "tsl/platform/bfloat16.h"
 #include "xla/stream_executor/rocm/cub_sort_kernel_rocm.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
+#include "tsl/platform/bfloat16.h"
 
 // Required for sorting Eigen::half and bfloat16.
 namespace rocprim {
