@@ -502,8 +502,7 @@ auto BlasLt::RegularMatmulPlan::GetAlgorithms(size_t max_algorithm_count,
   return algorithms;
 }
 
-absl::StatusOr<gpu::BlasLtMatmulAlgorithm>
-BlasLt::RegularMatmulPlan::GetBlasLtMatmulAlgorithm(
+absl::StatusOr<gpu::BlasLtMatmulAlgorithm> BlasLt::DescribeAlgorithm(
     const MatmulAlgorithm& algorithm) const {
   const auto* algo =
       std::any_cast<hipblasLtMatmulAlgo_t>(&algorithm.opaque_algo);
@@ -514,10 +513,9 @@ BlasLt::RegularMatmulPlan::GetBlasLtMatmulAlgorithm(
   hipblasLtMatmulAlgo_t copy = *algo;
   int version = 0;
   {
-    absl::MutexLock lock(blas_lt_.mu_);
-    TF_RET_CHECK(blas_lt_.handle_ != nullptr);
-    SE_HIPBLAS_RETURN_IF_ERROR(
-        hipblasLtGetVersion(blas_lt_.handle_.get(), &version));
+    absl::MutexLock lock(mu_);
+    TF_RET_CHECK(handle_ != nullptr);
+    SE_HIPBLAS_RETURN_IF_ERROR(hipblasLtGetVersion(handle_.get(), &version));
   }
   return gpu::BlasLtMatmulAlgorithm{
       /*library_version=*/version,
@@ -527,10 +525,8 @@ BlasLt::RegularMatmulPlan::GetBlasLtMatmulAlgorithm(
   };
 }
 
-absl::StatusOr<BlasLt::MatmulAlgorithm>
-BlasLt::RegularMatmulPlan::GetMatmulAlgorithm(
-    const gpu::BlasLtMatmulAlgorithm& algorithm,
-    size_t max_workspace_size) const {
+absl::StatusOr<hipblasLtMatmulAlgo_t> BlasLt::FindSolution(
+    const gpu::BlasLtMatmulAlgorithm& algorithm) const {
   const auto* hipblaslt =
       std::get_if<gpu::HipblasLtMatmulAlgorithm>(&algorithm.algorithm);
   if (hipblaslt == nullptr) {
@@ -538,12 +534,8 @@ BlasLt::RegularMatmulPlan::GetMatmulAlgorithm(
         "BlasLtMatmulAlgorithm does not contain a hipBLASLt algorithm "
         "descriptor.");
   }
-  std::unique_ptr<ActivateContext> activation = blas_lt_.executor_->Activate();
-  // Held throughout, as in GetAlgorithms: the queries below read op_desc_,
-  // which ExecuteOnStream may modify under mu_ for a shared plan.
-  absl::MutexLock lock(blas_lt_.mu_);
-  TF_RET_CHECK(blas_lt_.handle_ != nullptr);
-  hipblasLtHandle_t handle = blas_lt_.handle_.get();
+  TF_RET_CHECK(handle_ != nullptr);
+  hipblasLtHandle_t handle = handle_.get();
   int version = 0;
   SE_HIPBLAS_RETURN_IF_ERROR(hipblasLtGetVersion(handle, &version));
   if (version != algorithm.library_version) {
@@ -552,8 +544,6 @@ BlasLt::RegularMatmulPlan::GetMatmulAlgorithm(
         "is loaded",
         hipblaslt->solution_index, algorithm.library_version, version));
   }
-  ABSL_RETURN_IF_ERROR(SetDummyPointersForAlgorithmQuery());
-
   hipblaslt_libstdcxx::Vector<int> indices(1, hipblaslt->solution_index);
   hipblaslt_libstdcxx::Vector<hipblasLtMatmulHeuristicResult_t> results;
   // getAlgosFromIndex accepts some indices that name no solution (it returns
@@ -567,22 +557,50 @@ BlasLt::RegularMatmulPlan::GetMatmulAlgorithm(
     return absl::NotFoundError(absl::StrFormat("hipBLASLt has no solution %d",
                                                hipblaslt->solution_index));
   }
-  hipblasLtMatmulAlgo_t algo = results[0].algo;
-  size_t workspace_size = 0;
-  if (hipblaslt_ext::matmulIsAlgoSupported(
-          handle, op_desc_.get(), &alpha_[0], a_desc_.get(), b_desc_.get(),
-          &beta_[0], c_desc_.get(), d_desc_.get(), algo,
-          workspace_size) != HIPBLAS_STATUS_SUCCESS) {
-    return absl::InvalidArgumentError(
-        absl::StrFormat("hipBLASLt solution %d does not support this problem",
-                        hipblaslt->solution_index));
-  }
+  return results[0].algo;
+}
+
+// Checks that solution `index` fits `max_workspace_size`.
+static absl::StatusOr<BlasLt::MatmulAlgorithm> CheckWorkspace(
+    hipblasLtMatmulAlgo_t algo, int32_t index, size_t workspace_size,
+    size_t max_workspace_size) {
   if (workspace_size > max_workspace_size) {
     return absl::ResourceExhaustedError(absl::StrFormat(
-        "hipBLASLt solution %d needs %d workspace bytes, %d available",
-        hipblaslt->solution_index, workspace_size, max_workspace_size));
+        "hipBLASLt solution %d needs %d workspace bytes, %d available", index,
+        workspace_size, max_workspace_size));
   }
-  return MatmulAlgorithm{algo, workspace_size};
+  return BlasLt::MatmulAlgorithm{algo, workspace_size};
+}
+
+absl::StatusOr<gpu::BlasLtMatmulAlgorithm>
+BlasLt::RegularMatmulPlan::GetBlasLtMatmulAlgorithm(
+    const MatmulAlgorithm& algorithm) const {
+  return blas_lt_.DescribeAlgorithm(algorithm);
+}
+
+absl::StatusOr<BlasLt::MatmulAlgorithm>
+BlasLt::RegularMatmulPlan::GetMatmulAlgorithm(
+    const gpu::BlasLtMatmulAlgorithm& algorithm,
+    size_t max_workspace_size) const {
+  std::unique_ptr<ActivateContext> activation = blas_lt_.executor_->Activate();
+  // Held throughout, as in GetAlgorithms: the queries below read op_desc_,
+  // which ExecuteOnStream may modify under mu_ for a shared plan.
+  absl::MutexLock lock(blas_lt_.mu_);
+  ABSL_ASSIGN_OR_RETURN(hipblasLtMatmulAlgo_t algo,
+                        blas_lt_.FindSolution(algorithm));
+  ABSL_RETURN_IF_ERROR(SetDummyPointersForAlgorithmQuery());
+  const int32_t index =
+      std::get<gpu::HipblasLtMatmulAlgorithm>(algorithm.algorithm)
+          .solution_index;
+  size_t workspace_size = 0;
+  if (hipblaslt_ext::matmulIsAlgoSupported(
+          blas_lt_.handle_.get(), op_desc_.get(), &alpha_[0], a_desc_.get(),
+          b_desc_.get(), &beta_[0], c_desc_.get(), d_desc_.get(), algo,
+          workspace_size) != HIPBLAS_STATUS_SUCCESS) {
+    return absl::InvalidArgumentError(absl::StrFormat(
+        "hipBLASLt solution %d does not support this problem", index));
+  }
+  return CheckWorkspace(algo, index, workspace_size, max_workspace_size);
 }
 
 absl::StatusOr<BlasLt::MatmulPlanPtr> BlasLt::GetHipBlasLtMatmulPlan(
@@ -1098,6 +1116,38 @@ auto BlasLt::GroupedMatmulPlan::GetAlgorithms(size_t max_algorithm_count,
           << static_cast<int>(epilogue_) << ": " << algorithms.size();
 
   return std::move(algorithms);
+}
+
+absl::StatusOr<gpu::BlasLtMatmulAlgorithm>
+BlasLt::GroupedMatmulPlan::GetBlasLtMatmulAlgorithm(
+    const MatmulAlgorithm& algorithm) const {
+  return blas_lt_.DescribeAlgorithm(algorithm);
+}
+
+absl::StatusOr<BlasLt::MatmulAlgorithm>
+BlasLt::GroupedMatmulPlan::GetMatmulAlgorithm(
+    const gpu::BlasLtMatmulAlgorithm& algorithm,
+    size_t max_workspace_size) const {
+  std::unique_ptr<ActivateContext> activation = blas_lt_.executor_->Activate();
+  absl::MutexLock lock(blas_lt_.mu_);
+  TF_RET_CHECK(grouped_gemm_ != nullptr) << "Grouped GEMM is not initialized";
+  // Admits the solutions GetAlgorithms admits. The workspace isAlgoSupported
+  // reports is not checked against max_workspace_size, which XLA sizes for
+  // the per-group user arguments (see ExecuteOnStream), as GetAlgorithms does
+  // not check it either.
+  grouped_gemm_->setMaxWorkspaceBytes(max_workspace_size);
+  ABSL_ASSIGN_OR_RETURN(hipblasLtMatmulAlgo_t algo,
+                        blas_lt_.FindSolution(algorithm));
+  const int32_t index =
+      std::get<gpu::HipblasLtMatmulAlgorithm>(algorithm.algorithm)
+          .solution_index;
+  size_t workspace_size = 0;
+  if (grouped_gemm_->isAlgoSupported(algo, workspace_size) !=
+      HIPBLAS_STATUS_SUCCESS) {
+    return absl::InvalidArgumentError(absl::StrFormat(
+        "hipBLASLt solution %d does not support this grouped problem", index));
+  }
+  return MatmulAlgorithm{algo, workspace_size};
 }
 
 absl::Status BlasLt::GroupedMatmulPlan::DoInitialize(

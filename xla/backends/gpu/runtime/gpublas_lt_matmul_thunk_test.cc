@@ -371,12 +371,39 @@ ENTRY AddDotsFunc {
   EXPECT_EQ(blas_lt->GetMatmulPlanCacheSize(), 1);
 }
 
+// Compiles `hlo` with autotuning and returns the algorithm descriptor of its
+// only BlasLt matmul thunk.
+absl::StatusOr<std::optional<se::gpu::BlasLtMatmulAlgorithm>>
+CompileAndGetThunkAlgorithm(se::StreamExecutor* exec,
+                            std::unique_ptr<HloModule> module) {
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<Compiler> compiler,
+                        Compiler::GetForPlatform(exec->GetPlatform()->id()));
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> compiled_module,
+                        compiler->RunHloPasses(std::move(module), exec,
+                                               /*device_allocator=*/nullptr));
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<Executable> executable,
+                        compiler->RunBackend(std::move(compiled_module), exec,
+                                             /*device_allocator=*/nullptr));
+  const auto* gpu_executable =
+      absl::down_cast<GpuExecutable*>(executable.get());
+  const CublasLtMatmulThunk* matmul_thunk = nullptr;
+  for (const std::unique_ptr<Thunk>& thunk :
+       gpu_executable->thunk_executor().thunks()) {
+    if (thunk->kind() == Thunk::kCublasLtMatmul) {
+      if (matmul_thunk != nullptr) {
+        return absl::InternalError("more than one BlasLt matmul thunk");
+      }
+      matmul_thunk = absl::down_cast<const CublasLtMatmulThunk*>(thunk.get());
+    }
+  }
+  if (matmul_thunk == nullptr) {
+    return absl::NotFoundError("no BlasLt matmul thunk");
+  }
+  return matmul_thunk->blas_lt_algorithm();
+}
+
 TEST_F(GpuBlasLtMatmulThunkTest,
        CompileGemmHloGeneratesThunkWithAlgorithmDescriptor) {
-  if (!gpu_comp().IsCuda()) {
-    GTEST_SKIP() << "cuBLASLt algorithm descriptors are only populated on CUDA";
-  }
-
   constexpr absl::string_view kGemmHlo = R"(
 HloModule SimpleGemm
 
@@ -395,28 +422,55 @@ ENTRY AddDotsFunc {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                        ParseAndReturnVerifiedModule(kGemmHlo, config));
   ASSERT_OK_AND_ASSIGN(
-      std::unique_ptr<Compiler> compiler,
-      Compiler::GetForPlatform(default_exec()->GetPlatform()->id()));
-  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> compiled_module,
-                       compiler->RunHloPasses(std::move(module), default_exec(),
-                                              /*device_allocator=*/nullptr));
-  ASSERT_OK_AND_ASSIGN(
-      std::unique_ptr<Executable> executable,
-      compiler->RunBackend(std::move(compiled_module), default_exec(),
-                           /*device_allocator=*/nullptr));
-  const auto* gpu_executable =
-      absl::down_cast<GpuExecutable*>(executable.get());
-  ASSERT_NE(gpu_executable, nullptr);
+      std::optional<se::gpu::BlasLtMatmulAlgorithm> algorithm,
+      CompileAndGetThunkAlgorithm(default_exec(), std::move(module)));
+  ASSERT_TRUE(algorithm.has_value());
+  EXPECT_GT(algorithm->library_version, 0);
+  if (gpu_comp().IsCuda()) {
+    EXPECT_TRUE(std::holds_alternative<se::cuda::CublasLtMatmulAlgorithm>(
+        algorithm->algorithm));
+  } else {
+    EXPECT_TRUE(std::holds_alternative<se::gpu::HipblasLtMatmulAlgorithm>(
+        algorithm->algorithm));
+  }
+}
 
-  const ThunkSequence& thunks = gpu_executable->thunk_executor().thunks();
-  ASSERT_EQ(thunks.size(), 1);
-  ASSERT_EQ(thunks[0]->kind(), Thunk::kCublasLtMatmul);
-  const auto* matmul_thunk =
-      absl::down_cast<const CublasLtMatmulThunk*>(thunks[0].get());
-  ASSERT_TRUE(matmul_thunk->blas_lt_algorithm().has_value());
-  EXPECT_GT(matmul_thunk->blas_lt_algorithm()->library_version, 0);
-  EXPECT_TRUE(std::holds_alternative<se::cuda::CublasLtMatmulAlgorithm>(
-      matmul_thunk->blas_lt_algorithm()->algorithm));
+constexpr absl::string_view kGroupedGemmHlo = R"(
+HloModule GroupedGemm
+
+ENTRY AddRaggedDotsFunc {
+  p0 = f16[64,9]{1,0} parameter(0)
+  p1 = f16[2,9,8]{2,1,0} parameter(1)
+  p2 = s32[2] constant({16, 48})
+  ROOT ragged-dot = f16[64,8]{1,0} ragged-dot(p0, p1, p2),
+                    lhs_contracting_dims={1}, rhs_contracting_dims={1},
+                    lhs_ragged_dims={0}, rhs_group_dims={0}
+})";
+
+// The hipBLASLt autotuner records a descriptor for grouped GEMMs too, and the
+// thunk runs it when the exact algorithm is required.
+TEST_F(GpuBlasLtMatmulThunkTest, GroupedGemmRunsExactAlgorithmDescriptor) {
+  auto* rocm = gpu_comp().rocm_compute_capability();
+  if (rocm == nullptr || !rocm->gfx9_mi300_series()) {
+    GTEST_SKIP() << "Grouped GEMM is only supported on ROCm gfx942 or gfx950";
+  }
+  HloModuleConfig config = GetModuleConfigForTest();
+  DebugOptions& debug_opts = config.mutable_debug_options();
+  debug_opts.set_xla_gpu_autotune_level(1);
+  debug_opts.set_xla_gpu_experimental_use_ragged_dot_grouped_gemm(true);
+  debug_opts.set_xla_gpu_require_exact_blas_lt_algorithm(true);
+  debug_opts.clear_xla_gpu_enable_command_buffer();
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kGroupedGemmHlo, config));
+  ASSERT_OK_AND_ASSIGN(
+      std::optional<se::gpu::BlasLtMatmulAlgorithm> algorithm,
+      CompileAndGetThunkAlgorithm(default_exec(), module->Clone()));
+  ASSERT_TRUE(algorithm.has_value());
+  EXPECT_GT(algorithm->library_version, 0);
+  EXPECT_TRUE(std::holds_alternative<se::gpu::HipblasLtMatmulAlgorithm>(
+      algorithm->algorithm));
+  EXPECT_TRUE(RunAndCompare(std::move(module), ErrorSpec{1e-4, 1e-5}));
 }
 
 TEST_F(GpuBlasLtMatmulThunkTest, GroupedGemmWithAutotuneOneCacheEntry) {
@@ -430,18 +484,6 @@ TEST_F(GpuBlasLtMatmulThunkTest, GroupedGemmWithAutotuneOneCacheEntry) {
   EXPECT_NE(blas_lt, nullptr);
   blas_lt->ClearMatmulPlanCache();
 
-  constexpr absl::string_view grouped_gemm_hlo = R"(
-HloModule GroupedGemm
-
-ENTRY AddRaggedDotsFunc {
-  p0 = f16[64,9]{1,0} parameter(0)
-  p1 = f16[2,9,8]{2,1,0} parameter(1)
-  p2 = s32[2] constant({16, 48})
-  ROOT ragged-dot = f16[64,8]{1,0} ragged-dot(p0, p1, p2),
-                    lhs_contracting_dims={1}, rhs_contracting_dims={1},
-                    lhs_ragged_dims={0}, rhs_group_dims={0}
-})";
-
   HloModuleConfig config = GetModuleConfigForTest();
   auto& debug_opts = config.mutable_debug_options();
   debug_opts.set_xla_gpu_autotune_level(1);
@@ -450,7 +492,7 @@ ENTRY AddRaggedDotsFunc {
   debug_opts.set_xla_gpu_enable_triton_gemm(false);
   debug_opts.set_xla_gpu_experimental_use_ragged_dot_grouped_gemm(true);
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> grouped_module,
-                       ParseAndReturnVerifiedModule(grouped_gemm_hlo, config));
+                       ParseAndReturnVerifiedModule(kGroupedGemmHlo, config));
   EXPECT_TRUE(RunAndCompare(std::move(grouped_module), ErrorSpec{1e-4, 1e-5}));
   EXPECT_EQ(blas_lt->GetMatmulPlanCacheSize(), 1);
 }

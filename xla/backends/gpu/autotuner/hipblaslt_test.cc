@@ -25,7 +25,6 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
-#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/status_matchers.h"
@@ -274,8 +273,11 @@ TEST_F(HipblasLtBackendTest, GetSupportedConfigsRecordsDescriptors) {
   EXPECT_OK(backend_.Compile(gemm, *recorded.back()));
 }
 
-// Complex GEMMs may run on the rocBLAS fallback, whose plan has no hipBLASLt
-// descriptor (kUnimplemented); its configs keep only the index.
+// Complex GEMMs run on the rocBLAS fallback when the loaded hipBLASLt has no
+// solution for them; that plan has no descriptor (kUnimplemented), and its
+// configs keep only the index. When hipBLASLt serves the type itself (as
+// hipBLASLt 1.4 on gfx950 does for c64), every config has a descriptor, so
+// this test does not reach the fallback branch there.
 TEST_F(HipblasLtBackendTest, GetSupportedConfigsForComplexGemm) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> hlo_module,
                        ParseAndReturnVerifiedModule(absl::StrReplaceAll(
@@ -285,9 +287,11 @@ TEST_F(HipblasLtBackendTest, GetSupportedConfigsForComplexGemm) {
   ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> configs,
                        backend_.GetSupportedConfigs(gemm));
   ASSERT_FALSE(configs.empty());
-  LOG(INFO) << configs.size() << " configs, first "
-            << (configs[0]->gemm().has_algorithm_proto() ? "with" : "without")
-            << " a descriptor";
+  for (const std::unique_ptr<BackendConfig>& config : configs) {
+    const AutotuneResult::GemmKey& key = config->gemm();
+    EXPECT_TRUE(!key.has_algorithm_proto() ||
+                key.algorithm_proto().has_hipblaslt());
+  }
   EXPECT_OK(backend_.Compile(gemm, *configs[0]));
 }
 

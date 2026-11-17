@@ -184,6 +184,13 @@ class BlasLt : public gpu::BlasLt {
     absl::StatusOr<std::vector<MatmulAlgorithm>> GetAlgorithms(
         size_t max_algorithm_count, size_t max_workspace_size) const override;
 
+    // As for RegularMatmulPlan, checking support with the grouped problem.
+    absl::StatusOr<gpu::BlasLtMatmulAlgorithm> GetBlasLtMatmulAlgorithm(
+        const MatmulAlgorithm& algorithm) const override;
+    absl::StatusOr<MatmulAlgorithm> GetMatmulAlgorithm(
+        const gpu::BlasLtMatmulAlgorithm& algorithm,
+        size_t max_workspace_size) const override;
+
     absl::Status SetAlgorithm(const MatmulAlgorithm& algorithm) override {
       auto palgo = std::any_cast<hipblasLtMatmulAlgo_t>(&algorithm.opaque_algo);
       if (palgo == nullptr) {
@@ -273,6 +280,17 @@ class BlasLt : public gpu::BlasLt {
   // Fails if hipBLASLt does not handle the requested types.
   absl::StatusOr<MatmulPlanPtr> GetHipBlasLtMatmulPlan(
       const gpu::GemmConfig& cfg, Epilogue epilogue) const;
+
+  // Describes `algorithm` by its hipBLASLt solution index and the loaded
+  // library version.
+  absl::StatusOr<gpu::BlasLtMatmulAlgorithm> DescribeAlgorithm(
+      const MatmulAlgorithm& algorithm) const;
+
+  // Looks the solution index of `algorithm` up in the loaded library, which
+  // must have the version the solution was recorded with.
+  absl::StatusOr<hipblasLtMatmulAlgo_t> FindSolution(
+      const gpu::BlasLtMatmulAlgorithm& algorithm) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
   StreamExecutor* executor_;
   mutable absl::Mutex mu_;

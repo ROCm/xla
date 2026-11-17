@@ -356,6 +356,45 @@ absl::Status RewriteWithWideOutputGemm(HloInstruction* gemm,
                              : absl::OkStatus();
 }
 
+// One config per candidate, with the hipBLASLt descriptor of its solution.
+// Plans without hipBLASLt solutions (the rocBLAS fallback for complex types)
+// have no descriptor (kUnimplemented); their configs keep only the index.
+absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>> MakeConfigs(
+    const BlasLt::MatmulPlan& plan,
+    const std::vector<BlasLt::MatmulAlgorithm>& algorithms,
+    int64_t workspace_size) {
+  std::vector<std::unique_ptr<BackendConfig>> configs;
+  configs.reserve(algorithms.size());
+  for (size_t i = 0; i < algorithms.size(); ++i) {
+    auto config = std::make_unique<BackendConfig>();
+    auto* gemm_key = config->mutable_gemm();
+    gemm_key->set_algorithm(i);
+    gemm_key->set_autotune_workspace_size(workspace_size);
+    absl::StatusOr<se::gpu::BlasLtMatmulAlgorithm> descriptor =
+        plan.GetBlasLtMatmulAlgorithm(algorithms[i]);
+    if (descriptor.ok()) {
+      *gemm_key->mutable_algorithm_proto() = descriptor->ToProto();
+    } else if (!absl::IsUnimplemented(descriptor.status())) {
+      return descriptor.status();
+    }
+    configs.push_back(std::move(config));
+  }
+  return configs;
+}
+
+// Sets the algorithm index, workspace size and descriptor chosen in `gemm_key`.
+void SetSelectedAlgorithm(const HipblasLtBackendConfig& gemm_key,
+                          GemmBackendConfig& backend_config) {
+  backend_config.set_selected_algorithm(gemm_key.algorithm());
+  backend_config.set_autotune_workspace_size(
+      gemm_key.autotune_workspace_size());
+  if (gemm_key.has_algorithm_proto()) {
+    *backend_config.mutable_algorithm_proto() = gemm_key.algorithm_proto();
+  } else {
+    backend_config.clear_algorithm_proto();
+  }
+}
+
 }  // namespace
 
 bool HipblasLtBackend::IsSupported(const HloInstruction& instr) {
@@ -419,25 +458,8 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
 
     ABSL_ASSIGN_OR_RETURN(std::vector<BlasLt::MatmulAlgorithm> algorithms,
                           plan->GetAlgorithms(max_algorithms, workspace_size));
-    int num_algorithms = algorithms.size();
-    std::vector<std::unique_ptr<BackendConfig>> configs;
-    configs.reserve(num_algorithms);
-    for (int i = 0; i < num_algorithms; ++i) {
-      auto config = std::make_unique<BackendConfig>();
-      auto* gemm_key = config->mutable_gemm();
-      gemm_key->set_algorithm(i);
-      gemm_key->set_autotune_workspace_size(workspace_size);
-      // Plans without hipBLASLt solutions (the rocBLAS fallback for complex
-      // types) have no descriptor; their configs keep only the index.
-      absl::StatusOr<se::gpu::BlasLtMatmulAlgorithm> descriptor =
-          plan->GetBlasLtMatmulAlgorithm(algorithms[i]);
-      if (descriptor.ok()) {
-        *gemm_key->mutable_algorithm_proto() = descriptor->ToProto();
-      } else if (!absl::IsUnimplemented(descriptor.status())) {
-        return descriptor.status();
-      }
-      configs.push_back(std::move(config));
-    }
+    ABSL_ASSIGN_OR_RETURN(std::vector<std::unique_ptr<BackendConfig>> configs,
+                          MakeConfigs(*plan, algorithms, workspace_size));
     if (configs.empty()) {
       Decision can_unfuse = CanUnfuseFp8Output(instr);
       if (can_unfuse.IsForbidden()) {
@@ -567,18 +589,7 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
 
     ABSL_ASSIGN_OR_RETURN(std::vector<BlasLt::MatmulAlgorithm> algorithms,
                           plan->GetAlgorithms(max_algorithms, workspace_size));
-    int num_algorithms = algorithms.size();
-    std::vector<std::unique_ptr<BackendConfig>> configs;
-    configs.reserve(num_algorithms);
-    for (int i = 0; i < num_algorithms; ++i) {
-      auto config = std::make_unique<BackendConfig>();
-      auto* gemm_key = config->mutable_gemm();
-      gemm_key->set_algorithm(i);
-      gemm_key->set_autotune_workspace_size(workspace_size);
-      configs.push_back(std::move(config));
-    }
-
-    return configs;
+    return MakeConfigs(*plan, algorithms, workspace_size);
   }
 
   return std::vector<std::unique_ptr<BackendConfig>>();
@@ -637,14 +648,7 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
                           instr.backend_config<GpuBackendConfig>());
     GemmBackendConfig& backend_config =
         *gpu_config.mutable_gemm_backend_config();
-    backend_config.set_selected_algorithm(gemm_key.algorithm());
-    backend_config.set_autotune_workspace_size(
-        gemm_key.autotune_workspace_size());
-    if (gemm_key.has_algorithm_proto()) {
-      *backend_config.mutable_algorithm_proto() = gemm_key.algorithm_proto();
-    } else {
-      backend_config.clear_algorithm_proto();
-    }
+    SetSelectedAlgorithm(gemm_key, backend_config);
     ABSL_RETURN_IF_ERROR(instr.set_backend_config(std::move(gpu_config)));
 
     if (instr.shape().IsTuple() && !instr.shape().tuple_shapes().empty()) {
@@ -747,9 +751,7 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
         gpu_config.mutable_grouped_gemm_backend_config()
             ->mutable_gemm_backend_config();
 
-    backend_config->set_selected_algorithm(gemm_key.algorithm());
-    backend_config->set_autotune_workspace_size(
-        gemm_key.autotune_workspace_size());
+    SetSelectedAlgorithm(gemm_key, *backend_config);
     ABSL_RETURN_IF_ERROR(instr.set_backend_config(std::move(gpu_config)));
     return absl::OkStatus();
   }
