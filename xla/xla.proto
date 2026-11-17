@@ -2043,7 +2043,13 @@ message DebugOptions {
   // updated in place or a custom-call operand).
   optional bool xla_gpu_experimental_while_loop_sink_broadcast_constants = 572;
 
-  // Next id: 573
+  // If true, GemmFusion looks through bitcasts when it checks whether an
+  // operand of an epilogue user is a broadcast. Local experiment
+  // switch, not for upstream.
+  optional bool xla_gpu_experimental_gemm_fusion_epilogue_look_through_bitcasts =
+      573;
+
+  // Next id: 574
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

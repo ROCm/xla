@@ -57,6 +57,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/ir/hlo_print_options.h"
 #include "xla/hlo/utils/hlo_query.h"
@@ -1190,13 +1191,25 @@ FusionDecision ShouldFuseUser(const HloInstruction* user,
     }
     // Currently only
     //  - effective parameters
-    //  - broadcasts of effective parameters
-    //  - broadcasts of scalars
-    // are accepted as other inputs of non-unary operations in
-    // the output fusion.
-    if ((operand->opcode() == HloOpcode::kBroadcast &&
-         (ShapeUtil::IsScalar(operand->operand(0)->shape()) ||
-          hlo_query::IsEffectiveParameter(*operand->operand(0)))) ||
+    //  - broadcasts of effective parameters or scalars
+    // are accepted as other inputs of non-unary operations in the output
+    // fusion. SinkBitcast rewrites op(bitcast(a), b) as
+    // bitcast(op(a, bitcast(b))), so the broadcast can reach this check
+    // wrapped in bitcasts.
+    const HloInstruction* unbitcast_operand = operand;
+    // LOCAL ONLY. The switch restores the previous check for A/B runs.
+    const bool look_through_bitcasts =
+        original_user.GetModule()
+            ->config()
+            .debug_options()
+            .xla_gpu_experimental_gemm_fusion_epilogue_look_through_bitcasts();
+    while (look_through_bitcasts &&
+           unbitcast_operand->opcode() == HloOpcode::kBitcast) {
+      unbitcast_operand = unbitcast_operand->operand(0);
+    }
+    if ((unbitcast_operand->opcode() == HloOpcode::kBroadcast &&
+         (ShapeUtil::IsScalar(unbitcast_operand->operand(0)->shape()) ||
+          hlo_query::IsEffectiveParameter(*unbitcast_operand->operand(0)))) ||
         hlo_query::IsEffectiveParameter(*operand)) {
       continue;
     }

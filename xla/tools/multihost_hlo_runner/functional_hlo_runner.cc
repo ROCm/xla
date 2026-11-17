@@ -38,6 +38,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
@@ -1734,9 +1735,19 @@ absl::Status LoadAndRunAndDump(
                                       running_options, hlo_file, input_format,
                                       /*arguments=*/{}, engine));
   LOG(INFO) << "Dump output to: " << dump_output_to;
+  // LOCAL ONLY. Pick the output format from the suffix so that a .pb path
+  // writes binary LiteralProtos for compare_hlo_outputs.py.
+  OutputFormat output_format = OutputFormat::kText;
+  if (absl::EndsWith(dump_output_to, ".pb")) {
+    output_format = OutputFormat::kProtoBinary;
+  } else if (absl::EndsWith(dump_output_to, ".pbtxt") ||
+             absl::EndsWith(dump_output_to, ".textproto")) {
+    output_format = OutputFormat::kProtoText;
+  }
   return dump_output_to.empty()
              ? absl::OkStatus()
-             : FunctionalHloRunner::DumpOutput(output, dump_output_to, task_id);
+             : FunctionalHloRunner::DumpOutput(output, dump_output_to, task_id,
+                                               output_format);
 }
 
 absl::Status LoadAndCompileAndDump(

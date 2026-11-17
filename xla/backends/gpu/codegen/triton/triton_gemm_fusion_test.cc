@@ -552,6 +552,35 @@ ENTRY e {
   EXPECT_TRUE(RunAndCompare(kHloText, ErrorSpec{/*aabs=*/1e-3, /*arel=*/1e-3}));
 }
 
+// GemmFusion sinks the bitcast past the select, which wraps the broadcast of a
+// scalar in a bitcast. The select must still land in the GEMM epilogue, with no
+// separate loop fusion, and compute the right result.
+TEST_F(TritonGemmTest, SelectWithBroadcastOfScalarBehindBitcastInEpilogue) {
+  constexpr absl::string_view kHloText = R"(
+HloModule t
+
+ENTRY e {
+  p0 = f32[2,64,32] parameter(0)
+  p1 = f32[2,32,64] parameter(1)
+  mask = pred[128,64] parameter(2)
+  dot = f32[2,64,64] dot(p0, p1), lhs_batch_dims={0}, rhs_batch_dims={0},
+    lhs_contracting_dims={2}, rhs_contracting_dims={1}
+  bc = f32[128,64] bitcast(dot)
+  c = f32[] constant(-2.38197633e+38)
+  fill = f32[128,64] broadcast(c), dimensions={}
+  ROOT s = f32[128,64] select(mask, bc, fill)
+})";
+
+  MatchOptimizedHlo(kHloText, R"(
+; CHECK: ENTRY
+; CHECK-NOT: kind=kLoop
+; CHECK: "__triton_nested_gemm_fusion"
+; CHECK-NOT: kind=kLoop
+  )");
+
+  EXPECT_TRUE(RunAndCompare(kHloText, ErrorSpec{/*aabs=*/1e-3, /*arel=*/1e-3}));
+}
+
 TEST_F(TritonGemmTest, MultipleBatchDimensions) {
   constexpr absl::string_view kHloText = R"(
 HloModule m

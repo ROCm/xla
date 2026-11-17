@@ -624,6 +624,8 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_experimental_enable_triton_scan(true);
   opts.set_xla_gpu_experimental_multi_phase_fusion(false);
   opts.set_xla_gpu_experimental_while_loop_sink_broadcast_constants(true);
+  opts.set_xla_gpu_experimental_gemm_fusion_epilogue_look_through_bitcasts(
+      true);
   opts.set_xla_gpu_async_copy_min_bytes(-1);
 
   // Disable float checks.
@@ -3858,6 +3860,15 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "If true, WhileLoopConstantSinking in the GPU optimization pipeline also "
       "sinks loop-invariant broadcasts of constants into while loops, unless "
       "no use in the loop body can fuse the broadcast."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_experimental_gemm_fusion_epilogue_look_through_bitcasts",
+      bool_setter_for(
+          &DebugOptions::
+              set_xla_gpu_experimental_gemm_fusion_epilogue_look_through_bitcasts),
+      debug_options
+          ->xla_gpu_experimental_gemm_fusion_epilogue_look_through_bitcasts(),
+      "If true, GemmFusion looks through bitcasts when it checks whether an "
+      "operand of an epilogue user is a broadcast."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_experimental_ragged_all_to_all_use_device_kernel",
       bool_setter_for(

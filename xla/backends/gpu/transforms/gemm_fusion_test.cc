@@ -236,6 +236,54 @@ ENTRY e {
               GmockMatch(m::Bitcast(m::Fusion())));
 }
 
+// Sinking the bitcast past the select wraps the broadcast of a scalar in a
+// bitcast. The select must still be fused into the epilogue, as it is when the
+// third operand is a parameter.
+TEST_F(GemmFusionTest, SelectWithBroadcastOfScalarIsFusedPastSunkBitcast) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule m
+
+ENTRY e {
+  p0 = f32[32,6] parameter(0)
+  p1 = f32[32,7] parameter(1)
+  mask = pred[14,3] parameter(2)
+  d = f32[6,7] dot(p0, p1),
+    lhs_contracting_dims={0}, rhs_contracting_dims={0}
+  b1 = f32[14,3] bitcast(d)
+  c = f32[] constant(-2.38197633e+38)
+  fill = f32[14,3] broadcast(c), dimensions={}
+  ROOT s = f32[14,3] select(mask, b1, fill)
+})"));
+  ASSERT_THAT(GemmFusion(device_info_).Run(module.get()), IsOkAndHolds(true));
+  const HloInstruction* root = module->entry_computation()->root_instruction();
+  ASSERT_THAT(root, GmockMatch(m::Bitcast(m::Fusion())));
+  EXPECT_EQ(root->operand(0)->fused_expression_root()->opcode(),
+            HloOpcode::kSelect);
+}
+
+// As above, but the other operand is a broadcast of a parameter, such as a per
+// column bias, which sinking the bitcast also wraps in a bitcast.
+TEST_F(GemmFusionTest, AddWithBroadcastOfParameterIsFusedPastSunkBitcast) {
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+HloModule m
+
+ENTRY e {
+  p0 = f32[2,64,32] parameter(0)
+  p1 = f32[2,32,64] parameter(1)
+  bias = f32[64] parameter(2)
+  d = f32[2,64,64] dot(p0, p1), lhs_batch_dims={0}, rhs_batch_dims={0},
+    lhs_contracting_dims={2}, rhs_contracting_dims={1}
+  b1 = f32[128,64] bitcast(d)
+  br = f32[128,64] broadcast(bias), dimensions={1}
+  ROOT a = f32[128,64] add(b1, br)
+})"));
+  ASSERT_THAT(GemmFusion(device_info_).Run(module.get()), IsOkAndHolds(true));
+  const HloInstruction* root = module->entry_computation()->root_instruction();
+  ASSERT_THAT(root, GmockMatch(m::Bitcast(m::Fusion())));
+  EXPECT_EQ(root->operand(0)->fused_expression_root()->opcode(),
+            HloOpcode::kAdd);
+}
+
 TEST_F(GemmFusionTest, BitcastDoesNotSinkPastLayoutChangingCopy) {
   ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
 HloModule m
