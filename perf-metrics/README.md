@@ -29,9 +29,11 @@ One directory per run, named `<stamp>-<sha6>`:
 data/20261113T021256Z-ced35e/
   run.json                              timestamp, the openxla/xla commit, the matrix
   therock_release_10.0/hlo_eval.tsv     model, leaf, module, duration_ms
+  therock_release_10.0/latency.csv      the HIP latency tool, one row per report
   therock_release_10.1/hlo_eval.tsv
+  therock_release_10.1/latency.csv
   therock_nightly/hlo_eval.tsv
-  therock_nightly/latency.csv           the HIP latency tool, one row per report
+  therock_nightly/latency.csv
 ```
 
 All three ROCm stacks replay the same HLO modules against the **same** pinned
@@ -43,9 +45,16 @@ while `modes` lists the subset that actually published results, so a mode in
 one list and not the other is a mode that failed. Nothing in the TSV or CSV
 rows carries that, which is why the manifest has to.
 
-`latency.csv` is written for the newest stack only: it
-characterises the ROCm runtime rather than the XLA tree, so measuring it on the
-release stacks would only re-measure the same interconnect.
+`latency.csv` is written for **every** stack, at 1, 2 and 4 GPUs, with one
+binary per stack compiled by that stack's own `hipcc`. The tool characterises
+the ROCm runtime rather than the XLA tree, which is precisely why each stack has
+to measure it: the dispatch and copy overhead it times is the part that differs
+between a pinned release and the nightly.
+
+Between 2026-11-04 and the day that became true the nightly ran the tool on the
+newest stack alone, so the release stacks have a stretch of runs with no
+`latency.csv` at all. `trends.py` publishes those runs as nulls and the page
+draws the break as a break.
 
 > **The stamped columns carry a stray `$`.** The nightly prepends the
 > timestamp, commit and mode to each row with `awk -v OFS="$sep"`, where the
@@ -124,20 +133,34 @@ difference at a glance where an aggregate would not.
 
 **Latency** is `rocm_latency_check_tool`, read from its `final` rows only --
 the tool also appends an `interval` row every few seconds, and pooling those
-would weight a run by how long it happened to take. **Only the nightly stack is
-plotted**: the figure characterises the ROCm runtime rather than the XLA tree,
-so the workflow runs the tool on the newest stack alone, and the three early
-runs that measured all three stacks are discarded rather than drawn as lines
-that stop in November and never resume. The stack filter therefore does not
-apply to that tab and is hidden on it. The p50 holds steady near 4ms; the **p99
-is a handful of requests** and one stall moves it by an order of magnitude
-(4.4ms to 67ms on 2026-11-12), so the page defaults to p50 and says so.
+would weight a run by how long it happened to take. A figure is addressed by a
+**(stack, GPU count) pair**: every stack in the matrix, at 1, 2 and 4 GPUs.
+
+Nine series on one chart would be a thicket that says nothing about which
+dimension moved, so the tab draws the same numbers twice, each time giving one
+dimension to the panels and the other to the lines:
+
+| Card | A panel is | A line is | Answers |
+|---|---|---|---|
+| **Per stack** | one ROCm stack | one GPU count | how a runtime's latency grows as the pipeline is spread wider |
+| **Across ROCm stacks** | one GPU count | one ROCm stack | what the stacks cost against each other, at a matched width |
+
+Every panel on the tab shares **one** y axis, taken from the whole selection,
+so a panel can be read against its neighbours and against the other card.
+Colour always encodes the lines *within* a panel and the panel title names the
+other dimension, which is why the two dimensions never share a hue: stacks keep
+palette slots 1-3 on every tab, GPU counts take 5-7 (validated as a set, all
+pairs, both themes -- worst CVD dE 17.6 light / 13.0 dark).
+
+The p50 holds steady near 4ms; the **p99 is a handful of requests** and one
+stall moves it by an order of magnitude (4.4ms to 67ms on 2026-11-12), so the
+page defaults to p50 and says so.
 
 The `rocm_version` column is not used: the tool writes the `--label` value into
-it, so on these snapshots it reads `therock_nightly`. `hip_version` beside it is
-correct and *is* read for every stack, including the ones whose timings are
-discarded -- a pinned release's HIP version is a fact that does not go stale, so
-it still names the build behind each stack chip.
+it, so a row reads `therock_nightly` rather than a version. `hip_version`
+beside it is the real thing and is read for every stack -- a pinned release's
+HIP version is a fact that does not go stale, so it names the build behind each
+stack chip and under each per-stack panel.
 
 ## The page
 
@@ -147,7 +170,7 @@ site/app.js       plain SVG built in the DOM -- no chart library, no build step
 site/styles.css   a copy of ci-metrics/site/styles.css, perf rules appended
 ```
 
-Four tabs over one stack filter:
+Four tabs over one stack filter, which scopes all four:
 
 - **Models** -- the index, the total, and the total split by model category.
 - **Inference** and **Training** -- one small chart per HLO module of that
@@ -156,8 +179,10 @@ Four tabs over one stack filter:
   the gradient all-reduce and the optimizer update, so a training module has no
   inference counterpart to sit beside. A tab whose suite the data does not carry
   is removed rather than shown empty.
-- **Latency** -- the HIP latency tool, nightly stack only. The stack filter is
-  hidden here, since it would scope nothing.
+- **Latency** -- the HIP latency tool, every stack at every GPU count, as the
+  two cards above. This tab adds two filters of its own: the GPU counts, which
+  scope both cards at once, and the metric (p50, p99, mean, QPS), which picks
+  which of the tool's figures the panels plot.
 
 `styles.css` is a copy rather than a shared file. The two dashboards are
 separate sections of the Pages site deployed by separate workflows, a shared

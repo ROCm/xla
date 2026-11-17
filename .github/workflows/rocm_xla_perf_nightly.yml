@@ -115,10 +115,10 @@ jobs:
 
           modes = [
               {
-                  "name": "therock_release_10.0",
+                  "name": "therock_lts_release_7.14.1",
                   "release": "10.0.0",
-                  "distro_url": "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.0.0.tar.gz",
-                  "distro_hash": "1c5e807875d26a2470ecc7323daa5b5b9009208a55c3290ac255a909cde15fc6",
+                  "distro_url": "https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-multiarch-7.14.1.tar.gz",
+                  "distro_hash": "no_hash",
                   "runner": RUNNER,
               },
               {
@@ -231,10 +231,14 @@ jobs:
             //xla/tools/multihost_hlo_runner:hlo_runner_main
 
       - name: Build and run rocm_latency_check_tool [${{ matrix.mode.name }}]
-        # The latency numbers characterise the ROCm runtime rather than the XLA
-        # tree, so measuring them once -- on the newest stack -- is enough; the
-        # release modes would only re-measure the same interconnect.
-        if: matrix.mode.name == 'therock_nightly'
+        # Measured on *every* stack in the matrix, not just the newest. These
+        # numbers characterise the ROCm runtime rather than the XLA tree, which
+        # is exactly why each stack has to measure them itself: the dispatch and
+        # copy overhead the tool times is the part that differs between a pinned
+        # release and the nightly, and a figure from one stack says nothing
+        # about another. One binary per mode, compiled with that mode's own
+        # hipcc out of its own ROCm distribution, so the runtime under test is
+        # the one the rest of this job built against.
         working-directory: perf-tools-src
         run: |
           mkdir -p "$RUNNER_TEMP/raw"
