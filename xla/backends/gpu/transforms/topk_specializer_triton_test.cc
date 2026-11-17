@@ -384,9 +384,10 @@ class TopkSpecializerTritonSortTest : public TopkSpecializerTritonTest {
  protected:
   // Parses a TopK of `p` = `type[in]` into `type[out]` followed by a sort of
   // its values `v` and of `indices` along `dimension`, compared by
-  // `comparator`. `indices` names one of the TopK indices `i`, `i` plus the
-  // broadcast scalar `o` on either side (`offset`, `offset_lhs`), or `i + i`
-  // (`doubled`).
+  // `comparator`. `indices` names one of the TopK indices `i`, `i` plus SPMD's
+  // partition offset `o` times the row length on either side (`offset`,
+  // `offset_lhs`), `i` plus `o` (`unscaled_offset`) or `o * o`
+  // (`squared_offset`), or `i + i` (`doubled`).
   std::unique_ptr<HloModule> ParseTopKThenSort(
       absl::string_view type, absl::string_view in, absl::string_view out,
       absl::string_view backend_config, TritonTopKFlags flags,
@@ -396,6 +397,7 @@ class TopkSpecializerTritonSortTest : public TopkSpecializerTritonTest {
         backend_config.empty()
             ? ""
             : absl::Substitute(", backend_config=$0", backend_config);
+    absl::string_view row_length = in.substr(in.rfind(',') + 1);
     auto module = ParseAndReturnVerifiedModule(absl::Substitute(
         R"(
       HloModule m
@@ -411,13 +413,21 @@ class TopkSpecializerTritonSortTest : public TopkSpecializerTritonTest {
         t = ($0[$2], s32[$2]) custom-call(p), custom_call_target="TopK"$3
         v = $0[$2] get-tuple-element(t), index=0
         i = s32[$2] get-tuple-element(t), index=1
-        b = s32[$2] broadcast(o), dimensions={}
+        n = s32[] constant($7)
+        on = s32[] multiply(o, n)
+        b = s32[$2] broadcast(on), dimensions={}
         offset = s32[$2] add(i, b)
         offset_lhs = s32[$2] add(b, i)
+        bo = s32[$2] broadcast(o), dimensions={}
+        unscaled_offset = s32[$2] add(i, bo)
+        oo = s32[] multiply(o, o)
+        boo = s32[$2] broadcast(oo), dimensions={}
+        squared_offset = s32[$2] add(i, boo)
         doubled = s32[$2] add(i, i)
         ROOT s = ($0[$2], s32[$2]) sort(v, $5), dimensions={$6}, to_apply=cmp
       })",
-        type, in, out, config_attr, comparator, indices, dimension));
+        type, in, out, config_attr, comparator, indices, dimension,
+        row_length));
     CHECK_OK(module.status());
     auto& debug_options = (*module)->mutable_config().mutable_debug_options();
     debug_options.set_xla_gpu_experimental_enable_triton_topk(
@@ -637,6 +647,13 @@ INSTANTIATE_TEST_SUITE_P(
                                    "offset", 1},
                       KeptSortCase{"PerElementOffset",
                                    std::string(kSpmdComparator), "doubled", 1},
+                      // Could wrap past 2^31 and reorder the indices.
+                      KeptSortCase{"UnscaledOffset",
+                                   std::string(kSpmdComparator),
+                                   "unscaled_offset", 1},
+                      KeptSortCase{"OffsetNotTimesTheRowLength",
+                                   std::string(kSpmdComparator),
+                                   "squared_offset", 1},
                       KeptSortCase{"OtherDimension",
                                    std::string(kSpmdComparator), "offset", 0}),
     [](const ::testing::TestParamInfo<KeptSortCase>& info) {

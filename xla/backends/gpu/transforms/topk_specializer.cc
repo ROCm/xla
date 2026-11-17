@@ -41,6 +41,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/literal.h"
 #include "xla/literal_util.h"
 #include "xla/primitive_util.h"
 #include "xla/service/hlo.pb.h"
@@ -512,21 +513,37 @@ const HloCustomCallInstruction* ReadTritonTopKOutput(const HloInstruction* inst,
   return topk;
 }
 
-// Returns the Triton TopK whose indices `inst` holds, plus the same offset for
-// every index (as SPMD partitioning adds per partition), or nullptr. The offset
-// keeps the order of the indices as long as their sum stays below 2^31, which
-// holds for partition offsets into a row of fewer than 2^31 elements.
+// Returns true if `offset` is the offset that SPMD partitioning adds to the
+// indices of a TopK over rows of `n` elements: a partition number times `n`,
+// broadcast. Adding it keeps the order of the indices because the sums are
+// indices into the unpartitioned rows, which are s32. Any other offset could
+// wrap past 2^31 and reorder them.
+bool IsPartitionIndexOffset(const HloInstruction* offset, int64_t n) {
+  if (offset->opcode() != HloOpcode::kBroadcast ||
+      !ShapeUtil::IsEffectiveScalar(offset->operand(0)->shape())) {
+    return false;
+  }
+  const HloInstruction* product = offset->operand(0);
+  return product->opcode() == HloOpcode::kMultiply &&
+         absl::c_any_of(product->operands(), [n](const HloInstruction* factor) {
+           return factor->IsConstant() &&
+                  factor->literal().GetFirstInteger() == n;
+         });
+}
+
+// Returns the Triton TopK whose indices `inst` holds, possibly plus the
+// partition offset of SPMD partitioning, or nullptr.
 const HloCustomCallInstruction* ReadTritonTopKIndices(
     const HloInstruction* inst) {
   if (inst->opcode() == HloOpcode::kAdd) {
     for (int64_t i : {0, 1}) {
-      const HloInstruction* offset = inst->operand(1 - i);
-      if (offset->opcode() == HloOpcode::kBroadcast &&
-          ShapeUtil::IsEffectiveScalar(offset->operand(0)->shape())) {
-        if (const HloCustomCallInstruction* topk =
-                ReadTritonTopKOutput(inst->operand(i), 1)) {
-          return topk;
-        }
+      const HloCustomCallInstruction* topk =
+          ReadTritonTopKOutput(inst->operand(i), 1);
+      if (topk != nullptr &&
+          IsPartitionIndexOffset(
+              inst->operand(1 - i),
+              topk->operand(0)->shape().dimensions().back())) {
+        return topk;
       }
     }
     return nullptr;

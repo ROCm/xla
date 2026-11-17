@@ -956,6 +956,7 @@ xla_test(
     deps = [
         ":hlo_pjrt_gpu_test_base",
         "//xla:array2d",
+        "//xla:comparison_util",
         "//xla:literal",
         "//xla:literal_util",
         "//xla:shape_util",

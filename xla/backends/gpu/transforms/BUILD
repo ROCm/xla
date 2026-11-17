@@ -3863,6 +3863,7 @@ cc_library(
     hdrs = ["topk_specializer.h"],
     deps = [
         "//xla:comparison_util",
+        "//xla:literal",
         "//xla:literal_util",
         "//xla:shape_util",
         "//xla:status_macros",

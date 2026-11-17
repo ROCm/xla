@@ -1671,13 +1671,13 @@ Future<ThunkSequence> ThunkEmitter::EmitTritonTopK(
                                             spec.ToString(), " with ",
                                             config->ToString()));
   }
-  return std::move(tsl::JoinFutures(
-                       EmitTritonTopKKernel(instr, TopKKernelKind::kChunk, spec,
-                                            *config, kernel_arguments),
-                       EmitTritonTopKKernel(instr, TopKKernelKind::kMerge,
-                                            GetTopKMergeSpec(spec, *config),
-                                            *merge_config,
-                                            std::move(kernel_arguments))))
+  Future<ThunkSequence> chunk_thunks = EmitTritonTopKKernel(
+      instr, TopKKernelKind::kChunk, spec, *config, kernel_arguments);
+  Future<ThunkSequence> merge_thunks = EmitTritonTopKKernel(
+      instr, TopKKernelKind::kMerge, GetTopKMergeSpec(spec, *config),
+      *merge_config, std::move(kernel_arguments));
+  return std::move(
+             tsl::JoinFutures(std::move(chunk_thunks), std::move(merge_thunks)))
       .Map([](std::tuple<ThunkSequence, ThunkSequence> tuple) {
         auto [thunks, merge_thunks] = std::move(tuple);
         for (std::unique_ptr<Thunk>& thunk : merge_thunks) {

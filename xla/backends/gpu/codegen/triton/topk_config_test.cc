@@ -163,6 +163,13 @@ TEST(TopKKernelConfigTest, ChunksGrowUntilTheMergeFits) {
   EXPECT_EQ(config->num_chunks, 2048);
   // Even the longest chunk leaves too many candidates of k = 128.
   EXPECT_FALSE(GetTopKKernelConfig(Spec(1, 1 << 24, 128), mi350).has_value());
+  EXPECT_FALSE(GetTopKKernelConfig(Spec(2, 1 << 24, 128), mi350).has_value());
+  // With 32-wide wavefronts a program holds half as many keys, so the merge
+  // of k = 128 over 2^20 keys no longer fits.
+  EXPECT_TRUE(GetTopKKernelConfig(Spec(1, 1 << 20, 128), mi350).has_value());
+  EXPECT_FALSE(GetTopKKernelConfig(Spec(1, 1 << 20, 128),
+                                   TestGpuDeviceInfo::AMDRX7900DeviceInfo())
+                   .has_value());
 }
 
 TEST(TopKKernelConfigTest, SingleKernelHasNoMergeOrScratch) {

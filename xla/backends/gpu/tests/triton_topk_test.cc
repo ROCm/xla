@@ -44,6 +44,7 @@ limitations under the License.
 #include "xla/array2d.h"
 #include "xla/backends/gpu/codegen/triton/topk_config.h"
 #include "xla/backends/gpu/tests/hlo_pjrt_gpu_test_base.h"
+#include "xla/comparison_util.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -283,6 +284,8 @@ std::vector<GridCase> GridCases() {
         }
       }
     }
+    // No kernel config fits, so the forced TopK keeps today's path.
+    cases.push_back({type, {2, 1 << 24, 128}});
   }
   return cases;
 }
@@ -294,12 +297,42 @@ std::string GridCaseName(const ::testing::TestParamInfo<GridCase>& info) {
 }
 
 class TritonTopKGridTest : public TritonTopKTest,
-                           public ::testing::WithParamInterface<GridCase> {};
+                           public ::testing::WithParamInterface<GridCase> {
+ protected:
+  // Compiles `hlo` with the Triton TopK kernels forced. A shape that no kernel
+  // config fits on this GPU, such as k = 128 over 2^20 keys with 32-wide
+  // wavefronts, must keep today's path.
+  absl::StatusOr<std::unique_ptr<OpaqueExecutable>> CompileForced(
+      absl::string_view hlo) {
+    const GridCase& c = GetParam();
+    const TopKKernelSpec spec{c.type, ComparisonOrder::kTotal,
+                              std::max<int64_t>(c.shape.batch, 1), c.shape.n,
+                              c.shape.k};
+    if (GetTopKKernelConfig(spec, device_description()).has_value()) {
+      return CompileWithTritonTopK(hlo);
+    }
+    ABSL_ASSIGN_OR_RETURN(auto executable,
+                          Compile(hlo, ConfigWithTritonTopK(true)));
+    ABSL_ASSIGN_OR_RETURN(const HloModule* optimized,
+                          test_runner().HloModuleFromWrapped(executable.get()));
+    for (const HloComputation* computation : optimized->computations()) {
+      for (const HloInstruction* instr : computation->instructions()) {
+        if (instr->opcode() == HloOpcode::kCustomCall &&
+            IsTritonTopK(*Cast<HloCustomCallInstruction>(instr))) {
+          return absl::InternalError(absl::StrCat(
+              "No Triton TopK kernel config fits ", spec.ToString(), ", but ",
+              instr->name(), " was routed to Triton"));
+        }
+      }
+    }
+    return executable;
+  }
+};
 
 TEST_P(TritonTopKGridTest, StableMatchesTodaysPathBitwise) {
   const GridCase& c = GetParam();
   const std::string hlo = TopKHlo(c.type, c.shape, "TOTAL", /*stable=*/true);
-  ASSERT_OK_AND_ASSIGN(auto triton, CompileWithTritonTopK(hlo));
+  ASSERT_OK_AND_ASSIGN(auto triton, CompileForced(hlo));
   ASSERT_OK_AND_ASSIGN(auto today, Compile(hlo, ConfigWithTritonTopK(false)));
   ASSERT_OK_AND_ASSIGN(std::vector<Literal> args, FakeArguments(hlo));
   ASSERT_OK_AND_ASSIGN(Literal expected, Run(today.get(), Pointers(args)));
@@ -310,7 +343,7 @@ TEST_P(TritonTopKGridTest, StableMatchesTodaysPathBitwise) {
 TEST_P(TritonTopKGridTest, UnstableIsValidAndDeterministic) {
   const GridCase& c = GetParam();
   const std::string hlo = TopKHlo(c.type, c.shape, "TOTAL", /*stable=*/false);
-  ASSERT_OK_AND_ASSIGN(auto triton, CompileWithTritonTopK(hlo));
+  ASSERT_OK_AND_ASSIGN(auto triton, CompileForced(hlo));
   ASSERT_OK_AND_ASSIGN(auto today, Compile(hlo, ConfigWithTritonTopK(false)));
   ASSERT_OK_AND_ASSIGN(std::vector<Literal> args, FakeArguments(hlo));
   ASSERT_OK_AND_ASSIGN(Literal reference, Run(today.get(), Pointers(args)));
