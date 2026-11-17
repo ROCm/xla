@@ -385,9 +385,11 @@ class TopkSpecializerTritonSortTest : public TopkSpecializerTritonTest {
   // Parses a TopK of `p` = `type[in]` into `type[out]` followed by a sort of
   // its values `v` and of `indices` along `dimension`, compared by
   // `comparator`. `indices` names one of the TopK indices `i`, `i` plus SPMD's
-  // partition offset `o` times the row length on either side (`offset`,
-  // `offset_lhs`), `i` plus `o` (`unscaled_offset`) or `o * o`
-  // (`squared_offset`), or `i + i` (`doubled`).
+  // offset, the number `o` of the partition in its group times the row length,
+  // on either side (`offset`, `offset_lhs`), `i` plus the partition id times
+  // the row length (`partition_offset`), offsets that can reach 2^31: a
+  // parameter times the row length (`unbounded_offset`), 2^25 times the row
+  // length (`far_offset`), 2^31 - 63 (`near_offset`), or `i + i` (`doubled`).
   std::unique_ptr<HloModule> ParseTopKThenSort(
       absl::string_view type, absl::string_view in, absl::string_view out,
       absl::string_view backend_config, TritonTopKFlags flags,
@@ -409,20 +411,38 @@ class TopkSpecializerTritonSortTest : public TopkSpecializerTritonTest {
       }
       ENTRY e {
         p = $0[$1] parameter(0)
-        o = s32[] parameter(1)
+        x = s32[] parameter(1)
         t = ($0[$2], s32[$2]) custom-call(p), custom_call_target="TopK"$3
         v = $0[$2] get-tuple-element(t), index=0
         i = s32[$2] get-tuple-element(t), index=1
         n = s32[] constant($7)
+        id = u32[] partition-id()
+        groups = u32[8] constant({0, 0, 1, 1, 2, 2, 3, 3})
+        group = u32[1] dynamic-slice(groups, id), dynamic_slice_sizes={1}
+        group_scalar = u32[] reshape(group)
+        o = s32[] convert(group_scalar)
         on = s32[] multiply(o, n)
         b = s32[$2] broadcast(on), dimensions={}
         offset = s32[$2] add(i, b)
         offset_lhs = s32[$2] add(b, i)
-        bo = s32[$2] broadcast(o), dimensions={}
-        unscaled_offset = s32[$2] add(i, bo)
-        oo = s32[] multiply(o, o)
-        boo = s32[$2] broadcast(oo), dimensions={}
-        squared_offset = s32[$2] add(i, boo)
+        id_s32 = s32[] convert(id)
+        idn = s32[] multiply(id_s32, n)
+        bid = s32[$2] broadcast(idn), dimensions={}
+        partition_offset = s32[$2] add(i, bid)
+        xn = s32[] multiply(x, n)
+        bx = s32[$2] broadcast(xn), dimensions={}
+        unbounded_offset = s32[$2] add(i, bx)
+        far = s32[2] constant({0, 33554432})
+        far_slot = s32[1] dynamic-slice(far, id), dynamic_slice_sizes={1}
+        far_scalar = s32[] reshape(far_slot)
+        far_n = s32[] multiply(far_scalar, n)
+        bfar = s32[$2] broadcast(far_n), dimensions={}
+        far_offset = s32[$2] add(i, bfar)
+        near = s32[2] constant({0, 2147483585})
+        near_slot = s32[1] dynamic-slice(near, id), dynamic_slice_sizes={1}
+        near_scalar = s32[] reshape(near_slot)
+        bnear = s32[$2] broadcast(near_scalar), dimensions={}
+        near_offset = s32[$2] add(i, bnear)
         doubled = s32[$2] add(i, i)
         ROOT s = ($0[$2], s32[$2]) sort(v, $5), dimensions={$6}, to_apply=cmp
       })",
@@ -488,7 +508,7 @@ TEST_F(TopkSpecializerTritonSortTest, RemovesTheSpmdMergeSortAfterTheTopK) {
 }
 
 TEST_F(TopkSpecializerTritonSortTest, RemovesTheSortOfOtherIndexForms) {
-  for (absl::string_view indices : {"i", "offset_lhs"}) {
+  for (absl::string_view indices : {"i", "offset_lhs", "partition_offset"}) {
     SCOPED_TRACE(indices);
     auto module =
         ParseTopKThenSort("bf16", "24576,64", "24576,6", "",
@@ -496,6 +516,22 @@ TEST_F(TopkSpecializerTritonSortTest, RemovesTheSortOfOtherIndexForms) {
     ASSERT_OK_AND_ASSIGN(bool changed, RunOnMi350(module.get()));
     EXPECT_TRUE(changed);
     EXPECT_FALSE(HasSort(*module));
+  }
+}
+
+TEST_F(TopkSpecializerTritonSortTest, PartitionCountBoundsThePartitionOffset) {
+  // The largest partition id times 64, plus 63, must stay below 2^31.
+  for (auto [num_partitions, removed] :
+       {std::pair{int64_t{8}, true}, std::pair{int64_t{1} << 25, true},
+        std::pair{(int64_t{1} << 25) + 1, false}}) {
+    SCOPED_TRACE(num_partitions);
+    auto module = ParseTopKThenSort("bf16", "24576,64", "24576,6", "",
+                                    TritonTopKFlags::kOn, kSpmdComparator,
+                                    "partition_offset");
+    module->mutable_config().set_num_partitions(num_partitions);
+    ASSERT_OK_AND_ASSIGN(bool changed, RunOnMi350(module.get()));
+    EXPECT_TRUE(changed);
+    EXPECT_EQ(HasSort(*module), !removed);
   }
 }
 
@@ -621,41 +657,42 @@ TEST_P(TopkSpecializerTritonKeptSortTest, SortIsKept) {
 
 INSTANTIATE_TEST_SUITE_P(
     Sorts, TopkSpecializerTritonKeptSortTest,
-    ::testing::Values(KeptSortCase{"HigherIndexFirst", R"(
+    ::testing::Values(
+        KeptSortCase{"HigherIndexFirst", R"(
         eq = pred[] compare(v0, v1), direction=EQ, type=TOTALORDER
         gt_i = pred[] compare(i0, i1), direction=GT
         gt = pred[] compare(v0, v1), direction=GT, type=TOTALORDER
         ROOT r = pred[] select(eq, gt_i, gt))",
-                                   "offset", 1},
-                      KeptSortCase{"Ascending", R"(
+                     "offset", 1},
+        KeptSortCase{"Ascending", R"(
         eq = pred[] compare(v0, v1), direction=EQ, type=TOTALORDER
         lt_i = pred[] compare(i0, i1), direction=LT
         lt = pred[] compare(v0, v1), direction=LT, type=TOTALORDER
         ROOT r = pred[] select(eq, lt_i, lt))",
-                                   "offset", 1},
-                      KeptSortCase{"PartialOrderCompare", R"(
+                     "offset", 1},
+        KeptSortCase{"PartialOrderCompare", R"(
         eq = pred[] compare(v0, v1), direction=EQ
         lt_i = pred[] compare(i0, i1), direction=LT
         gt = pred[] compare(v0, v1), direction=GT
         ROOT r = pred[] select(eq, lt_i, gt))",
-                                   "offset", 1},
-                      KeptSortCase{"SwappedParameters", R"(
+                     "offset", 1},
+        KeptSortCase{"SwappedParameters", R"(
         eq = pred[] compare(v0, v1), direction=EQ, type=TOTALORDER
         lt_i = pred[] compare(i1, i0), direction=LT
         gt = pred[] compare(v0, v1), direction=GT, type=TOTALORDER
         ROOT r = pred[] select(eq, lt_i, gt))",
-                                   "offset", 1},
-                      KeptSortCase{"PerElementOffset",
-                                   std::string(kSpmdComparator), "doubled", 1},
-                      // Could wrap past 2^31 and reorder the indices.
-                      KeptSortCase{"UnscaledOffset",
-                                   std::string(kSpmdComparator),
-                                   "unscaled_offset", 1},
-                      KeptSortCase{"OffsetNotTimesTheRowLength",
-                                   std::string(kSpmdComparator),
-                                   "squared_offset", 1},
-                      KeptSortCase{"OtherDimension",
-                                   std::string(kSpmdComparator), "offset", 0}),
+                     "offset", 1},
+        KeptSortCase{"PerElementOffset", std::string(kSpmdComparator),
+                     "doubled", 1},
+        // Could wrap past 2^31 and reorder the indices.
+        KeptSortCase{"UnboundedOffset", std::string(kSpmdComparator),
+                     "unbounded_offset", 1},
+        KeptSortCase{"OffsetPast2To31", std::string(kSpmdComparator),
+                     "far_offset", 1},
+        KeptSortCase{"IndexPlusOffsetPast2To31", std::string(kSpmdComparator),
+                     "near_offset", 1},
+        KeptSortCase{"OtherDimension", std::string(kSpmdComparator), "offset",
+                     0}),
     [](const ::testing::TestParamInfo<KeptSortCase>& info) {
       return info.param.name;
     });

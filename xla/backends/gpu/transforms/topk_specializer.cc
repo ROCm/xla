@@ -17,8 +17,10 @@ limitations under the License.
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -513,26 +515,80 @@ const HloCustomCallInstruction* ReadTritonTopKOutput(const HloInstruction* inst,
   return topk;
 }
 
-// Returns true if `offset` is the offset that SPMD partitioning adds to the
-// indices of a TopK over rows of `n` elements: a partition number times `n`,
-// broadcast. Adding it keeps the order of the indices because the sums are
-// indices into the unpartitioned rows, which are s32. Any other offset could
-// wrap past 2^31 and reorder them.
-bool IsPartitionIndexOffset(const HloInstruction* offset, int64_t n) {
-  if (offset->opcode() != HloOpcode::kBroadcast ||
-      !ShapeUtil::IsEffectiveScalar(offset->operand(0)->shape())) {
-    return false;
+// Returns an upper bound of the integer scalar `inst` if it is provably in
+// [0, 2^31): a constant, the partition id, an entry of a constant table (which
+// is how SPMD partitioning reads the number of a partition in its group), or
+// conversions and products of these. Returns std::nullopt otherwise.
+std::optional<int64_t> NonNegativeUpperBound(const HloInstruction* inst) {
+  const PrimitiveType type = inst->shape().element_type();
+  if (!primitive_util::IsIntegralType(type) ||
+      primitive_util::BitWidth(type) < 32 ||
+      !ShapeUtil::IsEffectiveScalar(inst->shape())) {
+    return std::nullopt;
   }
-  const HloInstruction* product = offset->operand(0);
-  return product->opcode() == HloOpcode::kMultiply &&
-         absl::c_any_of(product->operands(), [n](const HloInstruction* factor) {
-           return factor->IsConstant() &&
-                  factor->literal().GetFirstInteger() == n;
-         });
+  std::optional<int64_t> bound;
+  switch (inst->opcode()) {
+    case HloOpcode::kConvert:
+    case HloOpcode::kReshape:
+    case HloOpcode::kBitcast:
+      bound = NonNegativeUpperBound(inst->operand(0));
+      break;
+    case HloOpcode::kConstant:
+      bound = inst->literal().GetFirstInteger();
+      break;
+    case HloOpcode::kPartitionId:
+      if (inst->GetModule() != nullptr) {
+        bound = inst->GetModule()->config().num_partitions() - 1;
+      }
+      break;
+    case HloOpcode::kDynamicSlice: {
+      const HloInstruction* table = inst->operand(0);
+      if (!table->IsConstant() || table->shape().dimensions().size() != 1) {
+        return std::nullopt;
+      }
+      bound = 0;
+      for (int64_t j = 0; j < table->shape().dimensions(0); ++j) {
+        std::optional<int64_t> entry = table->literal().GetIntegralAsS64({j});
+        if (!entry.has_value() || *entry < 0) {
+          return std::nullopt;
+        }
+        bound = std::max(*bound, *entry);
+      }
+      break;
+    }
+    case HloOpcode::kMultiply: {
+      std::optional<int64_t> lhs = NonNegativeUpperBound(inst->operand(0));
+      std::optional<int64_t> rhs = NonNegativeUpperBound(inst->operand(1));
+      if (lhs.has_value() && rhs.has_value()) {
+        bound = *lhs * *rhs;
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  if (!bound.has_value() || *bound < 0 ||
+      *bound > std::numeric_limits<int32_t>::max()) {
+    return std::nullopt;
+  }
+  return bound;
 }
 
-// Returns the Triton TopK whose indices `inst` holds, possibly plus the
-// partition offset of SPMD partitioning, or nullptr.
+// Returns true if adding `offset` to the indices of a TopK over rows of `n`
+// elements keeps their order: `offset` broadcasts one non-negative scalar and
+// the sums stay below 2^31. SPMD partitioning adds such an offset, the number
+// of the partition times `n`.
+bool KeepsIndexOrder(const HloInstruction* offset, int64_t n) {
+  if (offset->opcode() != HloOpcode::kBroadcast) {
+    return false;
+  }
+  std::optional<int64_t> bound = NonNegativeUpperBound(offset->operand(0));
+  return bound.has_value() &&
+         *bound + n - 1 <= std::numeric_limits<int32_t>::max();
+}
+
+// Returns the Triton TopK whose indices `inst` holds, possibly plus an offset
+// that keeps their order, or nullptr.
 const HloCustomCallInstruction* ReadTritonTopKIndices(
     const HloInstruction* inst) {
   if (inst->opcode() == HloOpcode::kAdd) {
@@ -540,9 +596,8 @@ const HloCustomCallInstruction* ReadTritonTopKIndices(
       const HloCustomCallInstruction* topk =
           ReadTritonTopKOutput(inst->operand(i), 1);
       if (topk != nullptr &&
-          IsPartitionIndexOffset(
-              inst->operand(1 - i),
-              topk->operand(0)->shape().dimensions().back())) {
+          KeepsIndexOrder(inst->operand(1 - i),
+                          topk->operand(0)->shape().dimensions().back())) {
         return topk;
       }
     }
