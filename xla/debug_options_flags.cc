@@ -623,7 +623,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_experimental_enable_tensor_ir(false);
   opts.set_xla_gpu_experimental_enable_triton_scan(true);
   opts.set_xla_gpu_experimental_multi_phase_fusion(false);
-  opts.set_xla_gpu_experimental_while_loop_sink_broadcast_constants(false);
+  opts.set_xla_gpu_experimental_while_loop_sink_broadcast_constants(true);
   opts.set_xla_gpu_async_copy_min_bytes(-1);
 
   // Disable float checks.
