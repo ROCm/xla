@@ -98,6 +98,14 @@ jobs:
       fail-fast: false
       matrix:
         mode:
+          # Mirrors the stacks the XLA UT nightly matrix covers. That job
+          # selects ROCm by tarball (ROCM_DISTRO_URL); JAX installs TheRock
+          # from pip instead, so the same stack is named by index + version.
+          - name: "therock_lts_release_7.14.1"
+            # Wheel equivalent of the LTS tarball the UT matrix builds: the
+            # release channel's multi-arch index, which carries 7.14.x.
+            index_url: "https://repo.amd.com/rocm/whl-multi-arch/rocm_sdk_core-7.14.1-py3-none-linux_x86_64.whl"
+            version: "7.14.1"
           - name: "therock_release"
             index_url: "https://stable.repo.amd.com/rocm/whl-next/"
             version: "10.0.0"
