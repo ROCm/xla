@@ -77,9 +77,9 @@ Bazel picks the TheRock tarball from these flags, which the `main` CI jobs all p
 
 - **Keep `ROCM_PATH` empty, and don't pass `--rocm_path` to `build/build.py`.** A non-empty `ROCM_PATH` takes priority over `ROCM_DISTRO_URL`, so Bazel would use a local ROCm install instead of the tarball.
 - TheRock 10.0.0 is also XLA's default hermetic ROCm (`rocm_latest_multiarch` in [`third_party/gpus/rocm/rocm_redist.bzl`](https://github.com/openxla/xla/blob/main/third_party/gpus/rocm/rocm_redist.bzl)); the two `ROCM_DISTRO_*` flags pin it explicitly.
-- To build against a TheRock nightly, set `ROCM_DISTRO_HASH=no_hash` (which skips the checksum) and point `ROCM_DISTRO_URL` at that nightly's tarball. The nightly URL differs between release lines and is subject to change, so check the `therock_nightly` entries in [`rocm_xla_ci_nightly.yml`](.github/workflows/rocm_xla_ci_nightly.yml) and [`rocm_xla_ci_jax.yml`](.github/workflows/rocm_xla_ci_jax.yml) for the current ones. At the time of writing:
+- To build against a TheRock nightly, set `ROCM_DISTRO_HASH=no_hash` (which skips the checksum) and point `ROCM_DISTRO_URL` at that nightly's tarball. The nightly URL differs between release lines and is subject to change, so check the `therock_nightly` stack in [`build_tools/rocm/nightly_rocm_stacks.py`](build_tools/rocm/nightly_rocm_stacks.py) for the current one. At the time of writing:
   - **10.1:** `https://rocm.nightlies.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-<version>.tar.gz`, with the version index at `https://rocm.nightlies.amd.com/whl-multi-arch/`.
-  - **10.2:** `https://nightly.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-<version>.tar.gz`, with the version index at `https://nightly.repo.amd.com/rocm/whl-next/`.
+  - **10.2 and 10.3:** `https://nightly.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-<version>.tar.gz`, with the version index at `https://nightly.repo.amd.com/rocm/whl-next/`.
 
   To print the latest `<version>`, pass the line's version index and number, for example for 10.2:
 
