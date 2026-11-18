@@ -85,6 +85,7 @@ jobs:
     needs: rocm-config
     if: github.event_name != 'pull_request_target' || github.event.label.name == 'sanitizers'
     runs-on: amd-do-linux-xla-gpu-gfx950-dpx-8
+    timeout-minutes: 960
     env:
       COMMON_ARGS: >-
         --config=rocm_ci_hermetic
