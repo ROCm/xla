@@ -211,6 +211,38 @@ TEST(TopKKernelConfigTest, SingleKernelHasNoMergeOrScratch) {
   EXPECT_FALSE(GetTopKMergeConfig(spec, *config, mi350).has_value());
 }
 
+TEST(TopKKernelConfigTest, SelectionDependsOnKAndTheRowLength) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  auto selection = [&](const TopKKernelSpec& spec) {
+    std::optional<TopKKernelConfig> config = GetTopKKernelConfig(spec, mi350);
+    EXPECT_TRUE(config.has_value());
+    return config.has_value() ? config->selection : TopKSelection::kRounds;
+  };
+  EXPECT_EQ(selection(Spec(24576, 64, 6, BF16)), TopKSelection::kRounds);
+  EXPECT_EQ(selection(Spec(8, 64, 9)), TopKSelection::kBitonic);
+  EXPECT_EQ(selection(Spec(8, 65, 16)), TopKSelection::kRounds);
+  EXPECT_EQ(selection(Spec(8, 2048, 17)), TopKSelection::kBitonic);
+  EXPECT_EQ(selection(Spec(8, 2049, 32)), TopKSelection::kRounds);
+  EXPECT_EQ(selection(Spec(8, 4096, 33)), TopKSelection::kBitonic);
+  EXPECT_EQ(selection(Spec(8, 8192, 128)), TopKSelection::kBitonic);
+  EXPECT_EQ(selection(Spec(8, 8193, 128)), TopKSelection::kRounds);
+}
+
+TEST(TopKKernelConfigTest, ChunkAndMergeChooseTheirSelectionsApart) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  // Chunks of 4096 for k = 9, and a merge of 5 * 9 candidates.
+  const TopKKernelSpec spec = Spec(2, 16385, 9);
+  std::optional<TopKKernelConfig> config = GetTopKKernelConfig(spec, mi350);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_EQ(config->block_n, 4096);
+  EXPECT_EQ(config->selection, TopKSelection::kRounds);
+  std::optional<TopKKernelConfig> merge_config =
+      GetTopKMergeConfig(spec, *config, mi350);
+  ASSERT_TRUE(merge_config.has_value());
+  EXPECT_EQ(merge_config->block_n, 64);
+  EXPECT_EQ(merge_config->selection, TopKSelection::kBitonic);
+}
+
 TEST(TopKKernelConfigTest, ToStringShowsChunksOnlyWhenSplit) {
   TopKKernelConfig config{4096, 1, 8, 64};
   EXPECT_EQ(config.ToString(),
@@ -219,6 +251,14 @@ TEST(TopKKernelConfigTest, ToStringShowsChunksOnlyWhenSplit) {
   EXPECT_EQ(config.ToString(),
             "block_n=4096 rows_per_program=1 num_warps=8 num_programs=64 "
             "num_chunks=8");
+}
+
+TEST(TopKKernelConfigTest, ToStringShowsOnlyTheBitonicSelection) {
+  TopKKernelConfig config{4096, 1, 8, 64};
+  config.selection = TopKSelection::kBitonic;
+  EXPECT_EQ(config.ToString(),
+            "block_n=4096 rows_per_program=1 num_warps=8 num_programs=64 "
+            "selection=bitonic");
 }
 
 class TopKCustomCallTest : public HloHardwareIndependentTestBase {

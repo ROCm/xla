@@ -294,8 +294,11 @@ std::vector<GridCase> GridCases() {
         }
       }
     }
-    // The largest tiles on MI350: chunks of 16384 keys and their merge.
+    // The largest tiles on MI350: chunks of 16384 keys and their merge, and
+    // bitonic selections over 8192 keys in one program and in a merge.
     cases.push_back({type, {2, 1 << 24, 16}});
+    cases.push_back({type, {2, 8192, 128}});
+    cases.push_back({type, {1, 1 << 18, 128}});
     // No kernel config fits, so the forced TopK keeps the default path.
     cases.push_back({type, {2, 1 << 24, 128}});
   }

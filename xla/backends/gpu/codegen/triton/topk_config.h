@@ -60,6 +60,16 @@ enum class TopKKernelKind {
   kMerge,
 };
 
+// How a Triton TopK kernel selects the top `k` keys of each row.
+enum class TopKSelection {
+  // `k` rounds; each moves the largest remaining key of the row to the output.
+  kRounds,
+  // The bitonic top-k of Triton's tl.topk: sorts groups of `k` keys, then
+  // halves the row until one group is left, keeping the larger key of each
+  // pair of groups and sorting the groups again.
+  kBitonic,
+};
+
 // Launch configuration of one Triton TopK kernel, where each program owns
 // `rows_per_program` rows of `block_n` elements.
 struct TopKKernelConfig {
@@ -71,6 +81,7 @@ struct TopKKernelConfig {
   int64_t num_programs;
   // Chunks of `block_n` elements per row: 1 for kSingle and kMerge.
   int64_t num_chunks = 1;
+  TopKSelection selection = TopKSelection::kRounds;
 
   std::string ToString() const;
 };

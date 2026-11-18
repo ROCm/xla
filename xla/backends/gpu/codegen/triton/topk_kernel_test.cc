@@ -70,11 +70,11 @@ class TopKKernelTest : public ::testing::Test {
     return *config;
   }
 
-  // Builds the kernel `kind` with the configurations of the routing rule and
-  // returns its IR as text.
+  // Builds the kernel `kind` with the configurations of the routing rule, but
+  // `selection`, and returns its IR as text.
   absl::StatusOr<std::string> Build(
-      const TopKKernelSpec& spec,
-      TopKKernelKind kind = TopKKernelKind::kSingle) {
+      const TopKKernelSpec& spec, TopKKernelKind kind = TopKKernelKind::kSingle,
+      TopKSelection selection = TopKSelection::kRounds) {
     TopKKernelSpec kernel_spec = spec;
     ABSL_ASSIGN_OR_RETURN(TopKKernelConfig config, Config(spec));
     if (kind == TopKKernelKind::kMerge) {
@@ -87,6 +87,7 @@ class TopKKernelTest : public ::testing::Test {
       kernel_spec = GetTopKMergeSpec(spec, config);
       config = *merge_config;
     }
+    config.selection = selection;
     ABSL_ASSIGN_OR_RETURN(
         mlir::OwningOpRef<mlir::ModuleOp> module,
         BuildTopKKernel(kernel_spec, config, kind, "topk", context_));
@@ -173,6 +174,47 @@ TEST_F(TopKKernelTest, MergeKernelReadsKeysFromScratch) {
   EXPECT_THAT(ir, HasSubstr(": tensor<2x16x!tt.ptr<i32>>"));
 }
 
+TEST_F(TopKKernelTest, BitonicKernel) {
+  // block_n = 128, rows_per_program = 32, k rounded up to 8: a hypercube of
+  // 5 + 7 dimensions, merged down to 5 + 3.
+  ASSERT_OK_AND_ASSIGN(std::string ir,
+                       Build(Spec(64, 128, 8), TopKKernelKind::kSingle,
+                             TopKSelection::kBitonic));
+  EXPECT_THAT(ir, Not(HasSubstr("scf.for")));
+  EXPECT_THAT(ir, HasSubstr("tensor<32x128xi64> -> "
+                            "tensor<2x2x2x2x2x2x2x2x2x2x2x2xi64>"));
+  EXPECT_THAT(ir, HasSubstr("arith.xori"));
+  EXPECT_THAT(ir, HasSubstr("arith.cmpi ugt"));
+  EXPECT_THAT(ir, HasSubstr("arith.maxui"));
+  EXPECT_THAT(ir, HasSubstr("tensor<2x2x2x2x2x2x2x2xi64> -> tensor<32x8xi64>"));
+  EXPECT_THAT(ir, HasSubstr(": tensor<32x8x!tt.ptr<f32>>"));
+}
+
+TEST_F(TopKKernelTest, BitonicKernelOfOneKey) {
+  // k = 1 is a plain row maximum.
+  ASSERT_OK_AND_ASSIGN(std::string ir,
+                       Build(Spec(64, 128, 1), TopKKernelKind::kSingle,
+                             TopKSelection::kBitonic));
+  EXPECT_THAT(ir, Not(HasSubstr("tt.reshape")));
+  EXPECT_THAT(ir, HasSubstr("arith.maxui"));
+  EXPECT_THAT(ir, HasSubstr("tensor<32xi64> -> tensor<32x1xi64>"));
+}
+
+TEST_F(TopKKernelTest, BitonicChunkAndMergeKernels) {
+  ASSERT_OK_AND_ASSIGN(std::string chunk,
+                       Build(Spec(2, 20000, 16), TopKKernelKind::kChunk,
+                             TopKSelection::kBitonic));
+  EXPECT_THAT(chunk, Not(HasSubstr("scf.for")));
+  EXPECT_THAT(chunk, HasSubstr("tensor<1x4096xi64> -> tensor<"));
+  EXPECT_THAT(chunk, HasSubstr(": tensor<1x16x!tt.ptr<i64>>"));
+  ASSERT_OK_AND_ASSIGN(std::string merge,
+                       Build(Spec(2, 20000, 16, BF16), TopKKernelKind::kMerge,
+                             TopKSelection::kBitonic));
+  EXPECT_THAT(merge, Not(HasSubstr("scf.for")));
+  EXPECT_THAT(merge, HasSubstr("tensor<2x128xi64> -> tensor<"));
+  EXPECT_THAT(merge, HasSubstr(": tensor<2x16x!tt.ptr<i32>>"));
+}
+
 TEST_F(TopKKernelTest, RejectsChunkConfigsThatDoNotCoverTheRow) {
   TopKKernelSpec spec = Spec(2, 20000, 16);
   ASSERT_OK_AND_ASSIGN(TopKKernelConfig config, Config(spec));
@@ -219,11 +261,15 @@ TEST_F(TopKKernelTest, RejectsChunksNarrowerThanK) {
   config.num_chunks = 16;
   config.rows_per_program = 1;
   config.num_programs = 32;
-  EXPECT_THAT(
-      BuildTopKKernel(spec, config, TopKKernelKind::kChunk, "topk", context_)
-          .status(),
-      StatusIs(absl::StatusCode::kInvalidArgument,
-               HasSubstr("does not cover")));
+  for (TopKSelection selection :
+       {TopKSelection::kRounds, TopKSelection::kBitonic}) {
+    config.selection = selection;
+    EXPECT_THAT(
+        BuildTopKKernel(spec, config, TopKKernelKind::kChunk, "topk", context_)
+            .status(),
+        StatusIs(absl::StatusCode::kInvalidArgument,
+                 HasSubstr("does not cover")));
+  }
 }
 
 TEST_F(TopKKernelTest, RejectsConfigsThatDoNotCoverTheInput) {
@@ -287,27 +333,33 @@ TEST_F(TopKKernelTest, EveryConfigOfTheRuleBuilds) {
                 GetTopKMergeConfig(spec, *config, mi350);
             ASSERT_EQ(merge_config.has_value(), config->num_chunks > 1)
                 << spec.ToString();
-            ++built;
-            if (config->num_chunks == 1) {
-              EXPECT_THAT(
-                  BuildTopKKernel(spec, *config, TopKKernelKind::kSingle,
-                                  "topk", context_)
-                      .status(),
-                  IsOk())
+            for (TopKSelection selection :
+                 {TopKSelection::kRounds, TopKSelection::kBitonic}) {
+              config->selection = selection;
+              if (config->num_chunks == 1) {
+                EXPECT_THAT(
+                    BuildTopKKernel(spec, *config, TopKKernelKind::kSingle,
+                                    "topk", context_)
+                        .status(),
+                    IsOk())
+                    << spec.ToString() << " " << config->ToString();
+                ++built;
+                continue;
+              }
+              EXPECT_THAT(BuildTopKKernel(spec, *config, TopKKernelKind::kChunk,
+                                          "topk", context_)
+                              .status(),
+                          IsOk())
                   << spec.ToString() << " " << config->ToString();
-              continue;
+              merge_config->selection = selection;
+              EXPECT_THAT(BuildTopKKernel(GetTopKMergeSpec(spec, *config),
+                                          *merge_config, TopKKernelKind::kMerge,
+                                          "topk", context_)
+                              .status(),
+                          IsOk())
+                  << spec.ToString() << " " << merge_config->ToString();
+              ++built;
             }
-            EXPECT_THAT(BuildTopKKernel(spec, *config, TopKKernelKind::kChunk,
-                                        "topk", context_)
-                            .status(),
-                        IsOk())
-                << spec.ToString() << " " << config->ToString();
-            EXPECT_THAT(
-                BuildTopKKernel(GetTopKMergeSpec(spec, *config), *merge_config,
-                                TopKKernelKind::kMerge, "topk", context_)
-                    .status(),
-                IsOk())
-                << spec.ToString() << " " << merge_config->ToString();
           }
         }
       }

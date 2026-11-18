@@ -23,6 +23,7 @@ limitations under the License.
 #include "absl/numeric/bits.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "re2/re2.h"
 #include "xla/comparison_util.h"
@@ -65,6 +66,9 @@ std::string TopKKernelConfig::ToString() const {
       rows_per_program, num_warps, num_programs);
   if (num_chunks > 1) {
     absl::StrAppendFormat(&s, " num_chunks=%d", num_chunks);
+  }
+  if (selection == TopKSelection::kBitonic) {
+    absl::StrAppend(&s, " selection=bitonic");
   }
   return s;
 }
@@ -162,6 +166,19 @@ std::optional<TopKKernelConfig> GetBlockConfig(
   return config;
 }
 
+// Sets how `config`, which keeps the top `k` keys of each row, selects them.
+// The k rounds grow with `k`; the bitonic selection pads `k` to a power of two
+// and grows faster with `block_n`. The thresholds come from MI350 measurements:
+// in each range of `k` below, the bitonic selection is at least as fast as the
+// k rounds at both ends.
+TopKKernelConfig WithSelection(int64_t k, TopKKernelConfig config) {
+  const int64_t block_k = NextPowerOfTwo(k);
+  const bool bitonic = (block_k >= 32 && config.block_n <= 64 * block_k) ||
+                       (block_k == 16 && config.block_n <= 64);
+  config.selection = bitonic ? TopKSelection::kBitonic : TopKSelection::kRounds;
+  return config;
+}
+
 }  // namespace
 
 std::optional<TopKKernelConfig> GetTopKKernelConfig(
@@ -169,7 +186,7 @@ std::optional<TopKKernelConfig> GetTopKKernelConfig(
   const int64_t block_n = NextPowerOfTwo(spec.n);
   if (std::optional<TopKKernelConfig> single =
           GetBlockConfig(spec.batch, block_n, device)) {
-    return single;
+    return WithSelection(spec.k, *single);
   }
   // Rows too long for one program are split into chunks. Longer chunks leave
   // fewer candidates for the merge step, whose row must fit one program.
@@ -182,7 +199,7 @@ std::optional<TopKKernelConfig> GetTopKKernelConfig(
     }
     config->num_chunks = num_chunks;
     if (GetTopKMergeConfig(spec, *config, device).has_value()) {
-      return config;
+      return WithSelection(spec.k, *config);
     }
   }
   return std::nullopt;
@@ -201,8 +218,12 @@ std::optional<TopKKernelConfig> GetTopKMergeConfig(
   if (config.num_chunks <= 1) {
     return std::nullopt;
   }
-  return GetBlockConfig(
+  std::optional<TopKKernelConfig> merge = GetBlockConfig(
       spec.batch, NextPowerOfTwo(GetTopKMergeSpec(spec, config).n), device);
+  if (!merge.has_value()) {
+    return std::nullopt;
+  }
+  return WithSelection(spec.k, *merge);
 }
 
 int64_t GetTopKScratchElements(const TopKKernelSpec& spec,
