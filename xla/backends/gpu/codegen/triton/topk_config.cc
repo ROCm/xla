@@ -143,6 +143,9 @@ absl::Status CheckTopKKernelLimits(const TopKKernelSpec& spec) {
     return InvalidArgument("unsupported order %s",
                            ComparisonOrderToString(spec.order));
   }
+  if (spec.batch < 1) {
+    return InvalidArgument("batch=%d is not at least 1", spec.batch);
+  }
   if (spec.k < 1 || spec.k > kMaxK) {
     return InvalidArgument("k=%d outside [1, %d]", spec.k, kMaxK);
   }

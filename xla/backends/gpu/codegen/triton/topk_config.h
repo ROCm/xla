@@ -91,7 +91,7 @@ absl::StatusOr<TopKKernelSpec> GetTopKKernelSpec(
     const HloCustomCallInstruction& topk);
 
 // Checks what the kernels support regardless of the device: f32 or bf16, TOTAL
-// or PARTIAL order, 1 <= k <= 128, n < 2^31 and k/n < 0.85.
+// or PARTIAL order, batch >= 1, 1 <= k <= 128, n < 2^31 and k/n < 0.85.
 absl::Status CheckTopKKernelLimits(const TopKKernelSpec& spec);
 
 // Picks the configuration of the first kernel for `spec` on `device`: kSingle

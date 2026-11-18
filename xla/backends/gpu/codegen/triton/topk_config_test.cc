@@ -69,6 +69,8 @@ TEST(TopKKernelLimitsTest, RejectsUnsupportedSpecs) {
               StatusIs(absl::StatusCode::kInvalidArgument));
   EXPECT_THAT(CheckTopKKernelLimits(Spec(8, 1024, 0)),
               StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(CheckTopKKernelLimits(Spec(0, 1024, 8)),
+              StatusIs(absl::StatusCode::kInvalidArgument));
   EXPECT_THAT(CheckTopKKernelLimits(Spec(8, 16, 14)),
               StatusIs(absl::StatusCode::kInvalidArgument));
   EXPECT_THAT(CheckTopKKernelLimits(Spec(1, int64_t{1} << 31, 8)),

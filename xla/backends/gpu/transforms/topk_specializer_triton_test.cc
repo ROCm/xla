@@ -226,6 +226,7 @@ INSTANTIATE_TEST_SUITE_P(
         RejectedCase{"F16", "f16[8,1000]", "f16[8,32]", "s32[8,32]"},
         RejectedCase{"KAboveLimit", "f32[8,1000]", "f32[8,129]", "s32[8,129]"},
         RejectedCase{"KCloseToN", "f32[8,16]", "f32[8,14]", "s32[8,14]"},
+        RejectedCase{"EmptyBatch", "f32[0,1000]", "f32[0,32]", "s32[0,32]"},
         // 1024 chunks of 16384 leave 131072 candidates to merge.
         RejectedCase{"TooManyCandidates", "f32[1,16777216]", "f32[1,128]",
                      "s32[1,128]"}),
