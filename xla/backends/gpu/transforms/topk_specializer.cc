@@ -711,8 +711,8 @@ absl::StatusOr<HloInstruction*> SmallBufferOptimization(
   return TupleUtil::ExtractPrefix(new_topk, 2);
 }
 
-// Whether the Triton TopK kernels take `topk` on `device`. Only forced TopKs
-// are taken.
+// Whether the Triton TopK kernels take `topk` on `device`. Without `force`,
+// only shapes where the kernels were measured faster on the device are taken.
 Decision ShouldUseTritonTopK(const HloCustomCallInstruction* topk,
                              const se::DeviceDescription& device, bool force) {
   absl::StatusOr<TopKKernelSpec> spec = GetTopKKernelSpec(*topk);
@@ -727,8 +727,9 @@ Decision ShouldUseTritonTopK(const HloCustomCallInstruction* topk,
     return Decision::Forbid(absl::StrCat(
         spec->ToString(), ": no kernel config fits ", device.name()));
   }
-  if (!force) {
-    return Decision::Forbid(absl::StrCat(spec->ToString(), ": not forced"));
+  if (!force && !IsTritonTopKFaster(*spec, device)) {
+    return Decision::Forbid(absl::StrCat(
+        spec->ToString(), ": not measured faster on ", device.name()));
   }
   return Decision::Allow();
 }

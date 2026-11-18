@@ -116,6 +116,12 @@ std::optional<TopKKernelConfig> GetTopKMergeConfig(
 int64_t GetTopKScratchElements(const TopKKernelSpec& spec,
                                const TopKKernelConfig& config);
 
+// Returns true if the Triton kernels were measured faster than the default
+// TopK path for `spec` on `device`. Only MI350 has been measured; other devices
+// return false.
+bool IsTritonTopKFaster(const TopKKernelSpec& spec,
+                        const se::DeviceDescription& device);
+
 // The backend config of a __gpu$TopK custom call computed by the Triton TopK
 // kernels carries `impl = "triton"`.
 bool IsTritonTopK(const HloCustomCallInstruction& topk);

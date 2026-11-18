@@ -261,6 +261,66 @@ TEST(TopKKernelConfigTest, ToStringShowsOnlyTheBitonicSelection) {
             "selection=bitonic");
 }
 
+TEST(TopKRoutingTest, Mi350TakesTheMoEShapes) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(24576, 64, 6, BF16), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(196608, 64, 6, BF16), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(24576, 32, 4, BF16), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(24576, 8, 2, BF16), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(24576, 64, 6, F32), mi350));
+}
+
+TEST(TopKRoutingTest, Mi350KeepsPaddedShortRowsWithMidK) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(64, 65, 8), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(64, 64, 8), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(1, 65, 8), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(1024, 65, 8), mi350));
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(1024, 257, 16), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(1024, 513, 16), mi350));
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(1024, 513, 16, BF16), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(1024, 33, 16, BF16), mi350));
+}
+
+TEST(TopKRoutingTest, Mi350KeepsLargeKOnRowsOf4KTo16K) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(1024, 8192, 64, BF16), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(1024, 8192, 64), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(1024, 8192, 32, BF16), mi350));
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(8, 16384, 128), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(8, 8192, 128), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(16384, 16384, 128), mi350));
+}
+
+TEST(TopKRoutingTest, Mi350KeepsOneLongF32RowWithLargeK) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(1, 1 << 20, 128), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(2, 1 << 20, 128), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(1, 1 << 20, 32), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(1, 1 << 20, 128, BF16), mi350));
+}
+
+TEST(TopKRoutingTest, Mi350TakesOtherShapes) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(512, 1024, 128), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(8, 65536, 128), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(8, 32768, 64, BF16), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(4096, 32768, 8), mi350));
+  EXPECT_TRUE(IsTritonTopKFaster(Spec(8, 1 << 24, 16), mi350));
+}
+
+TEST(TopKRoutingTest, Mi350KeepsOtherTypes) {
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(24576, 64, 6, F16),
+                                  TestGpuDeviceInfo::AMDMI350DeviceInfo()));
+}
+
+TEST(TopKRoutingTest, OtherDevicesKeepTheDefaultPath) {
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(24576, 64, 6, BF16),
+                                  TestGpuDeviceInfo::AMDMI300DeviceInfo()));
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(24576, 64, 6, BF16),
+                                  TestGpuDeviceInfo::H100SXMDeviceInfo()));
+}
+
 class TopKCustomCallTest : public HloHardwareIndependentTestBase {
  protected:
   absl::StatusOr<HloCustomCallInstruction*> ParseTopK(

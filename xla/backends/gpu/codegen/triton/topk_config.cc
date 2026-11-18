@@ -32,6 +32,7 @@ limitations under the License.
 #include "xla/primitive_util.h"
 #include "xla/shape.h"
 #include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
 
@@ -47,6 +48,45 @@ constexpr int64_t kTargetKeysPerThread = 8;
 // Each 64-bit key takes two registers per thread.
 constexpr int64_t kMaxKeysPerThread = 32;
 constexpr int64_t kMaxNumWarps = 8;
+
+// MI350 (gfx950): the Triton kernels are faster than the default path except
+// in the regions below, measured on stable TOTAL-order TopKs of random data
+// for rows of 2 to 2^24 elements, batches of 1 to 2^18 and k up to 128. Rows
+// that are not a power of two were measured at the length just above one, where
+// the kernels pad the most.
+bool IsTritonTopKFasterOnMi350(const TopKKernelSpec& spec) {
+  const bool bf16 = spec.input_type == BF16;
+  if (!bf16 && spec.input_type != F32) {
+    return false;
+  }
+  const int64_t batch = spec.batch, n = spec.n, k = spec.k;
+  const bool padded = !absl::has_single_bit(static_cast<uint64_t>(n));
+  // The k rounds scan the row padded to a power of two, up to twice its
+  // length.
+  if (padded && batch > 1 && batch <= 64 && n > 16 && n <= 256 && k >= 5 &&
+      k <= 8) {
+    return false;
+  }
+  if (padded && batch > 1 && n > 64 && n <= (bf16 ? 1024 : 512) && k >= 9 &&
+      k <= 16) {
+    return false;
+  }
+  // Rows of up to 16K keys fit one program, which runs the k rounds (up to
+  // 128) over the whole padded row; longer rows are split into chunks that run
+  // in parallel.
+  if (bf16 && n > 4096 && n <= 16384 && k > 32 && k <= 64) {
+    return false;
+  }
+  if (n > 8192 && n <= 16384 && k > 64 && batch < 16384) {
+    return false;
+  }
+  // One long f32 row: merging the candidates of its chunks takes most of the
+  // time.
+  if (!bf16 && batch == 1 && n > (1 << 18) && k > 32) {
+    return false;
+  }
+  return true;
+}
 
 int64_t NextPowerOfTwo(int64_t x) {
   return static_cast<int64_t>(absl::bit_ceil(static_cast<uint64_t>(x)));
@@ -229,6 +269,14 @@ std::optional<TopKKernelConfig> GetTopKMergeConfig(
 int64_t GetTopKScratchElements(const TopKKernelSpec& spec,
                                const TopKKernelConfig& config) {
   return config.num_chunks > 1 ? spec.batch * config.num_chunks * spec.k : 0;
+}
+
+bool IsTritonTopKFaster(const TopKKernelSpec& spec,
+                        const se::DeviceDescription& device) {
+  const se::RocmComputeCapability* rocm =
+      device.gpu_compute_capability().rocm_compute_capability();
+  return rocm != nullptr && rocm->gfx9_mi350() &&
+         IsTritonTopKFasterOnMi350(spec);
 }
 
 bool IsTritonTopK(const HloCustomCallInstruction& topk) {

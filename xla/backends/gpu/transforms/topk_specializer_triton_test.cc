@@ -128,13 +128,37 @@ TEST_F(TopkSpecializerTritonTest, FlagOffKeepsTopK) {
   EXPECT_FALSE(changed);
 }
 
-TEST_F(TopkSpecializerTritonTest, FlagOnWithoutForceKeepsTopK) {
+TEST_F(TopkSpecializerTritonTest,
+       FlagOnKeepsShapesWhereTheDefaultPathIsFaster) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                        ParseTopK("f32[8,16384]", "f32[8,128]", "s32[8,128]", "",
                                  TritonTopKFlags::kOn));
   ASSERT_OK_AND_ASSIGN(
       bool changed,
       RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                 module.get()));
+  EXPECT_FALSE(changed);
+}
+
+TEST_F(TopkSpecializerTritonTest, FlagOnRoutesShapesWhereTritonIsFaster) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseTopK("bf16[24576,64]", "bf16[24576,6]",
+                                 "s32[24576,6]", "", TritonTopKFlags::kOn));
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                 module.get()));
+  EXPECT_TRUE(changed);
+  ExpectMarkedTopK(*module, /*stable=*/true, ComparisonOrder::kTotal);
+}
+
+TEST_F(TopkSpecializerTritonTest, FlagOnDoesNotRouteOnUnmeasuredGpus) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseTopK("bf16[24576,64]", "bf16[24576,6]",
+                                 "s32[24576,6]", "", TritonTopKFlags::kOn));
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI300DeviceInfo()),
                  module.get()));
   EXPECT_FALSE(changed);
   EXPECT_FALSE(HasTritonTopK(*module));
@@ -271,6 +295,35 @@ TEST_F(TopkSpecializerTritonTest, ForcedTopKKeepsTheMetadata) {
     }
     EXPECT_TRUE(HasTritonTopK(*module));
   }
+}
+
+TEST_F(TopkSpecializerTritonTest, FlagOnRoutesLongRows) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseTopK("f32[8,65536]", "f32[8,8]", "s32[8,8]", "",
+                                 TritonTopKFlags::kOn));
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                 module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_TRUE(HasTritonTopK(*module));
+  EXPECT_EQ(module->entry_computation()->root_instruction()->opcode(),
+            HloOpcode::kTuple);
+}
+
+TEST_F(TopkSpecializerTritonTest, OneLongRowWithLargeKKeepsTheDefaultPath) {
+  // Merging the candidates of the chunks costs more than the default sort.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseTopK("f32[1,1048576]", "f32[1,128]", "s32[1,128]",
+                                 "", TritonTopKFlags::kOn));
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                 module.get()));
+  EXPECT_FALSE(changed);
+  EXPECT_FALSE(HasTritonTopK(*module));
+  EXPECT_TRUE(
+      module->entry_computation()->root_instruction()->IsCustomCall("TopK"));
 }
 
 constexpr absl::string_view kDeferredPackedBf16 =
