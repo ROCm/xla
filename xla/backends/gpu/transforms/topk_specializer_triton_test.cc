@@ -16,12 +16,14 @@ limitations under the License.
 // Routing of TopK to the Triton TopK kernels on ROCm. Runs on the CPU with the
 // device descriptions of TestGpuDeviceInfo.
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/algorithm/container.h"
 #include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -364,6 +366,331 @@ TEST_F(TopkSpecializerTritonTest, RowLimitFollowsTheWaveSize) {
               chunked ? HloOpcode::kTuple : HloOpcode::kCustomCall);
   }
 }
+
+// The comparator SPMD partitioning gives the merge sort after a TopK: values in
+// descending total order, ties by ascending index.
+constexpr absl::string_view kSpmdComparator = R"hlo(
+        eq = pred[] compare(v0, v1), direction=EQ, type=TOTALORDER
+        lt = pred[] compare(i0, i1), direction=LT
+        gt = pred[] compare(v0, v1), direction=GT, type=TOTALORDER
+        ROOT r = pred[] select(eq, lt, gt))hlo";
+
+class TopkSpecializerTritonSortTest : public TopkSpecializerTritonTest {
+ protected:
+  // Parses a TopK of `p` = `type[in]` into `type[out]` followed by a sort of
+  // its values `v` and of `indices` along `dimension`, compared by
+  // `comparator`. `indices` names one of the TopK indices `i`, `i` plus SPMD's
+  // offset, the number `o` of the partition in its group times the row length,
+  // on either side (`offset`, `offset_lhs`), `i` plus the partition id times
+  // the row length (`partition_offset`), offsets that can reach 2^31: a
+  // parameter times the row length (`unbounded_offset`), 2^25 times the row
+  // length (`far_offset`), 2^31 - 63 (`near_offset`), or `i + i` (`doubled`).
+  absl::StatusOr<std::unique_ptr<HloModule>> ParseTopKThenSort(
+      absl::string_view type, absl::string_view in, absl::string_view out,
+      absl::string_view backend_config, TritonTopKFlags flags,
+      absl::string_view comparator = kSpmdComparator,
+      absl::string_view indices = "offset", int64_t dimension = 1) {
+    std::string config_attr =
+        backend_config.empty()
+            ? ""
+            : absl::Substitute(", backend_config=$0", backend_config);
+    absl::string_view row_length = in.substr(in.rfind(',') + 1);
+    flags_ = flags;
+    return ParseAndReturnVerifiedModule(absl::Substitute(
+        R"hlo(
+      HloModule m
+      cmp {
+        v0 = $0[] parameter(0)
+        v1 = $0[] parameter(1)
+        i0 = s32[] parameter(2)
+        i1 = s32[] parameter(3)$4
+      }
+      ENTRY e {
+        p = $0[$1] parameter(0)
+        x = s32[] parameter(1)
+        t = ($0[$2], s32[$2]) custom-call(p), custom_call_target="TopK"$3
+        v = $0[$2] get-tuple-element(t), index=0
+        i = s32[$2] get-tuple-element(t), index=1
+        n = s32[] constant($7)
+        id = u32[] partition-id()
+        groups = u32[8] constant({0, 0, 1, 1, 2, 2, 3, 3})
+        group = u32[1] dynamic-slice(groups, id), dynamic_slice_sizes={1}
+        group_scalar = u32[] reshape(group)
+        o = s32[] convert(group_scalar)
+        on = s32[] multiply(o, n)
+        b = s32[$2] broadcast(on), dimensions={}
+        offset = s32[$2] add(i, b)
+        offset_lhs = s32[$2] add(b, i)
+        id_s32 = s32[] convert(id)
+        idn = s32[] multiply(id_s32, n)
+        bid = s32[$2] broadcast(idn), dimensions={}
+        partition_offset = s32[$2] add(i, bid)
+        xn = s32[] multiply(x, n)
+        bx = s32[$2] broadcast(xn), dimensions={}
+        unbounded_offset = s32[$2] add(i, bx)
+        far = s32[2] constant({0, 33554432})
+        far_slot = s32[1] dynamic-slice(far, id), dynamic_slice_sizes={1}
+        far_scalar = s32[] reshape(far_slot)
+        far_n = s32[] multiply(far_scalar, n)
+        bfar = s32[$2] broadcast(far_n), dimensions={}
+        far_offset = s32[$2] add(i, bfar)
+        near = s32[2] constant({0, 2147483585})
+        near_slot = s32[1] dynamic-slice(near, id), dynamic_slice_sizes={1}
+        near_scalar = s32[] reshape(near_slot)
+        bnear = s32[$2] broadcast(near_scalar), dimensions={}
+        near_offset = s32[$2] add(i, bnear)
+        doubled = s32[$2] add(i, i)
+        ROOT s = ($0[$2], s32[$2]) sort(v, $5), dimensions={$6}, to_apply=cmp
+      })hlo",
+        type, in, out, config_attr, comparator, indices, dimension,
+        row_length));
+  }
+
+  // Parses an entry computation of `body` with the bf16 SPMD comparator `cmp`,
+  // with the Triton TopK kernels forced.
+  absl::StatusOr<std::unique_ptr<HloModule>> ParseEntryWithSpmdComparator(
+      absl::string_view body) {
+    flags_ = TritonTopKFlags::kForced;
+    return ParseAndReturnVerifiedModule(absl::Substitute(
+        R"hlo(
+      HloModule m
+      cmp {
+        v0 = bf16[] parameter(0)
+        v1 = bf16[] parameter(1)
+        i0 = s32[] parameter(2)
+        i1 = s32[] parameter(3)$0
+      }
+      ENTRY e {$1
+      })hlo",
+        kSpmdComparator, body));
+  }
+
+  static bool HasSort(const HloModule& module) {
+    return absl::c_any_of(module.entry_computation()->instructions(),
+                          [](const HloInstruction* inst) {
+                            return inst->opcode() == HloOpcode::kSort;
+                          });
+  }
+
+  absl::StatusOr<bool> RunOnMi350(HloModule* module) {
+    return RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                      module);
+  }
+};
+
+TEST_F(TopkSpecializerTritonSortTest, RemovesTheSpmdMergeSortAfterTheTopK) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseTopKThenSort("bf16", "24576,64", "24576,6", "",
+                                         TritonTopKFlags::kForced));
+  ASSERT_OK_AND_ASSIGN(bool changed, RunOnMi350(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_TRUE(HasTritonTopK(*module));
+  EXPECT_FALSE(HasSort(*module));
+  const HloInstruction* root = module->entry_computation()->root_instruction();
+  ASSERT_EQ(root->opcode(), HloOpcode::kTuple);
+  EXPECT_EQ(root->operand(0)->opcode(), HloOpcode::kGetTupleElement);
+  EXPECT_EQ(root->operand(1)->name(), "offset");
+}
+
+TEST_F(TopkSpecializerTritonSortTest, RemovesTheSortOfOtherIndexForms) {
+  for (absl::string_view indices : {"i", "offset_lhs", "partition_offset"}) {
+    SCOPED_TRACE(indices);
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<HloModule> module,
+        ParseTopKThenSort("bf16", "24576,64", "24576,6", "",
+                          TritonTopKFlags::kForced, kSpmdComparator, indices));
+    ASSERT_OK_AND_ASSIGN(bool changed, RunOnMi350(module.get()));
+    EXPECT_TRUE(changed);
+    EXPECT_FALSE(HasSort(*module));
+  }
+}
+
+TEST_F(TopkSpecializerTritonSortTest, PartitionCountBoundsThePartitionOffset) {
+  // The largest partition id times 64, plus 63, must stay below 2^31.
+  for (auto [num_partitions, removed] :
+       {std::pair{int64_t{8}, true}, std::pair{int64_t{1} << 25, true},
+        std::pair{(int64_t{1} << 25) + 1, false}}) {
+    SCOPED_TRACE(num_partitions);
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<HloModule> module,
+        ParseTopKThenSort("bf16", "24576,64", "24576,6", "",
+                          TritonTopKFlags::kForced, kSpmdComparator,
+                          "partition_offset"));
+    module->mutable_config().set_num_partitions(num_partitions);
+    ASSERT_OK_AND_ASSIGN(bool changed, RunOnMi350(module.get()));
+    EXPECT_TRUE(changed);
+    EXPECT_EQ(HasSort(*module), !removed);
+  }
+}
+
+TEST_F(TopkSpecializerTritonSortTest, RemovesTheSortAfterAChunkedTopK) {
+  // 16 chunks of 4096 per row: the TopK results come through the tuple that
+  // drops the scratch output.
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      ParseTopKThenSort("f32", "8,65536", "8,8", "", TritonTopKFlags::kForced));
+  ASSERT_OK_AND_ASSIGN(bool changed, RunOnMi350(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_TRUE(HasTritonTopK(*module));
+  EXPECT_FALSE(HasSort(*module));
+}
+
+TEST_F(TopkSpecializerTritonSortTest, RemovesTheSortOfValuesOnly) {
+  flags_ = TritonTopKFlags::kForced;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(R"hlo(
+    HloModule m
+    cmp {
+      v0 = bf16[] parameter(0)
+      v1 = bf16[] parameter(1)
+      ROOT gt = pred[] compare(v0, v1), direction=GT, type=TOTALORDER
+    }
+    ENTRY e {
+      p = bf16[24576,64] parameter(0)
+      t = (bf16[24576,6], s32[24576,6]) custom-call(p), custom_call_target="TopK"
+      v = bf16[24576,6] get-tuple-element(t), index=0
+      ROOT s = bf16[24576,6] sort(v), dimensions={1}, to_apply=cmp
+    })hlo"));
+  ASSERT_OK_AND_ASSIGN(bool changed, RunOnMi350(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_FALSE(HasSort(*module));
+  EXPECT_EQ(module->entry_computation()->root_instruction()->opcode(),
+            HloOpcode::kGetTupleElement);
+}
+
+TEST_F(TopkSpecializerTritonSortTest, KeepsTheSortAfterAPartialOrderTopK) {
+  // A PARTIAL order TopK treats -0 and +0 as equal; the sort does not.
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      ParseTopKThenSort("bf16", "24576,64", "24576,6",
+                        R"({is_stable = false, order = "PARTIAL"})",
+                        TritonTopKFlags::kForced));
+  ASSERT_OK_AND_ASSIGN(bool changed, RunOnMi350(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_TRUE(HasTritonTopK(*module));
+  EXPECT_TRUE(HasSort(*module));
+}
+
+TEST_F(TopkSpecializerTritonSortTest, KeepsTheSortAfterADefaultPathTopK) {
+  // The kernels do not take k/n >= 0.85, so the TopK keeps the default path.
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      ParseTopKThenSort("f32", "8,16", "8,14", "", TritonTopKFlags::kForced));
+  ASSERT_OK(RunOnMi350(module.get()));
+  EXPECT_FALSE(HasTritonTopK(*module));
+  EXPECT_TRUE(HasSort(*module));
+}
+
+TEST_F(TopkSpecializerTritonSortTest, FlagOffKeepsTheSort) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseTopKThenSort("bf16", "24576,64", "24576,6", "",
+                                         TritonTopKFlags::kOff));
+  ASSERT_OK_AND_ASSIGN(bool changed, RunOnMi350(module.get()));
+  EXPECT_FALSE(changed);
+  EXPECT_TRUE(HasSort(*module));
+}
+
+TEST_F(TopkSpecializerTritonSortTest, KeepsTheSortOfIndicesOfAnotherTopK) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseEntryWithSpmdComparator(R"hlo(
+      p = bf16[24576,64] parameter(0)
+      q = bf16[24576,64] parameter(1)
+      t = (bf16[24576,6], s32[24576,6]) custom-call(p), custom_call_target="TopK"
+      u = (bf16[24576,6], s32[24576,6]) custom-call(q), custom_call_target="TopK"
+      v = bf16[24576,6] get-tuple-element(t), index=0
+      j = s32[24576,6] get-tuple-element(u), index=1
+      ROOT s = (bf16[24576,6], s32[24576,6]) sort(v, j), dimensions={1}, to_apply=cmp)hlo"));
+  ASSERT_OK_AND_ASSIGN(bool changed, RunOnMi350(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_TRUE(HasTritonTopK(*module));
+  EXPECT_TRUE(HasSort(*module));
+}
+
+TEST_F(TopkSpecializerTritonSortTest, KeepsASortWithControlDependencies) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseEntryWithSpmdComparator(R"hlo(
+      p = bf16[24576,64] parameter(0)
+      o = s32[] parameter(1)
+      n = s32[] negate(o)
+      t = (bf16[24576,6], s32[24576,6]) custom-call(p), custom_call_target="TopK"
+      v = bf16[24576,6] get-tuple-element(t), index=0
+      i = s32[24576,6] get-tuple-element(t), index=1
+      ROOT s = (bf16[24576,6], s32[24576,6]) sort(v, i), dimensions={1}, to_apply=cmp, control-predecessors={n})hlo"));
+  ASSERT_OK_AND_ASSIGN(bool changed, RunOnMi350(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_TRUE(HasTritonTopK(*module));
+  EXPECT_TRUE(HasSort(*module));
+  // No replacement tuple is left behind.
+  EXPECT_FALSE(absl::c_any_of(module->entry_computation()->instructions(),
+                              [](const HloInstruction* inst) {
+                                return inst->opcode() == HloOpcode::kTuple;
+                              }));
+}
+
+struct KeptSortCase {
+  std::string name;
+  std::string comparator;
+  std::string indices;
+  int64_t dimension;
+};
+
+class TopkSpecializerTritonKeptSortTest
+    : public TopkSpecializerTritonSortTest,
+      public ::testing::WithParamInterface<KeptSortCase> {};
+
+TEST_P(TopkSpecializerTritonKeptSortTest, SortIsKept) {
+  const KeptSortCase& c = GetParam();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseTopKThenSort("bf16", "24576,64", "24576,6", "",
+                                         TritonTopKFlags::kForced, c.comparator,
+                                         c.indices, c.dimension));
+  ASSERT_OK_AND_ASSIGN(bool changed, RunOnMi350(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_TRUE(HasTritonTopK(*module));
+  EXPECT_TRUE(HasSort(*module));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Sorts, TopkSpecializerTritonKeptSortTest,
+    ::testing::Values(
+        KeptSortCase{"HigherIndexFirst", R"hlo(
+        eq = pred[] compare(v0, v1), direction=EQ, type=TOTALORDER
+        gt_i = pred[] compare(i0, i1), direction=GT
+        gt = pred[] compare(v0, v1), direction=GT, type=TOTALORDER
+        ROOT r = pred[] select(eq, gt_i, gt))hlo",
+                     "offset", 1},
+        KeptSortCase{"Ascending", R"hlo(
+        eq = pred[] compare(v0, v1), direction=EQ, type=TOTALORDER
+        lt_i = pred[] compare(i0, i1), direction=LT
+        lt = pred[] compare(v0, v1), direction=LT, type=TOTALORDER
+        ROOT r = pred[] select(eq, lt_i, lt))hlo",
+                     "offset", 1},
+        KeptSortCase{"PartialOrderCompare", R"hlo(
+        eq = pred[] compare(v0, v1), direction=EQ
+        lt_i = pred[] compare(i0, i1), direction=LT
+        gt = pred[] compare(v0, v1), direction=GT
+        ROOT r = pred[] select(eq, lt_i, gt))hlo",
+                     "offset", 1},
+        KeptSortCase{"SwappedParameters", R"hlo(
+        eq = pred[] compare(v0, v1), direction=EQ, type=TOTALORDER
+        lt_i = pred[] compare(i1, i0), direction=LT
+        gt = pred[] compare(v0, v1), direction=GT, type=TOTALORDER
+        ROOT r = pred[] select(eq, lt_i, gt))hlo",
+                     "offset", 1},
+        KeptSortCase{"PerElementOffset", std::string(kSpmdComparator),
+                     "doubled", 1},
+        // Could wrap past 2^31 and reorder the indices.
+        KeptSortCase{"UnboundedOffset", std::string(kSpmdComparator),
+                     "unbounded_offset", 1},
+        KeptSortCase{"OffsetPast2To31", std::string(kSpmdComparator),
+                     "far_offset", 1},
+        KeptSortCase{"IndexPlusOffsetPast2To31", std::string(kSpmdComparator),
+                     "near_offset", 1},
+        KeptSortCase{"OtherDimension", std::string(kSpmdComparator), "offset",
+                     0}),
+    [](const ::testing::TestParamInfo<KeptSortCase>& info) {
+      return info.param.name;
+    });
 
 }  // namespace
 }  // namespace xla::gpu

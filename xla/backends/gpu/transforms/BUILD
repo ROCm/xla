@@ -3986,6 +3986,7 @@ cc_library(
     hdrs = ["topk_specializer.h"],
     deps = [
         "//xla:comparison_util",
+        "//xla:literal",
         "//xla:literal_util",
         "//xla:shape_util",
         "//xla:status_macros",
@@ -4053,6 +4054,7 @@ xla_cc_test(
         "//xla/hlo/transforms:topk_rewriter",
         "//xla/service/gpu:gpu_device_info_for_tests",
         "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
