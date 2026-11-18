@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-11-18T02:15:08Z",
+  "commit": "8222a2",
+  "xla_sha": "8222a20403309dbffc2361879a05f8945493be46",
+  "repository": "openxla/xla",
+  "workflow_run": "44221827540",
+  "therock_version": "10.2.0rc2",
+  "modes": [
+    "therock_lts_release_7.14.1",
+    "therock_nightly",
+    "therock_release_10.1"
+  ],
+  "matrix": [
+    {
+      "name": "therock_lts_release_7.14.1",
+      "release": "10.0.0",
+      "distro_url": "https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-multiarch-7.14.1.tar.gz",
+      "distro_hash": "no_hash",
+      "runner": "amd-do-linux-xla-gpu-gfx950-dpx-4"
+    },
+    {
+      "name": "therock_release_10.1",
+      "release": "10.1.0",
+      "distro_url": "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.1.0.tar.gz",
+      "distro_hash": "a95c72f0052168f2262365dff71c2259331721ad0a65da7957dc7d96ccb77021",
+      "runner": "amd-do-linux-xla-gpu-gfx950-dpx-4"
+    },
+    {
+      "name": "therock_nightly",
+      "release": "10.2.0rc2",
+      "distro_url": "https://rc.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.2.0rc2.tar.gz",
+      "distro_hash": "no_hash",
+      "runner": "amd-do-linux-xla-gpu-gfx950-dpx-4"
+    }
+  ]
+}
