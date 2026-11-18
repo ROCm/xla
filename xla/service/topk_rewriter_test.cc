@@ -786,7 +786,8 @@ ENTRY TopK {
   ROOT topk = (bf16[10,2]{1,0}, s32[10,2]{1,0}) topk(x), k=2, largest=true
 })"));
 
-  // Before sharding: the generic sort, marked, instead of the packed sort.
+  // The deferring TopkDecomposer: the generic sort, marked, instead of the
+  // packed sort.
   ASSERT_OK_AND_ASSIGN(bool changed,
                        TopkDecomposer(HloPredicateIsOp<HloOpcode::kTopK>,
                                       /*defer_packed_bf16=*/true)
@@ -818,7 +819,7 @@ ENTRY TopK {
   ASSERT_NE(topk, nullptr);
   EXPECT_TRUE(IsTopKWithDeferredPackedBf16(topk));
 
-  // After sharding: the packed BF16 sort, as without the deferral.
+  // A later TopkDecomposer: the packed BF16 sort, as without the deferral.
   ASSERT_OK_AND_ASSIGN(changed, TopkDecomposer().Run(module.get()));
   EXPECT_TRUE(changed);
   ASSERT_OK(HloDCE().Run(module.get()).status());

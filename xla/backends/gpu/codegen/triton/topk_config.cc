@@ -51,9 +51,9 @@ constexpr int64_t kMaxNumWarps = 8;
 
 // MI350 (gfx950): the Triton kernels are faster than the default path except
 // in the regions below, measured on stable TOTAL-order TopKs of random data
-// (rocprofv3 kernel times) for rows of 2 to 2^24 elements, batches of 1 to
-// 2^18 and k up to 128. Rows that are not a power of two were measured at the
-// length just above one, where the kernels pad the most.
+// for rows of 2 to 2^24 elements, batches of 1 to 2^18 and k up to 128. Rows
+// that are not a power of two were measured at the length just above one, where
+// the kernels pad the most.
 bool IsTritonTopKFasterOnMi350(const TopKKernelSpec& spec) {
   const bool bf16 = spec.input_type == BF16;
   if (!bf16 && spec.input_type != F32) {
@@ -61,7 +61,8 @@ bool IsTritonTopKFasterOnMi350(const TopKKernelSpec& spec) {
   }
   const int64_t batch = spec.batch, n = spec.n, k = spec.k;
   const bool padded = !absl::has_single_bit(static_cast<uint64_t>(n));
-  // The k rounds of the selection scan the row padded to a power of two.
+  // The k rounds scan the row padded to a power of two, up to twice its
+  // length.
   if (padded && batch > 1 && batch <= 64 && n > 16 && n <= 256 && k >= 5 &&
       k <= 8) {
     return false;
@@ -70,7 +71,9 @@ bool IsTritonTopKFasterOnMi350(const TopKKernelSpec& spec) {
       k <= 16) {
     return false;
   }
-  // The bitonic selection in one program over 4K to 16K keys.
+  // Rows of up to 16K keys fit one program, which runs the k rounds (up to
+  // 128) over the whole padded row; longer rows are split into chunks that run
+  // in parallel.
   if (bf16 && n > 4096 && n <= 16384 && k > 32 && k <= 64) {
     return false;
   }
@@ -205,9 +208,9 @@ std::optional<TopKKernelConfig> GetBlockConfig(
 
 // Sets how `config`, which keeps the top `k` keys of each row, selects them.
 // The k rounds grow with `k`; the bitonic selection pads `k` to a power of two
-// and grows faster with `block_n`. On MI350 the bitonic selection was at least
-// as fast as the k rounds at both ends of every range of `k` below, for every
-// measured batch.
+// and grows faster with `block_n`. The thresholds come from MI350 measurements:
+// in each range of `k` below, the bitonic selection is at least as fast as the
+// k rounds at both ends.
 TopKKernelConfig WithSelection(int64_t k, TopKKernelConfig config) {
   const int64_t block_k = NextPowerOfTwo(k);
   const bool bitonic = (block_k >= 32 && config.block_n <= 64 * block_k) ||

@@ -438,8 +438,8 @@ absl::StatusOr<HloInstruction*> SmallBufferOptimization(
 // Returns true if the Triton TopK kernels take `topk` on `device`. Without
 // `force`, only shapes where the kernels were measured faster on the device
 // are taken.
-bool RocmTritonTopKGate(const HloCustomCallInstruction* topk,
-                        const se::DeviceDescription& device, bool force) {
+bool ShouldUseTritonTopK(const HloCustomCallInstruction* topk,
+                         const se::DeviceDescription& device, bool force) {
   absl::StatusOr<TopKKernelSpec> spec = GetTopKKernelSpec(*topk);
   if (!spec.ok()) {
     VLOG(2) << "Triton TopK not used: " << spec.status();
@@ -712,7 +712,7 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
 
     if (compute_capability.IsRocm() &&
         debug_options.xla_gpu_experimental_enable_triton_topk() &&
-        RocmTritonTopKGate(
+        ShouldUseTritonTopK(
             topk, device_description_,
             debug_options.xla_gpu_experimental_force_triton_topk())) {
       VLOG(2) << "Rewriting TopK for the Triton TopK kernels";
