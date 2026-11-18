@@ -1729,7 +1729,7 @@ Future<ThunkSequence> ThunkEmitter::EmitTritonTopKKernel(
               buffer_assignment = &ir_emitter_context_->buffer_assignment(),
               &gpu_device_info = ir_emitter_context_->gpu_device_info()](
                  TritonWrapperResult result) mutable
-                 -> Future<KernelReuseCache::Entry> {
+             -> Future<KernelReuseCache::Entry> {
           if (result.global_scratch_memory_size > 0) {
             return absl::InternalError(
                 absl::StrCat("Triton TopK kernel ", kernel_name, " asks for ",
@@ -1800,7 +1800,7 @@ Future<ThunkSequence> ThunkEmitter::EmitTritonTopKKernel(
        devices_in_process =
            ir_emitter_context_->gpu_topology().num_devices_per_process()](
           const KernelReuseCache::Entry& entry) mutable
-          -> absl::StatusOr<ThunkSequence> {
+      -> absl::StatusOr<ThunkSequence> {
         VLOG(1) << "Triton TopK " << name << " runs kernel "
                 << entry.kernel_name << (was_cached ? " (cached)" : "");
         ABSL_ASSIGN_OR_RETURN(

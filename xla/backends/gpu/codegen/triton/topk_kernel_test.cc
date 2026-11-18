@@ -226,6 +226,24 @@ TEST_F(TopKKernelTest, RejectsChunkConfigsThatDoNotCoverTheRow) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
+TEST_F(TopKKernelTest, RejectsChunksNarrowerThanK) {
+  // 16 chunks of 64 cover the row, but k = 100 is padded to 128.
+  TopKKernelSpec spec = Spec(2, 1000, 100);
+  TopKKernelConfig config = Config(spec);
+  config.block_n = 64;
+  config.num_chunks = 16;
+  config.rows_per_program = 1;
+  config.num_programs = 32;
+  for (TopKSelection selection :
+       {TopKSelection::kRounds, TopKSelection::kBitonic}) {
+    config.selection = selection;
+    EXPECT_THAT(
+        BuildTopKKernel(spec, config, TopKKernelKind::kChunk, "topk", context_)
+            .status(),
+        StatusIs(absl::StatusCode::kInvalidArgument));
+  }
+}
+
 TEST_F(TopKKernelTest, RejectsConfigsThatDoNotCoverTheInput) {
   TopKKernelSpec spec = Spec(64, 128, 8);
   TopKKernelConfig config = Config(spec);

@@ -20,6 +20,7 @@ limitations under the License.
 
 #include "absl/numeric/bits.h"
 #include "absl/status/status.h"
+#include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "llvm/ADT/APInt.h"
@@ -42,7 +43,6 @@ limitations under the License.
 #include "mlir/Support/LLVM.h"
 #include "xla/backends/gpu/codegen/triton/topk_config.h"
 #include "xla/comparison_util.h"
-#include "xla/tsl/platform/errors.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -523,7 +523,7 @@ bool IsPowerOfTwo(int64_t x) {
 absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> BuildTopKKernel(
     const TopKKernelSpec& spec, const TopKKernelConfig& config,
     TopKKernelKind kind, absl::string_view name, mlir::MLIRContext& context) {
-  TF_RETURN_IF_ERROR(CheckTopKKernelLimits(spec));
+  ABSL_RETURN_IF_ERROR(CheckTopKKernelLimits(spec));
   const bool chunked = kind == TopKKernelKind::kChunk;
   // Chunks cover the row and none of them is empty.
   const bool covers_row =
@@ -531,7 +531,11 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> BuildTopKKernel(
                     config.block_n * config.num_chunks >= spec.n &&
                     config.block_n * (config.num_chunks - 1) < spec.n
               : config.num_chunks == 1 && config.block_n >= spec.n;
-  if (!IsPowerOfTwo(config.block_n) || !covers_row ||
+  // A row or chunk holds the k largest keys, padded to a power of two.
+  const bool holds_k =
+      config.block_n >=
+      static_cast<int64_t>(absl::bit_ceil(static_cast<uint64_t>(spec.k)));
+  if (!IsPowerOfTwo(config.block_n) || !covers_row || !holds_k ||
       !IsPowerOfTwo(config.rows_per_program) || config.num_programs < 1 ||
       config.num_programs * config.rows_per_program <
           spec.batch * config.num_chunks) {
