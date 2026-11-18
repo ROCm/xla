@@ -47,15 +47,30 @@ struct TopKKernelSpec {
   std::string ToString() const;
 };
 
-// Launch configuration of the Triton TopK kernel, where each program owns
+// The Triton TopK kernels. A TopK whose rows fit one program runs kSingle;
+// longer rows run kChunk, then kMerge.
+enum class TopKKernelKind {
+  // Each program selects the top `k` of `rows_per_program` whole rows.
+  kSingle,
+  // Each program selects the top `k` keys of one chunk of `block_n` elements
+  // of a row and writes them to the scratch output.
+  kChunk,
+  // Each program selects the top `k` of the `num_chunks * k` candidate keys
+  // of `rows_per_program` rows in the scratch output.
+  kMerge,
+};
+
+// Launch configuration of one Triton TopK kernel, where each program owns
 // `rows_per_program` rows of `block_n` elements.
 struct TopKKernelConfig {
-  // Row length rounded up to a power of two; positions past the end are
-  // padding.
+  // Row (or chunk) length rounded up to a power of two; positions past the end
+  // are padding.
   int64_t block_n;
   int64_t rows_per_program;
   int64_t num_warps;
   int64_t num_programs;
+  // Chunks of `block_n` elements per row: 1 for kSingle and kMerge.
+  int64_t num_chunks = 1;
 
   std::string ToString() const;
 };
@@ -68,12 +83,27 @@ absl::StatusOr<TopKKernelSpec> GetTopKKernelSpec(
 // or PARTIAL order, batch >= 1, 1 <= k <= 128, n < 2^31 and k/n < 0.85.
 absl::Status CheckTopKKernelLimits(const TopKKernelSpec& spec);
 
-// Picks the configuration of the kernel for `spec` on `device`. Returns nullopt
-// if a row does not fit one program on the device. Register use is an
-// estimate and LDS use an upper bound; the compiled kernel is checked again by
-// the emitter.
+// Picks the configuration of the first kernel for `spec` on `device`: kSingle
+// if a row fits one program, otherwise kChunk (`num_chunks` > 1) with a merge
+// step that fits one program per row. Returns nullopt if neither fits the
+// device. Register use is an estimate and LDS use an upper bound; the compiled
+// kernels are checked again by the emitter.
 std::optional<TopKKernelConfig> GetTopKKernelConfig(
     const TopKKernelSpec& spec, const se::DeviceDescription& device);
+
+// The merge step of a chunked `config`: a TopK of the `num_chunks * k`
+// candidate keys of each row, and its kMerge configuration (nullopt if it does
+// not fit the device).
+TopKKernelSpec GetTopKMergeSpec(const TopKKernelSpec& spec,
+                                const TopKKernelConfig& config);
+std::optional<TopKKernelConfig> GetTopKMergeConfig(
+    const TopKKernelSpec& spec, const TopKKernelConfig& config,
+    const se::DeviceDescription& device);
+
+// Elements of the u64 scratch output (the candidate keys) of a chunked
+// `config`; 0 if the TopK needs no scratch.
+int64_t GetTopKScratchElements(const TopKKernelSpec& spec,
+                               const TopKKernelConfig& config);
 
 // The backend config of a __gpu$TopK custom call computed by the Triton TopK
 // kernels carries `impl = "triton"`.

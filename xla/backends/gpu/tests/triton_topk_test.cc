@@ -279,9 +279,12 @@ struct GridCase {
 };
 
 std::vector<GridCase> GridCases() {
+  // Rows longer than 16384 are split into chunks: a partial tail chunk,
+  // a tail of one element, 16 chunks, and chunks grown to 8192 for k = 128.
   const std::vector<std::pair<int64_t, int64_t>> batch_and_n = {
-      {0, 7},     {0, 1000}, {0, 16384}, {3, 64},  {129, 33},
-      {17, 1024}, {5, 4096}, {2, 16384}, {1000, 8}};
+      {0, 7},     {0, 1000},  {0, 16384},  {3, 64},   {129, 33},
+      {17, 1024}, {5, 4096},  {2, 16384},  {1000, 8}, {0, 20000},
+      {2, 16385}, {3, 65536}, {1, 1 << 20}};
   std::vector<GridCase> cases;
   for (PrimitiveType type : {F32, BF16}) {
     for (auto [batch, n] : batch_and_n) {
@@ -291,6 +294,8 @@ std::vector<GridCase> GridCases() {
         }
       }
     }
+    // The largest tiles on MI350: chunks of 16384 keys and their merge.
+    cases.push_back({type, {2, 1 << 24, 16}});
     // No kernel config fits, so the forced TopK keeps the default path.
     cases.push_back({type, {2, 1 << 24, 128}});
   }
@@ -307,7 +312,8 @@ class TritonTopKGridTest : public TritonTopKTest,
                            public ::testing::WithParamInterface<GridCase> {
  protected:
   // Compiles `hlo` with the Triton TopK kernels forced. A shape that no kernel
-  // config fits on this GPU must keep the default path.
+  // config fits on this GPU, such as k = 128 over 2^20 keys with 32-wide
+  // wavefronts, must keep the default path.
   absl::StatusOr<std::unique_ptr<OpaqueExecutable>> CompileForced(
       absl::string_view hlo) {
     const GridCase& c = GetParam();
@@ -470,6 +476,7 @@ class TritonTopKCommandBufferTest
     : public TritonTopKTest,
       public ::testing::WithParamInterface<TopKShape> {};
 
+// Long rows run the chunk and merge kernels in the command buffer.
 TEST_P(TritonTopKCommandBufferTest, TopKInCommandBuffer) {
   ASSERT_OK_AND_ASSIGN(
       tsl::testing::TemporaryDirectory dump_dir,
@@ -508,7 +515,8 @@ TEST_P(TritonTopKCommandBufferTest, TopKInCommandBuffer) {
 }
 
 INSTANTIATE_TEST_SUITE_P(TritonTopKCommandBuffer, TritonTopKCommandBufferTest,
-                         ::testing::Values(TopKShape{1024, 64, 6}),
+                         ::testing::Values(TopKShape{1024, 64, 6},
+                                           TopKShape{8, 65536, 16}),
                          [](const ::testing::TestParamInfo<TopKShape>& info) {
                            return absl::StrCat("b", info.param.batch, "_n",
                                                info.param.n, "_k",
@@ -608,8 +616,9 @@ std::vector<SpecialCase> SpecialCases(bool all_patterns) {
         if (!all_patterns && pattern != Pattern::kSpecial) {
           continue;
         }
+        // 20000 splits into chunks, so ties span chunks.
         for (auto [batch, n] : std::vector<std::pair<int64_t, int64_t>>{
-                 {1, 32}, {8, 1024}, {3, 16384}}) {
+                 {1, 32}, {8, 1024}, {3, 16384}, {2, 20000}}) {
           for (int64_t k : {2, 17, 64}) {
             if (static_cast<double>(k) / n < 0.85) {
               cases.push_back({type, partial, pattern, {batch, n, k}});

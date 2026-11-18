@@ -45,6 +45,7 @@ namespace {
 using ::absl_testing::IsOk;
 using ::absl_testing::StatusIs;
 using ::testing::HasSubstr;
+using ::testing::Optional;
 
 TopKKernelSpec Spec(int64_t batch, int64_t n, int64_t k,
                     PrimitiveType type = F32,
@@ -125,10 +126,16 @@ TEST(TopKKernelConfigTest, RowLimitDependsOnTheWaveSize) {
   ASSERT_EQ(mi350.threads_per_warp(), 64);
   ASSERT_EQ(rx7900.threads_per_warp(), 32);
 
-  EXPECT_TRUE(GetTopKKernelConfig(Spec(8, 16384, 64), mi350).has_value());
-  EXPECT_FALSE(GetTopKKernelConfig(Spec(8, 32768, 64), mi350).has_value());
-  EXPECT_TRUE(GetTopKKernelConfig(Spec(8, 8192, 64), rx7900).has_value());
-  EXPECT_FALSE(GetTopKKernelConfig(Spec(8, 16384, 64), rx7900).has_value());
+  auto num_chunks = [](const TopKKernelSpec& spec,
+                       const se::DeviceDescription& device) {
+    std::optional<TopKKernelConfig> config = GetTopKKernelConfig(spec, device);
+    return config.has_value() ? std::optional(config->num_chunks)
+                              : std::nullopt;
+  };
+  EXPECT_THAT(num_chunks(Spec(8, 16384, 64), mi350), Optional(1));
+  EXPECT_THAT(num_chunks(Spec(8, 32768, 64), mi350), Optional(8));
+  EXPECT_THAT(num_chunks(Spec(8, 8192, 64), rx7900), Optional(1));
+  EXPECT_THAT(num_chunks(Spec(8, 16384, 64), rx7900), Optional(4));
 }
 
 TEST(TopKKernelConfigTest, RowLimitDependsOnTheLdsSize) {
@@ -137,14 +144,81 @@ TEST(TopKKernelConfigTest, RowLimitDependsOnTheLdsSize) {
   ASSERT_EQ(mi300.shared_memory_per_block(), 64 * 1024);
 
   // The 64-bit keys of a program take 8 bytes each in LDS.
-  EXPECT_TRUE(GetTopKKernelConfig(Spec(8, 8192, 64), mi300).has_value());
-  EXPECT_FALSE(GetTopKKernelConfig(Spec(8, 16384, 64), mi300).has_value());
+  std::optional<TopKKernelConfig> config =
+      GetTopKKernelConfig(Spec(8, 8192, 64), mi300);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_EQ(config->num_chunks, 1);
+  config = GetTopKKernelConfig(Spec(8, 16384, 64), mi300);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_EQ(config->block_n, 4096);
+  EXPECT_EQ(config->num_chunks, 4);
+  // The merge of 128 chunks of k = 128 would hold 16384 keys.
+  EXPECT_FALSE(GetTopKKernelConfig(Spec(1, 1 << 20, 128), mi300).has_value());
 }
 
-TEST(TopKKernelConfigTest, ToStringShowsTheLaunchConfig) {
+TEST(TopKKernelConfigTest, LongRowsAreSplitIntoChunks) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  const TopKKernelSpec spec = Spec(2, 20000, 16);
+  std::optional<TopKKernelConfig> config = GetTopKKernelConfig(spec, mi350);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_EQ(config->block_n, 4096);
+  EXPECT_EQ(config->num_chunks, 5);
+  EXPECT_EQ(config->rows_per_program, 1);
+  EXPECT_EQ(config->num_warps, 8);
+  EXPECT_EQ(config->num_programs, 10);
+  EXPECT_EQ(GetTopKScratchElements(spec, *config), 2 * 5 * 16);
+
+  TopKKernelSpec merge_spec = GetTopKMergeSpec(spec, *config);
+  EXPECT_EQ(merge_spec.input_type, spec.input_type);
+  EXPECT_EQ(merge_spec.order, spec.order);
+  EXPECT_EQ(merge_spec.batch, 2);
+  EXPECT_EQ(merge_spec.n, 80);
+  EXPECT_EQ(merge_spec.k, 16);
+  std::optional<TopKKernelConfig> merge_config =
+      GetTopKMergeConfig(spec, *config, mi350);
+  ASSERT_TRUE(merge_config.has_value());
+  EXPECT_EQ(merge_config->block_n, 128);
+  EXPECT_EQ(merge_config->num_chunks, 1);
+  EXPECT_EQ(merge_config->num_programs, 1);
+}
+
+TEST(TopKKernelConfigTest, ChunksGrowUntilTheMergeFits) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  // 4096 chunks of 4096 leave 32768 candidates, more than one program takes.
+  std::optional<TopKKernelConfig> config =
+      GetTopKKernelConfig(Spec(1, 1 << 24, 8), mi350);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_EQ(config->block_n, 8192);
+  EXPECT_EQ(config->num_chunks, 2048);
+  // Even the longest chunk leaves too many candidates of k = 128.
+  EXPECT_FALSE(GetTopKKernelConfig(Spec(1, 1 << 24, 128), mi350).has_value());
+  EXPECT_FALSE(GetTopKKernelConfig(Spec(2, 1 << 24, 128), mi350).has_value());
+  // With 32-wide wavefronts a program holds half as many keys, so the merge
+  // of k = 128 over 2^20 keys no longer fits.
+  EXPECT_TRUE(GetTopKKernelConfig(Spec(1, 1 << 20, 128), mi350).has_value());
+  EXPECT_FALSE(GetTopKKernelConfig(Spec(1, 1 << 20, 128),
+                                   TestGpuDeviceInfo::AMDRX7900DeviceInfo())
+                   .has_value());
+}
+
+TEST(TopKKernelConfigTest, SingleKernelHasNoMergeOrScratch) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  const TopKKernelSpec spec = Spec(8, 1000, 32);
+  std::optional<TopKKernelConfig> config = GetTopKKernelConfig(spec, mi350);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_EQ(config->num_chunks, 1);
+  EXPECT_EQ(GetTopKScratchElements(spec, *config), 0);
+  EXPECT_FALSE(GetTopKMergeConfig(spec, *config, mi350).has_value());
+}
+
+TEST(TopKKernelConfigTest, ToStringShowsChunksOnlyWhenSplit) {
   TopKKernelConfig config{4096, 1, 8, 64};
   EXPECT_EQ(config.ToString(),
             "block_n=4096 rows_per_program=1 num_warps=8 num_programs=64");
+  config.num_chunks = 8;
+  EXPECT_EQ(config.ToString(),
+            "block_n=4096 rows_per_program=1 num_warps=8 num_programs=64 "
+            "num_chunks=8");
 }
 
 class TopKCustomCallTest : public HloHardwareIndependentTestBase {

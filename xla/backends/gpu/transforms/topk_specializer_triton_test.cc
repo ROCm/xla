@@ -217,27 +217,58 @@ INSTANTIATE_TEST_SUITE_P(
         RejectedCase{"KAboveLimit", "f32[8,1000]", "f32[8,129]", "s32[8,129]"},
         RejectedCase{"KCloseToN", "f32[8,16]", "f32[8,14]", "s32[8,14]"},
         RejectedCase{"EmptyBatch", "f32[0,1000]", "f32[0,32]", "s32[0,32]"},
-        // A row of 65536 keys does not fit one program; k > 16 also keeps
-        // the TopK off the prebuilt kernel.
-        RejectedCase{"LongRow", "f32[8,65536]", "f32[8,32]", "s32[8,32]"}),
+        // 1024 chunks of 16384 leave 131072 candidates to merge.
+        RejectedCase{"TooManyCandidates", "f32[1,16777216]", "f32[1,128]",
+                     "s32[1,128]"}),
     [](const ::testing::TestParamInfo<RejectedCase>& info) {
       return info.param.name;
     });
 
-TEST_F(TopkSpecializerTritonTest, ForcedTopKKeepsTheMetadata) {
+TEST_F(TopkSpecializerTritonTest, ForcedLongRowGetsAScratchOutput) {
+  // 16 chunks of 4096 per row, 8 candidates each.
   ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<HloModule> module,
-      ParseTopK("f32[8,1000]", "f32[8,8]", "s32[8,8]", "",
-                TritonTopKFlags::kForced, R"(metadata={op_name="top_k"})"));
+      ParseTopK("f32[8,65536]", "f32[8,8]", "s32[8,8]",
+                R"({order = "PARTIAL"})", TritonTopKFlags::kForced));
   ASSERT_OK_AND_ASSIGN(
       bool changed,
       RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
                  module.get()));
   EXPECT_TRUE(changed);
-  EXPECT_TRUE(HasTritonTopK(*module));
-  EXPECT_EQ(
-      module->entry_computation()->root_instruction()->metadata().op_name(),
-      "top_k");
+  const HloInstruction* root = module->entry_computation()->root_instruction();
+  ASSERT_EQ(root->opcode(), HloOpcode::kTuple);
+  ASSERT_EQ(root->operand_count(), 2);
+  auto* topk = DynCast<HloCustomCallInstruction>(root->operand(0)->operand(0));
+  ASSERT_NE(topk, nullptr) << root->ToString();
+  EXPECT_EQ(topk->custom_call_target(), "__gpu$TopK");
+  EXPECT_TRUE(IsTritonTopK(*topk));
+  EXPECT_EQ(topk->operand(0)->opcode(), HloOpcode::kParameter);
+  EXPECT_EQ(topk->shape().ToString(), "(f32[8,8], s32[8,8], u64[1024])");
+  EXPECT_EQ(hlo_instruction_utils::GetTopKOrder(topk),
+            ComparisonOrder::kPartial);
+  EXPECT_EQ(root->operand(1)->operand(0), topk);
+}
+
+TEST_F(TopkSpecializerTritonTest, ForcedTopKKeepsTheMetadata) {
+  for (absl::string_view n : {"1000", "65536"}) {
+    SCOPED_TRACE(n);
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<HloModule> module,
+        ParseTopK(absl::StrCat("f32[8,", n, "]"), "f32[8,8]", "s32[8,8]", "",
+                  TritonTopKFlags::kForced, R"(metadata={op_name="top_k"})"));
+    ASSERT_OK_AND_ASSIGN(
+        bool changed,
+        RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                   module.get()));
+    EXPECT_TRUE(changed);
+    for (const HloInstruction* inst :
+         module->entry_computation()->instructions()) {
+      if (inst->IsCustomCall("__gpu$TopK")) {
+        EXPECT_EQ(inst->metadata().op_name(), "top_k");
+      }
+    }
+    EXPECT_TRUE(HasTritonTopK(*module));
+  }
 }
 
 constexpr absl::string_view kDeferredPackedBf16 =
@@ -314,17 +345,23 @@ TEST_F(TopkSpecializerTritonTest, OtherRocmArchitecturesAreRoutedWhenForced) {
 }
 
 TEST_F(TopkSpecializerTritonTest, RowLimitFollowsTheWaveSize) {
-  // 16384 keys fit a wave-64 program of 8 warps, but not a wave-32 one.
-  for (const auto& [device, fits] :
-       {std::pair{TestGpuDeviceInfo::AMDMI350DeviceInfo(), true},
-        std::pair{TestGpuDeviceInfo::AMDRX7900DeviceInfo(), false}}) {
+  // 16384 keys fit a wave-64 program of 8 warps; a wave-32 device splits them
+  // into chunks.
+  for (const auto& [device, chunked] :
+       {std::pair{TestGpuDeviceInfo::AMDMI350DeviceInfo(), false},
+        std::pair{TestGpuDeviceInfo::AMDRX7900DeviceInfo(), true}}) {
     SCOPED_TRACE(device.name());
     ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                          ParseTopK("f32[8,16384]", "f32[8,32]", "s32[8,32]", "",
                                    TritonTopKFlags::kForced));
-    ASSERT_THAT(RunHloPass(TopkSpecializer(device), module.get()),
-                absl_testing::IsOk());
-    EXPECT_EQ(HasTritonTopK(*module), fits);
+    ASSERT_OK_AND_ASSIGN(bool changed,
+                         RunHloPass(TopkSpecializer(device), module.get()));
+    EXPECT_TRUE(changed);
+    EXPECT_TRUE(HasTritonTopK(*module));
+    const HloInstruction* root =
+        module->entry_computation()->root_instruction();
+    EXPECT_EQ(root->opcode(),
+              chunked ? HloOpcode::kTuple : HloOpcode::kCustomCall);
   }
 }
 

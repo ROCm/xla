@@ -333,11 +333,11 @@ class ThunkEmitter {
   // Emits a __gpu$TopK custom call marked by TopkSpecializer for the Triton
   // TopK kernels.
   Future<ThunkSequence> EmitTritonTopK(const HloCustomCallInstruction* instr);
-  // Emits the Triton TopK kernel of `instr` with the custom call's buffers
-  // `kernel_arguments`.
+  // Emits the Triton TopK kernel `kind` of `instr` with the custom call's
+  // buffers `kernel_arguments`.
   Future<ThunkSequence> EmitTritonTopKKernel(
-      const HloCustomCallInstruction* instr, const TopKKernelSpec& spec,
-      const TopKKernelConfig& config,
+      const HloCustomCallInstruction* instr, TopKKernelKind kind,
+      const TopKKernelSpec& spec, const TopKKernelConfig& config,
       emitters::KernelArguments kernel_arguments);
 
   Future<ThunkSequence> EmitWhile(const HloInstruction* instr);

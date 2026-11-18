@@ -60,9 +60,13 @@ std::string TopKKernelSpec::ToString() const {
 }
 
 std::string TopKKernelConfig::ToString() const {
-  return absl::StrFormat(
+  std::string s = absl::StrFormat(
       "block_n=%d rows_per_program=%d num_warps=%d num_programs=%d", block_n,
       rows_per_program, num_warps, num_programs);
+  if (num_chunks > 1) {
+    absl::StrAppendFormat(&s, " num_chunks=%d", num_chunks);
+  }
+  return s;
 }
 
 absl::StatusOr<TopKKernelSpec> GetTopKKernelSpec(
@@ -162,7 +166,48 @@ std::optional<TopKKernelConfig> GetBlockConfig(
 
 std::optional<TopKKernelConfig> GetTopKKernelConfig(
     const TopKKernelSpec& spec, const se::DeviceDescription& device) {
-  return GetBlockConfig(spec.batch, NextPowerOfTwo(spec.n), device);
+  const int64_t block_n = NextPowerOfTwo(spec.n);
+  if (std::optional<TopKKernelConfig> single =
+          GetBlockConfig(spec.batch, block_n, device)) {
+    return single;
+  }
+  // Rows too long for one program are split into chunks. Longer chunks leave
+  // fewer candidates for the merge step, whose row must fit one program.
+  for (int64_t chunk = kTargetKeysPerProgram; chunk < block_n; chunk *= 2) {
+    const int64_t num_chunks = CeilOfRatio(spec.n, chunk);
+    std::optional<TopKKernelConfig> config =
+        GetBlockConfig(spec.batch * num_chunks, chunk, device);
+    if (!config.has_value()) {
+      continue;
+    }
+    config->num_chunks = num_chunks;
+    if (GetTopKMergeConfig(spec, *config, device).has_value()) {
+      return config;
+    }
+  }
+  return std::nullopt;
+}
+
+TopKKernelSpec GetTopKMergeSpec(const TopKKernelSpec& spec,
+                                const TopKKernelConfig& config) {
+  TopKKernelSpec merge = spec;
+  merge.n = config.num_chunks * spec.k;
+  return merge;
+}
+
+std::optional<TopKKernelConfig> GetTopKMergeConfig(
+    const TopKKernelSpec& spec, const TopKKernelConfig& config,
+    const se::DeviceDescription& device) {
+  if (config.num_chunks <= 1) {
+    return std::nullopt;
+  }
+  return GetBlockConfig(
+      spec.batch, NextPowerOfTwo(GetTopKMergeSpec(spec, config).n), device);
+}
+
+int64_t GetTopKScratchElements(const TopKKernelSpec& spec,
+                               const TopKKernelConfig& config) {
+  return config.num_chunks > 1 ? spec.batch * config.num_chunks * spec.k : 0;
 }
 
 bool IsTritonTopK(const HloCustomCallInstruction& topk) {
