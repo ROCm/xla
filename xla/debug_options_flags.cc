@@ -3789,15 +3789,15 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       bool_setter_for(
           &DebugOptions::set_xla_gpu_experimental_enable_triton_topk),
       debug_options->xla_gpu_experimental_enable_triton_topk(),
-      "If true, on ROCm, routes TopKs to the Triton TopK kernels where the "
-      "speed table of the GPU says they are faster."));
+      "If true, on ROCm, routes TopKs to the Triton TopK kernels where they "
+      "were measured faster than the default path on the GPU."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_experimental_force_triton_topk",
       bool_setter_for(
           &DebugOptions::set_xla_gpu_experimental_force_triton_topk),
       debug_options->xla_gpu_experimental_force_triton_topk(),
       "Test only. With xla_gpu_experimental_enable_triton_topk, routes every "
-      "TopK that the Triton TopK kernels support, ignoring the speed table."));
+      "TopK that the Triton TopK kernels support, faster or not."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_experimental_enable_tensor_ir",
       bool_setter_for(&DebugOptions::set_xla_gpu_experimental_enable_tensor_ir),

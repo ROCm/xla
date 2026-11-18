@@ -122,7 +122,7 @@ TEST_F(TopkSpecializerTritonTest, FlagOffKeepsTopK) {
   EXPECT_FALSE(changed);
 }
 
-TEST_F(TopkSpecializerTritonTest, FlagOnKeepsShapesOutsideTheSpeedTable) {
+TEST_F(TopkSpecializerTritonTest, FlagOnKeepsShapesWhereTodaysPathIsFaster) {
   auto module = ParseTopK("f32[8,16384]", "f32[8,128]", "s32[8,128]", "",
                           TritonTopKFlags::kOn);
   ASSERT_OK_AND_ASSIGN(
@@ -132,7 +132,7 @@ TEST_F(TopkSpecializerTritonTest, FlagOnKeepsShapesOutsideTheSpeedTable) {
   EXPECT_FALSE(changed);
 }
 
-TEST_F(TopkSpecializerTritonTest, FlagOnRoutesShapesInTheSpeedTable) {
+TEST_F(TopkSpecializerTritonTest, FlagOnRoutesShapesWhereTritonIsFaster) {
   auto module = ParseTopK("bf16[24576,64]", "bf16[24576,6]", "s32[24576,6]", "",
                           TritonTopKFlags::kOn);
   ASSERT_OK_AND_ASSIGN(
@@ -143,7 +143,7 @@ TEST_F(TopkSpecializerTritonTest, FlagOnRoutesShapesInTheSpeedTable) {
   ExpectMarkedTopK(*module, /*stable=*/true, ComparisonOrder::kTotal);
 }
 
-TEST_F(TopkSpecializerTritonTest, FlagOnDoesNotRouteWithoutATable) {
+TEST_F(TopkSpecializerTritonTest, FlagOnDoesNotRouteOnUnmeasuredGpus) {
   auto module = ParseTopK("bf16[24576,64]", "bf16[24576,6]", "s32[24576,6]", "",
                           TritonTopKFlags::kOn);
   ASSERT_OK_AND_ASSIGN(
@@ -256,7 +256,7 @@ TEST_F(TopkSpecializerTritonTest, ForcedLongRowGetsAScratchOutput) {
   EXPECT_EQ(root->operand(1)->operand(0), topk);
 }
 
-TEST_F(TopkSpecializerTritonTest, FlagOnRoutesLongRowsInTheSpeedTable) {
+TEST_F(TopkSpecializerTritonTest, FlagOnRoutesLongRows) {
   auto module = ParseTopK("f32[8,65536]", "f32[8,8]", "s32[8,8]", "",
                           TritonTopKFlags::kOn);
   ASSERT_OK_AND_ASSIGN(
@@ -269,33 +269,31 @@ TEST_F(TopkSpecializerTritonTest, FlagOnRoutesLongRowsInTheSpeedTable) {
             HloOpcode::kTuple);
 }
 
-TEST_F(TopkSpecializerTritonTest, LongRowOutsideTheSpeedTableKeepsTodaysPath) {
-  // Many rows of 32769..65535 with k = 1: today's prebuilt kernel was faster.
-  auto module = ParseTopK("f32[1024,40000]", "f32[1024,1]", "s32[1024,1]", "",
+TEST_F(TopkSpecializerTritonTest, OneLongRowWithLargeKKeepsTodaysPath) {
+  // Merging the candidates of the chunks costs more than today's sort.
+  auto module = ParseTopK("f32[1,1048576]", "f32[1,128]", "s32[1,128]", "",
                           TritonTopKFlags::kOn);
   ASSERT_OK_AND_ASSIGN(
       bool changed,
       RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
                  module.get()));
-  EXPECT_TRUE(changed);
+  EXPECT_FALSE(changed);
   EXPECT_FALSE(HasTritonTopK(*module));
-  const HloInstruction* root = module->entry_computation()->root_instruction();
-  ASSERT_EQ(root->opcode(), HloOpcode::kTuple);
-  EXPECT_EQ(Cast<HloCustomCallInstruction>(root->operand(0)->operand(0))
-                ->custom_call_target(),
-            "__gpu$TopK");
+  EXPECT_TRUE(
+      module->entry_computation()->root_instruction()->IsCustomCall("TopK"));
 }
 
 constexpr absl::string_view kDeferredPackedBf16 =
     R"(frontend_attributes={_xla_topk_deferred_packed_bf16="true"})";
 
 TEST_F(TopkSpecializerTritonTest, DeferredPackedBf16KeepsTheTopKWhenNotRouted) {
-  // Not in the speed table. Without the mark, it takes the prebuilt kernel.
+  // Not routed on a GPU without measurements. Without the mark, it takes the
+  // prebuilt kernel.
   auto unmarked = ParseTopK("bf16[8,1024]", "bf16[8,16]", "s32[8,16]", "",
                             TritonTopKFlags::kOn);
   ASSERT_OK_AND_ASSIGN(
       bool changed,
-      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI300DeviceInfo()),
                  unmarked.get()));
   EXPECT_TRUE(changed);
 
@@ -304,7 +302,7 @@ TEST_F(TopkSpecializerTritonTest, DeferredPackedBf16KeepsTheTopKWhenNotRouted) {
                           TritonTopKFlags::kOn, kDeferredPackedBf16);
   ASSERT_OK_AND_ASSIGN(
       changed,
-      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI300DeviceInfo()),
                  marked.get()));
   EXPECT_FALSE(changed);
   const HloInstruction* root = marked->entry_computation()->root_instruction();
@@ -582,7 +580,7 @@ TEST_F(TopkSpecializerTritonSortTest, KeepsTheSortAfterAPartialOrderTopK) {
 }
 
 TEST_F(TopkSpecializerTritonSortTest, KeepsTheSortAfterTodaysTopK) {
-  // Not in the speed table, so the TopK keeps today's path.
+  // Today's path is faster, so the TopK keeps it.
   auto module =
       ParseTopKThenSort("f32", "8,16384", "8,128", "", TritonTopKFlags::kOn);
   ASSERT_OK(RunOnMi350(module.get()));

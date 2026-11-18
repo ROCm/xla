@@ -436,7 +436,8 @@ absl::StatusOr<HloInstruction*> SmallBufferOptimization(
 }
 
 // Returns true if the Triton TopK kernels take `topk` on `device`. Without
-// `force`, only shapes in the speed table of the device are taken.
+// `force`, only shapes where the kernels were measured faster on the device
+// are taken.
 bool RocmTritonTopKGate(const HloCustomCallInstruction* topk,
                         const se::DeviceDescription& device, bool force) {
   absl::StatusOr<TopKKernelSpec> spec = GetTopKKernelSpec(*topk);
@@ -456,7 +457,7 @@ bool RocmTritonTopKGate(const HloCustomCallInstruction* topk,
   }
   if (!force && !IsTritonTopKFaster(*spec, device)) {
     VLOG(2) << "Triton TopK not used for " << spec->ToString()
-            << ": not in the speed table of " << device.name();
+            << ": not measured faster on " << device.name();
     return false;
   }
   return true;

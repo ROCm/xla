@@ -20,13 +20,11 @@ limitations under the License.
 #include <optional>
 #include <string>
 
-#include "absl/algorithm/container.h"
 #include "absl/numeric/bits.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#include "absl/types/span.h"
 #include "re2/re2.h"
 #include "xla/comparison_util.h"
 #include "xla/hlo/ir/hlo_instruction_utils.h"
@@ -51,183 +49,40 @@ constexpr int64_t kTargetKeysPerThread = 8;
 constexpr int64_t kMaxKeysPerThread = 32;
 constexpr int64_t kMaxNumWarps = 8;
 
-// A region of TopK shapes where the Triton kernel was measured faster than the
-// default path. Bounds are inclusive.
-struct TopKSpeedRegion {
-  PrimitiveType input_type;
-  int64_t min_batch, max_batch;
-  int64_t min_n, max_n;
-  int64_t min_k, max_k;
-};
-
-// MI350 (gfx950): regions where the Triton kernel took at most 1/1.1 of the
-// kernel time of the default path at every measured point: each power of two
-// `n` alone, the rows between two powers of two at their shortest length, the
-// largest `k` of each `k` range, and the batches at both ends of the range.
-// Rows longer than 16384 use the chunk and merge kernels. TopKSplitter splits
-// a single row of n = 2^21 or more first, so those rows start at batch 2.
-// Stable TOTAL-order TopKs on random data, rocprofv3 kernel times, with the
-// selections of WithSelection.
-constexpr TopKSpeedRegion kMi350SpeedTable[] = {
-    {F32, 64, 262144, 2, 2, 1, 1},
-    {F32, 64, 262144, 3, 3, 1, 2},
-    {F32, 1, 262144, 4, 4, 1, 2},
-    {F32, 64, 262144, 4, 4, 3, 3},
-    {F32, 1, 262144, 5, 7, 1, 4},
-    {F32, 1, 262144, 8, 8, 1, 6},
-    {F32, 1, 262144, 9, 15, 1, 4},
-    {F32, 1024, 262144, 9, 15, 5, 7},
-    {F32, 1, 262144, 16, 16, 1, 13},
-    {F32, 1, 262144, 17, 31, 1, 4},
-    {F32, 1024, 262144, 17, 31, 5, 8},
-    {F32, 1, 262144, 17, 31, 9, 14},
-    {F32, 1, 262144, 32, 32, 1, 27},
-    {F32, 1, 262144, 33, 63, 1, 4},
-    {F32, 1024, 16384, 33, 63, 5, 8},
-    {F32, 1, 262144, 33, 63, 9, 28},
-    {F32, 1, 262144, 64, 64, 1, 54},
-    {F32, 1, 262144, 65, 127, 1, 2},
-    {F32, 1024, 262144, 65, 127, 3, 8},
-    {F32, 1024, 16384, 65, 127, 9, 16},
-    {F32, 1024, 262144, 65, 127, 17, 32},
-    {F32, 1, 262144, 65, 127, 33, 55},
-    {F32, 1, 262144, 128, 128, 1, 108},
-    {F32, 1, 262144, 129, 255, 1, 4},
-    {F32, 1024, 16384, 129, 255, 5, 8},
-    {F32, 1, 262144, 129, 255, 17, 109},
-    {F32, 1, 262144, 256, 256, 1, 128},
-    {F32, 1, 262144, 257, 511, 1, 8},
-    {F32, 1, 262144, 257, 511, 17, 128},
-    {F32, 1, 262144, 512, 512, 1, 128},
-    {F32, 1, 16384, 513, 1023, 1, 128},
-    {F32, 1024, 131072, 1024, 1024, 1, 1},
-    {F32, 1, 131072, 1024, 1024, 2, 128},
-    {F32, 1, 130944, 1025, 2047, 1, 1},
-    {F32, 1024, 130944, 1025, 2047, 2, 2},
-    {F32, 1, 130944, 1025, 2047, 3, 128},
-    {F32, 1, 65536, 2048, 2048, 1, 128},
-    {F32, 1, 65504, 2049, 4095, 1, 128},
-    {F32, 1, 32768, 4096, 4096, 1, 128},
-    {F32, 1, 32760, 4097, 8191, 1, 128},
-    {F32, 1, 16384, 8192, 8192, 1, 32},
-    {F32, 64, 16384, 8192, 8192, 33, 64},
-    {F32, 1, 16384, 8192, 8192, 65, 128},
-    {F32, 1, 16382, 8193, 16383, 1, 64},
-    {F32, 64, 16382, 8193, 16383, 65, 128},
-    {F32, 1, 8192, 16384, 16384, 1, 16},
-    {F32, 64, 8192, 16384, 16384, 17, 64},
-    {F32, 64, 8191, 16385, 32767, 1, 1},
-    {F32, 1, 8191, 16385, 32767, 2, 128},
-    {F32, 1, 4096, 32768, 32768, 1, 128},
-    {F32, 1, 64, 32769, 65535, 1, 2},
-    {F32, 1, 4095, 32769, 65535, 3, 128},
-    {F32, 1, 2048, 65536, 65536, 1, 128},
-    {F32, 1, 2047, 65537, 131071, 1, 128},
-    {F32, 1, 1024, 131072, 131072, 1, 128},
-    {F32, 1, 1023, 131073, 262143, 1, 128},
-    {F32, 1, 512, 262144, 262144, 1, 128},
-    {F32, 1, 511, 262145, 524287, 1, 64},
-    {F32, 64, 511, 262145, 524287, 65, 128},
-    {F32, 1, 256, 524288, 524288, 1, 64},
-    {F32, 64, 256, 524288, 524288, 65, 128},
-    {F32, 1, 255, 524289, 1048575, 1, 64},
-    {F32, 64, 255, 524289, 1048575, 65, 128},
-    {F32, 1, 128, 1048576, 1048576, 1, 64},
-    {F32, 64, 128, 1048576, 1048576, 65, 128},
-    {F32, 1, 127, 1048577, 2097151, 1, 32},
-    {F32, 64, 127, 1048577, 2097151, 33, 128},
-    {F32, 2, 64, 2097152, 2097152, 1, 128},
-    {F32, 1, 63, 2097153, 4194303, 1, 32},
-    {F32, 2, 32, 4194304, 4194304, 1, 64},
-    {F32, 1, 31, 4194305, 8388607, 1, 32},
-    {F32, 2, 16, 8388608, 8388608, 1, 32},
-    {F32, 1, 15, 8388609, 16777215, 1, 16},
-    {F32, 2, 8, 16777216, 16777216, 1, 16},
-    {BF16, 1, 262144, 2, 2, 1, 1},
-    {BF16, 1, 262144, 3, 3, 1, 2},
-    {BF16, 1, 262144, 4, 4, 1, 3},
-    {BF16, 1, 262144, 5, 7, 1, 4},
-    {BF16, 1, 262144, 8, 8, 1, 6},
-    {BF16, 1, 262144, 9, 15, 1, 4},
-    {BF16, 16384, 262144, 9, 15, 5, 7},
-    {BF16, 1, 262144, 16, 16, 1, 13},
-    {BF16, 1, 262144, 17, 31, 1, 4},
-    {BF16, 1024, 16384, 17, 31, 5, 8},
-    {BF16, 1, 262144, 17, 31, 9, 14},
-    {BF16, 1, 262144, 32, 32, 1, 27},
-    {BF16, 1, 262144, 33, 63, 1, 4},
-    {BF16, 1024, 262144, 33, 63, 5, 8},
-    {BF16, 1, 262144, 33, 63, 9, 28},
-    {BF16, 1, 262144, 64, 64, 1, 54},
-    {BF16, 1, 262144, 65, 127, 1, 2},
-    {BF16, 1024, 16384, 65, 127, 3, 8},
-    {BF16, 1, 262144, 65, 127, 17, 32},
-    {BF16, 1024, 16384, 65, 127, 33, 55},
-    {BF16, 1, 262144, 128, 128, 1, 8},
-    {BF16, 1024, 262144, 128, 128, 9, 16},
-    {BF16, 1, 262144, 128, 128, 17, 108},
-    {BF16, 1, 262144, 129, 255, 1, 4},
-    {BF16, 1024, 262144, 129, 255, 5, 8},
-    {BF16, 1024, 262144, 129, 255, 17, 109},
-    {BF16, 1, 262144, 256, 256, 1, 128},
-    {BF16, 1, 262144, 257, 511, 1, 4},
-    {BF16, 1, 16384, 257, 511, 5, 8},
-    {BF16, 1, 262144, 257, 511, 17, 128},
-    {BF16, 1, 262144, 512, 512, 1, 128},
-    {BF16, 1, 16384, 513, 1023, 1, 8},
-    {BF16, 1, 16384, 513, 1023, 17, 128},
-    {BF16, 1, 131072, 1024, 1024, 1, 8},
-    {BF16, 1024, 131072, 1024, 1024, 9, 16},
-    {BF16, 1, 131072, 1024, 1024, 17, 128},
-    {BF16, 1, 130944, 1025, 2047, 1, 64},
-    {BF16, 1, 16384, 1025, 2047, 65, 128},
-    {BF16, 1, 65536, 2048, 2048, 1, 8},
-    {BF16, 1024, 65536, 2048, 2048, 9, 16},
-    {BF16, 1, 65536, 2048, 2048, 17, 128},
-    {BF16, 1, 65504, 2049, 4095, 1, 128},
-    {BF16, 1, 32768, 4096, 4096, 1, 128},
-    {BF16, 1, 32760, 4097, 8191, 1, 32},
-    {BF16, 1, 64, 4097, 8191, 33, 64},
-    {BF16, 1, 1024, 4097, 8191, 65, 128},
-    {BF16, 1, 16384, 8192, 8192, 1, 16},
-    {BF16, 64, 16384, 8192, 8192, 17, 32},
-    {BF16, 1, 16384, 8192, 8192, 65, 128},
-    {BF16, 1, 16382, 8193, 16383, 1, 64},
-    {BF16, 1, 8192, 16384, 16384, 1, 16},
-    {BF16, 64, 8192, 16384, 16384, 17, 32},
-    {BF16, 1, 8191, 16385, 32767, 1, 128},
-    {BF16, 1, 4096, 32768, 32768, 1, 128},
-    {BF16, 1, 4095, 32769, 65535, 1, 128},
-    {BF16, 1, 2048, 65536, 65536, 1, 128},
-    {BF16, 1, 2047, 65537, 131071, 1, 128},
-    {BF16, 1, 1024, 131072, 131072, 1, 128},
-    {BF16, 1, 1023, 131073, 262143, 1, 128},
-    {BF16, 1, 512, 262144, 262144, 1, 128},
-    {BF16, 1, 511, 262145, 524287, 1, 128},
-    {BF16, 1, 256, 524288, 524288, 1, 64},
-    {BF16, 64, 256, 524288, 524288, 65, 128},
-    {BF16, 1, 255, 524289, 1048575, 1, 128},
-    {BF16, 1, 128, 1048576, 1048576, 1, 64},
-    {BF16, 64, 128, 1048576, 1048576, 65, 128},
-    {BF16, 1, 127, 1048577, 2097151, 1, 64},
-    {BF16, 64, 127, 1048577, 2097151, 65, 128},
-    {BF16, 2, 64, 2097152, 2097152, 1, 128},
-    {BF16, 1, 63, 2097153, 4194303, 1, 64},
-    {BF16, 2, 32, 4194304, 4194304, 1, 64},
-    {BF16, 1, 31, 4194305, 8388607, 1, 32},
-    {BF16, 2, 16, 8388608, 8388608, 1, 32},
-    {BF16, 1, 15, 8388609, 16777215, 1, 16},
-    {BF16, 2, 8, 16777216, 16777216, 1, 16},
-};
-
-absl::Span<const TopKSpeedRegion> GetTopKSpeedTable(
-    const se::DeviceDescription& device) {
-  const se::RocmComputeCapability* rocm =
-      device.gpu_compute_capability().rocm_compute_capability();
-  if (rocm != nullptr && rocm->gfx9_mi350()) {
-    return kMi350SpeedTable;
+// MI350 (gfx950): the Triton kernels are faster than the default path except
+// in the regions below, measured on stable TOTAL-order TopKs of random data
+// (rocprofv3 kernel times) for rows of 2 to 2^24 elements, batches of 1 to
+// 2^18 and k up to 128. Rows that are not a power of two were measured at the
+// length just above one, where the kernels pad the most.
+bool IsTritonTopKFasterOnMi350(const TopKKernelSpec& spec) {
+  const bool bf16 = spec.input_type == BF16;
+  if (!bf16 && spec.input_type != F32) {
+    return false;
   }
-  return {};
+  const int64_t batch = spec.batch, n = spec.n, k = spec.k;
+  const bool padded = !absl::has_single_bit(static_cast<uint64_t>(n));
+  // The k rounds of the selection scan the row padded to a power of two.
+  if (padded && batch > 1 && batch <= 64 && n > 16 && n <= 256 && k >= 5 &&
+      k <= 8) {
+    return false;
+  }
+  if (padded && batch > 1 && n > 64 && n <= (bf16 ? 1024 : 512) && k >= 9 &&
+      k <= 16) {
+    return false;
+  }
+  // The bitonic selection in one program over 4K to 16K keys.
+  if (bf16 && n > 4096 && n <= 16384 && k > 32 && k <= 64) {
+    return false;
+  }
+  if (n > 8192 && n <= 16384 && k > 64 && batch < 16384) {
+    return false;
+  }
+  // One long f32 row: merging the candidates of its chunks takes most of the
+  // time.
+  if (!bf16 && batch == 1 && n > (1 << 18) && k > 32) {
+    return false;
+  }
+  return true;
 }
 
 int64_t NextPowerOfTwo(int64_t x) {
@@ -412,14 +267,10 @@ int64_t GetTopKScratchElements(const TopKKernelSpec& spec,
 
 bool IsTritonTopKFaster(const TopKKernelSpec& spec,
                         const se::DeviceDescription& device) {
-  return absl::c_any_of(
-      GetTopKSpeedTable(device), [&](const TopKSpeedRegion& region) {
-        return region.input_type == spec.input_type &&
-               spec.batch >= region.min_batch &&
-               spec.batch <= region.max_batch && spec.n >= region.min_n &&
-               spec.n <= region.max_n && spec.k >= region.min_k &&
-               spec.k <= region.max_k;
-      });
+  const se::RocmComputeCapability* rocm =
+      device.gpu_compute_capability().rocm_compute_capability();
+  return rocm != nullptr && rocm->gfx9_mi350() &&
+         IsTritonTopKFasterOnMi350(spec);
 }
 
 bool IsTritonTopK(const HloCustomCallInstruction& topk) {

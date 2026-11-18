@@ -116,9 +116,9 @@ std::optional<TopKKernelConfig> GetTopKMergeConfig(
 int64_t GetTopKScratchElements(const TopKKernelSpec& spec,
                                const TopKKernelConfig& config);
 
-// Returns true if the measured speed table of `device` says that the Triton
-// kernel is faster than the default TopK path for `spec`. Devices without a
-// table return false.
+// Returns true if the Triton kernels were measured faster than the default
+// TopK path for `spec` on `device`. Only MI350 has been measured; other devices
+// return false.
 bool IsTritonTopKFaster(const TopKKernelSpec& spec,
                         const se::DeviceDescription& device);
 
