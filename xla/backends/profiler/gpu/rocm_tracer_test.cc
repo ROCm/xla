@@ -116,6 +116,10 @@ TEST(RocmTracerTest, GpuAgentDataMatchesHipDeviceProperties) {
   RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
   const auto& agents = tracer.GpuAgents();
   ASSERT_GT(agents.size(), 0u);
+  // Every HIP device found its agent by PCI address.
+  int count = 0;
+  ASSERT_EQ(hipGetDeviceCount(&count), hipSuccess);
+  EXPECT_EQ(agents.size(), static_cast<size_t>(count));
 
   hipDeviceProp_t props;
   ASSERT_EQ(hipGetDeviceProperties(&props, 0), hipSuccess);

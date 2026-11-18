@@ -55,7 +55,10 @@ class RocmTracer {
   // GPU k is HIP device k. The first call of NumGpus(), GpuAgents() or
   // Enable() sorts the agents into HIP order, so it makes HIP calls.
   uint32_t NumGpus() { return GpuAgents().size(); }
-  const std::vector<rocprofiler_agent_v0_t>& GpuAgents();
+  const std::vector<rocprofiler_agent_v0_t>& GpuAgents() {
+    SortAgentsByHipDevice();
+    return gpu_agents_;
+  }
   RocmTraceCollector* collector() { return collector_; }
 
   int toolInit(rocprofiler_client_finalize_t finalize_func, void* tool_data);
@@ -105,6 +108,9 @@ class RocmTracer {
 
  private:
   absl::Status InitProfiling(void* tool_data);
+  // Keeps the SDK's GPU agents that HIP sees, in HIP order. Only the first
+  // call does the work.
+  void SortAgentsByHipDevice();
   // The HIP device number of `agent`, or kInvalidDeviceId.
   uint32_t HipDeviceOf(rocprofiler_agent_id_t agent) const;
 

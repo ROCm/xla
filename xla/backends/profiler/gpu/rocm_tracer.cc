@@ -160,7 +160,7 @@ bool RocmTracer::IsAvailable() const {
   return ts;
 }
 
-const std::vector<rocprofiler_agent_v0_t>& RocmTracer::GpuAgents() {
+void RocmTracer::SortAgentsByHipDevice() {
   absl::call_once(hip_order_once_, [this] {
     int count = 0;
     if (hipGetDeviceCount(&count) != hipSuccess) {
@@ -188,7 +188,6 @@ const std::vector<rocprofiler_agent_v0_t>& RocmTracer::GpuAgents() {
     }
     gpu_agents_ = std::move(sorted);
   });
-  return gpu_agents_;
 }
 
 uint32_t RocmTracer::HipDeviceOf(rocprofiler_agent_id_t agent) const {
@@ -203,7 +202,7 @@ uint32_t RocmTracer::HipDeviceOf(rocprofiler_agent_id_t agent) const {
 absl::Status RocmTracer::Enable(RocmTraceCollector* collector) {
   // Before rocprofiler_start_context: the record callbacks read gpu_agents_,
   // which never changes after this.
-  GpuAgents();
+  SortAgentsByHipDevice();
   absl::MutexLock lock(collector_mutex_);
   if (collector_ != nullptr) {
     return absl::AlreadyExistsError("ROCM tracer is already running");
