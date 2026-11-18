@@ -38,6 +38,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/transforms/topk_rewriter.h"
 #include "xla/service/gpu/gpu_device_info_for_tests.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/xla.pb.h"
@@ -166,9 +167,15 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         RoutedCase{"StableTotalF32", "f32[8,1000]", "f32[8,32]", "s32[8,32]",
                    "", true, ComparisonOrder::kTotal},
+        RoutedCase{"UnstablePartialBf16", "bf16[24576,64]", "bf16[24576,6]",
+                   "s32[24576,6]", R"({is_stable = false, order = "PARTIAL"})",
+                   false, ComparisonOrder::kPartial},
         RoutedCase{"StablePartialF32", "f32[16,4096]", "f32[16,8]", "s32[16,8]",
                    R"({order = "PARTIAL"})", true, ComparisonOrder::kPartial},
         RoutedCase{"UnstableTotalF32", "f32[32,2048]", "f32[32,64]",
+                   "s32[32,64]", R"({is_stable = false})", false,
+                   ComparisonOrder::kTotal},
+        RoutedCase{"UnstableTotalBf16", "bf16[32,2048]", "bf16[32,64]",
                    "s32[32,64]", R"({is_stable = false})", false,
                    ComparisonOrder::kTotal},
         RoutedCase{"RankOne", "f32[4096]", "f32[16]", "s32[16]", "", true,
@@ -207,7 +214,6 @@ INSTANTIATE_TEST_SUITE_P(
     Shapes, TopkSpecializerTritonRejectedTest,
     ::testing::Values(
         RejectedCase{"F16", "f16[8,1000]", "f16[8,32]", "s32[8,32]"},
-        RejectedCase{"Bf16", "bf16[8,1000]", "bf16[8,32]", "s32[8,32]"},
         RejectedCase{"KAboveLimit", "f32[8,1000]", "f32[8,129]", "s32[8,129]"},
         RejectedCase{"KCloseToN", "f32[8,16]", "f32[8,14]", "s32[8,14]"},
         RejectedCase{"EmptyBatch", "f32[0,1000]", "f32[0,32]", "s32[0,32]"},
@@ -232,6 +238,53 @@ TEST_F(TopkSpecializerTritonTest, ForcedTopKKeepsTheMetadata) {
   EXPECT_EQ(
       module->entry_computation()->root_instruction()->metadata().op_name(),
       "top_k");
+}
+
+constexpr absl::string_view kDeferredPackedBf16 =
+    R"(frontend_attributes={_xla_topk_deferred_packed_bf16="true"})";
+
+TEST_F(TopkSpecializerTritonTest, DeferredPackedBf16KeepsTheTopKWhenNotRouted) {
+  // Not forced, and MI300 has no measurements, so it is not routed. Without
+  // the mark, it takes the prebuilt kernel.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> unmarked,
+                       ParseTopK("bf16[8,1024]", "bf16[8,16]", "s32[8,16]", "",
+                                 TritonTopKFlags::kOn));
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI300DeviceInfo()),
+                 unmarked.get()));
+  EXPECT_TRUE(changed);
+
+  // With the mark, TopkDecomposer later gives it the packed BF16 sort.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> marked,
+                       ParseTopK("bf16[8,1024]", "bf16[8,16]", "s32[8,16]", "",
+                                 TritonTopKFlags::kOn, kDeferredPackedBf16));
+  ASSERT_OK_AND_ASSIGN(
+      changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI300DeviceInfo()),
+                 marked.get()));
+  EXPECT_FALSE(changed);
+  const HloInstruction* root = marked->entry_computation()->root_instruction();
+  EXPECT_TRUE(root->IsCustomCall("TopK"));
+  EXPECT_TRUE(IsTopKWithDeferredPackedBf16(root));
+}
+
+TEST_F(TopkSpecializerTritonTest, DeferredPackedBf16IsRoutedWhenForced) {
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      ParseTopK("bf16[24576,64]", "bf16[24576,6]", "s32[24576,6]",
+                R"({is_stable = true, order = "TOTAL"})",
+                TritonTopKFlags::kForced, kDeferredPackedBf16));
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                 module.get()));
+  EXPECT_TRUE(changed);
+  ExpectMarkedTopK(*module, /*stable=*/true, ComparisonOrder::kTotal);
+  for (const HloInstruction* inst :
+       module->entry_computation()->instructions()) {
+    EXPECT_FALSE(IsTopKWithDeferredPackedBf16(inst)) << inst->ToString();
+  }
 }
 
 TEST_F(TopkSpecializerTritonTest, CudaIsNotRouted) {

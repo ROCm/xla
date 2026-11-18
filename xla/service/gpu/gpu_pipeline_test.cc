@@ -83,6 +83,7 @@ struct PipelineConfigCase {
   bool use_spmd_partitioning;
   bool use_shardy_partitioner;
   bool enable_enzyme_comms_opt;
+  bool rocm_triton_topk = false;
 };
 
 using DefaultPipelineCreatabilityTest =
@@ -99,9 +100,12 @@ TEST_P(DefaultPipelineCreatabilityTest, PassesAreCreatable) {
   config.set_use_shardy_partitioner(test_case.use_shardy_partitioner);
   config.mutable_debug_options().set_xla_enable_enzyme_comms_opt(
       test_case.enable_enzyme_comms_opt);
+  config.mutable_debug_options().set_xla_gpu_experimental_enable_triton_topk(
+      test_case.rocm_triton_topk);
 
   const se::DeviceDescription device_description =
-      TestGpuDeviceInfo::RTXA6000DeviceInfo();
+      test_case.rocm_triton_topk ? TestGpuDeviceInfo::AMDMI350DeviceInfo()
+                                 : TestGpuDeviceInfo::RTXA6000DeviceInfo();
   const GpuTopology gpu_topology("test", /*num_partitions=*/1,
                                  /*num_hosts_per_partition=*/1,
                                  /*num_devices_per_host=*/8);
@@ -136,7 +140,9 @@ INSTANTIATE_TEST_SUITE_P(
            PipelineConfigCase{"SinglePartitionShardy", 1, false, true, false},
            PipelineConfigCase{"SpmdGspmd", 8, true, false, false},
            PipelineConfigCase{"SpmdGspmdEnzyme", 8, true, false, true},
-           PipelineConfigCase{"SpmdShardy", 8, true, true, false}),
+           PipelineConfigCase{"SpmdShardy", 8, true, true, false},
+           PipelineConfigCase{"RocmTritonTopK", 1, false, false, false,
+                              /*rocm_triton_topk=*/true}),
     [](const TestParamInfo<PipelineConfigCase>& info) {
       return info.param.name;
     });

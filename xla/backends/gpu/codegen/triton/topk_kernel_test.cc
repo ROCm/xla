@@ -112,6 +112,18 @@ TEST_F(TopKKernelTest, F32PartialKernel) {
   EXPECT_THAT(ir, HasSubstr("2147483647"));
 }
 
+TEST_F(TopKKernelTest, Bf16PartialKernel) {
+  // block_n = 64, rows_per_program = 64, k = 6 rounded up to 8.
+  ASSERT_OK_AND_ASSIGN(std::string ir, Build(Spec(24576, 64, 6, BF16,
+                                                  ComparisonOrder::kPartial)));
+  EXPECT_THAT(ir, HasSubstr("!tt.ptr<bf16>"));
+  EXPECT_THAT(ir, HasSubstr("tt.bitcast %"));
+  EXPECT_THAT(ir, HasSubstr("tensor<64x64xbf16> -> tensor<64x64xi16>"));
+  EXPECT_THAT(ir, HasSubstr("tensor<64x8xi16> -> tensor<64x8xbf16>"));
+  // The PARTIAL index is 0x7FFFFFFF - idx.
+  EXPECT_THAT(ir, HasSubstr("2147483647"));
+}
+
 TEST_F(TopKKernelTest, LargeInputsUseI64Offsets) {
   // 2^21 rows of 2^11 elements need offsets of 32 bits or more.
   ASSERT_OK_AND_ASSIGN(std::string ir, Build(Spec(int64_t{1} << 21, 2048, 8)));
@@ -152,7 +164,7 @@ TEST_F(TopKKernelTest, RejectsSpecsOutsideTheLimits) {
 TEST_F(TopKKernelTest, EveryConfigOfTheRuleBuilds) {
   const se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
   int built = 0;
-  for (PrimitiveType type : {F32}) {
+  for (PrimitiveType type : {F32, BF16}) {
     for (ComparisonOrder order :
          {ComparisonOrder::kTotal, ComparisonOrder::kPartial}) {
       for (int64_t batch : {1, 3, 64, 1000, 24576}) {

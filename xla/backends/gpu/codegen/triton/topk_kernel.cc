@@ -45,6 +45,7 @@ limitations under the License.
 #include "xla/comparison_util.h"
 #include "xla/service/llvm_ir/llvm_util.h"
 #include "xla/util.h"
+#include "xla/xla_data.pb.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 
@@ -202,7 +203,8 @@ class TopKKernelBuilder {
         mlir::cast<RankedTensorType>(x.getType()).getShape());
   }
 
-  // The key of BuildPackF32ToU64 in topk_specializer.cc.
+  // The key of BuildPackF32ToU64 in topk_specializer.cc. BF16 bits shifted left
+  // by 16 are the F32 bits of the same value, so BF16 uses the F32 key.
   //   radix = bits ^ ((bits >>s 31) | 0x80000000)
   //   TOTAL:   hi = radix,              lo = 0xFFFFFFFF - idx
   //   PARTIAL: hi = radix + is_neg_zero, lo = ((0x7FFFFFFF - idx) << 1)
@@ -269,13 +271,30 @@ class TopKKernelBuilder {
                 b_, arith::ShRUIOp::create(b_, hi, Const(i32_, 31, shape)),
                 one),
             Const(i32_, 0x80000000u, shape)));
-    return {ttir::BitcastOp::create(b_, Tensor(value_type, shape), bits), idx};
+    Value value;
+    if (value_type.isF32()) {
+      value = ttir::BitcastOp::create(b_, Tensor(value_type, shape), bits);
+    } else {
+      Value bf16_bits = arith::TruncIOp::create(
+          b_, Tensor(b_.getI16Type(), shape),
+          arith::ShRUIOp::create(b_, bits, Const(i32_, 16, shape)));
+      value = ttir::BitcastOp::create(b_, Tensor(value_type, shape), bf16_bits);
+    }
+    return {value, idx};
   }
 
-  // The bit pattern of each element of the F32 `x`, as i32.
+  // The F32 bit pattern of each element of `x` (F32 or BF16), as i32.
   Value F32Bits(Value x) {
-    auto shape = mlir::cast<RankedTensorType>(x.getType()).getShape();
-    return ttir::BitcastOp::create(b_, Tensor(i32_, shape), x);
+    auto x_type = mlir::cast<RankedTensorType>(x.getType());
+    auto shape = x_type.getShape();
+    if (x_type.getElementType().isF32()) {
+      return ttir::BitcastOp::create(b_, Tensor(i32_, shape), x);
+    }
+    Value bf16_bits =
+        ttir::BitcastOp::create(b_, Tensor(b_.getI16Type(), shape), x);
+    return arith::ShLIOp::create(
+        b_, arith::ExtUIOp::create(b_, Tensor(i32_, shape), bf16_bits),
+        Const(i32_, 16, shape));
   }
 
   // The unsigned maximum of each row of a [rows, n] tensor of keys.
@@ -384,7 +403,8 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> BuildTopKKernel(
       llvm_ir::CreateMlirModuleOp(b.getLoc());
   b.setInsertionPointToEnd(module->getBody());
 
-  Type value_type = b.getF32Type();
+  Type value_type =
+      spec.input_type == F32 ? Type(b.getF32Type()) : Type(b.getBF16Type());
   Type value_ptr = ttir::PointerType::get(value_type);
   Type index_ptr = ttir::PointerType::get(b.getI32Type());
   auto function_type =

@@ -53,6 +53,7 @@ TopKKernelSpec Spec(int64_t batch, int64_t n, int64_t k,
 }
 
 TEST(TopKKernelLimitsTest, AcceptsSupportedSpecs) {
+  EXPECT_THAT(CheckTopKKernelLimits(Spec(24576, 64, 6, BF16)), IsOk());
   EXPECT_THAT(CheckTopKKernelLimits(Spec(1, 8, 1)), IsOk());
   EXPECT_THAT(CheckTopKKernelLimits(Spec(7, 1000, 128)), IsOk());
   EXPECT_THAT(
@@ -64,9 +65,6 @@ TEST(TopKKernelLimitsTest, RejectsUnsupportedSpecs) {
   EXPECT_THAT(CheckTopKKernelLimits(Spec(8, 1024, 8, F16)),
               StatusIs(absl::StatusCode::kInvalidArgument,
                        HasSubstr("unsupported type f16")));
-  EXPECT_THAT(CheckTopKKernelLimits(Spec(8, 1024, 8, BF16)),
-              StatusIs(absl::StatusCode::kInvalidArgument,
-                       HasSubstr("unsupported type bf16")));
   EXPECT_THAT(CheckTopKKernelLimits(Spec(8, 1024, 8, S32)),
               StatusIs(absl::StatusCode::kInvalidArgument,
                        HasSubstr("unsupported type s32")));
@@ -93,7 +91,7 @@ TEST(TopKKernelLimitsTest, RejectsUnsupportedSpecs) {
 TEST(TopKKernelConfigTest, ShortRowsShareAProgram) {
   se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
   std::optional<TopKKernelConfig> config =
-      GetTopKKernelConfig(Spec(24576, 64, 6), mi350);
+      GetTopKKernelConfig(Spec(24576, 64, 6, BF16), mi350);
   ASSERT_TRUE(config.has_value());
   EXPECT_EQ(config->block_n, 64);
   EXPECT_EQ(config->rows_per_program, 64);

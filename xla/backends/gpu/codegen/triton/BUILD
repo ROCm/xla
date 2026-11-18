@@ -949,6 +949,7 @@ cc_library(
         ":topk_config",
         "//xla:comparison_util",
         "//xla:util",
+        "//xla:xla_data_proto_cc",
         "//xla/service/llvm_ir:llvm_util",
         "@com_google_absl//absl/numeric:bits",
         "@com_google_absl//absl/status",

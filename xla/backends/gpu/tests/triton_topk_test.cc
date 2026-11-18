@@ -23,6 +23,7 @@ limitations under the License.
 #include <memory>
 #include <numeric>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -59,6 +60,7 @@ limitations under the License.
 #include "xla/tests/test_utils.h"
 #include "xla/tsl/platform/env.h"
 #include "xla/tsl/testing/temporary_directory.h"
+#include "xla/types.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/path.h"
@@ -193,8 +195,19 @@ std::vector<const Literal*> Pointers(const std::vector<Literal>& literals) {
   return pointers;
 }
 
-// The bit pattern of an f32 value.
-uint32_t F32Bits(float value) { return absl::bit_cast<uint32_t>(value); }
+// Unsigned integer of the same width as a float type.
+template <typename T>
+using BitsOf = std::conditional_t<sizeof(T) == 4, uint32_t, uint16_t>;
+
+// The f32 bit pattern of an f32 or bf16 value.
+template <typename T>
+uint32_t F32Bits(T value) {
+  if constexpr (sizeof(T) == 4) {
+    return absl::bit_cast<uint32_t>(value);
+  } else {
+    return uint32_t{absl::bit_cast<uint16_t>(value)} << 16;
+  }
+}
 
 // Sort key of XLA's TOTAL order (larger key = larger value); PARTIAL order
 // treats -0 as +0.
@@ -243,16 +256,16 @@ void ExpectValidUnstableTopK(const Literal& input, const Literal& reference,
     absl::flat_hash_set<int32_t> seen;
     for (int64_t j = 0; j < shape.k; ++j) {
       const int64_t pos = row * shape.k + j;
-      ASSERT_EQ(absl::bit_cast<uint32_t>(values[pos]),
-                absl::bit_cast<uint32_t>(ref_values[pos]))
+      ASSERT_EQ(absl::bit_cast<BitsOf<T>>(values[pos]),
+                absl::bit_cast<BitsOf<T>>(ref_values[pos]))
           << "row " << row << " position " << j;
       const int32_t index = indices[pos];
       ASSERT_GE(index, 0);
       ASSERT_LT(index, shape.n);
       ASSERT_TRUE(seen.insert(index).second)
           << "row " << row << " repeats index " << index;
-      ASSERT_EQ(absl::bit_cast<uint32_t>(in[row * shape.n + index]),
-                absl::bit_cast<uint32_t>(values[pos]))
+      ASSERT_EQ(absl::bit_cast<BitsOf<T>>(in[row * shape.n + index]),
+                absl::bit_cast<BitsOf<T>>(values[pos]))
           << "row " << row << " index " << index;
     }
   }
@@ -270,7 +283,7 @@ std::vector<GridCase> GridCases() {
       {0, 7},     {0, 1000}, {0, 16384}, {3, 64},  {129, 33},
       {17, 1024}, {5, 4096}, {2, 16384}, {1000, 8}};
   std::vector<GridCase> cases;
-  for (PrimitiveType type : {F32}) {
+  for (PrimitiveType type : {F32, BF16}) {
     for (auto [batch, n] : batch_and_n) {
       for (int64_t k : {1, 2, 6, 16, 17, 33, 64, 128}) {
         if (static_cast<double>(k) / n < 0.85) {
@@ -349,7 +362,11 @@ TEST_P(TritonTopKGridTest, UnstableIsValidAndDeterministic) {
   ASSERT_OK_AND_ASSIGN(Literal first, Run(triton.get(), Pointers(args)));
   ASSERT_OK_AND_ASSIGN(Literal second, Run(triton.get(), Pointers(args)));
   EXPECT_TRUE(LiteralTestUtil::Equal(first, second));
-  ExpectValidUnstableTopK<float>(args[0], reference, first, c.shape);
+  if (c.type == F32) {
+    ExpectValidUnstableTopK<float>(args[0], reference, first, c.shape);
+  } else {
+    ExpectValidUnstableTopK<bfloat16>(args[0], reference, first, c.shape);
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(TritonTopKGrid, TritonTopKGridTest,
@@ -511,6 +528,12 @@ constexpr uint32_t kSpecialF32[] = {
     0xFFE00000u, 0x00000000u, 0xFF800000u, 0x42810000u, 0x7FE00000u,
     0x3C4D0000u, 0x00700000u, 0x80100000u, 0x00020000u, 0x80010000u,
     0x7F800001u, 0xFF800001u, 0x7FA00000u, 0xFFA00000u};
+// The same values as bf16 (upper halves), with bf16 signaling NaNs.
+constexpr uint16_t kSpecialBf16[] = {
+    0xFF80u, 0x7F80u, 0x8010u, 0x0000u, 0x7FC0u, 0x7FE1u, 0x8000u, 0xC281u,
+    0x7F80u, 0xFFC0u, 0xFFE1u, 0xC281u, 0x8000u, 0x0002u, 0x8001u, 0xFFE0u,
+    0x0000u, 0xFF80u, 0x4281u, 0x7FE0u, 0x3C4Du, 0x0070u, 0x8010u, 0x0002u,
+    0x8001u, 0x7F81u, 0xFF81u, 0x7FA0u, 0xFFA0u};
 
 bool IsSignalingNan(uint32_t f32_bits) {
   return (f32_bits & 0x7F800000u) == 0x7F800000u &&
@@ -519,7 +542,7 @@ bool IsSignalingNan(uint32_t f32_bits) {
 
 template <typename T>
 T FromBits(uint32_t bits) {
-  return absl::bit_cast<T>(bits);
+  return absl::bit_cast<T>(static_cast<BitsOf<T>>(bits));
 }
 
 // Rows start with a rotation of the special values and are filled with the
@@ -528,15 +551,23 @@ T FromBits(uint32_t bits) {
 template <typename T>
 Array2D<T> MakeInput(Pattern pattern, int64_t batch, int64_t n,
                      bool with_signaling_nans) {
-  std::vector<uint32_t> special(std::begin(kSpecialF32), std::end(kSpecialF32));
-  if (!with_signaling_nans) {
-    special.erase(
-        std::remove_if(special.begin(), special.end(), IsSignalingNan),
-        special.end());
+  std::vector<uint32_t> special;
+  if constexpr (sizeof(T) == 4) {
+    special.assign(std::begin(kSpecialF32), std::end(kSpecialF32));
+  } else {
+    special.assign(std::begin(kSpecialBf16), std::end(kSpecialBf16));
   }
-  const uint32_t smallest_nan = 0xFFFFFFFFu;
-  const uint32_t one = 0x3F800000u;
-  const uint32_t neg_zero = 0x80000000u;
+  if (!with_signaling_nans) {
+    special.erase(std::remove_if(special.begin(), special.end(),
+                                 [](uint32_t bits) {
+                                   return IsSignalingNan(
+                                       sizeof(T) == 4 ? bits : bits << 16);
+                                 }),
+                  special.end());
+  }
+  const uint32_t smallest_nan = sizeof(T) == 4 ? 0xFFFFFFFFu : 0xFFFFu;
+  const uint32_t one = sizeof(T) == 4 ? 0x3F800000u : 0x3F80u;
+  const uint32_t neg_zero = sizeof(T) == 4 ? 0x80000000u : 0x8000u;
   const uint32_t ties[] = {one, 0, neg_zero, one, 0};
   Array2D<T> input(batch, n);
   for (int64_t row = 0; row < batch; ++row) {
@@ -570,7 +601,7 @@ struct SpecialCase {
 
 std::vector<SpecialCase> SpecialCases(bool all_patterns) {
   std::vector<SpecialCase> cases;
-  for (PrimitiveType type : {F32}) {
+  for (PrimitiveType type : {F32, BF16}) {
     for (bool partial : {false, true}) {
       for (Pattern pattern :
            {Pattern::kSpecial, Pattern::kTies, Pattern::kAllEqual}) {
@@ -623,10 +654,18 @@ TEST_P(TritonTopKSpecialValuesTest, MatchesHostReferenceBitwise) {
               /*stable=*/true);
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> triton,
                        CompileWithTritonTopK(hlo));
-  Array2D<float> array =
-      MakeInput<float>(c.pattern, c.shape.batch, c.shape.n, true);
-  Literal input = LiteralUtil::CreateR2FromArray2D<float>(array);
-  Literal expected = ReferenceTopK(array, c.shape.k, c.partial);
+  Literal input, expected;
+  if (c.type == F32) {
+    Array2D<float> array =
+        MakeInput<float>(c.pattern, c.shape.batch, c.shape.n, true);
+    input = LiteralUtil::CreateR2FromArray2D<float>(array);
+    expected = ReferenceTopK(array, c.shape.k, c.partial);
+  } else {
+    Array2D<bfloat16> array =
+        MakeInput<bfloat16>(c.pattern, c.shape.batch, c.shape.n, true);
+    input = LiteralUtil::CreateR2FromArray2D<bfloat16>(array);
+    expected = ReferenceTopK(array, c.shape.k, c.partial);
+  }
   ASSERT_OK_AND_ASSIGN(Literal actual, Run(triton.get(), {&input}));
   EXPECT_TRUE(LiteralTestUtil::Equal(expected, actual));
 }
@@ -643,8 +682,10 @@ std::string PackSelectUnpackHlo(PrimitiveType type, const TopKShape& shape,
                                 bool partial) {
   const std::string in = Dims(shape.batch, shape.n);
   const std::string out = Dims(shape.batch, shape.k);
-  const std::string to_f32 = "x32 = f32[$0] copy(x)";
-  const std::string from_f32 = "vals = f32[$1] copy(v32)";
+  const std::string to_f32 =
+      type == F32 ? "x32 = f32[$0] copy(x)" : "x32 = f32[$0] convert(x)";
+  const std::string from_f32 =
+      type == F32 ? "vals = f32[$1] copy(v32)" : "vals = bf16[$1] convert(v32)";
   const std::string pack_low = partial ? R"hlo(
       c7f = u32[] constant(2147483647)
       b7f = u32[$0] broadcast(c7f), dimensions={}
@@ -724,6 +765,8 @@ class TritonTopKEquivalenceTest
     : public TritonTopKTest,
       public ::testing::WithParamInterface<SpecialCase> {};
 
+// Signaling NaNs are left out: the bf16 <-> f32 converts of the adapter quiet
+// them, while the Triton kernel returns the input bits.
 TEST_P(TritonTopKEquivalenceTest, MatchesTheU64AdapterBitwise) {
   const SpecialCase& c = GetParam();
   if (!FitsTritonTopK(c.type, c.shape)) {
@@ -736,7 +779,8 @@ TEST_P(TritonTopKEquivalenceTest, MatchesTheU64AdapterBitwise) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> adapter,
                        Compile(PackSelectUnpackHlo(c.type, c.shape, c.partial),
                                ConfigWithTritonTopK(false)));
-  Literal input = MakeInputLiteral<float>(c, /*with_signaling_nans=*/false);
+  Literal input = c.type == F32 ? MakeInputLiteral<float>(c, false)
+                                : MakeInputLiteral<bfloat16>(c, false);
   ASSERT_OK_AND_ASSIGN(Literal expected, Run(adapter.get(), {&input}));
   ASSERT_OK_AND_ASSIGN(Literal actual, Run(triton.get(), {&input}));
   EXPECT_TRUE(LiteralTestUtil::Equal(expected, actual));

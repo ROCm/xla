@@ -43,6 +43,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/transforms/topk_rewriter.h"
 #include "xla/literal_util.h"
 #include "xla/primitive_util.h"
 #include "xla/service/decision.h"
@@ -780,11 +781,21 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
           debug_options.xla_gpu_experimental_force_triton_topk());
       if (use_triton.IsAllowed()) {
         VLOG(2) << "Rewriting TopK for the Triton TopK kernels";
+        // No packed BF16 sort follows, and the new TopK copies the frontend
+        // attributes.
+        topk->erase_frontend_attribute(kTopKDeferredPackedBf16Attr);
         ABSL_ASSIGN_OR_RETURN(HloInstruction * new_topk,
                               RewriteTopKForRocmTriton(topk));
         return ReplaceInstruction(topk, new_topk);
       }
       VLOG(2) << "Triton TopK not used: " << use_triton.Explain();
+    }
+
+    // A BF16 TopK whose packed sort was deferred for the Triton TopK kernels
+    // keeps that sort (from TopkDecomposer) when the kernels do not take it.
+    if (IsTopKWithDeferredPackedBf16(topk)) {
+      VLOG(2) << "Keeping the deferred packed BF16 sort for " << topk->name();
+      return absl::OkStatus();
     }
 
     if (auto small_topk = SmallBufferOptimization(topk, cuda_cc, sm_count_);
