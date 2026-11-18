@@ -15,8 +15,8 @@ limitations under the License.
 
 // End-to-end tests of the Triton TopK kernels on ROCm. Every test forces the
 // Triton path and checks that the compiled module took it, then compares the
-// results bit for bit: with today's path (flag off), with upstream's u64
-// pack -> select -> unpack, or with a host reference.
+// results bit for bit: with the default path (flag off), with the u64
+// pack -> select -> unpack of TopkSpecializer, or with a host reference.
 
 #include <algorithm>
 #include <cstdint>
@@ -231,9 +231,9 @@ Literal ReferenceTopK(const Array2D<T>& input, int64_t k, bool partial) {
       LiteralUtil::CreateR2FromArray2D<int32_t>(indices));
 }
 
-// Checks the contract of an unstable TopK (design 4.7) against a stable
-// reference: the same value bits in order, and every index valid, unique in
-// its row and pointing to an element with exactly the returned value bits.
+// Checks the contract of an unstable TopK against a stable reference: the same
+// value bits in order, and every index valid, unique in its row and pointing to
+// an element with exactly the returned value bits.
 template <typename T>
 void ExpectValidUnstableTopK(const Literal& input, const Literal& reference,
                              const Literal& actual, const TopKShape& shape) {
@@ -261,7 +261,7 @@ void ExpectValidUnstableTopK(const Literal& input, const Literal& reference,
   }
 }
 
-// ---- L5: flag on vs flag off on random inputs ------------------------------
+// ---- Flag on vs flag off on random inputs ----------------------------------
 
 struct GridCase {
   PrimitiveType type;
@@ -269,7 +269,7 @@ struct GridCase {
 };
 
 std::vector<GridCase> GridCases() {
-  // Rows longer than 16384 are split into chunks (L4): a partial tail chunk,
+  // Rows longer than 16384 are split into chunks: a partial tail chunk,
   // a tail of one element, 16 chunks, and chunks grown to 8192 for k = 128.
   const std::vector<std::pair<int64_t, int64_t>> batch_and_n = {
       {0, 7},     {0, 1000},  {0, 16384},  {3, 64},   {129, 33},
@@ -284,7 +284,7 @@ std::vector<GridCase> GridCases() {
         }
       }
     }
-    // No kernel config fits, so the forced TopK keeps today's path.
+    // No kernel config fits, so the forced TopK keeps the default path.
     cases.push_back({type, {2, 1 << 24, 128}});
   }
   return cases;
@@ -301,7 +301,7 @@ class TritonTopKGridTest : public TritonTopKTest,
  protected:
   // Compiles `hlo` with the Triton TopK kernels forced. A shape that no kernel
   // config fits on this GPU, such as k = 128 over 2^20 keys with 32-wide
-  // wavefronts, must keep today's path.
+  // wavefronts, must keep the default path.
   absl::StatusOr<std::unique_ptr<OpaqueExecutable>> CompileForced(
       absl::string_view hlo) {
     const GridCase& c = GetParam();
@@ -329,13 +329,15 @@ class TritonTopKGridTest : public TritonTopKTest,
   }
 };
 
-TEST_P(TritonTopKGridTest, StableMatchesTodaysPathBitwise) {
+TEST_P(TritonTopKGridTest, StableMatchesTheDefaultPathBitwise) {
   const GridCase& c = GetParam();
   const std::string hlo = TopKHlo(c.type, c.shape, "TOTAL", /*stable=*/true);
   ASSERT_OK_AND_ASSIGN(auto triton, CompileForced(hlo));
-  ASSERT_OK_AND_ASSIGN(auto today, Compile(hlo, ConfigWithTritonTopK(false)));
+  ASSERT_OK_AND_ASSIGN(auto default_path,
+                       Compile(hlo, ConfigWithTritonTopK(false)));
   ASSERT_OK_AND_ASSIGN(std::vector<Literal> args, FakeArguments(hlo));
-  ASSERT_OK_AND_ASSIGN(Literal expected, Run(today.get(), Pointers(args)));
+  ASSERT_OK_AND_ASSIGN(Literal expected,
+                       Run(default_path.get(), Pointers(args)));
   ASSERT_OK_AND_ASSIGN(Literal actual, Run(triton.get(), Pointers(args)));
   EXPECT_TRUE(LiteralTestUtil::Equal(expected, actual));
 }
@@ -344,9 +346,11 @@ TEST_P(TritonTopKGridTest, UnstableIsValidAndDeterministic) {
   const GridCase& c = GetParam();
   const std::string hlo = TopKHlo(c.type, c.shape, "TOTAL", /*stable=*/false);
   ASSERT_OK_AND_ASSIGN(auto triton, CompileForced(hlo));
-  ASSERT_OK_AND_ASSIGN(auto today, Compile(hlo, ConfigWithTritonTopK(false)));
+  ASSERT_OK_AND_ASSIGN(auto default_path,
+                       Compile(hlo, ConfigWithTritonTopK(false)));
   ASSERT_OK_AND_ASSIGN(std::vector<Literal> args, FakeArguments(hlo));
-  ASSERT_OK_AND_ASSIGN(Literal reference, Run(today.get(), Pointers(args)));
+  ASSERT_OK_AND_ASSIGN(Literal reference,
+                       Run(default_path.get(), Pointers(args)));
   ASSERT_OK_AND_ASSIGN(Literal first, Run(triton.get(), Pointers(args)));
   ASSERT_OK_AND_ASSIGN(Literal second, Run(triton.get(), Pointers(args)));
   EXPECT_TRUE(LiteralTestUtil::Equal(first, second));
@@ -360,7 +364,7 @@ TEST_P(TritonTopKGridTest, UnstableIsValidAndDeterministic) {
 INSTANTIATE_TEST_SUITE_P(TritonTopKGrid, TritonTopKGridTest,
                          ::testing::ValuesIn(GridCases()), GridCaseName);
 
-// ---- L5: inside a while body and inside a command buffer -------------------
+// ---- Inside a while body and inside a command buffer -----------------------
 
 constexpr absl::string_view kTopKInWhileHlo = R"(
   HloModule topk_in_while
@@ -423,12 +427,13 @@ TEST_F(TritonTopKTest, TopKInWhileBody) {
   }
   EXPECT_TRUE(topk_in_while_body) << optimized->ToString();
 
-  ASSERT_OK_AND_ASSIGN(auto today,
+  ASSERT_OK_AND_ASSIGN(auto default_path,
                        Compile(kTopKInWhileHlo, ConfigWithTritonTopK(false)));
   ASSERT_OK_AND_ASSIGN(std::vector<Literal> args,
                        FakeArguments(kTopKInWhileHlo));
   args[1] = LiteralUtil::CreateR0<int32_t>(3);
-  ASSERT_OK_AND_ASSIGN(Literal expected, Run(today.get(), Pointers(args)));
+  ASSERT_OK_AND_ASSIGN(Literal expected,
+                       Run(default_path.get(), Pointers(args)));
   ASSERT_OK_AND_ASSIGN(Literal actual, Run(triton.get(), Pointers(args)));
   EXPECT_TRUE(LiteralTestUtil::Equal(expected, actual));
 }
@@ -477,9 +482,11 @@ TEST_P(TritonTopKCommandBufferTest, TopKInCommandBuffer) {
   ASSERT_OK(tsl::ReadFileToString(tsl::Env::Default(), dump_files[0], &dump));
   EXPECT_TRUE(HasKernelInCommandBuffer(dump)) << dump;
 
-  ASSERT_OK_AND_ASSIGN(auto today, Compile(hlo, ConfigWithTritonTopK(false)));
+  ASSERT_OK_AND_ASSIGN(auto default_path,
+                       Compile(hlo, ConfigWithTritonTopK(false)));
   ASSERT_OK_AND_ASSIGN(std::vector<Literal> args, FakeArguments(hlo));
-  ASSERT_OK_AND_ASSIGN(Literal expected, Run(today.get(), Pointers(args)));
+  ASSERT_OK_AND_ASSIGN(Literal expected,
+                       Run(default_path.get(), Pointers(args)));
   // Runs 1 and 2 record the command buffer; run 3 updates it with new buffers.
   for (int run = 0; run < 3; ++run) {
     std::vector<Literal> copies;
@@ -500,7 +507,7 @@ INSTANTIATE_TEST_SUITE_P(TritonTopKCommandBuffer, TritonTopKCommandBufferTest,
                                                info.param.k);
                          });
 
-// ---- Special-value inputs (L6, L7) ----------------------------------------
+// ---- Special-value inputs --------------------------------------------------
 
 enum class Pattern { kSpecial, kTies, kAllEqual };
 
@@ -624,7 +631,7 @@ Literal MakeInputLiteral(const SpecialCase& c, bool with_signaling_nans) {
       MakeInput<T>(c.pattern, c.shape.batch, c.shape.n, with_signaling_nans));
 }
 
-// ---- L7: special values against the host reference -------------------------
+// ---- Special values against the host reference -----------------------------
 
 class TritonTopKSpecialValuesTest
     : public TritonTopKTest,
@@ -656,9 +663,9 @@ INSTANTIATE_TEST_SUITE_P(TritonTopKSpecialValues, TritonTopKSpecialValuesTest,
                          ::testing::ValuesIn(SpecialCases(true)),
                          SpecialCaseName);
 
-// ---- L6: equal to upstream's u64 pack -> select -> unpack -------------------
+// ---- Equal to the u64 pack -> select -> unpack of TopkSpecializer ----------
 
-// The HLO of upstream's u64 adapter (BuildPackF32ToU64, BuildUnpackU64ToF32 in
+// The HLO of the u64 adapter (BuildPackF32ToU64, BuildUnpackU64ToF32 in
 // topk_specializer.cc), op for op, around a u64 TopK that becomes a sort.
 std::string PackSelectUnpackHlo(PrimitiveType type, const TopKShape& shape,
                                 bool partial) {
@@ -747,20 +754,20 @@ class TritonTopKEquivalenceTest
     : public TritonTopKTest,
       public ::testing::WithParamInterface<SpecialCase> {};
 
-// Signaling NaNs are left out: upstream's bf16 <-> f32 converts quiet them,
-// while the Triton kernel returns the input bits (design T4).
-TEST_P(TritonTopKEquivalenceTest, MatchesUpstreamPackSelectUnpackBitwise) {
+// Signaling NaNs are left out: the bf16 <-> f32 converts of the adapter quiet
+// them, while the Triton kernel returns the input bits.
+TEST_P(TritonTopKEquivalenceTest, MatchesTheU64AdapterBitwise) {
   const SpecialCase& c = GetParam();
   ASSERT_OK_AND_ASSIGN(
       auto triton, CompileWithTritonTopK(
                        TopKHlo(c.type, c.shape, c.partial ? "PARTIAL" : "TOTAL",
                                /*stable=*/true)));
-  ASSERT_OK_AND_ASSIGN(auto upstream,
+  ASSERT_OK_AND_ASSIGN(auto adapter,
                        Compile(PackSelectUnpackHlo(c.type, c.shape, c.partial),
                                ConfigWithTritonTopK(false)));
   Literal input = c.type == F32 ? MakeInputLiteral<float>(c, false)
                                 : MakeInputLiteral<bfloat16>(c, false);
-  ASSERT_OK_AND_ASSIGN(Literal expected, Run(upstream.get(), {&input}));
+  ASSERT_OK_AND_ASSIGN(Literal expected, Run(adapter.get(), {&input}));
   ASSERT_OK_AND_ASSIGN(Literal actual, Run(triton.get(), {&input}));
   EXPECT_TRUE(LiteralTestUtil::Equal(expected, actual));
 }

@@ -327,8 +327,8 @@ class TopKKernelBuilder {
     return absl::bit_width(static_cast<uint64_t>(x)) - 1;
   }
 
-  // The key of upstream's BuildPackF32ToU64. BF16 bits shifted left by 16 are
-  // the F32 bits of the same value, so BF16 uses the F32 key.
+  // The key of BuildPackF32ToU64 in topk_specializer.cc. BF16 bits shifted left
+  // by 16 are the F32 bits of the same value, so BF16 uses the F32 key.
   //   radix = bits ^ ((bits >>s 31) | 0x80000000)
   //   TOTAL:   hi = radix,              lo = 0xFFFFFFFF - idx
   //   PARTIAL: hi = radix + is_neg_zero, lo = ((0x7FFFFFFF - idx) << 1)
@@ -369,7 +369,7 @@ class TopKKernelBuilder {
         arith::ExtUIOp::create(b_, key_type, lo));
   }
 
-  // The inverse of Pack, as upstream's BuildUnpackU64ToF32.
+  // The inverse of Pack, as BuildUnpackU64ToF32 in topk_specializer.cc.
   std::pair<Value, Value> Unpack(Value key, Type value_type, bool partial) {
     auto shape = mlir::cast<RankedTensorType>(key.getType()).getShape();
     Type i32_tensor = Tensor(i32_, shape);

@@ -287,7 +287,7 @@ TEST(TopKRoutingTest, Mi350KeepsOtherTypes) {
                                   TestGpuDeviceInfo::AMDMI350DeviceInfo()));
 }
 
-TEST(TopKRoutingTest, OtherDevicesKeepTodaysPath) {
+TEST(TopKRoutingTest, OtherDevicesKeepTheDefaultPath) {
   EXPECT_FALSE(IsTritonTopKFaster(Spec(24576, 64, 6, BF16),
                                   TestGpuDeviceInfo::AMDMI300DeviceInfo()));
   EXPECT_FALSE(IsTritonTopKFaster(Spec(24576, 64, 6, BF16),

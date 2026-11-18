@@ -15,6 +15,9 @@ limitations under the License.
 
 #include "xla/service/topk_rewriter.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -24,13 +27,10 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status_matchers.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
@@ -871,7 +871,7 @@ ENTRY TopK {
 }
 
 TEST_F(TopkRewriterTest, TopKDecompositionDeferredPackedOnlyMarksPackedCases) {
-  for (absl::string_view topk : {
+  for (const char* topk : {
            "x = f32[10,10] parameter(0)\n"
            "ROOT t = (f32[10,2], s32[10,2]) topk(x), k=2, largest=true",
            "x = bf16[2,65536] parameter(0)\n"

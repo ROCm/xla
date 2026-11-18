@@ -122,7 +122,8 @@ TEST_F(TopkSpecializerTritonTest, FlagOffKeepsTopK) {
   EXPECT_FALSE(changed);
 }
 
-TEST_F(TopkSpecializerTritonTest, FlagOnKeepsShapesWhereTodaysPathIsFaster) {
+TEST_F(TopkSpecializerTritonTest,
+       FlagOnKeepsShapesWhereTheDefaultPathIsFaster) {
   auto module = ParseTopK("f32[8,16384]", "f32[8,128]", "s32[8,128]", "",
                           TritonTopKFlags::kOn);
   ASSERT_OK_AND_ASSIGN(
@@ -270,8 +271,8 @@ TEST_F(TopkSpecializerTritonTest, FlagOnRoutesLongRows) {
             HloOpcode::kTuple);
 }
 
-TEST_F(TopkSpecializerTritonTest, OneLongRowWithLargeKKeepsTodaysPath) {
-  // Merging the candidates of the chunks costs more than today's sort.
+TEST_F(TopkSpecializerTritonTest, OneLongRowWithLargeKKeepsTheDefaultPath) {
+  // Merging the candidates of the chunks costs more than the default sort.
   auto module = ParseTopK("f32[1,1048576]", "f32[1,128]", "s32[1,128]", "",
                           TritonTopKFlags::kOn);
   ASSERT_OK_AND_ASSIGN(
@@ -580,8 +581,8 @@ TEST_F(TopkSpecializerTritonSortTest, KeepsTheSortAfterAPartialOrderTopK) {
   EXPECT_TRUE(HasSort(*module));
 }
 
-TEST_F(TopkSpecializerTritonSortTest, KeepsTheSortAfterTodaysTopK) {
-  // Today's path is faster, so the TopK keeps it.
+TEST_F(TopkSpecializerTritonSortTest, KeepsTheSortAfterADefaultPathTopK) {
+  // The default path is faster, so the TopK keeps it.
   auto module =
       ParseTopKThenSort("f32", "8,16384", "8,128", "", TritonTopKFlags::kOn);
   ASSERT_OK(RunOnMi350(module.get()));

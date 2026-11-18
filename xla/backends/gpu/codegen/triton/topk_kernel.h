@@ -39,11 +39,12 @@ namespace xla::gpu {
 //
 // Each element gets the 64-bit priority key of the stable TopK adapter
 // (openxla/xla#43913): an order-preserving form of the value in the high 32
-// bits and a reversed index in the low 32 bits, bit for bit as upstream's
-// pack in TopkSpecializer. All keys of a row differ, so `k` rounds of "take the
-// row maximum and remove it" give the stable order. Positions past the end of
-// a row get key 0, which is below every real key. Chunks use the index within
-// the whole row, so the merge step decodes the original positions.
+// bits and a reversed index in the low 32 bits, bit for bit as
+// BuildPackF32ToU64 in topk_specializer.cc. All keys of a row differ, so `k`
+// rounds of "take the row maximum and remove it" give the stable order.
+// Positions past the end of a row get key 0, which is below every real key.
+// Chunks use the index within the whole row, so the merge step decodes the
+// original positions.
 //
 // `context` must have the Triton, arith and SCF dialects loaded.
 absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> BuildTopKKernel(
