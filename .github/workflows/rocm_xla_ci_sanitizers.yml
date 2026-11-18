@@ -51,35 +51,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docker-image: ${{ steps.out.outputs.docker-image }}
-      therock-version: ${{ steps.therock.outputs.therock_version }}
     steps:
       - id: out
         shell: bash
         run: |
           echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: openxla/xla
-          ref: main
-          sparse-checkout: |
-            build_tools/rocm
-          persist-credentials: false
-
-      - name: Fetch theRock version detection from ROCm/xla
-        run: |
-          wget -O build_tools/rocm/detect-therock-version.sh "https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/detect-therock-version.sh"
-          chmod +x build_tools/rocm/detect-therock-version.sh
-
-      - name: Detect latest TheRock version
-        id: therock
-        env:
-          ROCM_PIP_SOURCE: nightlies
-          GPU_TARGET: device-all
-          ROCM_SDK_VERSION: ""
-          PIP_INDEX_PATH: ""
-          THEROCK_INDEX_URL: ""
-        run: bash build_tools/rocm/detect-therock-version.sh
 
   execute-xla-ut-sanitizers:
     needs: rocm-config

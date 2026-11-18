@@ -45,7 +45,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docker-image: ${{ steps.out.outputs.docker-image }}
-      therock-version: ${{ steps.therock.outputs.therock_version }}
       # The benchmark matrix as JSON. Drives the matrix below *and* is recorded
       # verbatim in run.json, so a published directory says which ROCm build
       # produced it.
@@ -63,10 +62,6 @@ jobs:
         run: |
           echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
       - name: Resolve the XLA commit under test and stamp the run
         id: xla
         shell: bash
@@ -81,16 +76,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Benchmarking openxla/xla @ ${sha:0:6} ($sha)"
 
-      - name: Detect latest TheRock version
-        id: therock
-        env:
-          ROCM_PIP_SOURCE: prerelease
-          GPU_TARGET: device-all
-          ROCM_SDK_VERSION: '10.2'
-          PIP_INDEX_PATH: ''
-          THEROCK_INDEX_URL: 'https://rc.repo.amd.com/rocm/whl-next/'
-        run: bash build_tools/rocm/detect-therock-version.sh
-
       # The stacks to benchmark, defined here rather than inline under
       # `strategy.matrix` so that one definition serves both readers of it.
       # publish-perf-metrics needs the whole matrix to record it in run.json,
@@ -101,22 +86,19 @@ jobs:
       - name: Build the benchmark matrix
         id: matrix
         shell: bash
-        env:
-          THEROCK_VERSION: ${{ steps.therock.outputs.therock_version }}
         run: |
           set -euo pipefail
           python3 -I - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, os, sys
+          import json, sys
 
           # One pool for every mode: the stacks are only comparable when the
           # same hardware measured them.
           RUNNER = "amd-do-linux-xla-gpu-gfx950-dpx-4"
-          nightly = os.environ["THEROCK_VERSION"]
 
           modes = [
               {
                   "name": "therock_lts_release_7.14.1",
-                  "release": "10.0.0",
+                  "release": "7.14.1",
                   "distro_url": "https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-multiarch-7.14.1.tar.gz",
                   "distro_hash": "no_hash",
                   "runner": RUNNER,
@@ -129,12 +111,10 @@ jobs:
                   "runner": RUNNER,
               },
               {
-                  "name": "therock_nightly",
-                  "release": nightly,
-                  "distro_url": f"https://rc.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-{nightly}.tar.gz",
-                  # Resolved fresh every night, so there is no digest to pin it
-                  # to; `release` above is what identifies which build this was.
-                  "distro_hash": "no_hash",
+                  "name": "therock_release_10.2",
+                  "release": "10.2.0",
+                  "distro_url": "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.2.0.tar.gz",
+                  "distro_hash": "6ac0b54de1a410b9727c37607c4c2cb6b4795c3db0a9b01393bccc8d8d01e87b",
                   "runner": RUNNER,
               },
           ]
@@ -311,7 +291,6 @@ jobs:
       # outright is part of what the run was, and the pair of lists says which
       # is which.
       MODES_JSON: ${{ needs.rocm-config.outputs.modes }}
-      THEROCK_VERSION: ${{ needs.rocm-config.outputs.therock-version }}
     steps:
       - name: Check out the perf tools
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

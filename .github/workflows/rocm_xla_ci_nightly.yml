@@ -34,6 +34,8 @@ on:
     paths:
       - ".github/workflows/rocm_xla_ci_nightly.yml"
       - ".github/workflows/rocm_xla_ci_jax.yml"
+      - "build_tools/rocm/nightly_rocm_stacks.py"
+      - "build_tools/rocm/detect-therock-version.sh"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
@@ -44,7 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docker-image: ${{ steps.out.outputs.docker-image }}
-      therock-version: ${{ steps.therock.outputs.therock_version }}
+      stacks: ${{ steps.stacks.outputs.stacks }}
+      xla-modes: ${{ steps.stacks.outputs.xla_modes }}
     steps:
       - id: out
         shell: bash
@@ -53,26 +56,13 @@ jobs:
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: openxla/xla
-          ref: main
           sparse-checkout: |
             build_tools/rocm
           persist-credentials: false
 
-      - name: Fetch theRock version detection from ROCm/xla
-        run: |
-          wget -O build_tools/rocm/detect-therock-version.sh "https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/detect-therock-version.sh"
-          chmod +x build_tools/rocm/detect-therock-version.sh
-
-      - name: Detect latest TheRock version
-        id: therock
-        env:
-          ROCM_PIP_SOURCE: prerelease
-          GPU_TARGET: device-all
-          ROCM_SDK_VERSION: "10.2"
-          PIP_INDEX_PATH: ""
-          THEROCK_INDEX_URL: "https://rc.repo.amd.com/rocm/whl-next/"
-        run: bash build_tools/rocm/detect-therock-version.sh
+      - name: Resolve the ROCm stacks to test
+        id: stacks
+        run: python3 build_tools/rocm/nightly_rocm_stacks.py
 
   execute-xla-ut-nightly:
     needs: rocm-config
@@ -103,27 +93,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode:
-          - name: "therock_lts_release_7.14.1"
-            distro_url: "https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-multiarch-7.14.1.tar.gz"
-            distro_hash: "no_hash"
-            runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
-            rbe_config: "rocm_rbe"
-          - name: "therock_release"
-            distro_url: "https://dev.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.1.0.dev0%2Be54d902c2bc89baf912f69149e47d9ddc5102c4d.tar.gz"
-            distro_hash: "682075648697e4aa8fe7cc9ec2a56e9207a1fc47f74c4f10440f8dadad89f5e6"
-            runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
-            rbe_config: "rocm_rbe"
-          - name: "therock_nightly"
-            distro_url: "https://rc.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-${{ needs.rocm-config.outputs.therock-version }}.tar.gz"
-            distro_hash: "no_hash"
-            runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
-            rbe_config: "rocm_rbe"
-          - name: "therock_release_bb"
-            distro_url: "https://dev.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.1.0.dev0%2Be54d902c2bc89baf912f69149e47d9ddc5102c4d.tar.gz"
-            distro_hash: "682075648697e4aa8fe7cc9ec2a56e9207a1fc47f74c4f10440f8dadad89f5e6"
-            runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
-            rbe_config: "rocm_rbe_dev"
+        mode: ${{ fromJSON(needs.rocm-config.outputs.xla-modes) }}
     container:
       image: ${{ needs.rocm-config.outputs.docker-image }}
 
@@ -214,8 +184,10 @@ jobs:
 
   # Call JAX upstream workflow as a separate job (runs on every trigger, i.e. every 2 hours)
   jax-upstream:
+    needs: rocm-config
     uses: ./.github/workflows/rocm_xla_ci_jax.yml
     with:
       repository: openxla/xla
       ref: main
       run_jax: true
+      stacks: ${{ needs.rocm-config.outputs.stacks }}
