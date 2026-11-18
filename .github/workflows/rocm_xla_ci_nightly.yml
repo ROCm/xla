@@ -44,35 +44,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docker-image: ${{ steps.out.outputs.docker-image }}
-      therock-version: ${{ steps.therock.outputs.therock_version }}
     steps:
       - id: out
         shell: bash
         run: |
           echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: openxla/xla
-          ref: main
-          sparse-checkout: |
-            build_tools/rocm
-          persist-credentials: false
-
-      - name: Fetch theRock version detection from ROCm/xla
-        run: |
-          wget -O build_tools/rocm/detect-therock-version.sh "https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/detect-therock-version.sh"
-          chmod +x build_tools/rocm/detect-therock-version.sh
-
-      - name: Detect latest TheRock version
-        id: therock
-        env:
-          ROCM_PIP_SOURCE: prerelease
-          GPU_TARGET: device-all
-          ROCM_SDK_VERSION: "10.2"
-          PIP_INDEX_PATH: ""
-          THEROCK_INDEX_URL: "https://rc.repo.amd.com/rocm/whl-next/"
-        run: bash build_tools/rocm/detect-therock-version.sh
 
   execute-xla-ut-nightly:
     needs: rocm-config
@@ -117,11 +93,6 @@ jobs:
           - name: "therock_release_10.2"
             distro_url: "https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.2.0.tar.gz"
             distro_hash: "6ac0b54de1a410b9727c37607c4c2cb6b4795c3db0a9b01393bccc8d8d01e87b"
-            runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
-            rbe_config: "rocm_rbe"
-          - name: "therock_nightly"
-            distro_url: "https://rc.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-${{ needs.rocm-config.outputs.therock-version }}.tar.gz"
-            distro_hash: "no_hash"
             runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
             rbe_config: "rocm_rbe"
           - name: "therock_release_bb"
