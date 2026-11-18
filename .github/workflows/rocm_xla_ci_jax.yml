@@ -109,6 +109,9 @@ jobs:
           - name: "therock_release"
             index_url: "https://stable.repo.amd.com/rocm/whl-next/"
             version: "10.0.0"
+          - name: "therock_release_10.2"
+            index_url: "https://stable.repo.amd.com/rocm/whl-next/"
+            version: "10.2.0"
           - name: "therock_nightly"
             index_url: ${{ needs.rocm-config.outputs.therock-index-url }}
             version: ${{ needs.rocm-config.outputs.therock-version }}
