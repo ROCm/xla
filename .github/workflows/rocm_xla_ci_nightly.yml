@@ -92,6 +92,14 @@ jobs:
         --bes_keywords=nightly
         --keep_going
         --nocache_test_results
+      # Selects the ROCm stack each matrix mode is named after. Without these,
+      # rocm_configure.bzl falls back to its default hermetic redistributable
+      # and every mode would silently build the same ROCm. ROCM_PATH is blanked
+      # because a non-empty one takes priority over ROCM_DISTRO_URL.
+      ROCM_DISTRO_ARGS: >-
+        --repo_env=ROCM_PATH=
+        --repo_env=ROCM_DISTRO_URL=${{ matrix.mode.distro_url }}
+        --repo_env=ROCM_DISTRO_HASH=${{ matrix.mode.distro_hash }}
     strategy:
       fail-fast: false
       matrix:
@@ -159,6 +167,7 @@ jobs:
             --bes_keywords=single_gpu \
             --build_event_json_file=xla_${{ matrix.mode.name }}_single_gpu_build_events.json \
             ${COMMON_ARGS} \
+            ${ROCM_DISTRO_ARGS} \
             -- \
             //xla/...
 
@@ -172,6 +181,7 @@ jobs:
             --bes_keywords=multi_gpu \
             --build_event_json_file=xla_${{ matrix.mode.name }}_multi_gpu_build_events.json \
             ${COMMON_ARGS} \
+            ${ROCM_DISTRO_ARGS} \
             --spawn_strategy=local \
             --strategy=TestRunner=local \
             -- \
@@ -187,6 +197,7 @@ jobs:
             --bes_keywords=cpu \
             --build_event_json_file=xla_${{ matrix.mode.name }}_rocm_cpu_build_events.json \
             ${COMMON_ARGS} \
+            ${ROCM_DISTRO_ARGS} \
             --spawn_strategy=local \
             -- \
             //xla/...
