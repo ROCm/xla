@@ -160,46 +160,40 @@ bool RocmTracer::IsAvailable() const {
   return ts;
 }
 
-void RocmTracer::SortAgentsByHipDevice() {
-  int count = 0;
-  if (hipGetDeviceCount(&count) != hipSuccess) {
-    count = 0;
-  }
-  // A HIP device with no agent at its address keeps an all-zero placeholder,
-  // so its rows are dropped and later devices keep their numbers.
-  std::vector<rocprofiler_agent_v0_t> sorted(count);
-  std::vector<bool> taken(gpu_agents_.size(), false);
-  for (int k = 0; k < count; ++k) {
-    // Only the bus-id string has the PCI function, which tells the partitions
-    // of one GPU apart.
-    char bus_id[64];
-    unsigned int dom, bus, dev, fn;
-    if (hipDeviceGetPCIBusId(bus_id, sizeof(bus_id), k) != hipSuccess ||
-        std::sscanf(bus_id, "%x:%x:%x.%x", &dom, &bus, &dev, &fn) != 4) {
-      continue;
+const std::vector<rocprofiler_agent_v0_t>& RocmTracer::GpuAgents() {
+  absl::call_once(hip_order_once_, [this] {
+    int count = 0;
+    if (hipGetDeviceCount(&count) != hipSuccess) {
+      count = 0;
     }
-    const uint32_t location_id = bus << 8 | dev << 3 | fn;
-    // The first agent at this address that no earlier HIP device took. For
-    // partitions that share an address (GC 9.4.4 on ROCm 6.2.x drivers or
-    // Linux 6.11), this assumes HIP and KFD list them in the same order.
-    for (size_t i = 0; i < gpu_agents_.size(); ++i) {
-      const rocprofiler_agent_v0_t& agent = gpu_agents_[i];
-      if (!taken[i] && agent.domain == dom &&
-          agent.location_id == location_id) {
-        sorted[k] = agent;
-        taken[i] = true;
-        break;
+    // The agent at each HIP device's PCI address, in HIP order. A device with
+    // no agent there (never seen) gets no entry, so later devices shift down.
+    std::vector<rocprofiler_agent_v0_t> sorted;
+    for (int k = 0; k < count; ++k) {
+      // Only the bus-id string has the PCI function, which tells the
+      // partitions of one GPU apart.
+      char bus_id[64];
+      unsigned int dom, bus, dev, fn;
+      if (hipDeviceGetPCIBusId(bus_id, sizeof(bus_id), k) != hipSuccess ||
+          std::sscanf(bus_id, "%x:%x:%x.%x", &dom, &bus, &dev, &fn) != 4) {
+        continue;
+      }
+      const uint32_t location_id = bus << 8 | dev << 3 | fn;
+      for (const rocprofiler_agent_v0_t& agent : gpu_agents_) {
+        if (agent.domain == dom && agent.location_id == location_id) {
+          sorted.push_back(agent);
+          break;
+        }
       }
     }
-  }
-  gpu_agents_ = std::move(sorted);
-  num_gpus_ = gpu_agents_.size();
+    gpu_agents_ = std::move(sorted);
+  });
+  return gpu_agents_;
 }
 
 uint32_t RocmTracer::HipDeviceOf(rocprofiler_agent_id_t agent) const {
   for (uint32_t k = 0; k < gpu_agents_.size(); ++k) {
-    if (gpu_agents_[k].type == ROCPROFILER_AGENT_TYPE_GPU &&
-        gpu_agents_[k].id.handle == agent.handle) {
+    if (gpu_agents_[k].id.handle == agent.handle) {
       return k;
     }
   }
@@ -209,7 +203,7 @@ uint32_t RocmTracer::HipDeviceOf(rocprofiler_agent_id_t agent) const {
 absl::Status RocmTracer::Enable(RocmTraceCollector* collector) {
   // Before rocprofiler_start_context: the record callbacks read gpu_agents_,
   // which never changes after this.
-  absl::call_once(hip_order_once_, &RocmTracer::SortAgentsByHipDevice, this);
+  GpuAgents();
   absl::MutexLock lock(collector_mutex_);
   if (collector_ != nullptr) {
     return absl::AlreadyExistsError("ROCM tracer is already running");
@@ -671,16 +665,14 @@ static int stream_external_correlation_callback(
 absl::Status RocmTracer::InitProfiling(void* tool_data) {
   name_info_ = GetCallbackTracingNames();
 
-  // Build an ordered list of GPU agents for use by the profiler collector
-  // (e.g. GetDeviceCapabilities).
-  num_gpus_ = 0;
+  // Every GPU agent the SDK lists. The first GpuAgents() call keeps the ones
+  // HIP sees, in HIP order; tool init is too early to call HIP.
   gpu_agents_.clear();
   for (const auto& agent : GetGpuDeviceAgents()) {
     VLOG(1) << "agent id = " << agent.id.handle << ", dev = " << agent.device_id
             << ", name = " << (agent.name ? agent.name : "null");
     if (agent.type == ROCPROFILER_AGENT_TYPE_GPU) {
       gpu_agents_.push_back(agent);
-      num_gpus_++;
     }
   }
 
