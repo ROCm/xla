@@ -513,11 +513,12 @@ absl::StatusOr<gpu::BlasLtMatmulAlgorithm> BlasLt::DescribeAlgorithm(
   hipblasLtMatmulAlgo_t copy = *algo;
   const int solution_index = hipblaslt_ext::getIndexFromAlgo(copy);
   if (solution_index < 0) {
-    // A negative index marks an algorithm that has no hipBLASLt solution
-    // (getSolutionNameFromAlgo treats it the same); its config keeps only the
-    // heuristic index.
+    // Negative values are rocRoller solutions (top bit set, e.g. for MX scaled
+    // dots). getIndexFromAlgo cannot round-trip them (newer hipBLASLt returns
+    // -1 for all of them), so their config keeps only the heuristic index.
     return absl::UnimplementedError(absl::StrFormat(
-        "hipBLASLt algorithm has no solution index (got %d)", solution_index));
+        "hipBLASLt solution index %d (rocRoller) cannot be recorded",
+        solution_index));
   }
   int version = 0;
   {
@@ -553,8 +554,8 @@ absl::StatusOr<hipblasLtMatmulAlgo_t> BlasLt::FindSolution(
   }
   hipblaslt_libstdcxx::Vector<int> indices(1, hipblaslt->solution_index);
   hipblaslt_libstdcxx::Vector<hipblasLtMatmulHeuristicResult_t> results;
-  // getAlgosFromIndex accepts some indices that name no solution (it returns
-  // an algorithm for -1), so reject negative ones and check the round trip.
+  // Negative indices are rocRoller solutions, which DescribeAlgorithm never
+  // records (they do not round-trip), so reject them and check the round trip.
   if (hipblaslt->solution_index < 0 ||
       hipblaslt_libstdcxx::GetAlgosFromIndex(handle, indices, results) !=
           HIPBLAS_STATUS_SUCCESS ||

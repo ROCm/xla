@@ -25,7 +25,6 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
-#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/status_matchers.h"
@@ -289,9 +288,6 @@ TEST_F(HipblasLtBackendTest, GetSupportedConfigsForComplexGemm) {
                          backend_.GetSupportedConfigs(gemm));
     ASSERT_FALSE(configs.empty());
     const bool has_descriptor = configs[0]->gemm().has_algorithm_proto();
-    LOG(INFO) << type << " GEMM configs "
-              << (has_descriptor ? "have hipBLASLt descriptors"
-                                 : "have no descriptor (rocBLAS fallback)");
     for (const std::unique_ptr<BackendConfig>& config : configs) {
       const AutotuneResult::GemmKey& key = config->gemm();
       EXPECT_EQ(key.has_algorithm_proto(), has_descriptor);
@@ -401,10 +397,10 @@ TEST_F(HipblasLtScaledDotTest, GetSupportedConfigs) {
 }
 
 // Scaled dots go through the same descriptor recording as other GEMMs. On
-// hipBLASLt 1.4.1 (gfx950) their algorithms report a negative solution index,
-// so the configs keep only the index; either way all configs of one dot agree
-// and ApplyConfig copies what the chosen config has.
-TEST_F(HipblasLtScaledDotTest, GetSupportedConfigsRecordsDescriptors) {
+// gfx950 their algorithms are rocRoller solutions (negative indices), so the
+// configs keep only the index; either way all configs of one dot agree and
+// ApplyConfig copies what the chosen config has.
+TEST_F(HipblasLtScaledDotTest, GetSupportedConfigsAgreeOnDescriptors) {
   for (const char* hlo : kScaledDotHlos) {
     ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
     HloInstruction* fusion = module->entry_computation()->root_instruction();
@@ -412,9 +408,6 @@ TEST_F(HipblasLtScaledDotTest, GetSupportedConfigsRecordsDescriptors) {
                          backend_.GetSupportedConfigs(*fusion));
     ASSERT_FALSE(configs.empty());
     const bool has_descriptor = configs[0]->gemm().has_algorithm_proto();
-    LOG(INFO) << "Scaled dot configs "
-              << (has_descriptor ? "have hipBLASLt descriptors"
-                                 : "have no descriptor");
     for (const std::unique_ptr<BackendConfig>& config : configs) {
       const AutotuneResult::GemmKey& key = config->gemm();
       EXPECT_EQ(key.has_algorithm_proto(), has_descriptor);

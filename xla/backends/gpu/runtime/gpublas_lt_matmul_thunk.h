@@ -109,7 +109,8 @@ class CublasLtMatmulThunk : public TracedCommand {
   bool require_exact_algorithm_;
   // Set when blas_lt_algorithm_ could not be loaded (e.g. it was chosen with
   // another library version) and the thunk fell back to algorithm_idx_; the
-  // lookup and its warning are then not repeated on every execution.
+  // lookup and its warning are then not repeated on every execution. Transient
+  // errors (Unavailable, DeadlineExceeded, Aborted, Cancelled) do not set it.
   std::atomic<bool> blas_lt_algorithm_failed_{false};
 };
 

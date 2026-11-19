@@ -47,6 +47,17 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
+namespace {
+
+// Errors that may not recur, so the thunk does not remember them as a failed
+// descriptor.
+bool IsTransientFailure(const absl::Status& status) {
+  return absl::IsUnavailable(status) || absl::IsDeadlineExceeded(status) ||
+         absl::IsAborted(status) || absl::IsCancelled(status);
+}
+
+}  // namespace
+
 CublasLtMatmulThunk::CublasLtMatmulThunk(
     Thunk::ThunkInfo thunk_info, std::string canonical_hlo,
     VariantConfig gemm_config, se::gpu::BlasLt::Epilogue epilogue,
@@ -163,8 +174,15 @@ CublasLtMatmulThunk::GetCachedMatmulPlan(const ExecuteParams& params) {
     if (plan.ok() || require_exact_algorithm_) {
       return plan;
     }
-    // Only one of concurrent executions reports the failure.
-    if (!blas_lt_algorithm_failed_.exchange(true, std::memory_order_relaxed)) {
+    if (IsTransientFailure(plan.status())) {
+      // Retry the descriptor on the next execution.
+      LOG(WARNING) << "Failed to initialize BlasLt algorithm from descriptor ("
+                   << plan.status()
+                   << "); falling back to heuristic algorithm index "
+                   << algorithm_idx_ << " for this execution";
+    } else if (!blas_lt_algorithm_failed_.exchange(true,
+                                                   std::memory_order_relaxed)) {
+      // Only one of concurrent executions reports the failure.
       LOG(WARNING) << "Failed to initialize BlasLt algorithm from descriptor ("
                    << plan.status()
                    << "); falling back to heuristic algorithm index "

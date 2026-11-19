@@ -358,8 +358,8 @@ absl::Status RewriteWithWideOutputGemm(HloInstruction* gemm,
 
 // One config per candidate, with the hipBLASLt descriptor of its solution.
 // Candidates without one (kUnimplemented: the rocBLAS fallback for complex
-// types, or a negative solution index, as for MX scaled dots on hipBLASLt
-// 1.4.1) keep only the index.
+// types, or a rocRoller solution with a negative index, as for MX scaled dots)
+// keep only the index.
 absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>> MakeConfigs(
     const BlasLt::MatmulPlan& plan,
     const std::vector<BlasLt::MatmulAlgorithm>& algorithms,
