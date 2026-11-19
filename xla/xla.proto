@@ -2085,7 +2085,15 @@ message DebugOptions {
   // AOT forward-compatibility window for U64 segmented radix sort has elapsed.
   optional bool xla_gpu_experimental_enable_raft_u64_radix = 584;
 
-  // Next id: 587
+  // If true, on ROCm, TopkSpecializer routes a TopK to the Triton TopK kernels
+  // where they were measured faster than the default path on the GPU.
+  optional bool xla_gpu_experimental_enable_triton_topk = 587;
+
+  // Test only. With xla_gpu_experimental_enable_triton_topk, routes every TopK
+  // that the Triton TopK kernels support, faster or not.
+  optional bool xla_gpu_experimental_force_triton_topk = 588;
+
+  // Next id: 589
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
