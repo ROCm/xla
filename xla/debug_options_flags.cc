@@ -616,6 +616,8 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_enable_persistent_symmetric_memory(false);
   opts.set_xla_gpu_experimental_enable_raft_for_stable_topk(true);
   opts.set_xla_gpu_experimental_enable_raft_u64_radix(false);
+  opts.set_xla_gpu_experimental_enable_triton_topk(false);
+  opts.set_xla_gpu_experimental_force_triton_topk(false);
   opts.set_xla_gpu_experimental_enable_tensor_ir(false);
   opts.set_xla_gpu_experimental_enable_triton_scan(true);
   opts.set_xla_gpu_experimental_multi_phase_fusion(false);
@@ -4031,6 +4033,20 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
         debug_options->xla_gpu_experimental_enable_raft_u64_radix(),
         "If true, enables RAFT select_k Radix paths for U64-packed stable "
         "TopK."));
+    flag_list->push_back(tsl::Flag(
+        "xla_gpu_experimental_enable_triton_topk",
+        bool_setter_for(
+            &DebugOptions::set_xla_gpu_experimental_enable_triton_topk),
+        debug_options->xla_gpu_experimental_enable_triton_topk(),
+        "If true, on ROCm, routes the TopKs forced with "
+        "xla_gpu_experimental_force_triton_topk to the Triton TopK kernels."));
+    flag_list->push_back(tsl::Flag(
+        "xla_gpu_experimental_force_triton_topk",
+        bool_setter_for(
+            &DebugOptions::set_xla_gpu_experimental_force_triton_topk),
+        debug_options->xla_gpu_experimental_force_triton_topk(),
+        "Test only. With xla_gpu_experimental_enable_triton_topk, routes every "
+        "TopK that the Triton TopK kernels support, faster or not."));
     flag_list->push_back(tsl::Flag(
         "xla_gpu_experimental_enable_tensor_ir",
         bool_setter_for(
