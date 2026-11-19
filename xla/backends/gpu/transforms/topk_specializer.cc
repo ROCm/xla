@@ -20,6 +20,7 @@ limitations under the License.
 #include <cstdint>
 #include <initializer_list>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -30,7 +31,9 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "xla/backends/gpu/codegen/triton/topk_config.h"
 #include "xla/backends/gpu/runtime/raft_select_k_utils.h"
 #include "xla/comparison_util.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
@@ -41,11 +44,14 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/transforms/topk_rewriter.h"
 #include "xla/literal_util.h"
 #include "xla/primitive_util.h"
+#include "xla/service/decision.h"
 #include "xla/service/hlo.pb.h"
 #include "xla/service/tuple_util.h"
 #include "xla/shape.h"
+#include "xla/shape_util.h"
 #include "xla/status_macros.h"
 #include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/device_description.h"
@@ -703,11 +709,63 @@ absl::StatusOr<HloInstruction*> SmallBufferOptimization(
   return TupleUtil::ExtractPrefix(new_topk, 2);
 }
 
+// Whether the Triton TopK kernels take `topk` on `device`. Only forced TopKs
+// are taken.
+Decision ShouldUseTritonTopK(const HloCustomCallInstruction* topk,
+                             const se::DeviceDescription& device, bool force) {
+  absl::StatusOr<TopKKernelSpec> spec = GetTopKKernelSpec(*topk);
+  if (!spec.ok()) {
+    return Decision(spec.status());
+  }
+  if (absl::Status limits = CheckTopKKernelLimits(*spec); !limits.ok()) {
+    return Decision::Forbid(
+        absl::StrCat(spec->ToString(), ": ", limits.message()));
+  }
+  if (!GetTopKKernelConfig(*spec, device).has_value()) {
+    return Decision::Forbid(absl::StrCat(
+        spec->ToString(), ": no kernel config fits ", device.name()));
+  }
+  if (!force) {
+    return Decision::Forbid(absl::StrCat(spec->ToString(), ": not forced"));
+  }
+  return Decision::Allow();
+}
+
+// Replaces `topk` by a __gpu$TopK custom call on the original values with the
+// same (values, indices) result, marked for the Triton TopK kernels. Rows split
+// into chunks get a third output: the scratch buffer of the chunk candidates.
+absl::StatusOr<HloInstruction*> RewriteTopKForRocmTriton(
+    HloCustomCallInstruction* topk, const se::DeviceDescription& device) {
+  ABSL_ASSIGN_OR_RETURN(TopKKernelSpec spec, GetTopKKernelSpec(*topk));
+  std::optional<TopKKernelConfig> config = GetTopKKernelConfig(spec, device);
+  TF_RET_CHECK(config.has_value()) << spec.ToString();
+  const int64_t scratch_elements = GetTopKScratchElements(spec, *config);
+  Shape cc_shape = topk->shape();
+  if (scratch_elements > 0) {
+    cc_shape = ShapeUtil::MakeTupleShape(
+        {topk->shape().tuple_shapes(0), topk->shape().tuple_shapes(1),
+         ShapeUtil::MakeShape(U64, {scratch_elements})});
+  }
+  HloComputation* comp = topk->parent();
+  auto* new_topk = Cast<HloCustomCallInstruction>(
+      comp->AddInstruction(HloInstruction::CreateCustomCall(
+          cc_shape, topk->operands(), "__gpu$TopK",
+          /*opaque=*/"", CustomCallApiVersion::API_VERSION_TYPED_FFI)));
+  topk->SetupDerivedInstruction(new_topk);
+  new_topk->set_raw_backend_config_string(topk->raw_backend_config_string());
+  ABSL_RETURN_IF_ERROR(MarkAsTritonTopK(*new_topk));
+  if (scratch_elements > 0) {
+    return TupleUtil::ExtractPrefix(new_topk, 2);
+  }
+  return new_topk;
+}
+
 class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
  public:
-  SpecializeTopkVisitor(se::GpuComputeCapability compute_capability,
+  SpecializeTopkVisitor(const se::DeviceDescription& device_description,
                         int sm_count)
-      : compute_capability_(std::move(compute_capability)),
+      : device_description_(device_description),
+        compute_capability_(device_description.gpu_compute_capability()),
         sm_count_(sm_count) {}
 
   absl::Status HandleCustomCall(HloInstruction* inst) override {
@@ -719,11 +777,9 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
     TF_RET_CHECK(topk->operand_count() == 1);
     const se::CudaComputeCapability* cuda_cc =
         compute_capability_.cuda_compute_capability();
+    const auto& debug_options = topk->GetModule()->config().debug_options();
     bool enable_raft_for_stable_topk =
-        topk->GetModule()
-            ->config()
-            .debug_options()
-            .xla_gpu_experimental_enable_raft_for_stable_topk();
+        debug_options.xla_gpu_experimental_enable_raft_for_stable_topk();
     // Route stable TopK to RAFT select_k via Uint64 adapter
     if (cuda_cc != nullptr && enable_raft_for_stable_topk &&
         ShouldRewriteStableTopKToUint64(topk, *cuda_cc)) {
@@ -731,6 +787,31 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
       ABSL_ASSIGN_OR_RETURN(HloInstruction * new_topk,
                             RewriteStableTopKToUint64(topk, sm_count_));
       return ReplaceInstruction(topk, new_topk);
+    }
+
+    if (compute_capability_.IsRocm() &&
+        debug_options.xla_gpu_experimental_enable_triton_topk()) {
+      Decision use_triton = ShouldUseTritonTopK(
+          topk, device_description_,
+          debug_options.xla_gpu_experimental_force_triton_topk());
+      if (use_triton.IsAllowed()) {
+        VLOG(2) << "Rewriting TopK for the Triton TopK kernels";
+        // No packed BF16 sort follows, and the new TopK copies the frontend
+        // attributes.
+        topk->erase_frontend_attribute(kTopKDeferredPackedBf16Attr);
+        ABSL_ASSIGN_OR_RETURN(
+            HloInstruction * new_topk,
+            RewriteTopKForRocmTriton(topk, device_description_));
+        return ReplaceInstruction(topk, new_topk);
+      }
+      VLOG(2) << "Triton TopK not used: " << use_triton.Explain();
+    }
+
+    // A BF16 TopK whose packed sort was deferred for the Triton TopK kernels
+    // keeps that sort (from TopkDecomposer) when the kernels do not take it.
+    if (IsTopKWithDeferredPackedBf16(topk)) {
+      VLOG(2) << "Keeping the deferred packed BF16 sort for " << topk->name();
+      return absl::OkStatus();
     }
 
     if (auto small_topk = SmallBufferOptimization(topk, cuda_cc, sm_count_);
@@ -745,6 +826,7 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
   }
 
  private:
+  const se::DeviceDescription& device_description_;
   se::GpuComputeCapability compute_capability_;
   int sm_count_;
 };
@@ -754,12 +836,14 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
 absl::StatusOr<bool> TopkSpecializer::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
-  int raft_sm_count = sm_count_;
+  const int sm_count = device_description_.core_count();
+  int raft_sm_count = sm_count;
   if (const se::CudaComputeCapability* cuda_cc =
-          compute_capability_.cuda_compute_capability()) {
-    raft_sm_count = GetRaftSelectKMaxSmCount(*cuda_cc, sm_count_);
+          device_description_.gpu_compute_capability()
+              .cuda_compute_capability()) {
+    raft_sm_count = GetRaftSelectKMaxSmCount(*cuda_cc, sm_count);
   }
-  return SpecializeTopkVisitor(compute_capability_, raft_sm_count)
+  return SpecializeTopkVisitor(device_description_, raft_sm_count)
       .RunOnModule(module, execution_threads);
 }
 
