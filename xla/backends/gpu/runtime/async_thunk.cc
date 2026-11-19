@@ -51,13 +51,13 @@ namespace {
 // Marks all collectives nested in `thunks` as async and registers them with
 // `async_execution`, so that the async-done can resolve their communicators.
 void RegisterNestedCollective(ThunkSequence& thunks,
-                               AsyncExecution& async_execution) {
+                              AsyncExecution& async_execution) {
   for (std::unique_ptr<Thunk>& thunk : thunks) {
     thunk->Walk([&](Thunk* nested) {
-      if(auto* collective = dynamic_cast<CollectiveThunk*>(nested)) {
+      if (auto* collective = dynamic_cast<CollectiveThunk*>(nested)) {
         collective->set_async(true);
         async_execution.SetCollective(
-          {collective->collective_config(), collective->communication_id()});
+            {collective->collective_config(), collective->communication_id()});
       }
     });
   }
@@ -213,10 +213,11 @@ absl::Status AsyncDoneThunk::ExecuteOnStream(const ExecuteParams& params) {
     if (!clique_key.ok()) {
       return Internal("Failed to get collective GPU clique key");
     }
-    ABSL_ASSIGN_OR_RETURN(auto comm, params.collective_cliques->GetComm(
-        *clique_key, params.collective_params->global_device_id));
-    ABSL_RETURN_IF_ERROR(
-        comm->AsyncDone(GpuCollectives::On(*params.stream)));
+    ABSL_ASSIGN_OR_RETURN(
+        auto comm,
+        params.collective_cliques->GetComm(
+            *clique_key, params.collective_params->global_device_id));
+    ABSL_RETURN_IF_ERROR(comm->AsyncDone(GpuCollectives::On(*params.stream)));
   }
   return absl::OkStatus();
 }

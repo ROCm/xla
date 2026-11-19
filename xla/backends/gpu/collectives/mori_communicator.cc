@@ -81,12 +81,12 @@ absl::StatusOr<mori::ccl::DataType> ToMoriDataType(PrimitiveType dtype) {
     // XLA PRED is a 1-byte boolean => U8 for reduce collectives
     case PRED:
       return mori::ccl::DataType::U8;
-    MORI_TYPE_DISPATCH(S32)
-    MORI_TYPE_DISPATCH(U32)
-    MORI_TYPE_DISPATCH(S64)
-    MORI_TYPE_DISPATCH(U64)
-    MORI_TYPE_DISPATCH(F32)
-    MORI_TYPE_DISPATCH(F64)
+      MORI_TYPE_DISPATCH(S32)
+      MORI_TYPE_DISPATCH(U32)
+      MORI_TYPE_DISPATCH(S64)
+      MORI_TYPE_DISPATCH(U64)
+      MORI_TYPE_DISPATCH(F32)
+      MORI_TYPE_DISPATCH(F64)
     default:
       return absl::UnimplementedError(absl::StrFormat(
           "MORI: unsupported dtype: %d", static_cast<int>(dtype)));
