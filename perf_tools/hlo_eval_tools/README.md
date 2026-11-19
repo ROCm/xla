@@ -208,7 +208,8 @@ Inference is dumped at 1, 2, 4 and 8 GPUs, one subdirectory per device count:
 (`xla.sdy.*`). Because the `before_optimizations` HLO is captured *before* the
 partitioner runs, the cross-device collectives (all-gather / reduce-scatter) are
 inserted by XLA at replay time inside `multihost_hlo_runner` — which is why
-replaying them requires `--num_partitions=N --use_shardy_partitioner` (see
+replaying them requires `--num_partitions=N --use_spmd_partitioning
+--use_shardy_partitioner` (see
 [Usage](#usage)); the checked-in module holds the shardings and `num_partitions=N`
 that drive that partitioning.
 
@@ -256,7 +257,7 @@ added automatically:
 ```bash
 ./multihost_hlo_runner \
   --device_type=gpu \
-  --num_partitions=8 --use_shardy_partitioner \
+  --num_partitions=8 --use_spmd_partitioning --use_shardy_partitioner \
   --hlo_argument_mode=uninitialized \
   --profile_execution=true \
   --append_profile_to_csv_file=results/llama3_8b_inference_8gpu \
@@ -270,10 +271,13 @@ added automatically:
 count from `--num_partitions` (default 1), **not** from the module. So for any
 module with `num_partitions=N > 1` — the `inference/<N>gpu/` leaves and the
 8-GPU MaxText LLM `training/` modules — you must pass `--num_partitions=N
---use_shardy_partitioner` (and have N GPUs visible). These modules were lowered by
-JAX with **Shardy**, so they contain `xla.sdy.*` custom calls: use
-`--use_shardy_partitioner`, **not** `--use_spmd_partitioning` (the GSPMD path
-`RET_CHECK`s on the `xla.sdy.*` calls). Omit the partition flags for the
+--use_spmd_partitioning --use_shardy_partitioner` (and have N GPUs visible). These
+modules were lowered by JAX with **Shardy**, so they contain `xla.sdy.*` custom
+calls: `--use_shardy_partitioner` selects the Shardy partitioner (`--use_spmd_partitioning`
+alone selects GSPMD, which `RET_CHECK`s on the `xla.sdy.*` calls), and
+`--use_spmd_partitioning` turns partitioning on. With `--use_shardy_partitioner`
+alone the runner compiles the module unpartitioned: every GPU runs the whole
+program, with no collectives. Omit the partition flags for the
 single-device (`1gpu`, and the 1-GPU `training/`) modules.
 
 `--hlo_argument_mode=uninitialized` is recommended for every run: it feeds
@@ -321,7 +325,7 @@ selection and per-leaf CSV naming — behind three arguments:
 ```
 
 For each leaf the script reads `num_partitions=N` from the first module and, when
-`N>1`, adds `--num_partitions=N --use_shardy_partitioner` and sets
+`N>1`, adds `--num_partitions=N --use_spmd_partitioning --use_shardy_partitioner` and sets
 `HIP_VISIBLE_DEVICES`/`CUDA_VISIBLE_DEVICES=0..N-1` (N GPUs must be visible). It
 always passes `--hlo_argument_mode=uninitialized`, **disables HIP command buffers**
 (see below), prints a summary of profiled / skipped / failed leaves, and exits
@@ -611,7 +615,7 @@ for leaf in hlo_eval_tools/*/*/training hlo_eval_tools/*/*/inference/*gpu; do
   [ -e "${files[0]}" ] || continue
   n=$(grep -oE 'num_partitions=[0-9]+' "${files[0]}" | head -1 | cut -d= -f2)
   n=${n:-1}
-  spmd=""; [ "$n" -gt 1 ] && spmd="--num_partitions=$n --use_shardy_partitioner"
+  spmd=""; [ "$n" -gt 1 ] && spmd="--num_partitions=$n --use_spmd_partitioning --use_shardy_partitioner"
   csv="results/$(echo "${leaf#hlo_eval_tools/}" | tr '/' '_')"
   ./multihost_hlo_runner \
     --device_type=gpu $spmd --hlo_argument_mode=uninitialized \
@@ -691,6 +695,11 @@ The currently checked-in results were produced on:
 105 of 117 leaves are present; the 12 missing are the deterministic failures below
 (`mixtral_8x7b` has no `results/` folder for this reason).
 
+These runs passed `--num_partitions=N --use_shardy_partitioner` without
+`--use_spmd_partitioning`, so every `num_partitions>1` leaf ran unpartitioned (each GPU
+ran the whole program, with no collectives). Their CSVs are not comparable with runs
+of the current `run_hlo_eval.sh`, which partitions them.
+
 ## Known build limitations (ROCm 7.2.4 / rocm-jaxlib-v0.10.2)
 
 On the validated build, **105 of 117** non-empty leaves profile successfully. The
@@ -705,6 +714,11 @@ are **deterministic** — retrying (even in isolation) does not help:
 - **`alphafold3` inference 2gpu / 8gpu** — `SIGSEGV` in
   `xla::gpu::CustomKernelThunk` (a custom GPU kernel inside the evoformer
   while-loops).
+
+All of these were observed with the unpartitioned flags described in
+[Collected results](#collected-results), so the multi-GPU failures (including mixtral's
+single 173.9 GiB allocation) may differ with `--use_spmd_partitioning`; they have not
+been re-checked on this build.
 
 Two distinct backend bugs were found. The first — HIP command buffers crashing in
 `libamdhip64` (`RocmCommandBuffer::LaunchGraph`) — is worked around by the default

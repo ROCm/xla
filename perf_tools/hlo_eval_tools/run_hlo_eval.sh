@@ -26,7 +26,8 @@
 #
 # For each leaf the device/partition count N is read from the first module's
 # header (`num_partitions=N`, default 1). Modules with N>1 were lowered by JAX with
-# Shardy, so they are run with `--num_partitions=N --use_shardy_partitioner` and
+# Shardy, so they are run with `--num_partitions=N --use_spmd_partitioning
+# --use_shardy_partitioner` and
 # HIP_VISIBLE_DEVICES / CUDA_VISIBLE_DEVICES=0..N-1 (N devices must be visible).
 # `--hlo_argument_mode=uninitialized` is always passed to skip random-input
 # generation (much faster startup for the large LLM / diffusion modules). Empty
@@ -432,7 +433,9 @@ invoke() {
     fi
   fi
   if [ "$n" -gt 1 ]; then
-    args+=(--num_partitions="$n" --use_shardy_partitioner)
+    # --use_shardy_partitioner only selects the partitioner; without
+    # --use_spmd_partitioning the runner compiles the module unpartitioned.
+    args+=(--num_partitions="$n" --use_spmd_partitioning --use_shardy_partitioner)
     [ "$n" -le "$NGPU" ] || echo "  WARN: needs $n GPUs but only ~$NGPU visible"
   fi
   args+=(--hlo_argument_mode="$ARG_MODE"
