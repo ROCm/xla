@@ -36,7 +36,8 @@ constexpr int32_t kDefaultMaxFixedPointIterations = 25;
 
 void AppendPreSPMDPartitionerPasses(
     HloPipelineEditor pipeline,
-    const AlgebraicSimplifierOptions& layout_insensitive_algsimp_opts) {
+    const AlgebraicSimplifierOptions& layout_insensitive_algsimp_opts,
+    bool defer_packed_bf16_topk) {
   pipeline.AppendPass("erase-xla-late-frontend-attributes");
   pipeline.AppendPass("cudnn-custom-call-converter");
   pipeline.AppendPass("composite-rewriter");
@@ -51,7 +52,12 @@ void AppendPreSPMDPartitionerPasses(
   pipeline.AppendPass("conditional-canonicalizer");
   // The TopkDecomposer generates a compare op with order=TOTAL and must
   // run before the ComparisonExpander which rewrites such comparisons.
-  pipeline.AppendPass("topk-decomposer", {{"only_topk_op", true}});
+  if (defer_packed_bf16_topk) {
+    pipeline.AppendPass("topk-decomposer",
+                        {{"only_topk_op", true}, {"defer_packed_bf16", true}});
+  } else {
+    pipeline.AppendPass("topk-decomposer", {{"only_topk_op", true}});
+  }
   // The SPMD partitioner would mess up the sort+slice structure, so we need to
   // rewrite Topk before that happens.
   pipeline.AppendPass("topk-rewriter");
@@ -232,12 +238,18 @@ absl::StatusOr<HloPipelineProto> GetDefaultCompilationPipeline(
       GetAlgebraicSimplifierOptions(
           AlgebraicSimplifierMode::kLayoutInsensitive, config.debug_options(),
           device_description.gpu_compute_capability().IsCuda());
+  // TopkSpecializer may route BF16 TopKs to the Triton TopK kernels on ROCm,
+  // so they must reach it as "TopK" custom calls instead of packed BF16 sorts.
+  const bool defer_packed_bf16_topk =
+      device_description.gpu_compute_capability().IsRocm() &&
+      config.debug_options().xla_gpu_experimental_enable_triton_topk();
   HloPipelineProto proto;
   HloPipelineEditor root(proto);
   root.AppendSequence("annotate-host-compute")
       .AppendPass("hlo_host_device_type_call_wrapper");
   AppendPreSPMDPartitionerPasses(root.AppendSequence("pre-spmd-partitioner"),
-                                 layout_insensitive_algsimp_opts);
+                                 layout_insensitive_algsimp_opts,
+                                 defer_packed_bf16_topk);
   if (config.num_partitions() > 1 && config.use_spmd_partitioning()) {
     AppendSPMDPartitionerPasses(root.AppendSequence("spmd-partitioner"), config,
                                 layout_insensitive_algsimp_opts, gpu_topology);

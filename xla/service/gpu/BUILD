@@ -484,6 +484,8 @@ cc_library(
         "//xla/backends/gpu/codegen:sort",
         "//xla/backends/gpu/codegen/kernels:custom_kernel",
         "//xla/backends/gpu/codegen/kernels:ptx_custom_kernel",
+        "//xla/backends/gpu/codegen/triton:topk_config",
+        "//xla/backends/gpu/codegen/triton:topk_kernel",
         "//xla/backends/gpu/codegen/triton:triton_kernel_source",
         "//xla/backends/gpu/codegen/triton:triton_wrapper_result",
         "//xla/backends/gpu/codegen/triton:xtile_compiler",
