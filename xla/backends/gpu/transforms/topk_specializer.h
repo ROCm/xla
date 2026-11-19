@@ -26,12 +26,11 @@ limitations under the License.
 namespace xla::gpu {
 
 // This pass transforms eligible TopK CustomCall into a call to be executed by
-// runtime/topk.cc.
+// runtime/topk.cc, or, on ROCm, by the Triton TopK kernels.
 class TopkSpecializer : public HloModulePass {
  public:
   explicit TopkSpecializer(const se::DeviceDescription& device_description)
-      : compute_capability_(device_description.gpu_compute_capability()),
-        sm_count_(device_description.core_count()) {}
+      : device_description_(device_description) {}
   absl::string_view name() const override { return "topk-specializer"; }
 
  protected:
@@ -40,8 +39,7 @@ class TopkSpecializer : public HloModulePass {
       const absl::flat_hash_set<absl::string_view>& execution_threads) override;
 
  private:
-  se::GpuComputeCapability compute_capability_;
-  int sm_count_;
+  se::DeviceDescription device_description_;
 };
 
 }  // namespace xla::gpu
