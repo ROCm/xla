@@ -157,6 +157,7 @@ use_repo(
     "onednn_async",
     "onednn_async_aarch64",
     "onedpl",
+    "origami",
     "org_sqlite",
     "pthreadpool",
     "raft",

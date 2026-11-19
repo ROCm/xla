@@ -18,6 +18,7 @@
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//xla:xla.default.bzl", "xla_cc_test")
+load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm_is_configured")
 load("//xla/tsl:tsl.bzl", "if_google")
 load("//xla/tsl:tsl.default.bzl", "get_compatible_with_portable")
 load("//xla/tsl/util:cc_embed_data.bzl", "cc_embed_data")
@@ -135,6 +136,53 @@ xla_cc_test(
         "//xla/stream_executor:device_description",
         "//xla/stream_executor/cuda:cuda_compute_capability",
         "//xla/stream_executor/rocm:rocm_compute_capability",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "origami_cost_model",
+    srcs = if_rocm_is_configured(
+        ["origami_cost_model_rocm.cc"],
+        ["origami_cost_model_stub.cc"],
+    ),
+    hdrs = ["origami_cost_model.h"],
+    deps = [
+        "//xla:shape_util",
+        "//xla:util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/service/gpu:matmul_utils",
+        "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+        "@com_google_absl//absl/types:span",
+    ] + if_rocm_is_configured([
+        "@origami//:origami",
+    ]),
+)
+
+xla_cc_test(
+    name = "origami_cost_model_test",
+    srcs = ["origami_cost_model_test.cc"],
+    tags = ["rocm-only"],
+    deps = [
+        ":origami_cost_model",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
+        "//xla/hlo/testlib:verified_hlo_module",
+        "//xla/service/gpu:matmul_utils",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor/rocm:rocm_compute_capability",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/time",
         "@com_google_googletest//:gtest_main",
     ],
 )

@@ -34,6 +34,7 @@ load("//third_party/cpuinfo:workspace.bzl", cpuinfo = "repo")
 load("//third_party/cuda_tile:workspace.bzl", cuda_tile = "repo")
 load("//third_party/cudnn_frontend:workspace.bzl", cudnn_frontend = "repo")
 load("//third_party/cutlass:workspace.bzl", cutlass = "repo")
+load("//third_party/origami:workspace.bzl", origami = "repo")
 load("//third_party/cutlass_cutedsl_runtime:workspace.bzl", cutlass_cutedsl_runtime = "repo")
 load("//third_party/dlpack:workspace.bzl", dlpack = "repo")
 load("//third_party/ducc:workspace.bzl", ducc = "repo")
@@ -161,6 +162,7 @@ def _initialize_third_party():
     xz()
     cuda_tile()
     cutlass()
+    origami()
     cutlass_cutedsl_runtime()
 
     # copybara: tsl vendor
