@@ -20,6 +20,7 @@ limitations under the License.
 #include <string>
 #include <utility>
 
+#include "absl/base/no_destructor.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/log/log.h"
 #include "absl/memory/memory.h"
@@ -68,27 +69,11 @@ Future<> Execute(absl::AnyInvocable<absl::Status() &&> f,
                   : Future<>(std::move(f)());
 }
 
-// Checks that the environment is configured so that RCCL can actually create
-// symmetric (LSA) windows, i.e. that NCCL_CUMEM_ENABLE is set to 1.
-absl::Status CheckNcclCuMemEnabledForSymmetricMemory() {
-  const char* raw = std::getenv("NCCL_CUMEM_ENABLE");
-  // Mirror RCCL's ncclCuMemEnable() semantics on ROCm: the cuMem allocator is
-  // only enabled when the parsed value is >= 1. An unset variable (RCCL default
-  // 0) or an explicit 0/negative value leaves symmetricSupport disabled.
-  int value = 0;
-  if (raw != nullptr && absl::SimpleAtoi(absl::string_view(raw), &value) &&
-      value >= 1) {
-    return absl::OkStatus();
-  }
-  return absl::FailedPreconditionError(absl::StrFormat(
-      "RCCL symmetric memory (NCCL windows) requires NCCL_CUMEM_ENABLE=1, but "
-      "it is currently %s. On ROCm this variable defaults to 0, which leaves "
-      "the communicator's symmetricSupport disabled and makes "
-      "ncclCommWindowRegister(NCCL_WIN_COLL_SYMMETRIC) silently fall back to a "
-      "non-symmetric window. Export NCCL_CUMEM_ENABLE=1 before launching to "
-      "enable symmetric memory, or disable the symmetric-memory collective "
-      "path.",
-      raw == nullptr ? "unset" : absl::StrFormat("\"%s\"", raw)));
+// Reads NCCL_CUMEM_ENABLE once.
+const absl::Status& CheckNcclCuMemEnabledForSymmetricMemory() {
+  static const absl::NoDestructor<absl::Status> status(
+      internal::NcclCuMemEnabledStatus(std::getenv("NCCL_CUMEM_ENABLE")));
+  return *status;
 }
 
 // Hint printed when ncclCommWindowRegister rejects a buffer.
@@ -120,12 +105,8 @@ RcclSymmetricMemory::Create(ncclComm_t comm,
   // Require NCCL_CUMEM_ENABLE=1 before touching the window-registration path.
   // Without it RCCL's comm->symmetricSupport is false and the registration
   // below silently downgrades to a non-symmetric window.
-  //
-  // This is the only place the environment is inspected: the compiler-side
-  // decision to emit symmetric-memory collectives (IsLsaPossible) deliberately
-  // does not look at NCCL_CUMEM_ENABLE. Log in addition to returning the error,
-  // because callers may fall back to another collective strategy.
-  if (absl::Status cumem_status = CheckNcclCuMemEnabledForSymmetricMemory();
+  if (const absl::Status& cumem_status =
+          CheckNcclCuMemEnabledForSymmetricMemory();
       !cumem_status.ok()) {
     LOG_FIRST_N(WARNING, 1) << cumem_status.message();
     return cumem_status;
@@ -258,5 +239,31 @@ RcclSymmetricMemory::PackedKernelArg RcclSymmetricMemory::PackKernelArg()
     const {
   return win_;
 }
+
+namespace internal {
+
+absl::Status NcclCuMemEnabledStatus(const char* nccl_cumem_enable) {
+  // Mirrors RCCL's ncclCuMemEnable(): the cuMem allocator is only enabled when
+  // the parsed value is >= 1.
+  int value = 0;
+  if (nccl_cumem_enable != nullptr &&
+      absl::SimpleAtoi(absl::string_view(nccl_cumem_enable), &value) &&
+      value >= 1) {
+    return absl::OkStatus();
+  }
+  return absl::FailedPreconditionError(absl::StrFormat(
+      "RCCL symmetric memory (NCCL windows) requires NCCL_CUMEM_ENABLE=1, but "
+      "it is currently %s. On ROCm this variable defaults to 0, which leaves "
+      "the communicator's symmetricSupport disabled and makes "
+      "ncclCommWindowRegister(NCCL_WIN_COLL_SYMMETRIC) silently fall back to a "
+      "non-symmetric window. Export NCCL_CUMEM_ENABLE=1 before launching to "
+      "enable symmetric memory, or disable the symmetric-memory collective "
+      "path.",
+      nccl_cumem_enable == nullptr
+          ? "unset"
+          : absl::StrFormat("\"%s\"", nccl_cumem_enable)));
+}
+
+}  // namespace internal
 
 }  // namespace xla::gpu

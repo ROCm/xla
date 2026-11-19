@@ -16,10 +16,10 @@ limitations under the License.
 #ifndef XLA_BACKENDS_GPU_COLLECTIVES_RCCL_SYMMETRIC_MEMORY_H_
 #define XLA_BACKENDS_GPU_COLLECTIVES_RCCL_SYMMETRIC_MEMORY_H_
 
-#include <cstddef>  // for size_t in the RCCL 10.0+ forward declarations below
 #include <memory>
 #include <string>
 
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "rocm/include/rccl/rccl.h"
 #include "rocm/rocm_config.h"  // IWYU pragma: keep  (defines TF_ROCM_VERSION)
@@ -81,6 +81,15 @@ class RcclSymmetricMemory final : public SymmetricMemory {
   stream_executor::DeviceAddressBase addr_;
   std::shared_ptr<tsl::Executor> executor_;
 };
+
+namespace internal {
+
+// Returns OK when `nccl_cumem_enable` (the raw NCCL_CUMEM_ENABLE value, or
+// nullptr when unset) enables RCCL's cuMem allocator, and therefore symmetric
+// window support. Exposed for testing; Create() reads the environment once.
+absl::Status NcclCuMemEnabledStatus(const char* nccl_cumem_enable);
+
+}  // namespace internal
 
 }  // namespace xla::gpu
 

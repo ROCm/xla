@@ -16,7 +16,7 @@ limitations under the License.
 #include "xla/backends/gpu/collectives/rccl_symmetric_memory.h"
 
 #include <cstddef>
-#include <cstdlib>
+#include <initializer_list>
 #include <memory>
 #include <string>
 
@@ -36,7 +36,6 @@ namespace se = stream_executor;
 using ::absl_testing::IsOk;
 using ::absl_testing::StatusIs;
 using ::testing::HasSubstr;
-using ::testing::Not;
 
 // RcclSymmetricMemory::Create() validates that the registered window is
 // genuinely symmetric / load/store accessible (LSA): on ROCm/RCCL >= 10.0 it
@@ -133,37 +132,22 @@ TEST_F(RcclSymmetricMemoryTest, CreateSucceeds) {
   EXPECT_NE(symm_mem->win(), nullptr);
 }
 
-// Verifies that RcclSymmetricMemory::Create fails fast with a clear,
-// actionable FailedPrecondition error when NCCL_CUMEM_ENABLE is disabled.
-//
-// On ROCm, NCCL_CUMEM_ENABLE defaults to 0, which disables the communicator's
-// symmetricSupport and makes ncclCommWindowRegister(NCCL_WIN_COLL_SYMMETRIC)
-// silently fall back to a non-symmetric window. Create() therefore requires the
-// variable to be set to 1 and rejects the call early otherwise. This test
-// temporarily overrides the (Bazel-provided) NCCL_CUMEM_ENABLE=1 with "0" to
-// exercise that early-return path, then restores the original value.
-TEST_F(RcclSymmetricMemoryTest, CreateFailsWhenCuMemDisabled) {
-  // Save and clobber NCCL_CUMEM_ENABLE for the duration of this test.
-  const char* saved = std::getenv("NCCL_CUMEM_ENABLE");
-  const std::string saved_value = saved != nullptr ? saved : "";
-  const bool had_value = saved != nullptr;
-  ASSERT_EQ(setenv("NCCL_CUMEM_ENABLE", "0", /*overwrite=*/1), 0);
+// Create() reads NCCL_CUMEM_ENABLE once per process, so the parsing is tested
+// directly here instead of through the environment. No GPU needed.
+TEST(NcclCuMemEnabledStatusTest, AcceptsEnabledValues) {
+  EXPECT_THAT(internal::NcclCuMemEnabledStatus("1"), IsOk());
+  EXPECT_THAT(internal::NcclCuMemEnabledStatus("2"), IsOk());
+}
 
-  se::DeviceAddressBase addr(buf_ptr_, buf_size_);
-  auto result = RcclSymmetricMemory::Create(comm_, addr, /*executor=*/nullptr);
-
-  // Restore the original environment before asserting so a failed expectation
-  // does not leak the override into later tests.
-  if (had_value) {
-    (void)setenv("NCCL_CUMEM_ENABLE", saved_value.c_str(), /*overwrite=*/1);
-  } else {
-    (void)unsetenv("NCCL_CUMEM_ENABLE");
+TEST(NcclCuMemEnabledStatusTest, RejectsDisabledValues) {
+  for (const char* raw : std::initializer_list<const char*>{
+           nullptr, "", "0", "-1", "not-a-number"}) {
+    SCOPED_TRACE(raw == nullptr ? "unset" : raw);
+    absl::Status status = internal::NcclCuMemEnabledStatus(raw);
+    EXPECT_THAT(status, StatusIs(absl::StatusCode::kFailedPrecondition));
+    EXPECT_THAT(std::string(status.message()),
+                HasSubstr("NCCL_CUMEM_ENABLE=1"));
   }
-
-  EXPECT_THAT(result, Not(IsOk()));
-  EXPECT_EQ(result.status().code(), absl::StatusCode::kFailedPrecondition);
-  EXPECT_THAT(std::string(result.status().message()),
-              HasSubstr("NCCL_CUMEM_ENABLE=1"));
 }
 
 // Verifies that addr() returns exactly the pointer and size that were
