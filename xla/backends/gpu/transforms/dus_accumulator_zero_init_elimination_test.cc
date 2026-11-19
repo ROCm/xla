@@ -70,7 +70,10 @@ struct RawDusCase {
   absl::string_view while_extra =
       "";  // extra attribute on `w =`, e.g. sharding
   absl::string_view trip_limit = "4";
+  absl::string_view trip_count = "";   // known_trip_count; empty: trip_limit
   absl::string_view iv_init = "z";     // ENTRY-level name feeding the IV's init
+  absl::string_view known_init = "0";  // known_init_step.init
+  absl::string_view iv_step = "1";     // known_init_step.step, body step
   absl::string_view entry_extra = "";  // entry pre-init declarations
   bool check_first_slot = false;  // assert init->operand(1) is AllocateBuffer
 
@@ -105,6 +108,17 @@ struct RawDusCase {
     c.iv_init = val;
     return c;
   }
+  // Loop with IV values init, init + step, ... (`trip` of them) below `limit`.
+  constexpr RawDusCase WithIv(absl::string_view init, absl::string_view step,
+                              absl::string_view trip,
+                              absl::string_view limit) const {
+    RawDusCase c = *this;
+    c.known_init = init;
+    c.iv_step = step;
+    c.trip_count = trip;
+    c.trip_limit = limit;
+    return c;
+  }
   constexpr RawDusCase WithEntryExtra(absl::string_view val) const {
     RawDusCase c = *this;
     c.entry_extra = val;
@@ -128,8 +142,8 @@ body {
   acc = bf16[4,8] get-tuple-element(p), index=1
   update = bf16[1,8] constant({ {1,1,1,1,1,1,1,1} })
 $BODY_DUS
-  one = s32[] constant(1)
-  next = s32[] add(it, one)
+  step = s32[] constant($IV_STEP)
+  next = s32[] add(it, step)
   ROOT out = (s32[], bf16[4,8]) tuple(next, dus)
 }
 
@@ -145,8 +159,9 @@ ENTRY e {
 $ENTRY_EXTRA$INIT_EXPR
   init = (s32[], bf16[4,8]) tuple($IV_INIT, zero_init)
   w = (s32[], bf16[4,8]) while(init), condition=cond, body=body,$WHILE_EXTRA
-      backend_config={"known_trip_count":{"n":"$TRIP_LIMIT"},
-                      "known_init_step":{"init":"0","step":"1"},
+      backend_config={"known_trip_count":{"n":"$TRIP_COUNT"},
+                      "known_init_step":{"init":"$KNOWN_INIT",
+                                         "step":"$IV_STEP"},
                       "known_induction_variable":{"tuple_index":"0"}}
   ROOT r = bf16[4,8] get-tuple-element(w), index=1
 }
@@ -155,6 +170,9 @@ $ENTRY_EXTRA$INIT_EXPR
        {"$INIT_EXPR", c.init_expr},
        {"$WHILE_EXTRA", c.while_extra},
        {"$TRIP_LIMIT", c.trip_limit},
+       {"$TRIP_COUNT", c.trip_count.empty() ? c.trip_limit : c.trip_count},
+       {"$KNOWN_INIT", c.known_init},
+       {"$IV_STEP", c.iv_step},
        {"$IV_INIT", c.iv_init},
        {"$ENTRY_EXTRA", c.entry_extra}});
 }
@@ -185,10 +203,73 @@ const RawDusCase kRawDusCases[] = {
     RawDusCase("NonBroadcastInitSkipped", false, 0)
         .WithInitExpr("  zero_init = bf16[4,8] parameter(0)"),
 
-    RawDusCase("NonZeroIvInitSkipped", false, 0)
-        .WithTripLimit("5")
+    // IV runs 1..4 and writes slot `it`: slot 0 is never written (the start 4
+    // is clamped to 3) — must skip.
+    RawDusCase("NonZeroIvInitMissesFirstSlotSkipped", false, 0)
+        .WithIv("1", "1", "4", "5")
         .WithIvInit("one_init")
         .WithEntryExtra("  one_init = s32[] constant(1)\n"),
+
+    // IV runs 1..4 and writes slot it - 1, so slots 0..3.
+    RawDusCase("NonZeroIvInitShiftedIndex", true, 1)
+        .WithIv("1", "1", "4", "5")
+        .WithIvInit("one_init")
+        .WithEntryExtra("  one_init = s32[] constant(1)\n")
+        .WithBodyDus(R"(  z = s32[] constant(0)
+  m1 = s32[] constant(-1)
+  idx = s32[] add(it, m1)
+  dus = bf16[4,8] dynamic-update-slice(acc, update, idx, z))"),
+
+    // IV takes 0, 2, 4, 6 and writes columns [it, it + 2).
+    RawDusCase("IvStepTwo", true, 1)
+        .WithIv("0", "2", "4", "8")
+        .WithBodyDus(R"(  z = s32[] constant(0)
+  update_tile = bf16[4,2] constant({ {1,1}, {1,1}, {1,1}, {1,1} })
+  dus = bf16[4,8] dynamic-update-slice(acc, update_tile, z, it))"),
+
+    // Same loop writing one column per iteration leaves odd columns — skip.
+    RawDusCase("IvStepTwoGapSkipped", false, 0)
+        .WithIv("0", "2", "4", "8")
+        .WithBodyDus(R"(  z = s32[] constant(0)
+  update_col = bf16[4,1] constant({ {1}, {1}, {1}, {1} })
+  dus = bf16[4,8] dynamic-update-slice(acc, update_col, z, it))"),
+
+    // Starts it - 1 = -1..2 with a 2-row slice: -1 is clamped to 0, and 2
+    // reaches the last row, so rows 0..3 are written.
+    RawDusCase("ClampedStartsCoverBuffer", true, 1)
+        .WithBodyDus(R"(  z = s32[] constant(0)
+  m1 = s32[] constant(-1)
+  idx = s32[] add(it, m1)
+  c1 = bf16[] constant(1)
+  update2 = bf16[2,8] broadcast(c1), dimensions={}
+  dus = bf16[4,8] dynamic-update-slice(acc, update2, idx, z))"),
+
+    // Starts it - 2 = -2..1 clamp to 0, 0, 0, 1: rows 0..1 only — skip.
+    RawDusCase("ClampedStartsMissRightEdgeSkipped", false, 0)
+        .WithBodyDus(R"(  z = s32[] constant(0)
+  m2 = s32[] constant(-2)
+  idx = s32[] add(it, m2)
+  dus = bf16[4,8] dynamic-update-slice(acc, update, idx, z))"),
+
+    // A full-height slice at start it + 1 = 1..4 is clamped to row 0 and
+    // overwrites the whole buffer every iteration.
+    RawDusCase("FullSliceClampedStart", true, 1)
+        .WithBodyDus(R"(  z = s32[] constant(0)
+  p1 = s32[] constant(1)
+  idx = s32[] add(it, p1)
+  c1 = bf16[] constant(1)
+  update4 = bf16[4,8] broadcast(c1), dimensions={}
+  dus = bf16[4,8] dynamic-update-slice(acc, update4, idx, z))"),
+
+    // init + (trip - 1) * step overflows int64: skip before computing the IV
+    // range (signed overflow). The full-height slice covers the buffer for any
+    // start, so only the overflow guard rejects this loop.
+    RawDusCase("IvRangeOverflowSkipped", false, 0)
+        .WithIv("9223372036854775806", "1", "4", "4")
+        .WithBodyDus(R"(  z = s32[] constant(0)
+  c1 = bf16[] constant(1)
+  update4 = bf16[4,8] broadcast(c1), dimensions={}
+  dus = bf16[4,8] dynamic-update-slice(acc, update4, it, z))"),
 
     RawDusCase("ShardedWhileSkipped", false, 0)
         .WithWhileExtra(

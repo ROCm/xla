@@ -15,7 +15,9 @@ limitations under the License.
 
 #include "xla/backends/gpu/transforms/dus_accumulator_zero_init_elimination.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -83,6 +85,10 @@ struct CandidateLoop {
   HloInstruction* while_instr;
   int64_t trip_count;
   int64_t induction_var_idx;
+  // Induction variable value in the first iteration and its per-iteration
+  // increment (positive).
+  int64_t iv_init = 0;
+  int64_t iv_step = 1;
 };
 
 absl::StatusOr<bool> AllUsersKillBuffer(const HloInstruction* buffer,
@@ -96,10 +102,12 @@ absl::StatusOr<bool> UserKillsBuffer(const HloInstruction* user,
 // TODO: the annotation can outlive the IR shape it was derived from —
 // upstream IV-rewriting passes should refresh or drop it.
 Range LoopIterationRange(const CandidateLoop& cfg) {
-  return Range{ConstantValue::GetSigned(0, /*bitwidth=*/64),
-               ConstantValue::GetSigned(cfg.trip_count - 1, /*bitwidth=*/64),
-               ConstantValue::GetSigned(1, /*bitwidth=*/64),
-               /*is_linear=*/true};
+  return Range{
+      ConstantValue::GetSigned(cfg.iv_init, /*bitwidth=*/64),
+      ConstantValue::GetSigned(cfg.iv_init + (cfg.trip_count - 1) * cfg.iv_step,
+                               /*bitwidth=*/64),
+      ConstantValue::GetSigned(cfg.iv_step, /*bitwidth=*/64),
+      /*is_linear=*/true};
 }
 
 // RecursivelyIdentifyRange handles the recursion into fused parameters, so
@@ -168,10 +176,24 @@ bool IsKillingDus(const HloInstruction* dus, const HloInstruction* operand,
   if (slice_size <= 0 || slice_size > dim_size) {
     return false;
   }
-  // Left edge, right edge, and no interior gaps.
-  return dyn_dim_range.min().GetSignedValue() <= 0 &&
-         dyn_dim_range.max()->GetSignedValue() >= dim_size - slice_size &&
-         slice_size >= dyn_dim_range.step()->GetSignedValue();
+  // No interior gaps between consecutive iterations' slices. This assumes the
+  // range's step is the distance between consecutive start values; the value
+  // range analysis does not guarantee that when the index depends on the IV
+  // through more than one operand (e.g. add(iv, iv)).
+  // TODO: reject such non-linear index expressions.
+  if (slice_size < dyn_dim_range.step()->GetSignedValue()) {
+    return false;
+  }
+  // DUS clamps its start into [0, dim_size - slice_size]; clamping only
+  // shrinks gaps, so the loop writes exactly [lo, hi). This matches
+  // min <= 0 && max >= dim_size - slice_size, except that a slice spanning
+  // the whole dimension now covers it for any start.
+  auto clamp = [&](int64_t v) {
+    return std::clamp<int64_t>(v, 0, dim_size - slice_size);
+  };
+  const int64_t lo = clamp(dyn_dim_range.min().GetSignedValue());
+  const int64_t hi = clamp(dyn_dim_range.max()->GetSignedValue()) + slice_size;
+  return lo == 0 && hi >= dim_size;  // left edge and right edge
 }
 
 // TODO: scatter killing-write support; needs reasoning over scatter index
@@ -319,9 +341,18 @@ std::optional<CandidateLoop> ClassifyCandidateWhile(HloInstruction* while_op) {
   if (trip_count <= 0) {
     return std::nullopt;
   }
-  if (!loop_cfg->has_known_init_step() ||
-      loop_cfg->known_init_step().init() != 0 ||
-      loop_cfg->known_init_step().step() != 1) {
+  if (!loop_cfg->has_known_init_step()) {
+    return std::nullopt;
+  }
+  const int64_t iv_init = loop_cfg->known_init_step().init();
+  const int64_t iv_step = loop_cfg->known_init_step().step();
+  if (iv_step <= 0) {
+    return std::nullopt;
+  }
+  // The IV's last value, iv_init + (trip_count - 1) * iv_step, must fit.
+  const int64_t max_last =
+      std::numeric_limits<int64_t>::max() - std::max<int64_t>(iv_init, 0);
+  if (trip_count - 1 > max_last / iv_step) {
     return std::nullopt;
   }
   if (while_op->operand(0)->opcode() != HloOpcode::kTuple) {
@@ -339,7 +370,9 @@ std::optional<CandidateLoop> ClassifyCandidateWhile(HloInstruction* while_op) {
   }
   return CandidateLoop{/*while_instr=*/while_op,
                        /*trip_count=*/trip_count,
-                       /*induction_var_idx=*/iv_tuple_idx};
+                       /*induction_var_idx=*/iv_tuple_idx,
+                       /*iv_init=*/iv_init,
+                       /*iv_step=*/iv_step};
 }
 
 }  // namespace
