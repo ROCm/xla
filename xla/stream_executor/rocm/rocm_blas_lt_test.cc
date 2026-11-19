@@ -13,21 +13,26 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <type_traits>
+#include <variant>
 #include <vector>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "absl/algorithm/container.h"
 #include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
+#include "absl/status/statusor.h"
 #include "xla/primitive_util.h"
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/device_address.h"
 #include "xla/stream_executor/device_address_handle.h"
+#include "xla/stream_executor/gpu/blas_lt_matmul_algorithm.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform_manager.h"
@@ -37,6 +42,8 @@ limitations under the License.
 
 namespace stream_executor::gpu {
 namespace {
+
+using ::testing::HasSubstr;
 
 class RocmBlasLtTest : public ::testing::Test {
  protected:
@@ -48,24 +55,23 @@ class RocmBlasLtTest : public ::testing::Test {
     ASSERT_OK_AND_ASSIGN(blas_lt_, gpu::BlasLt::Get(executor_));
   }
 
-  // Column-major A (m x k) and B (k x n) are ones, C is zero, alpha=1, beta=0.
-  // Each output element must equal k.
-  // skip_if_unsupported skips only an empty algorithm list (SKU/library gap).
-  // GetMatmulPlan failures are always test failures.
+  static constexpr int64_t kDim = 32;
+  static constexpr size_t kWorkspaceSize = 32 * 1024 * 1024;  // 32 MB
+
+  // Column-major A (m x k), B (k x n) and C (m x n) with m = n = kDim.
   template <typename InputT, typename OutputT>
-  void RunGemm(blas::ComputationType compute_type, bool skip_if_unsupported) {
+  absl::StatusOr<BlasLt::MatmulPlanPtr> MakePlan(
+      blas::ComputationType compute_type, int64_t k = kDim) {
     xla::PrimitiveType input_primitive_type =
         xla::primitive_util::NativeToPrimitiveType<InputT>();
     xla::PrimitiveType output_primitive_type =
         xla::primitive_util::NativeToPrimitiveType<OutputT>();
 
-    const int64_t m = 32, n = 32, k = 32;
-
-    gpu::MatrixLayout a_layout(input_primitive_type, m, k,
+    gpu::MatrixLayout a_layout(input_primitive_type, kDim, k,
                                gpu::MatrixLayout::Order::kColumnMajor);
-    gpu::MatrixLayout b_layout(input_primitive_type, k, n,
+    gpu::MatrixLayout b_layout(input_primitive_type, k, kDim,
                                gpu::MatrixLayout::Order::kColumnMajor);
-    gpu::MatrixLayout c_layout(output_primitive_type, m, n,
+    gpu::MatrixLayout c_layout(output_primitive_type, kDim, kDim,
                                gpu::MatrixLayout::Order::kColumnMajor);
 
     gpu::GemmConfig cfg = {
@@ -83,26 +89,21 @@ class RocmBlasLtTest : public ::testing::Test {
         gpu::ScaleMode::kNone,            // scale_mode
         compute_type                      // compute_type
     };
+    return blas_lt_->GetMatmulPlan(cfg, gpu::BlasLt::Epilogue::kDefault);
+  }
 
-    ASSERT_OK_AND_ASSIGN(auto plan, blas_lt_->GetMatmulPlan(
-                                        cfg, gpu::BlasLt::Epilogue::kDefault));
-
-    const size_t workspace_size = 32 * 1024 * 1024;  // 32 MB
-    ASSERT_OK_AND_ASSIGN(auto algorithms,
-                         plan->GetAlgorithms(128, workspace_size));
-    if (skip_if_unsupported && algorithms.empty()) {
-      GTEST_SKIP() << "hipBLASLt returned no algorithms for this dtype.";
-    }
-    ASSERT_FALSE(algorithms.empty());
-    ASSERT_OK(plan->SetAlgorithm(algorithms[0]));
-
+  // A and B are ones, C is zero, alpha=1, beta=0: each output element of
+  // `plan`, run with the algorithm it has set, must equal kDim.
+  template <typename InputT, typename OutputT>
+  void ExecuteAndCheck(const BlasLt::MatmulPlan& plan) {
+    const int64_t m = kDim, n = kDim, k = kDim;
     std::vector<InputT> h_a(m * k, static_cast<InputT>(1));
     std::vector<InputT> h_b(k * n, static_cast<InputT>(1));
 
     DeviceAddress<InputT> d_a = executor_->AllocateArray<InputT>(h_a.size());
     DeviceAddress<InputT> d_b = executor_->AllocateArray<InputT>(h_b.size());
     DeviceAddress<OutputT> d_c = executor_->AllocateArray<OutputT>(m * n);
-    DeviceAddressBase workspace = executor_->Allocate(workspace_size);
+    DeviceAddressBase workspace = executor_->Allocate(kWorkspaceSize);
     DeviceAddressHandle a_keep(executor_, d_a);
     DeviceAddressHandle b_keep(executor_, d_b);
     DeviceAddressHandle c_keep(executor_, d_c);
@@ -128,7 +129,7 @@ class RocmBlasLtTest : public ::testing::Test {
         /*scratch_allocator=*/nullptr,
     };
 
-    ASSERT_OK(plan->ExecuteOnStream(stream_.get(), args, nullptr));
+    ASSERT_OK(plan.ExecuteOnStream(stream_.get(), args, nullptr));
 
     std::vector<OutputT> h_result(m * n);
     ASSERT_OK(stream_->Memcpy(h_result.data(), d_c,
@@ -143,6 +144,21 @@ class RocmBlasLtTest : public ::testing::Test {
         ASSERT_EQ(h_result[i], static_cast<OutputT>(k)) << "at index " << i;
       }
     }
+  }
+
+  // skip_if_unsupported skips only an empty algorithm list (SKU/library gap).
+  // GetMatmulPlan failures are always test failures.
+  template <typename InputT, typename OutputT>
+  void RunGemm(blas::ComputationType compute_type, bool skip_if_unsupported) {
+    ASSERT_OK_AND_ASSIGN(auto plan, (MakePlan<InputT, OutputT>(compute_type)));
+    ASSERT_OK_AND_ASSIGN(auto algorithms,
+                         plan->GetAlgorithms(128, kWorkspaceSize));
+    if (skip_if_unsupported && algorithms.empty()) {
+      GTEST_SKIP() << "hipBLASLt returned no algorithms for this dtype.";
+    }
+    ASSERT_FALSE(algorithms.empty());
+    ASSERT_OK(plan->SetAlgorithm(algorithms[0]));
+    ExecuteAndCheck<InputT, OutputT>(*plan);
   }
 
   Platform* platform_ = nullptr;
@@ -165,6 +181,85 @@ TEST_F(RocmBlasLtTest, S8S8S32Gemm) {
 TEST_F(RocmBlasLtTest, S8S8F32Gemm) {
   RunGemm<int8_t, float>(blas::ComputationType::kF32,
                          /*skip_if_unsupported=*/true);
+}
+
+// A descriptor taken from one plan selects the same hipBLASLt solution in a
+// fresh plan (as the thunk does at run time) and computes the right result.
+TEST_F(RocmBlasLtTest, DescriptorRoundTripRunsTheSameSolution) {
+  ASSERT_OK_AND_ASSIGN(auto plan,
+                       (MakePlan<float, float>(blas::ComputationType::kF32)));
+  ASSERT_OK_AND_ASSIGN(auto algorithms,
+                       plan->GetAlgorithms(128, kWorkspaceSize));
+  ASSERT_FALSE(algorithms.empty());
+  // The last candidate, so that the ordinal and the solution index differ
+  // from the heuristic's first choice.
+  ASSERT_OK_AND_ASSIGN(BlasLtMatmulAlgorithm descriptor,
+                       plan->GetBlasLtMatmulAlgorithm(algorithms.back()));
+  ASSERT_TRUE(
+      std::holds_alternative<HipblasLtMatmulAlgorithm>(descriptor.algorithm));
+  EXPECT_NE(descriptor.library_version, 0);
+  ASSERT_OK_AND_ASSIGN(std::optional<BlasLtMatmulAlgorithm> parsed,
+                       BlasLtMatmulAlgorithm::FromProto(descriptor.ToProto()));
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(*parsed, descriptor);
+
+  ASSERT_OK_AND_ASSIGN(auto fresh_plan,
+                       (MakePlan<float, float>(blas::ComputationType::kF32)));
+  ASSERT_OK_AND_ASSIGN(BlasLt::MatmulAlgorithm found,
+                       fresh_plan->GetMatmulAlgorithm(*parsed, kWorkspaceSize));
+  EXPECT_EQ(found.workspace_size, algorithms.back().workspace_size);
+  EXPECT_THAT(fresh_plan->GetBlasLtMatmulAlgorithm(found),
+              absl_testing::IsOkAndHolds(descriptor));
+  ASSERT_OK(fresh_plan->SetCachedAlgorithm(*parsed, kWorkspaceSize));
+  ExecuteAndCheck<float, float>(*fresh_plan);
+}
+
+TEST_F(RocmBlasLtTest, DescriptorFromAnotherLibraryVersionIsRejected) {
+  ASSERT_OK_AND_ASSIGN(auto plan,
+                       (MakePlan<float, float>(blas::ComputationType::kF32)));
+  ASSERT_OK_AND_ASSIGN(auto algorithms, plan->GetAlgorithms(1, kWorkspaceSize));
+  ASSERT_FALSE(algorithms.empty());
+  ASSERT_OK_AND_ASSIGN(BlasLtMatmulAlgorithm descriptor,
+                       plan->GetBlasLtMatmulAlgorithm(algorithms.front()));
+
+  BlasLtMatmulAlgorithm other_version = descriptor;
+  other_version.library_version += 1;
+  EXPECT_THAT(plan->GetMatmulAlgorithm(other_version, kWorkspaceSize),
+              absl_testing::StatusIs(absl::StatusCode::kFailedPrecondition,
+                                     HasSubstr("library version")));
+
+  for (int32_t index : {-1, 1 << 30}) {
+    BlasLtMatmulAlgorithm missing = descriptor;
+    missing.algorithm = HipblasLtMatmulAlgorithm{/*solution_index=*/index};
+    EXPECT_THAT(plan->GetMatmulAlgorithm(missing, kWorkspaceSize),
+                absl_testing::StatusIs(absl::StatusCode::kNotFound,
+                                       HasSubstr("has no solution")))
+        << "solution index " << index;
+  }
+}
+
+// A long contraction makes hipBLASLt offer split-K solutions, which need a
+// workspace; such a solution is rejected when the workspace is smaller.
+TEST_F(RocmBlasLtTest, DescriptorNeedingMoreWorkspaceIsRejected) {
+  ASSERT_OK_AND_ASSIGN(auto plan,
+                       (MakePlan<float, float>(blas::ComputationType::kF32,
+                                               /*k=*/kDim * 1024)));
+  ASSERT_OK_AND_ASSIGN(auto algorithms,
+                       plan->GetAlgorithms(128, kWorkspaceSize));
+  auto with_workspace =
+      absl::c_find_if(algorithms, [](const BlasLt::MatmulAlgorithm& algorithm) {
+        return algorithm.workspace_size > 0;
+      });
+  if (with_workspace == algorithms.end()) {
+    GTEST_SKIP() << "no hipBLASLt solution needs a workspace for this problem";
+  }
+  ASSERT_OK_AND_ASSIGN(BlasLtMatmulAlgorithm descriptor,
+                       plan->GetBlasLtMatmulAlgorithm(*with_workspace));
+  EXPECT_OK(plan->GetMatmulAlgorithm(descriptor, kWorkspaceSize));
+  EXPECT_THAT(
+      plan->GetMatmulAlgorithm(descriptor, with_workspace->workspace_size - 1),
+      absl_testing::StatusIs(absl::StatusCode::kResourceExhausted,
+                             HasSubstr("workspace bytes")));
 }
 
 }  // namespace

@@ -808,6 +808,7 @@ cc_library(
         "//xla/stream_executor:memory_allocation",
         "//xla/stream_executor:scratch_allocator",
         "//xla/stream_executor:stream",
+        "//xla/stream_executor/gpu:blas_lt_matmul_algorithm",
         "//xla/stream_executor/gpu:gpu_blas_lt",
         "//xla/stream_executor/gpu:gpu_helpers_header",
         "//xla/tsl/platform:errors",
@@ -818,6 +819,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
         "@local_config_rocm//rocm:hipblaslt",  # buildcleaner: keep
@@ -844,8 +846,13 @@ xla_test(
         "//xla/stream_executor:platform_manager",
         "//xla/stream_executor:stream",
         "//xla/stream_executor:stream_executor_h",
+        "//xla/stream_executor/gpu:blas_lt_matmul_algorithm",
         "//xla/stream_executor/gpu:gpu_blas_lt",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_googletest//:gtest_main",  # buildcleaner: keep
     ],
 )
@@ -866,6 +873,7 @@ cc_library(
         "//xla/stream_executor:blas",
         "//xla/stream_executor:device_address",
         "//xla/stream_executor:stream",
+        "//xla/stream_executor/gpu:blas_lt_matmul_algorithm",
         "//xla/stream_executor/gpu:gpu_blas_lt",
         "//xla/tsl/platform:errors",
         "@com_google_absl//absl/base:core_headers",

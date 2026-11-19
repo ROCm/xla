@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/backends/gpu/runtime/gpublas_lt_matmul_thunk.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -45,6 +46,17 @@ limitations under the License.
 
 namespace xla {
 namespace gpu {
+
+namespace {
+
+// Errors that may not recur, so the thunk does not remember them as a failed
+// descriptor.
+bool IsTransientFailure(const absl::Status& status) {
+  return absl::IsUnavailable(status) || absl::IsDeadlineExceeded(status) ||
+         absl::IsAborted(status) || absl::IsCancelled(status);
+}
+
+}  // namespace
 
 CublasLtMatmulThunk::CublasLtMatmulThunk(
     Thunk::ThunkInfo thunk_info, std::string canonical_hlo,
@@ -153,7 +165,8 @@ CublasLtMatmulThunk::GetCachedMatmulPlan(const ExecuteParams& params) {
                                          gemm_config_));
     return std::move(plan);
   };
-  if (blas_lt_algorithm_.has_value()) {
+  if (blas_lt_algorithm_.has_value() &&
+      !blas_lt_algorithm_failed_.load(std::memory_order_relaxed)) {
     absl::StatusOr<se::gpu::BlasLt::MatmulPlan*> plan =
         blas_lt->GetOrCreateMatmulPlanWithAlgorithm(canonical_hlo_, create,
                                                     *blas_lt_algorithm_,
@@ -161,11 +174,21 @@ CublasLtMatmulThunk::GetCachedMatmulPlan(const ExecuteParams& params) {
     if (plan.ok() || require_exact_algorithm_) {
       return plan;
     }
-    LOG(WARNING) << "Failed to initialize BlasLt algorithm from descriptor ("
-                 << plan.status()
-                 << "); falling back to heuristic algorithm index "
-                 << algorithm_idx_;
-  } else if (require_exact_algorithm_) {
+    if (IsTransientFailure(plan.status())) {
+      // Retry the descriptor on the next execution.
+      LOG(WARNING) << "Failed to initialize BlasLt algorithm from descriptor ("
+                   << plan.status()
+                   << "); falling back to heuristic algorithm index "
+                   << algorithm_idx_ << " for this execution";
+    } else if (!blas_lt_algorithm_failed_.exchange(true,
+                                                   std::memory_order_relaxed)) {
+      // Only one of concurrent executions reports the failure.
+      LOG(WARNING) << "Failed to initialize BlasLt algorithm from descriptor ("
+                   << plan.status()
+                   << "); falling back to heuristic algorithm index "
+                   << algorithm_idx_ << " for this thunk";
+    }
+  } else if (!blas_lt_algorithm_.has_value() && require_exact_algorithm_) {
     return absl::FailedPreconditionError(
         "Exact BlasLt algorithm is required, but no algorithm descriptor "
         "this build supports was provided.");
