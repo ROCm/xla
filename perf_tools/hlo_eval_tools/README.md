@@ -98,6 +98,7 @@ hlo_eval_tools/
     qwen3_14b/{training,inference}/
     gpt_j_6b/{training,inference}/
     flan_t5_large/{training,inference}/
+    marin_june_67b_a2b/{training,inference}/
   vision_diffusion/
     resnet50/{training,inference}/
     imagenette/{training,inference}/
@@ -125,7 +126,7 @@ CSV headers scoped to a single run and makes cross-run comparison straightforwar
 
 | Category folder | Models |
 | --- | --- |
-| `large_language_models/` | `deepseek2_16b`, `gemma3_4b`, `gp3_oss_20b`, `llama3_8b`, `mixtral_8x7b`, `qwen3_14b`, `gpt_j_6b`, `flan_t5_large` |
+| `large_language_models/` | `deepseek2_16b`, `gemma3_4b`, `gp3_oss_20b`, `llama3_8b`, `mixtral_8x7b`, `qwen3_14b`, `gpt_j_6b`, `flan_t5_large`, `marin_june_67b_a2b` |
 | `vision_diffusion/` | `resnet50`, `imagenette`, `efficientnet`, `vit`, `mlp_mixer`, `clip`, `detr`, `stable_diffusion_1_5`, `sdxl`, `dit` |
 | `multimodal/` | `paligemma`, `siglip`, `lit`, `cappa` |
 | `science/` | `alphafold3`, `colabfold` |
@@ -151,11 +152,13 @@ shown; inference is dumped separately at each listed count under
 `inference/<N>gpu/`.
 
 Provenance: dumped with a from-source build of ROCm JAX/XLA (`jax 0.10.2` built
-against the `rocm-jaxlib-v0.10.2` XLA branch) on a gfx950 node. Scope is
+against the `rocm-jaxlib-v0.10.2` XLA branch) on a gfx950 node, except
+`marin_june_67b_a2b`, dumped with a newer JAX (see [its section](#marin-june-67b-a2b)). Scope is
 compilation-only — synthetic inputs and randomly-initialized weights are enough to
 emit the `before_optimizations` HLO, so no trained checkpoints or datasets are
 needed. The six MaxText LLMs' training is dumped on 8 GPUs (FSDP,
-`num_partitions=8`); all other training is single-GPU. Multi-GPU inference uses
+`num_partitions=8`), and so is `marin_june_67b_a2b` (expert-parallel); all other
+training is single-GPU. Multi-GPU inference uses
 tensor-parallel for the MaxText LLMs and FSDP for everything else (see
 [Multi-GPU inference](#multi-gpu-inference)).
 
@@ -169,6 +172,7 @@ tensor-parallel for the MaxText LLMs and FSDP for everything else (see
 | `qwen3_14b` | 8 | 1 / 2 / 4 / 8 | MaxText |
 | `gpt_j_6b` | 1 | 1 / 2 / 4 / 8 | HF `FlaxGPTJForCausalLM`; multi-GPU = FSDP |
 | `flan_t5_large` | 1 | 1 / 2 / 4 / 8 | HF `FlaxT5ForConditionalGeneration`; multi-GPU = FSDP |
+| `marin_june_67b_a2b` | 8 | 8 | Marin June 67B-A2B MoE, 4 layers; expert-parallel; see [Marin June 67B-A2B](#marin-june-67b-a2b) |
 | `resnet50` | 1 | 1 / 2 / 4 / 8 | big_vision BiT ResNetV2-50 |
 | `imagenette` | 1 | 1 / 2 / 4 / 8 | flax ResNet-18 (10-class); added beyond the canonical set |
 | `efficientnet` | 1 | 1 / 2 / 4 / 8 | EfficientNet-B0 (flax implementation) |
@@ -187,8 +191,8 @@ tensor-parallel for the MaxText LLMs and FSDP for everything else (see
 | `colabfold` | — | 1 / 2 / 4 / 8 | inference-only; AlphaFold2 single-sequence |
 
 `—` in Training means the model has no public training path (dumped
-inference-only). In total the tree holds 141 HLO modules across 24 models: 22
-training + 119 inference (summed over the 1/2/4/8-GPU inference leaves). Each LLM
+inference-only). In total the tree holds 143 HLO modules across 25 models: 23
+training + 120 inference (summed over the 1/2/4/8-GPU inference leaves). Each LLM
 inference leaf holds its `prefill` + `generate` modules (mixtral's 1-GPU leaf: 2
 prefill buckets + generate); every other inference leaf holds one forward module.
 
@@ -198,6 +202,54 @@ inference-only).
 source stack, so they use compact, architecturally-faithful flax implementations
 (representative op mixes for benchmarking, not weight-identical to reference
 checkpoints).
+
+### Marin June 67B-A2B
+
+`marin_june_67b_a2b` is the MoE training step of [Marin](https://github.com/marin-community/marin)'s
+June 67B-A2B model, from the AMD copy `experiments/amd/june_67b_a2b` (AMD-Ecosystem/marin
+`amd/snowball-mi355x` at `5ce5542808`, `synthetic_benchmark.py`). It is our 2-node MI355X
+training configuration reduced to one node:
+
+- the full width (hidden 2560, 256 experts with top-4 routing, 4096-token sequences) with
+  4 layers instead of 26 (`--layers 4`, the layer count of Marin's `medium` preset): the
+  26-layer step returns about 875 GiB summed over the 8 GPUs (the updated parameters and
+  optimizer state), the runner does not donate its inputs, and by default
+  (`--output_mode=return_outputs`) it copies the outputs to host memory; a 26-layer replay
+  was OOM-killed on the host (900 GB job limit) even with `--gpu_client_mem_fraction=0.9`;
+- expert parallelism over the 8 GPUs (`--expert-axis 8`), the layers in one stacked `scan`,
+  4 microbatches of 8 x 4096 tokens per GPU (global batch 256) with float32 gradient sums;
+- one replica (`--replica-axis 1`) and no ZeRO-1, which needs two or more replicas;
+- Pallas-Triton flash attention and grouped GEMMs (`--attention gpu_pallas_triton_flash`,
+  `RAGGED_DOT_IMPL=triton`) instead of the jax-aiter and FlyDSL kernels of our production
+  runs, which are FFI custom calls `multihost_hlo_runner` cannot run. The norm and RoPE
+  kernels of the model are Pallas-Triton in any configuration.
+
+`training/` holds `jit_train_step`. `inference/8gpu/` holds `jit_evaluate`, the
+forward-only held-out loss the trainer runs every N steps (`--eval-every`); the model has
+no serving path, so there are no prefill/generate modules or 1/2/4-GPU leaves. Both are
+`num_partitions=8` Shardy modules and need the runner's `--use_spmd_partitioning` (their
+`shard_map` calls fail to compile unpartitioned).
+
+They were dumped with JAX `fb2682ef29` built on ROCm/xla `e7c1bc01a2` on an MI355X node,
+with `--xla_enable_hlo_sharding_v3=false` (device-list shardings instead of named-mesh
+ones). Then, so that the text parses on runners older than that XLA and converts to
+StableHLO:
+
+- the collectives' replica groups, written by this JAX as mesh axes
+  (`replica_groups=mesh[...] {'expert'}`), were rewritten as the equivalent explicit
+  device groups;
+- the 1-D `scan` instructions of JAX's GPU `cumsum` lowering were rewritten as the
+  `reduce-window` JAX emits for `cumsum` on other platforms;
+- source paths inside the Triton IR were replaced with same-length neutral ones.
+
+The `.mlirbc` artifacts are serialized for StableHLO 1.18.0
+(`convert_hlo_to_stablehlo.py --target 1.18.0`), the oldest version that can hold the
+Triton custom calls (typed FFI with a dictionary `backend_config`). The pinned control
+`rocm-jaxlib-v0.10.2` has StableHLO 1.17.0 and cannot read them.
+
+The model has no `results/` folder: the checked-in CSVs come from the
+`rocm-jaxlib-v0.10.2` control, which cannot read the `.mlirbc`, and the control's runner
+has not been tried on the HLO text.
 
 ## Multi-GPU inference
 
@@ -692,7 +744,7 @@ The currently checked-in results were produced on:
 - **Docker image:** `ghcr.io/rocm/jax-ubu22.rocm7.2.4`
 - **Runner flags:** `--hlo_argument_mode=uninitialized --num_repeats=2`, HIP command buffers disabled
 
-105 of 117 leaves are present; the 12 missing are the deterministic failures below
+105 of the 117 leaves of that corpus (before `marin_june_67b_a2b` was added) are present; the 12 missing are the deterministic failures below
 (`mixtral_8x7b` has no `results/` folder for this reason).
 
 These runs passed `--num_partitions=N --use_shardy_partitioner` without
@@ -702,7 +754,8 @@ of the current `run_hlo_eval.sh`, which partitions them.
 
 ## Known build limitations (ROCm 7.2.4 / rocm-jaxlib-v0.10.2)
 
-On the validated build, **105 of 117** non-empty leaves profile successfully. The
+On the validated build, **105 of 117** non-empty leaves (the corpus before
+`marin_june_67b_a2b` was added) profile successfully. The
 remaining 12 fail for reasons intrinsic to this ROCm/XLA build (not the tool), and
 are **deterministic** — retrying (even in isolation) does not help:
 
