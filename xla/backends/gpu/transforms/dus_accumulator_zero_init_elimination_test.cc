@@ -674,6 +674,134 @@ ENTRY e {
   EXPECT_EQ(CountAllocateBuffers(module.get()), 0);
 }
 
+// One broadcast (as CSE leaves it) feeds the init tuples of three scans over
+// the same stack shape, and the ROOT also reads it. w0 and w1 overwrite every
+// slot, so each gets its own AllocateBuffer; w2 reads its slot before writing
+// it and keeps the broadcast, as does the ROOT.
+TEST_F(DusAccumulatorZeroInitEliminationTest, SharedInitReplacedPerWhile) {
+  constexpr absl::string_view kHlo = R"(
+HloModule m
+
+body {
+  p = (s32[], bf16[4,8]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  acc = bf16[4,8] get-tuple-element(p), index=1
+  update = bf16[1,8] constant({ {1,1,1,1,1,1,1,1} })
+  z = s32[] constant(0)
+  dus = bf16[4,8] dynamic-update-slice(acc, update, it, z)
+  one = s32[] constant(1)
+  next = s32[] add(it, one)
+  ROOT out = (s32[], bf16[4,8]) tuple(next, dus)
+}
+
+body_reads {
+  p = (s32[], bf16[4,8]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  acc = bf16[4,8] get-tuple-element(p), index=1
+  z = s32[] constant(0)
+  row = bf16[1,8] dynamic-slice(acc, it, z), dynamic_slice_sizes={1,8}
+  dus = bf16[4,8] dynamic-update-slice(acc, row, it, z)
+  one = s32[] constant(1)
+  next = s32[] add(it, one)
+  ROOT out = (s32[], bf16[4,8]) tuple(next, dus)
+}
+
+cond {
+  p = (s32[], bf16[4,8]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  limit = s32[] constant(4)
+  ROOT lt = pred[] compare(it, limit), direction=LT
+}
+
+ENTRY e {
+  z = s32[] constant(0)
+  c0 = bf16[] constant(0)
+  zero_init = bf16[4,8] broadcast(c0), dimensions={}
+  init0 = (s32[], bf16[4,8]) tuple(z, zero_init)
+  w0 = (s32[], bf16[4,8]) while(init0), condition=cond, body=body,
+      backend_config={"known_trip_count":{"n":"4"},
+                      "known_init_step":{"init":"0","step":"1"},
+                      "known_induction_variable":{"tuple_index":"0"}}
+  init1 = (s32[], bf16[4,8]) tuple(z, zero_init)
+  w1 = (s32[], bf16[4,8]) while(init1), condition=cond, body=body,
+      backend_config={"known_trip_count":{"n":"4"},
+                      "known_init_step":{"init":"0","step":"1"},
+                      "known_induction_variable":{"tuple_index":"0"}}
+  init2 = (s32[], bf16[4,8]) tuple(z, zero_init)
+  w2 = (s32[], bf16[4,8]) while(init2), condition=cond, body=body_reads,
+      backend_config={"known_trip_count":{"n":"4"},
+                      "known_init_step":{"init":"0","step":"1"},
+                      "known_induction_variable":{"tuple_index":"0"}}
+  r0 = bf16[4,8] get-tuple-element(w0), index=1
+  r1 = bf16[4,8] get-tuple-element(w1), index=1
+  r2 = bf16[4,8] get-tuple-element(w2), index=1
+  ROOT r = (bf16[4,8], bf16[4,8], bf16[4,8], bf16[4,8]) tuple(r0, r1, r2, zero_init)
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(kHlo));
+  EnableFlag(module.get());
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       DusAccumulatorZeroInitElimination().Run(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_EQ(CountAllocateBuffers(module.get()), 2);
+  HloComputation* entry = module->entry_computation();
+  auto slot1 = [&](absl::string_view tuple) {
+    return entry->GetInstructionWithName(tuple)->operand(1);
+  };
+  EXPECT_EQ(slot1("init0")->custom_call_target(), "AllocateBuffer");
+  EXPECT_EQ(slot1("init1")->custom_call_target(), "AllocateBuffer");
+  EXPECT_EQ(slot1("init2")->opcode(), HloOpcode::kBroadcast);
+  EXPECT_EQ(entry->root_instruction()->operand(3)->opcode(),
+            HloOpcode::kBroadcast);
+}
+
+// A shared init whose init tuple also feeds something other than the while
+// (here the ROOT) is left alone: replacing the tuple operand would change what
+// that other user sees.
+TEST_F(DusAccumulatorZeroInitEliminationTest, SharedInitTupleWithOtherUser) {
+  constexpr absl::string_view kHlo = R"(
+HloModule m
+
+body {
+  p = (s32[], bf16[4,8]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  acc = bf16[4,8] get-tuple-element(p), index=1
+  update = bf16[1,8] constant({ {1,1,1,1,1,1,1,1} })
+  z = s32[] constant(0)
+  dus = bf16[4,8] dynamic-update-slice(acc, update, it, z)
+  one = s32[] constant(1)
+  next = s32[] add(it, one)
+  ROOT out = (s32[], bf16[4,8]) tuple(next, dus)
+}
+
+cond {
+  p = (s32[], bf16[4,8]) parameter(0)
+  it = s32[] get-tuple-element(p), index=0
+  limit = s32[] constant(4)
+  ROOT lt = pred[] compare(it, limit), direction=LT
+}
+
+ENTRY e {
+  z = s32[] constant(0)
+  c0 = bf16[] constant(0)
+  zero_init = bf16[4,8] broadcast(c0), dimensions={}
+  init0 = (s32[], bf16[4,8]) tuple(z, zero_init)
+  w0 = (s32[], bf16[4,8]) while(init0), condition=cond, body=body,
+      backend_config={"known_trip_count":{"n":"4"},
+                      "known_init_step":{"init":"0","step":"1"},
+                      "known_induction_variable":{"tuple_index":"0"}}
+  r0 = bf16[4,8] get-tuple-element(w0), index=1
+  ROOT r = (bf16[4,8], (s32[], bf16[4,8]), bf16[4,8]) tuple(r0, init0, zero_init)
+}
+)";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(kHlo));
+  EnableFlag(module.get());
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       DusAccumulatorZeroInitElimination().Run(module.get()));
+  EXPECT_FALSE(changed);
+  EXPECT_EQ(CountAllocateBuffers(module.get()), 0);
+}
+
 // Peeled first iteration: CollectivePipeliner's forward pipelining moves
 // iteration 0 out of the loop, so the stack init is DUS(broadcast(0), x0, 0),
 // simplified to pad(x0, 0), and the loop runs iterations 1..3. Only the peeled
