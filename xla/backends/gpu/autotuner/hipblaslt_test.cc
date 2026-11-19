@@ -25,6 +25,7 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/status_matchers.h"
@@ -275,24 +276,30 @@ TEST_F(HipblasLtBackendTest, GetSupportedConfigsRecordsDescriptors) {
 
 // Complex GEMMs run on the rocBLAS fallback when the loaded hipBLASLt has no
 // solution for them; that plan has no descriptor (kUnimplemented), and its
-// configs keep only the index. When hipBLASLt serves the type itself (as
-// hipBLASLt 1.4 on gfx950 does for c64), every config has a descriptor, so
-// this test does not reach the fallback branch there.
+// configs keep only the index. Either way, all configs of one GEMM agree.
 TEST_F(HipblasLtBackendTest, GetSupportedConfigsForComplexGemm) {
-  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> hlo_module,
-                       ParseAndReturnVerifiedModule(absl::StrReplaceAll(
-                           kHipblasLtCustomCallHlo, {{"f32[", "c64["}})));
-  const HloInstruction& gemm =
-      *hlo_module->entry_computation()->root_instruction()->operand(0);
-  ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> configs,
-                       backend_.GetSupportedConfigs(gemm));
-  ASSERT_FALSE(configs.empty());
-  for (const std::unique_ptr<BackendConfig>& config : configs) {
-    const AutotuneResult::GemmKey& key = config->gemm();
-    EXPECT_TRUE(!key.has_algorithm_proto() ||
-                key.algorithm_proto().has_hipblaslt());
+  for (absl::string_view type : {"c64[", "c128["}) {
+    SCOPED_TRACE(type);
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> hlo_module,
+                         ParseAndReturnVerifiedModule(absl::StrReplaceAll(
+                             kHipblasLtCustomCallHlo, {{"f32[", type}})));
+    const HloInstruction& gemm =
+        *hlo_module->entry_computation()->root_instruction()->operand(0);
+    ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> configs,
+                         backend_.GetSupportedConfigs(gemm));
+    ASSERT_FALSE(configs.empty());
+    const bool has_descriptor = configs[0]->gemm().has_algorithm_proto();
+    LOG(INFO) << type << " GEMM configs "
+              << (has_descriptor ? "have hipBLASLt descriptors"
+                                 : "have no descriptor (rocBLAS fallback)");
+    for (const std::unique_ptr<BackendConfig>& config : configs) {
+      const AutotuneResult::GemmKey& key = config->gemm();
+      EXPECT_EQ(key.has_algorithm_proto(), has_descriptor);
+      EXPECT_TRUE(!key.has_algorithm_proto() ||
+                  key.algorithm_proto().has_hipblaslt());
+    }
+    EXPECT_OK(backend_.Compile(gemm, *configs[0]));
   }
-  EXPECT_OK(backend_.Compile(gemm, *configs[0]));
 }
 
 TEST_F(HipblasLtBackendTest, ApplyConfigPropagatesDescriptor) {
@@ -390,6 +397,45 @@ TEST_F(HipblasLtScaledDotTest, GetSupportedConfigs) {
     auto configs = backend_.GetSupportedConfigs(*fusion);
     EXPECT_THAT(configs,
                 absl_testing::IsOkAndHolds(testing::SizeIs(testing::Gt(0))));
+  }
+}
+
+// Scaled dots go through the same descriptor recording as other GEMMs. On
+// hipBLASLt 1.4.1 (gfx950) their algorithms report a negative solution index,
+// so the configs keep only the index; either way all configs of one dot agree
+// and ApplyConfig copies what the chosen config has.
+TEST_F(HipblasLtScaledDotTest, GetSupportedConfigsRecordsDescriptors) {
+  for (const char* hlo : kScaledDotHlos) {
+    ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo));
+    HloInstruction* fusion = module->entry_computation()->root_instruction();
+    ASSERT_OK_AND_ASSIGN(std::vector<std::unique_ptr<BackendConfig>> configs,
+                         backend_.GetSupportedConfigs(*fusion));
+    ASSERT_FALSE(configs.empty());
+    const bool has_descriptor = configs[0]->gemm().has_algorithm_proto();
+    LOG(INFO) << "Scaled dot configs "
+              << (has_descriptor ? "have hipBLASLt descriptors"
+                                 : "have no descriptor");
+    for (const std::unique_ptr<BackendConfig>& config : configs) {
+      const AutotuneResult::GemmKey& key = config->gemm();
+      EXPECT_EQ(key.has_algorithm_proto(), has_descriptor);
+      EXPECT_TRUE(!key.has_algorithm_proto() ||
+                  key.algorithm_proto().has_hipblaslt());
+    }
+    const BackendConfig& last = *configs.back();
+    EXPECT_OK(backend_.Compile(*fusion, last));
+
+    ASSERT_OK(backend_.ApplyConfig(*fusion, last));
+    const HloInstruction* custom_call =
+        module->entry_computation()->root_instruction()->operand(0);
+    ASSERT_OK_AND_ASSIGN(GpuBackendConfig gpu_config,
+                         custom_call->backend_config<GpuBackendConfig>());
+    const GemmBackendConfig& gemm_config = gpu_config.gemm_backend_config();
+    EXPECT_EQ(gemm_config.selected_algorithm(), last.gemm().algorithm());
+    EXPECT_EQ(gemm_config.has_algorithm_proto(), has_descriptor);
+    if (has_descriptor) {
+      EXPECT_THAT(gemm_config.algorithm_proto(),
+                  EqualsProto(last.gemm().algorithm_proto()));
+    }
   }
 }
 

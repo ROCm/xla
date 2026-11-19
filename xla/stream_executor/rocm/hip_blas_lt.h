@@ -282,7 +282,7 @@ class BlasLt : public gpu::BlasLt {
       const gpu::GemmConfig& cfg, Epilogue epilogue) const;
 
   // Describes `algorithm` by its hipBLASLt solution index and the loaded
-  // library version.
+  // library version; kUnimplemented if it has no solution index.
   absl::StatusOr<gpu::BlasLtMatmulAlgorithm> DescribeAlgorithm(
       const MatmulAlgorithm& algorithm) const;
 

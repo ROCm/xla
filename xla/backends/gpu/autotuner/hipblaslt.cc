@@ -357,8 +357,9 @@ absl::Status RewriteWithWideOutputGemm(HloInstruction* gemm,
 }
 
 // One config per candidate, with the hipBLASLt descriptor of its solution.
-// Plans without hipBLASLt solutions (the rocBLAS fallback for complex types)
-// have no descriptor (kUnimplemented); their configs keep only the index.
+// Candidates without one (kUnimplemented: the rocBLAS fallback for complex
+// types, or a negative solution index, as for MX scaled dots on hipBLASLt
+// 1.4.1) keep only the index.
 absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>> MakeConfigs(
     const BlasLt::MatmulPlan& plan,
     const std::vector<BlasLt::MatmulAlgorithm>& algorithms,
@@ -374,7 +375,10 @@ absl::StatusOr<std::vector<std::unique_ptr<BackendConfig>>> MakeConfigs(
         plan.GetBlasLtMatmulAlgorithm(algorithms[i]);
     if (descriptor.ok()) {
       *gemm_key->mutable_algorithm_proto() = descriptor->ToProto();
-    } else if (!absl::IsUnimplemented(descriptor.status())) {
+    } else if (absl::IsUnimplemented(descriptor.status())) {
+      VLOG(2) << "hipBLASLt: candidate " << i
+              << " has no descriptor: " << descriptor.status();
+    } else {
       return descriptor.status();
     }
     configs.push_back(std::move(config));
@@ -537,16 +541,7 @@ HipblasLtBackend::GetSupportedConfigs(const HloInstruction& instr) {
       return std::vector<std::unique_ptr<BackendConfig>>();
     }
 
-    std::vector<std::unique_ptr<BackendConfig>> configs;
-    configs.reserve(algorithms.size());
-    for (int64_t i = 0; i < static_cast<int64_t>(algorithms.size()); ++i) {
-      auto config = std::make_unique<BackendConfig>();
-      auto* gemm_key = config->mutable_gemm();
-      gemm_key->set_algorithm(i);
-      gemm_key->set_autotune_workspace_size(workspace_size);
-      configs.push_back(std::move(config));
-    }
-    return configs;
+    return MakeConfigs(**plan_or, algorithms, workspace_size);
   }
   if (IsCublasLtGroupedMatmul(instr)) {
     ABSL_ASSIGN_OR_RETURN(GpuBackendConfig gpu_config,
@@ -733,8 +728,7 @@ absl::Status HipblasLtBackend::ApplyConfig(HloInstruction& instr,
     gemm_config.set_beta(0.0);
     gemm_config.set_scale_mode(
         static_cast<int32_t>(se::gpu::ScaleMode::kBlockScaling));
-    gemm_config.set_selected_algorithm(gemm_key.algorithm());
-    gemm_config.set_autotune_workspace_size(workspace_size);
+    SetSelectedAlgorithm(gemm_key, gemm_config);
 
     HloInstruction* custom_call =
         parent->AddInstruction(HloInstruction::CreateCustomCall(

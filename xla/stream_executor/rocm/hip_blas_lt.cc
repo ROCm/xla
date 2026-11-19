@@ -511,6 +511,14 @@ absl::StatusOr<gpu::BlasLtMatmulAlgorithm> BlasLt::DescribeAlgorithm(
   }
   // getIndexFromAlgo takes a non-const reference, and `algo` is const.
   hipblasLtMatmulAlgo_t copy = *algo;
+  const int solution_index = hipblaslt_ext::getIndexFromAlgo(copy);
+  if (solution_index < 0) {
+    // A negative index marks an algorithm that has no hipBLASLt solution
+    // (getSolutionNameFromAlgo treats it the same); its config keeps only the
+    // heuristic index.
+    return absl::UnimplementedError(absl::StrFormat(
+        "hipBLASLt algorithm has no solution index (got %d)", solution_index));
+  }
   int version = 0;
   {
     absl::MutexLock lock(mu_);
@@ -520,8 +528,7 @@ absl::StatusOr<gpu::BlasLtMatmulAlgorithm> BlasLt::DescribeAlgorithm(
   return gpu::BlasLtMatmulAlgorithm{
       /*library_version=*/version,
       /*algorithm=*/
-      gpu::HipblasLtMatmulAlgorithm{
-          /*solution_index=*/hipblaslt_ext::getIndexFromAlgo(copy)},
+      gpu::HipblasLtMatmulAlgorithm{/*solution_index=*/solution_index},
   };
 }
 
@@ -1131,10 +1138,12 @@ BlasLt::GroupedMatmulPlan::GetMatmulAlgorithm(
   std::unique_ptr<ActivateContext> activation = blas_lt_.executor_->Activate();
   absl::MutexLock lock(blas_lt_.mu_);
   TF_RET_CHECK(grouped_gemm_ != nullptr) << "Grouped GEMM is not initialized";
-  // Admits the solutions GetAlgorithms admits. The workspace isAlgoSupported
-  // reports is not checked against max_workspace_size, which XLA sizes for
-  // the per-group user arguments (see ExecuteOnStream), as GetAlgorithms does
-  // not check it either.
+  // Admits the solutions GetAlgorithms admits: neither checks the workspace
+  // isAlgoSupported reports against max_workspace_size. GemmRewriter sizes the
+  // grouped workspace for the per-group user arguments only, and
+  // ExecuteOnStream passes hipBLASLt the space after them, so a solution that
+  // needs workspace gets none (a known issue of the grouped path, independent
+  // of descriptors). The returned workspace_size is not used by grouped plans.
   grouped_gemm_->setMaxWorkspaceBytes(max_workspace_size);
   ABSL_ASSIGN_OR_RETURN(hipblasLtMatmulAlgo_t algo,
                         blas_lt_.FindSolution(algorithm));
