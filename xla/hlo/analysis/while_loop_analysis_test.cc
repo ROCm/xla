@@ -1631,6 +1631,55 @@ ENTRY main {
   EXPECT_EQ(EvaluateScalarPerIteration(loop, sum, 63), std::nullopt);
 }
 
+TEST_F(WhileLoopAnalysisTest, EvaluateScalarPerIterationBoundedCallees) {
+  // `called` goes through a 64-element array in a called computation, and
+  // `dotted` through a dot.
+  const char* const kHlo = R"hlo(
+HloModule m
+add {
+  a = s32[] parameter(0)
+  b = s32[] parameter(1)
+  ROOT s = s32[] add(a, b)
+}
+wide_sum {
+  x = s32[] parameter(0)
+  wide = s32[64] broadcast(x), dimensions={}
+  zero = s32[] constant(0)
+  ROOT sum = s32[] reduce(wide, zero), dimensions={0}, to_apply=add
+}
+body {
+  p = (s32[]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  called = s32[] call(i), to_apply=wide_sum
+  v = s32[2] broadcast(i), dimensions={}
+  dotted = s32[] dot(v, v), lhs_contracting_dims={0}, rhs_contracting_dims={0}
+  one = s32[] constant(1)
+  next = s32[] add(i, one)
+  ROOT t = (s32[]) tuple(next)
+}
+cond {
+  p = (s32[]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  n = s32[] constant(4)
+  ROOT lt = pred[] compare(i, n), direction=LT
+}
+ENTRY main {
+  zero = s32[] constant(0)
+  init = (s32[]) tuple(zero)
+  ROOT loop = (s32[]) while(init), condition=cond, body=body
+}
+)hlo";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(kHlo));
+  const HloInstruction* loop = module->entry_computation()->root_instruction();
+  const HloInstruction* called = FindInstruction(module.get(), "called");
+  EXPECT_THAT(EvaluateScalarPerIteration(loop, called, 64),
+              ::testing::Optional(::testing::ElementsAre(0, 64, 128, 192)));
+  EXPECT_EQ(EvaluateScalarPerIteration(loop, called, 63), std::nullopt);
+  EXPECT_EQ(EvaluateScalarPerIteration(
+                loop, FindInstruction(module.get(), "dotted"), 64),
+            std::nullopt);
+}
+
 TEST_F(WhileLoopAnalysisTest, EvaluateScalarPerIterationNestedLoop) {
   // The inner loop reads two arrays that are invariant in the outer loop: one
   // initialized from a constant, one from rng.

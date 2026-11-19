@@ -1347,11 +1347,57 @@ bool DependsOnSideEffect(const HloInstruction* instruction) {
   return false;
 }
 
+// Whether evaluating `h` does O(n log n) element operations, n =
+// `max_elements`, plus O(n log n) calls of scalar computations: its outputs
+// have at most `max_elements` elements in total (each is scalar if
+// `scalar_only`), it is not an op whose work can be superlinear in its
+// operand and output sizes, and the computations it calls satisfy the same
+// bound (computations applied per element, such as reducers, are scalar).
+bool HasBoundedEvaluation(const HloInstruction* h, int64_t max_elements,
+                          bool scalar_only) {
+  int64_t elements = 0;
+  bool scalar = true;
+  ShapeUtil::ForEachSubshape(
+      h->shape(), [&](const Shape& subshape, const ShapeIndex&) {
+        if (subshape.IsArray()) {
+          elements += ShapeUtil::ElementsIn(subshape);
+          scalar = scalar && ShapeUtil::IsScalar(subshape);
+        }
+      });
+  if (elements > max_elements || (scalar_only && !scalar)) {
+    return false;
+  }
+  switch (h->opcode()) {
+    case HloOpcode::kCholesky:
+    case HloOpcode::kConvolution:
+    case HloOpcode::kDot:
+    case HloOpcode::kRaggedDot:
+    case HloOpcode::kReduceWindow:
+    case HloOpcode::kSelectAndScatter:
+    case HloOpcode::kTriangularSolve:
+    case HloOpcode::kWhile:
+      return false;
+    default:
+      break;
+  }
+  const bool called_once = h->opcode() == HloOpcode::kCall ||
+                           h->opcode() == HloOpcode::kConditional ||
+                           h->opcode() == HloOpcode::kFusion;
+  for (const HloComputation* called : h->called_computations()) {
+    for (const HloInstruction* c : called->instructions()) {
+      if (!HasBoundedEvaluation(c, max_elements, scalar_only || !called_once)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 // The loop state elements that `scalar`, an instruction of the loop body,
 // reads, or nullopt if it reads the loop state other than through
-// get-tuple-element, has a side effect in the loop body, or computes a value
-// of more than `max_elements` elements, which bounds the work of evaluating it
-// in one iteration.
+// get-tuple-element, has a side effect in the loop body, or depends on an
+// instruction without HasBoundedEvaluation(max_elements), which bounds the
+// work of evaluating it in one iteration.
 optional<absl::flat_hash_set<int64_t>> LoopStateElementsRead(
     const HloInstruction* scalar, int64_t max_elements) {
   const HloInstruction* param = scalar->parent()->parameter_instruction(0);
@@ -1364,14 +1410,7 @@ optional<absl::flat_hash_set<int64_t>> LoopStateElementsRead(
     if (h == param || h->HasSideEffect()) {
       return nullopt;
     }
-    int64_t elements = 0;
-    ShapeUtil::ForEachSubshape(
-        h->shape(), [&](const Shape& subshape, const ShapeIndex&) {
-          if (subshape.IsArray()) {
-            elements += ShapeUtil::ElementsIn(subshape);
-          }
-        });
-    if (elements > max_elements) {
+    if (!HasBoundedEvaluation(h, max_elements, /*scalar_only=*/false)) {
       return nullopt;
     }
     if (h->opcode() == HloOpcode::kGetTupleElement && h->operand(0) == param) {
