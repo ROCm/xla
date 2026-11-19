@@ -331,15 +331,6 @@ class TopKKernelBuilder {
     return arith::ExtSIOp::create(b_, result_type, x);
   }
 
-  // Truncates an offset tensor to i32.
-  Value ToI32(Value x) {
-    auto tensor = mlir::cast<RankedTensorType>(x.getType());
-    if (tensor.getElementType() == i32_) {
-      return x;
-    }
-    return arith::TruncIOp::create(b_, Tensor(i32_, tensor.getShape()), x);
-  }
-
   // Broadcasts a [rows] tensor along the columns of `shape`.
   Value Rows(Value x, llvm::ArrayRef<int64_t> shape) {
     return Broadcast(ttir::ExpandDimsOp::create(b_, x, 1), shape);

@@ -69,8 +69,9 @@ absl::StatusOr<TopKKernelSpec> GetTopKKernelSpec(
 absl::Status CheckTopKKernelLimits(const TopKKernelSpec& spec);
 
 // Picks the configuration of the kernel for `spec` on `device`. Returns nullopt
-// if a row does not fit one program on the device. Register and LDS use are
-// estimates; the compiled kernel is checked again by the emitter.
+// if a row does not fit one program on the device. Register use is an
+// estimate and LDS use an upper bound; the compiled kernel is checked again by
+// the emitter.
 std::optional<TopKKernelConfig> GetTopKKernelConfig(
     const TopKKernelSpec& spec, const se::DeviceDescription& device);
 

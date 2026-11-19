@@ -146,9 +146,9 @@ std::optional<TopKKernelConfig> GetBlockConfig(
       kMaxKeysPerThread) {
     return std::nullopt;
   }
-  // Cross-warp reductions exchange one 64-bit key per row and warp in LDS.
-  const int64_t lds_bytes =
-      config.rows_per_program * config.num_warps * int64_t{8};
+  // Triton may stage a program's whole tile of 64-bit keys through LDS to
+  // change its layout.
+  const int64_t lds_bytes = keys_per_program * int64_t{8};
   if (lds_bytes > device.shared_memory_per_block()) {
     return std::nullopt;
   }

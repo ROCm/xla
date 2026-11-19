@@ -133,6 +133,16 @@ TEST(TopKKernelConfigTest, RowLimitDependsOnTheWaveSize) {
   EXPECT_FALSE(GetTopKKernelConfig(Spec(8, 16384, 64), rx7900).has_value());
 }
 
+TEST(TopKKernelConfigTest, RowLimitDependsOnTheLdsSize) {
+  se::DeviceDescription mi300 = TestGpuDeviceInfo::AMDMI300DeviceInfo();
+  ASSERT_EQ(mi300.threads_per_warp(), 64);
+  ASSERT_EQ(mi300.shared_memory_per_block(), 64 * 1024);
+
+  // The 64-bit keys of a program take 8 bytes each in LDS.
+  EXPECT_TRUE(GetTopKKernelConfig(Spec(8, 8192, 64), mi300).has_value());
+  EXPECT_FALSE(GetTopKKernelConfig(Spec(8, 16384, 64), mi300).has_value());
+}
+
 TEST(TopKKernelConfigTest, ToStringShowsTheLaunchConfig) {
   TopKKernelConfig config{4096, 1, 8, 64};
   EXPECT_EQ(config.ToString(),
