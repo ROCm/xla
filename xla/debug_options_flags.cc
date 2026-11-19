@@ -571,6 +571,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_experimental_enable_collective_multi_streaming(false);
   opts.set_xla_gpu_experimental_force_split_k(0);
   opts.set_xla_gpu_experimental_enable_triton_warp_specialization(false);
+  opts.set_xla_gpu_experimental_use_origami_cost_model(false);
   opts.set_xla_detect_unstable_reductions(DebugOptions::DETECTION_MODE_NONE);
   opts.set_xla_detect_unstable_reductions_post_optimizations(
       DebugOptions::DETECTION_MODE_NONE);
@@ -3925,6 +3926,13 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
         debug_options->xla_gpu_experimental_force_split_k(),
         "Force a specific split_k value. Zero (default) means do not force "
         "split_k and use the heuristic."));
+    flag_list->push_back(tsl::Flag(
+        "xla_gpu_experimental_use_origami_cost_model",
+        bool_setter_for(
+            &DebugOptions::set_xla_gpu_experimental_use_origami_cost_model),
+        debug_options->xla_gpu_experimental_use_origami_cost_model(),
+        "ROCm only. Rank Triton GEMM configs with AMD's Origami analytic model "
+        "instead of the NVIDIA-calibrated cost model."));
     flag_list->push_back(tsl::Flag(
         "xla_gpu_experimental_enable_triton_warp_specialization",
         bool_setter_for(

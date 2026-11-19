@@ -416,5 +416,98 @@ TEST_F(CostModelConfigOptimizationHloTest,
                                  Pair(valid_config, Gt(absl::ZeroDuration()))));
 }
 
+
+TEST_F(CostModelConfigOptimizationHloTest, OrigamiFlagOffUsesDefaultEstimator) {
+  const se::DeviceDescription mi300 = TestGpuDeviceInfo::AMDMI300DeviceInfo();
+  auto [module, dot] = GetHloModuleAndDot_F32_1024_1024_1024();
+  std::vector<TritonGemmConfig> all_configs = {
+      TritonGemmConfig(32, 32, 32, 1, 4, 1, false),
+      TritonGemmConfig(64, 64, 64, 1, 4, 1, false),
+      TritonGemmConfig(128, 128, 128, 1, 4, 1, false),
+  };
+
+  DebugOptions debug_options = module->config().debug_options();
+  (*debug_options
+        .mutable_xla_gpu_experimental_cost_model_gemm_tiling_options())["top"] =
+      "2";
+  debug_options.set_xla_gpu_experimental_use_origami_cost_model(false);
+
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<TritonGemmConfig> optimized,
+      OptimizeConfigsWithCostModel(dot, all_configs, all_configs, mi300,
+                                   debug_options, &mlir_context_));
+  EXPECT_EQ(optimized.size(), 2);
+}
+
+TEST_F(CostModelConfigOptimizationHloTest, OrigamiSelectsWholeTileShapes) {
+  const se::DeviceDescription mi300 = TestGpuDeviceInfo::AMDMI300DeviceInfo();
+  auto [module, dot] = GetHloModuleAndDot_F32_1024_1024_1024();
+
+  // Two variants per tile shape; Origami cannot tell them apart, so a selected
+  // shape must contribute both.
+  std::vector<TritonGemmConfig> all_configs = {
+      TritonGemmConfig(128, 128, 32, 2, 4, 1, false),
+      TritonGemmConfig(128, 128, 32, 3, 8, 1, false),
+      TritonGemmConfig(64, 64, 32, 2, 4, 1, false),
+      TritonGemmConfig(64, 64, 32, 3, 8, 1, false),
+      TritonGemmConfig(32, 32, 32, 2, 4, 1, false),
+      TritonGemmConfig(32, 32, 32, 3, 8, 1, false),
+  };
+
+  DebugOptions debug_options = module->config().debug_options();
+  debug_options.set_xla_gpu_experimental_use_origami_cost_model(true);
+  (*debug_options
+        .mutable_xla_gpu_experimental_cost_model_gemm_tiling_options())
+      ["top_tile_shapes"] = "2";
+
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<TritonGemmConfig> optimized,
+      OptimizeConfigsWithCostModel(dot, all_configs, all_configs, mi300,
+                                   debug_options, &mlir_context_));
+
+  EXPECT_EQ(optimized.size(), 4);
+  absl::flat_hash_map<std::tuple<int, int, int>, int> per_shape;
+  for (const TritonGemmConfig& c : optimized) {
+    ++per_shape[{c.block_m, c.block_n, c.block_k}];
+  }
+  EXPECT_EQ(per_shape.size(), 2);
+  for (const auto& [shape, count] : per_shape) {
+    EXPECT_EQ(count, 2);
+  }
+}
+
+TEST_F(CostModelConfigOptimizationHloTest, OrigamiFallsBackOnCudaTarget) {
+  const se::DeviceDescription h100 = TestGpuDeviceInfo::H100SXMDeviceInfo();
+  auto [module, dot] = GetHloModuleAndDot_F32_1024_1024_1024();
+  std::vector<TritonGemmConfig> all_configs = {
+      TritonGemmConfig(32, 32, 32, 1, 4, 1, false),
+      TritonGemmConfig(64, 64, 64, 1, 4, 1, false),
+      TritonGemmConfig(128, 128, 128, 1, 4, 1, false),
+  };
+
+  DebugOptions debug_options = module->config().debug_options();
+  debug_options.set_xla_gpu_experimental_use_origami_cost_model(true);
+  (*debug_options
+        .mutable_xla_gpu_experimental_cost_model_gemm_tiling_options())["top"] =
+      "2";
+
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<TritonGemmConfig> optimized,
+      OptimizeConfigsWithCostModel(dot, all_configs, all_configs, h100,
+                                   debug_options, &mlir_context_));
+  EXPECT_EQ(optimized.size(), 2);
+}
+
+TEST_F(CostModelConfigOptimizationHloTest, ParsesTopTileShapesOption) {
+  google::protobuf::Map<std::string, std::string> options;
+  options["top_tile_shapes"] = "7";
+  ASSERT_OK_AND_ASSIGN(detail::CostModelGemmTilingOptions parsed,
+                       detail::ParseCostModelGemmTilingOptions(options));
+  EXPECT_EQ(parsed.top_tile_shapes, 7);
+
+  options["top_tile_shapes"] = "nonsense";
+  EXPECT_FALSE(detail::ParseCostModelGemmTilingOptions(options).ok());
+}
+
 }  // namespace
 }  // namespace xla::gpu

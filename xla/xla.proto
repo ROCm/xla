@@ -1910,6 +1910,13 @@ message DebugOptions {
   // autotuning where possible.
   optional bool xla_gpu_experimental_cost_model_gemm_tiling_default = 531;
 
+  // ROCm only. If true, ranks Triton GEMM configs with AMD's Origami analytic
+  // model instead of the NVIDIA-calibrated gpu_dot_fusion_cost_model. Selects
+  // all configs belonging to the best-estimated tile shapes; the count is the
+  // "top_tile_shapes" key of
+  // xla_gpu_experimental_cost_model_gemm_tiling_options.
+  optional bool xla_gpu_experimental_use_origami_cost_model = 584;
+
   // Enables SPMD partitioner to opportunistically materialize
   // MeshAxesReplicaGroupList (RGV3).
   optional bool xla_enable_rgv3_materialization = 479;
@@ -2060,7 +2067,7 @@ message DebugOptions {
   // cache miss.
   optional bool xla_fail_on_autotune_cache_miss = 583;
 
-  // Next id: 584
+  // Next id: 585
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

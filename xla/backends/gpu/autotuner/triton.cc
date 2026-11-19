@@ -182,7 +182,8 @@ TritonBackend::GetSupportedConfigsForDot(const HloInstruction* instr) {
 
   if (!debug_options()
            .xla_gpu_experimental_cost_model_gemm_tiling_options()
-           .empty()) {
+           .empty() ||
+      debug_options().xla_gpu_experimental_use_origami_cost_model()) {
     VLOG(1) << "Optimizing configs with the cost model.";
     std::vector<TritonGemmConfig> all_configs =
         search_space.GenerateConfigs(autotune_warp_specialization);

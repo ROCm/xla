@@ -91,6 +91,9 @@ struct CostModelGemmTilingOptions {
   std::optional<int> mixin_max_same_mnk;
   // If true, mixin configs must be faster than all configs in the base set.
   bool mixin_only_faster = false;
+  // Origami path only: number of best-estimated tile shapes to keep. Every
+  // config belonging to them is returned.
+  int top_tile_shapes = 10;
 
   std::string ToString() const;
 };

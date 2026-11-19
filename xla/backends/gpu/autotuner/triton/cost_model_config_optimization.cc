@@ -15,6 +15,8 @@ limitations under the License.
 
 #include "xla/backends/gpu/autotuner/triton/cost_model_config_optimization.h"
 
+#include "xla/backends/gpu/autotuner/triton/origami_cost_model.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <memory>
@@ -222,6 +224,7 @@ std::string CostModelGemmTilingOptions::ToString() const {
   if (filter.has_value()) {
     absl::StrAppend(&s, " filter: ", *filter);
   }
+  absl::StrAppend(&s, " top_tile_shapes: ", top_tile_shapes);
   absl::StrAppend(&s, " }");
   return s;
 }
@@ -269,6 +272,14 @@ absl::StatusOr<CostModelGemmTilingOptions> ParseCostModelGemmTilingOptions(
       } else {
         return absl::InvalidArgumentError(
             absl::StrCat("Could not parse 'mixin_only_faster' value: ", value));
+      }
+    } else if (key == "top_tile_shapes") {
+      int val = 0;
+      if (absl::SimpleAtoi(value, &val) && val > 0) {
+        parsed_options.top_tile_shapes = val;
+      } else {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Could not parse 'top_tile_shapes' value: ", value));
       }
     } else if (key == "filter") {
       float val = 0.f;
@@ -339,6 +350,36 @@ std::vector<TritonGemmConfig> FillConfigListFromEstimates(
 
 }  // namespace cost_model_config_optimization_detail
 
+
+namespace {
+
+// Returns a model when the flag is on and Origami can handle this dot on this
+// device; nullptr otherwise. Any failure here falls back to the default
+// estimator rather than aborting compilation.
+std::unique_ptr<OrigamiDotCostModel> MaybeCreateOrigamiModel(
+    const HloDotInstruction* dot,
+    const se::DeviceDescription& device_description,
+    const DebugOptions& debug_options) {
+  if (!debug_options.xla_gpu_experimental_use_origami_cost_model()) {
+    return nullptr;
+  }
+  if (absl::Status supported = IsSupportedByOrigami(dot, device_description);
+      !supported.ok()) {
+    VLOG(1) << "Origami cannot model this dot: " << supported;
+    return nullptr;
+  }
+  absl::StatusOr<std::unique_ptr<OrigamiDotCostModel>> model =
+      OrigamiDotCostModel::Create(device_description);
+  if (!model.ok()) {
+    LOG(WARNING) << "Origami cost model requested but unavailable: "
+                 << model.status();
+    return nullptr;
+  }
+  return *std::move(model);
+}
+
+}  // namespace
+
 absl::StatusOr<std::vector<TritonGemmConfig>> OptimizeConfigsWithCostModel(
     const HloDotInstruction* dot,
     const std::vector<TritonGemmConfig>& all_configs,
@@ -362,6 +403,21 @@ absl::StatusOr<std::vector<TritonGemmConfig>> OptimizeConfigsWithCostModel(
 
   VLOG(1) << "Performing Cost Model config optimizations with "
           << options.ToString();
+
+  if (std::unique_ptr<OrigamiDotCostModel> origami =
+          MaybeCreateOrigamiModel(dot, device_description, debug_options)) {
+    absl::StatusOr<std::vector<TritonGemmConfig>> selected =
+        origami->SelectTopTileShapes(dot, all_configs,
+                                     options.top_tile_shapes);
+    if (selected.ok() && !selected->empty()) {
+      VLOG(1) << "Origami selected " << selected->size() << " of "
+              << all_configs.size() << " configs across "
+              << options.top_tile_shapes << " tile shapes";
+      return *std::move(selected);
+    }
+    LOG(WARNING) << "Origami selection failed, falling back: "
+                 << selected.status();
+  }
 
   std::optional<absl::StatusOr<detail::OrderedEstimatesAndConfigs>>
       estimated_all_configs;
@@ -457,6 +513,15 @@ EstimateConfigsWithCostModel(const HloDotInstruction* dot,
                              const DebugOptions& debug_options,
                              mlir::MLIRContext* mlir_context) {
   namespace detail = cost_model_config_optimization_detail;
+
+  if (std::unique_ptr<OrigamiDotCostModel> origami =
+          MaybeCreateOrigamiModel(dot, device_description, debug_options)) {
+    absl::StatusOr<absl::flat_hash_map<TritonGemmConfig, absl::Duration>>
+        estimates = origami->EstimateRunTimes(dot, configs);
+    if (estimates.ok()) return *std::move(estimates);
+    LOG(WARNING) << "Origami estimation failed, falling back: "
+                 << estimates.status();
+  }
 
   detail::ExtractedModuleAndContext extracted =
       detail::CreateEstimationContext(dot, device_description, debug_options);

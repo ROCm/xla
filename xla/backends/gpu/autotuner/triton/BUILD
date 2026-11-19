@@ -192,6 +192,7 @@ cc_library(
     srcs = ["cost_model_config_optimization.cc"],
     hdrs = ["cost_model_config_optimization.h"],
     deps = [
+        ":origami_cost_model",
         "//xla:xla_data_proto_cc",
         "//xla:xla_proto_cc",
         "//xla/backends/gpu/transforms:convert_triton_gemm_config",
