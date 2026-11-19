@@ -30,7 +30,9 @@ limitations under the License.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/base/casts.h"
+#include "absl/base/log_severity.h"
 #include "absl/log/log.h"
+#include "absl/log/scoped_mock_log.h"
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
 #include "absl/status/status_matchers.h"
@@ -1206,7 +1208,18 @@ TEST_F(CublasLtMatmulThunkCmdBufTest,
       std::unique_ptr<Thunk> fallback_thunk,
       CublasLtMatmulThunk::FromProto(Thunk::ThunkInfo(), invalid_proto,
                                      allocations, fallback_options));
-  EXPECT_OK(fallback_thunk->ExecuteOnStream(*params_));
+  // The thunk remembers the failed lookup: it warns once, not per execution.
+  absl::ScopedMockLog log(absl::MockLogDefault::kIgnoreUnexpected);
+  EXPECT_CALL(log,
+              Log(absl::LogSeverity::kWarning, ::testing::_,
+                  ::testing::HasSubstr(
+                      "Failed to initialize BlasLt algorithm from descriptor")))
+      .Times(1);
+  log.StartCapturingLogs();
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_OK(fallback_thunk->ExecuteOnStream(*params_));
+  }
+  log.StopCapturingLogs();
 }
 
 // An algorithm_proto whose algorithm kind this build does not know (added by a
