@@ -1349,9 +1349,11 @@ bool DependsOnSideEffect(const HloInstruction* instruction) {
 
 // The loop state elements that `scalar`, an instruction of the loop body,
 // reads, or nullopt if it reads the loop state other than through
-// get-tuple-element or has a side effect in the loop body.
+// get-tuple-element, has a side effect in the loop body, or computes a value
+// of more than `max_elements` elements, which bounds the work of evaluating it
+// in one iteration.
 optional<absl::flat_hash_set<int64_t>> LoopStateElementsRead(
-    const HloInstruction* scalar) {
+    const HloInstruction* scalar, int64_t max_elements) {
   const HloInstruction* param = scalar->parent()->parameter_instruction(0);
   absl::flat_hash_set<int64_t> indices;
   std::vector<const HloInstruction*> stack = {scalar};
@@ -1360,6 +1362,16 @@ optional<absl::flat_hash_set<int64_t>> LoopStateElementsRead(
     const HloInstruction* h = stack.back();
     stack.pop_back();
     if (h == param || h->HasSideEffect()) {
+      return nullopt;
+    }
+    int64_t elements = 0;
+    ShapeUtil::ForEachSubshape(
+        h->shape(), [&](const Shape& subshape, const ShapeIndex&) {
+          if (subshape.IsArray()) {
+            elements += ShapeUtil::ElementsIn(subshape);
+          }
+        });
+    if (elements > max_elements) {
       return nullopt;
     }
     if (h->opcode() == HloOpcode::kGetTupleElement && h->operand(0) == param) {
@@ -1409,7 +1421,8 @@ std::optional<std::vector<int64_t>> EvaluateScalarPerIteration(
   if (last_iteration >= static_cast<uint64_t>(max_trip_count)) {
     return nullopt;
   }
-  optional<absl::flat_hash_set<int64_t>> read = LoopStateElementsRead(scalar);
+  optional<absl::flat_hash_set<int64_t>> read =
+      LoopStateElementsRead(scalar, max_trip_count);
   if (!read.has_value()) {
     return nullopt;
   }

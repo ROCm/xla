@@ -1592,6 +1592,45 @@ ENTRY main {
             std::nullopt);
 }
 
+TEST_F(WhileLoopAnalysisTest, EvaluateScalarPerIterationLargeIntermediate) {
+  // `sum` goes through a 64-element array in every iteration.
+  const char* const kHlo = R"hlo(
+HloModule m
+add {
+  a = s32[] parameter(0)
+  b = s32[] parameter(1)
+  ROOT s = s32[] add(a, b)
+}
+body {
+  p = (s32[]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  wide = s32[64] broadcast(i), dimensions={}
+  zero = s32[] constant(0)
+  sum = s32[] reduce(wide, zero), dimensions={0}, to_apply=add
+  one = s32[] constant(1)
+  next = s32[] add(i, one)
+  ROOT t = (s32[]) tuple(next)
+}
+cond {
+  p = (s32[]) parameter(0)
+  i = s32[] get-tuple-element(p), index=0
+  n = s32[] constant(4)
+  ROOT lt = pred[] compare(i, n), direction=LT
+}
+ENTRY main {
+  zero = s32[] constant(0)
+  init = (s32[]) tuple(zero)
+  ROOT loop = (s32[]) while(init), condition=cond, body=body
+}
+)hlo";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(kHlo));
+  const HloInstruction* loop = module->entry_computation()->root_instruction();
+  const HloInstruction* sum = FindInstruction(module.get(), "sum");
+  EXPECT_THAT(EvaluateScalarPerIteration(loop, sum, 64),
+              ::testing::Optional(::testing::ElementsAre(0, 64, 128, 192)));
+  EXPECT_EQ(EvaluateScalarPerIteration(loop, sum, 63), std::nullopt);
+}
+
 TEST_F(WhileLoopAnalysisTest, EvaluateScalarPerIterationNestedLoop) {
   // The inner loop reads two arrays that are invariant in the outer loop: one
   // initialized from a constant, one from rng.
