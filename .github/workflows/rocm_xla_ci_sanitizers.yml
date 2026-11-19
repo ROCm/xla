@@ -105,6 +105,7 @@ jobs:
         run: lscpu
 
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
+        timeout-minutes: 600
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
@@ -118,6 +119,7 @@ jobs:
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always() && !cancelled()
+        timeout-minutes: 160
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
@@ -129,6 +131,7 @@ jobs:
             //xla/...
 
       - name: Test XLA [${{ matrix.mode.name }}] [rocm_cpu]
+        timeout-minutes: 160
         if: always() && !cancelled()
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
