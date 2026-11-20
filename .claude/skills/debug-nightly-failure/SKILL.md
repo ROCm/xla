@@ -423,7 +423,14 @@ like this:
    addresses.
 3. `**Category:** <category>` - the label from Step 2 (or the corrected one
    from Step 3, if you changed it).
-4. Then your actual report, as below.
+4. `**Outcome:** <outcome>` - exactly one of the four literal strings
+   `Fix found`, `Already fixed upstream`, `Possible fix (unverified)`,
+   `Not resolved`, matching which of the four shapes below you're about
+   to write. This is a separate, machine-greppable line in addition to
+   the shape itself - a future cleanup pass that classifies many of these
+   reports at once relies on matching this exact line rather than reading
+   prose, so get the literal string right.
+5. Then your actual report, as below.
 
 **Already fixed upstream** (found in Step 4A): comment with:
 - The root cause, as understood from the fixing commit.
