@@ -79,12 +79,14 @@ jobs:
     outputs:
       # A JSON array of {issue_number, repository, head_sha, run_id, job_id,
       # job_name, step_name, failure_url, detection_comment_url} - one per
-      # failure signature that doesn't already have a debug report this run.
-      # Fed into the "debug" job's matrix below, so each one gets its own
-      # isolated debug run. "[]" means nothing new to debug. Every detected
-      # failure gets a comment on the (single, shared) tracking issue
-      # regardless of whether it ends up here - see
-      # collect_claude_debug_targets.sh.
+      # signature that still needs a debug run: either a brand new failure
+      # this run (gets one new detection comment - never a duplicate for a
+      # signature that already has one, analyzed or not), or an existing
+      # comment on the tracking issue that was never actually analyzed
+      # (caught up every run, independent of whether this run found any
+      # new failures of its own). Fed into the "debug" job's matrix below,
+      # so each one gets its own isolated debug run. "[]" means nothing to
+      # debug. See collect_claude_debug_targets.sh for the two-phase logic.
       new_failures: ${{ steps.collect_targets.outputs.new_failures }}
     steps:
       - name: Checkout repository
@@ -149,21 +151,23 @@ jobs:
             fi
           done < run_ids.txt
 
-      - name: Report failures, collect new failures to debug
+      - name: Report failures, collect new and never-analyzed failures to debug
         id: collect_targets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -s failures.json ]; then
-            ISSUE_NUMBER=$(build_tools/rocm/create_infra_error_issue.sh)
-            TARGETS=$(build_tools/rocm/collect_claude_debug_targets.sh \
-              "${ISSUE_NUMBER}" \
-              failures.json \
-              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}")
-          else
-            echo "No failures found, skipping issue reporting"
-            TARGETS="[]"
-          fi
+          # Always runs, even when failures.json is empty: besides
+          # reporting this run's new failures (Phase 1), the script also
+          # scans the whole tracking issue every time for a comment that
+          # was posted earlier but never actually got analyzed - a
+          # cancelled monitoring run, a PR-validation-skipped debug job, or
+          # some other interrupted attempt (Phase 2) - and queues that for
+          # debug too. See collect_claude_debug_targets.sh.
+          ISSUE_NUMBER=$(build_tools/rocm/create_infra_error_issue.sh)
+          TARGETS=$(build_tools/rocm/collect_claude_debug_targets.sh \
+            "${ISSUE_NUMBER}" \
+            failures.json \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}")
           echo "new_failures=${TARGETS}" >> "$GITHUB_OUTPUT"
 
   debug:

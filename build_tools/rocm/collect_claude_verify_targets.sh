@@ -96,8 +96,12 @@ for COMMENT_ID in "${COMMENT_IDS[@]}"; do
         continue
     fi
 
-    JOB_NAME="${SIGNATURE%% / *}"
-    STEP_NAME="${SIGNATURE#* / }"
+    # Split at the LAST " / ", not the first: JOB_NAME itself routinely
+    # contains " / " (reusable-workflow-called jobs are named
+    # "caller / callee", e.g. "jax-upstream / JAX Upstream Linux x86 ..."),
+    # while STEP_NAME never does.
+    JOB_NAME="${SIGNATURE% / *}"
+    STEP_NAME="${SIGNATURE##* / }"
 
     FAILURE_URL=$(printf '%s' "$BODY" | grep -oP '(?<=- Failing job: )\S+' | head -1)
     if [ -z "$FAILURE_URL" ]; then
