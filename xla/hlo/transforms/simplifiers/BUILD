@@ -794,6 +794,8 @@ cc_library(
         "//xla/hlo/analysis:shape_tracker",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/pass:hlo_pass",
+        "//xla/hlo/utils:hlo_query",
+        "//xla/service:collective_ops_utils",
         "//xla/service:matmul_indexing_utils",
         "//xla/service:shape_inference",
         "//xla/service/graphcycles",
@@ -834,6 +836,8 @@ xla_cc_test(
         "//xla/hlo/utils:hlo_query",
         "//xla/service:pattern_matcher",
         "//xla/tests:literal_test_util",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",  # fixdeps: keep

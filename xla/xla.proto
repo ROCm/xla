@@ -792,6 +792,11 @@ message DebugOptions {
   // inputs+output is within the threshold.
   optional int32 xla_gpu_dot_merger_threshold_mb = 331;
 
+  // If true, the DotMerger pass does not merge a dot that feeds a collective in
+  // its computation with a dot that does not, so the collective does not wait
+  // for the larger merged dot.
+  optional bool xla_gpu_dot_merger_collective_aware = 588;
+
   // DEPRECATED: Use `xla_dump_autotune_cache_to` instead.
   // File to write autotune results to. It will be a binary file unless the name
   // ends with .txt or .textproto. Warning: The results are written at every
@@ -2100,7 +2105,7 @@ message DebugOptions {
   // AOT forward-compatibility window for U64 segmented radix sort has elapsed.
   optional bool xla_gpu_experimental_enable_raft_u64_radix = 584;
 
-  // Next id: 588
+  // Next id: 589
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

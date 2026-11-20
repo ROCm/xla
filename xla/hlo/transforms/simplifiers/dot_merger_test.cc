@@ -15,17 +15,19 @@ limitations under the License.
 
 #include "xla/hlo/transforms/simplifiers/dot_merger.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "absl/algorithm/container.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "xla/error_spec.h"
 #include "xla/hlo/evaluator/hlo_evaluator.h"
+#include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
@@ -2287,6 +2289,297 @@ TEST_F(DotMergerTest, NoMergeOfTaggedAndUntaggedDots) {
   ASSERT_NE(dot1, nullptr);
   EXPECT_EQ(dot0->get_frontend_attribute("_scheduling_group_id"), "1");
   EXPECT_FALSE(dot1->has_frontend_attributes());
+}
+
+// Collective-aware merging: only dots whose "feeds a collective in this
+// computation" status agrees are merged.
+class DotMergerCollectiveAwareTest : public DotMergerTest {
+ public:
+  absl::StatusOr<bool> RunDotMerger(HloModule* module, bool collective_aware) {
+    DotMerger pass(
+        /*max_size_to_merge=*/std::numeric_limits<int64_t>::max(),
+        /*queue_id=*/[](const HloInstruction*) -> int64_t { return 0; },
+        collective_aware);
+    return RunHloPass(&pass, module);
+  }
+
+  static int64_t CountDots(const HloComputation* computation) {
+    return absl::c_count_if(computation->instructions(),
+                            [](const HloInstruction* instr) {
+                              return instr->opcode() == HloOpcode::kDot;
+                            });
+  }
+};
+
+// dot0 feeds an all-to-all, dot1 does not.
+constexpr absl::string_view kAsymmetricPair = R"(
+  HloModule module, replica_count=2
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    a2a = f32[200,10] all-to-all(dot0), dimensions={0}, replica_groups={{0,1}}
+    ROOT tuple = (f32[200,10], f32[200,50]) tuple(a2a, dot1)
+  })";
+
+TEST_F(DotMergerCollectiveAwareTest, AsymmetricPairNotMergedWhenEnabled) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kAsymmetricPair));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       RunDotMerger(module.get(), /*collective_aware=*/true));
+  EXPECT_FALSE(changed);
+  EXPECT_EQ(CountDots(module->entry_computation()), 2);
+}
+
+TEST_F(DotMergerCollectiveAwareTest, AsymmetricPairMergedWhenDisabled) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(kAsymmetricPair));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       RunDotMerger(module.get(), /*collective_aware=*/false));
+  EXPECT_TRUE(changed);
+  EXPECT_EQ(CountDots(module->entry_computation()), 1);
+}
+
+TEST_F(DotMergerCollectiveAwareTest, BothFeedCollectivesMerged) {
+  absl::string_view module_string = R"(
+  HloModule module, replica_count=2
+
+  add {
+    a = f32[] parameter(0)
+    b = f32[] parameter(1)
+    ROOT sum = f32[] add(a, b)
+  }
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    a2a = f32[200,10] all-to-all(dot0), dimensions={0}, replica_groups={{0,1}}
+    ar = f32[200,50] all-reduce(dot1), replica_groups={{0,1}}, to_apply=add
+    ROOT tuple = (f32[200,10], f32[200,50]) tuple(a2a, ar)
+  })";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       RunDotMerger(module.get(), /*collective_aware=*/true));
+  EXPECT_TRUE(changed);
+  EXPECT_EQ(CountDots(module->entry_computation()), 1);
+}
+
+TEST_F(DotMergerCollectiveAwareTest, NeitherFeedsCollectiveMerged) {
+  absl::string_view module_string = R"(
+  HloModule module, replica_count=2
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    a2a = f32[200,100] all-to-all(lhs), dimensions={0}, replica_groups={{0,1}}
+    ROOT tuple = (f32[200,10], f32[200,50], f32[200,100]) tuple(dot0, dot1, a2a)
+  })";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       RunDotMerger(module.get(), /*collective_aware=*/true));
+  EXPECT_TRUE(changed);
+  EXPECT_EQ(CountDots(module->entry_computation()), 1);
+}
+
+TEST_F(DotMergerCollectiveAwareTest, AllGatherStartCountsAsCollective) {
+  absl::string_view module_string = R"(
+  HloModule module, replica_count=2
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    ags = (f32[200,10], f32[400,10]) all-gather-start(dot0), dimensions={0}, replica_groups={{0,1}}
+    agd = f32[400,10] all-gather-done(ags)
+    ROOT tuple = (f32[400,10], f32[200,50]) tuple(agd, dot1)
+  })";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       RunDotMerger(module.get(), /*collective_aware=*/true));
+  EXPECT_FALSE(changed);
+  EXPECT_EQ(CountDots(module->entry_computation()), 2);
+}
+
+TEST_F(DotMergerCollectiveAwareTest, AsyncStartOfAllReduceCountsAsCollective) {
+  absl::string_view module_string = R"(
+  HloModule module, replica_count=2
+
+  add {
+    a = f32[] parameter(0)
+    b = f32[] parameter(1)
+    ROOT sum = f32[] add(a, b)
+  }
+
+  async_all_reduce {
+    p = f32[200,10] parameter(0)
+    ROOT ar = f32[200,10] all-reduce(p), replica_groups={{0,1}}, to_apply=add
+  }
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    start = ((f32[200,10]), f32[200,10]) async-start(dot0), calls=async_all_reduce
+    done = f32[200,10] async-done(start)
+    ROOT tuple = (f32[200,10], f32[200,50]) tuple(done, dot1)
+  })";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       RunDotMerger(module.get(), /*collective_aware=*/true));
+  EXPECT_FALSE(changed);
+  EXPECT_EQ(CountDots(module->entry_computation()), 2);
+}
+
+TEST_F(DotMergerCollectiveAwareTest, SingleParticipantCollectiveIgnored) {
+  absl::string_view module_string = R"(
+  HloModule module, replica_count=2
+
+  add {
+    a = f32[] parameter(0)
+    b = f32[] parameter(1)
+    ROOT sum = f32[] add(a, b)
+  }
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    ar = f32[200,10] all-reduce(dot0), replica_groups={{0},{1}}, to_apply=add
+    ROOT tuple = (f32[200,10], f32[200,50]) tuple(ar, dot1)
+  })";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       RunDotMerger(module.get(), /*collective_aware=*/true));
+  EXPECT_TRUE(changed);
+  EXPECT_EQ(CountDots(module->entry_computation()), 1);
+}
+
+TEST_F(DotMergerCollectiveAwareTest, ControlSuccessorCollectiveCounts) {
+  absl::string_view module_string = R"(
+  HloModule module, replica_count=2
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    other = f32[64,8] parameter(3)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    a2a = f32[64,8] all-to-all(other), dimensions={0}, replica_groups={{0,1}}, control-predecessors={dot0}
+    ROOT tuple = (f32[200,10], f32[200,50], f32[64,8]) tuple(dot0, dot1, a2a)
+  })";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       RunDotMerger(module.get(), /*collective_aware=*/true));
+  EXPECT_FALSE(changed);
+  EXPECT_EQ(CountDots(module->entry_computation()), 2);
+}
+
+// dot0 feeds the collective; dot1 and dot2 do not. dot0 is the smallest, so it
+// is the first seed and stays alone; dot1|dot2 are merged in a later round.
+TEST_F(DotMergerCollectiveAwareTest, NonFeedingDotsMergedFeedingDotAlone) {
+  absl::string_view module_string = R"(
+  HloModule module, replica_count=2
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,20] parameter(2)
+    rhs2 = f32[100,30] parameter(3)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,20] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot2 = f32[200,30] dot(lhs, rhs2), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    a2a = f32[200,10] all-to-all(dot0), dimensions={0}, replica_groups={{0,1}}
+    ROOT tuple = (f32[200,10], f32[200,20], f32[200,30]) tuple(a2a, dot1, dot2)
+  })";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       RunDotMerger(module.get(), /*collective_aware=*/true));
+  EXPECT_TRUE(changed);
+  SCOPED_TRACE(module->ToString());
+  EXPECT_EQ(CountDots(module->entry_computation()), 2);
+  const HloInstruction* alone = nullptr;
+  const HloInstruction* merged1 = nullptr;
+  const HloInstruction* merged2 = nullptr;
+  EXPECT_THAT(
+      module->entry_computation()->root_instruction(),
+      GmockMatch(m::Tuple(
+          m::AllToAll(m::Dot(&alone, m::Parameter(0), m::Parameter(1))),
+          m::Slice(m::Dot(&merged1, m::Parameter(0), m::Concatenate())),
+          m::Slice(m::Dot(&merged2, m::Parameter(0), m::Concatenate())))));
+  EXPECT_EQ(merged1, merged2);
+  EXPECT_NE(alone, merged1);
+}
+
+// The asymmetric pair inside a while body is not merged. In the caller, a dot
+// that feeds the while (whose body has the collective) does not count as
+// feeding a collective, so the caller's pair is merged.
+TEST_F(DotMergerCollectiveAwareTest, WhileBodyAnalyzedOnItsOwn) {
+  absl::string_view module_string = R"(
+  HloModule module, replica_count=2
+
+  body {
+    p = (f32[200,100], f32[100,10], f32[100,50], f32[200,10], f32[200,50], s32[]) parameter(0)
+    lhs = f32[200,100] get-tuple-element(p), index=0
+    rhs0 = f32[100,10] get-tuple-element(p), index=1
+    rhs1 = f32[100,50] get-tuple-element(p), index=2
+    i = s32[] get-tuple-element(p), index=5
+    one = s32[] constant(1)
+    next = s32[] add(i, one)
+    bdot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    bdot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    a2a = f32[200,10] all-to-all(bdot0), dimensions={0}, replica_groups={{0,1}}
+    ROOT t = (f32[200,100], f32[100,10], f32[100,50], f32[200,10], f32[200,50], s32[]) tuple(lhs, rhs0, rhs1, a2a, bdot1, next)
+  }
+
+  cond {
+    p = (f32[200,100], f32[100,10], f32[100,50], f32[200,10], f32[200,50], s32[]) parameter(0)
+    i = s32[] get-tuple-element(p), index=5
+    n = s32[] constant(4)
+    ROOT lt = pred[] compare(i, n), direction=LT
+  }
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    zero = s32[] constant(0)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    init = (f32[200,100], f32[100,10], f32[100,50], f32[200,10], f32[200,50], s32[]) tuple(lhs, rhs0, rhs1, dot0, dot1, zero)
+    ROOT w = (f32[200,100], f32[100,10], f32[100,50], f32[200,10], f32[200,50], s32[]) while(init), condition=cond, body=body
+  })";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       RunDotMerger(module.get(), /*collective_aware=*/true));
+  EXPECT_TRUE(changed);
+  EXPECT_EQ(CountDots(module->entry_computation()), 1);
+  const HloComputation* body = module->GetComputationWithName("body");
+  ASSERT_NE(body, nullptr);
+  EXPECT_EQ(CountDots(body), 2);
 }
 
 }  // namespace

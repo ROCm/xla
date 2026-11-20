@@ -47,9 +47,12 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_input_output_alias_config.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/utils/hlo_query.h"
 #include "xla/permutation_util.h"
 #include "xla/primitive_util.h"
+#include "xla/service/collective_ops_utils.h"
 #include "xla/service/graphcycles/graphcycles.h"
 #include "xla/service/matmul_indexing_utils.h"
 #include "xla/service/shape_inference.h"
@@ -62,6 +65,56 @@ limitations under the License.
 
 namespace xla {
 namespace {
+
+// Instructions that have a collective among their transitive (data or control)
+// users in the same computation, or are such a collective.
+using FeedsCollectiveSet = absl::flat_hash_set<const HloInstruction*>;
+
+// Returns true if `instr` is a collective (sync, or the start of an async one,
+// including send/recv) that does not have exactly one participant per group.
+// Single-participant collectives are no-ops that later passes remove, so they
+// do not put anything on the critical path.
+bool IsNonDegenerateCollective(const HloInstruction* instr) {
+  if (!hlo_query::IsCollectiveCommunicationOp(instr->opcode()) &&
+      !hlo_query::IsAsyncCollectiveStartOp(instr, /*include_send_recv=*/true)) {
+    return false;
+  }
+  const HloInstruction* collective = instr;
+  if (instr->opcode() == HloOpcode::kAsyncStart) {
+    collective = instr->async_wrapped_instruction();
+  }
+  // Collective-permute, send and recv have no replica groups.
+  if (!HloCollectiveInstruction::ClassOf(collective)) {
+    return true;
+  }
+  absl::StatusOr<std::optional<std::pair<int64_t, int64_t>>> count_and_size =
+      GetReplicaGroupCountAndSize(collective);
+  if (!count_and_size.ok() || !count_and_size->has_value()) {
+    return true;
+  }
+  return (*count_and_size)->second != 1;
+}
+
+// Computes the set of instructions in the computation that feed a
+// non-degenerate collective, given the computation's post order.
+FeedsCollectiveSet ComputeFeedsCollective(
+    absl::Span<HloInstruction* const> post_order) {
+  FeedsCollectiveSet feeds;
+  auto in_feeds = [&](const HloInstruction* instr) {
+    return feeds.contains(instr);
+  };
+  // In reverse post order, every user and control successor of an instruction
+  // is visited before the instruction itself.
+  for (auto it = post_order.rbegin(); it != post_order.rend(); ++it) {
+    const HloInstruction* instr = *it;
+    if (IsNonDegenerateCollective(instr) ||
+        absl::c_any_of(instr->users(), in_feeds) ||
+        absl::c_any_of(instr->control_successors(), in_feeds)) {
+      feeds.insert(instr);
+    }
+  }
+  return feeds;
+}
 
 bool HasSubByteUpcast(const HloInstruction* instr) {
   while (instr != nullptr && (instr->opcode() == HloOpcode::kTranspose ||
@@ -729,7 +782,7 @@ void UpdateGraphForMergedDot(
 absl::StatusOr<std::vector<DotOperandUsage>> FindDotsToMerge(
     absl::Span<const DotOperandUsage> compatible_dots, GraphCycles& graph,
     const std::function<int32_t(const HloInstruction*)>& graph_id,
-    int64_t max_size_to_merge) {
+    int64_t max_size_to_merge, const FeedsCollectiveSet* feeds_collective) {
   // Number of flops that take the same time as a write of a single byte to HBM.
   // This depends on the GPU a lot, but 290 is what we on a typical modern
   // GPU (as of 2026).
@@ -789,6 +842,9 @@ absl::StatusOr<std::vector<DotOperandUsage>> FindDotsToMerge(
   // max size. Return as soon as we find a group of 2 or more.
   for (size_t i = 0; i < compatible_dots.size(); ++i) {
     const DotOperandUsage& first_dot = compatible_dots[i];
+    const bool first_feeds_collective =
+        feeds_collective != nullptr &&
+        feeds_collective->contains(first_dot.dot);
     std::vector<DotOperandUsage> group = {first_dot};
     int64_t sum_nc = first_dot.concat_nc_size;
     const int64_t max_allowed_nc = sum_nc * kMaxNonContractingRatio;
@@ -801,6 +857,17 @@ absl::StatusOr<std::vector<DotOperandUsage>> FindDotsToMerge(
       const DotOperandUsage& cand_dot = compatible_dots[j];
       if (cand_dot.concat_nc_size > max_allowed_nc) {
         break;  // Subsequent elements violate the kMaxNonContractingRatio.
+      }
+
+      // Keep groups uniform: either all members feed a collective in this
+      // computation, or none do. Merging a dot on the path to a collective
+      // with one off that path makes the collective wait for both.
+      if (feeds_collective != nullptr &&
+          feeds_collective->contains(cand_dot.dot) != first_feeds_collective) {
+        VLOG(3) << "Not merging " << cand_dot.dot->name() << " with "
+                << first_dot.dot->name()
+                << ": only one of them feeds a collective.";
+        continue;
       }
 
       if (absl::c_any_of(group, [&](const DotOperandUsage& member) {
@@ -843,19 +910,29 @@ absl::StatusOr<HloInstruction*> MergeCluster(
     const EquivalenceKey& key, absl::Span<const DotOperandUsage> dots,
     GraphCycles& graph,
     const std::function<int32_t(const HloInstruction*)>& graph_id,
-    ReplacementMap& replacements, int64_t max_size_to_merge) {
+    ReplacementMap& replacements, int64_t max_size_to_merge,
+    const FeedsCollectiveSet* feeds_collective) {
   std::vector<DotOperandUsage> compatible_dots =
       GetUnmergedDots(dots, replacements);
   if (compatible_dots.size() < 2) {
     return nullptr;
   }
 
-  ABSL_ASSIGN_OR_RETURN(
-      std::vector<DotOperandUsage> dots_to_merge,
-      FindDotsToMerge(compatible_dots, graph, graph_id, max_size_to_merge));
+  ABSL_ASSIGN_OR_RETURN(std::vector<DotOperandUsage> dots_to_merge,
+                        FindDotsToMerge(compatible_dots, graph, graph_id,
+                                        max_size_to_merge, feeds_collective));
 
   if (dots_to_merge.size() < 2) {
     return nullptr;
+  }
+
+  // `feeds_collective` is computed once per computation and not updated for
+  // merged dots. That is exact only if every merged group is uniform.
+  if (feeds_collective != nullptr) {
+    const bool feeds = feeds_collective->contains(dots_to_merge[0].dot);
+    TF_RET_CHECK(absl::c_all_of(dots_to_merge, [&](const DotOperandUsage& u) {
+      return feeds_collective->contains(u.dot) == feeds;
+    })) << "Collective-aware DotMerger formed a non-uniform group.";
   }
 
   // The shared operand of the new dot will be lhs or rhs, depending on which
@@ -941,9 +1018,9 @@ absl::StatusOr<HloInstruction*> MergeCluster(
 }
 
 absl::Status BuildDependencyGraph(
-    HloComputation* comp, GraphCycles& graph,
+    absl::Span<HloInstruction* const> post_order, GraphCycles& graph,
     const std::function<int32_t(const HloInstruction*)>& graph_id) {
-  for (HloInstruction* instr : comp->MakeInstructionPostOrder()) {
+  for (HloInstruction* instr : post_order) {
     int32_t id = graph_id(instr);
     for (const HloInstruction* operand : instr->operands()) {
       if (!graph.InsertEdge(graph_id(operand), id)) {
@@ -1006,7 +1083,8 @@ absl::Status SimplifyConsumerChain(HloInstruction* chain_start) {
 
 absl::StatusOr<bool> MergeDots(
     HloComputation* comp, int64_t max_size_to_merge,
-    std::function<int64_t(const HloInstruction* dot)> queue_id) {
+    std::function<int64_t(const HloInstruction* dot)> queue_id,
+    bool collective_aware) {
   // Collect equivalence classes.  Specifically, create the map
   //
   //   instruction, dimension_categories_at_source, queue_id ->
@@ -1078,7 +1156,14 @@ absl::StatusOr<bool> MergeDots(
 
   // Iteration order doesn't matter for correctness, but graph.InsertEdge() is
   // *much* faster if we iterate in topological order.
-  ABSL_RETURN_IF_ERROR(BuildDependencyGraph(comp, graph, graph_id));
+  const std::vector<HloInstruction*> post_order =
+      comp->MakeInstructionPostOrder();
+  ABSL_RETURN_IF_ERROR(BuildDependencyGraph(post_order, graph, graph_id));
+
+  std::optional<FeedsCollectiveSet> feeds_collective;
+  if (collective_aware) {
+    feeds_collective = ComputeFeedsCollective(post_order);
+  }
 
   // Merge within equivalence classes.  We keep a map of all dot->new root
   // replacements. We'll apply all replacements at the end of the pass.
@@ -1090,9 +1175,11 @@ absl::StatusOr<bool> MergeDots(
     // merging is possible. We may have several iterations because dots of one
     // cluster may have dependencies on each other so cannot be merged together.
     while (true) {
-      ABSL_ASSIGN_OR_RETURN(HloInstruction * new_dot,
-                            MergeCluster(key, values, graph, graph_id,
-                                         replacements, max_size_to_merge));
+      ABSL_ASSIGN_OR_RETURN(
+          HloInstruction * new_dot,
+          MergeCluster(
+              key, values, graph, graph_id, replacements, max_size_to_merge,
+              feeds_collective.has_value() ? &*feeds_collective : nullptr));
       if (!new_dot) {
         if (VLOG_IS_ON(3)) {
           std::vector<DotOperandUsage> unmerged =
@@ -1152,8 +1239,9 @@ absl::StatusOr<bool> DotMerger::RunImpl(
   bool changed = false;
   for (HloComputation* comp :
        module->MakeNonfusionComputations(execution_threads)) {
-    ABSL_ASSIGN_OR_RETURN(bool changed_computation,
-                          MergeDots(comp, max_size_to_merge_, queue_id_));
+    ABSL_ASSIGN_OR_RETURN(
+        bool changed_computation,
+        MergeDots(comp, max_size_to_merge_, queue_id_, collective_aware_));
     changed |= changed_computation;
   }
   return changed;

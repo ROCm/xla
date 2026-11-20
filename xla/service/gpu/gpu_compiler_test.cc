@@ -15,9 +15,6 @@ limitations under the License.
 
 #include "xla/service/gpu/gpu_compiler.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
@@ -30,6 +27,8 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include "absl/algorithm/container.h"
 #include "absl/base/casts.h"
 #include "absl/base/log_severity.h"
@@ -49,7 +48,6 @@ limitations under the License.
 #include "absl/strings/substitute.h"
 #include "absl/types/span.h"
 #include "google/protobuf/text_format.h"
-#include "tsl/platform/regexp.h"
 #include "xla/autotune_cache.pb.h"
 #include "xla/autotune_results.pb.h"
 #include "xla/backends/autotuner/backends.pb.h"
@@ -86,6 +84,7 @@ limitations under the License.
 #include "xla/service/device_assignment.h"
 #include "xla/service/executable.h"
 #include "xla/service/gpu/backend_configs.pb.h"
+#include "xla/service/gpu/cublas_cudnn.h"
 #include "xla/service/gpu/export_hlo.h"
 #include "xla/service/gpu/gpu_executable.h"
 #include "xla/service/gpu/metrics.h"
@@ -124,6 +123,7 @@ limitations under the License.
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
+#include "tsl/platform/regexp.h"
 
 namespace xla {
 namespace gpu {
@@ -1827,6 +1827,65 @@ tmp_9 = f64[1,2]{1,0} reshape(tmp_8)
 tmp_10 = f64[3,2]{1,0} dot(tmp_4, tmp_9), lhs_contracting_dims={1}, rhs_contracting_dims={0}
 ROOT tmp_11 = f64[3,2]{1,0} reshape(tmp_10)
 })");
+}
+
+// Counts GEMMs in the optimized module: dots (e.g. in Triton GEMM fusions) and
+// cuBLAS/hipBLASLt GEMM custom calls.
+int64_t CountGemms(const HloModule& module) {
+  int64_t count = 0;
+  for (const HloComputation* computation : module.computations()) {
+    for (const HloInstruction* instr : computation->instructions()) {
+      if (instr->opcode() == HloOpcode::kDot || IsCublasGemm(*instr)) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+TEST_F(GpuCompilerTest, DotMergerCollectiveAwareKeepsCollectiveFeedingDot) {
+  // A small "router" dot feeds an all-to-all; a larger sibling dot with the
+  // same LHS does not. By default DotMerger merges them into one GEMM; with
+  // xla_gpu_dot_merger_collective_aware they stay separate.
+  constexpr absl::string_view kHlo = R"(
+    HloModule dot_merger_collective_aware, replica_count=2
+
+    ENTRY main {
+      x = bf16[1024,512] parameter(0)
+      w_router = bf16[512,64] parameter(1)
+      w_gate = bf16[512,512] parameter(2)
+      router = bf16[1024,64] dot(x, w_router), lhs_contracting_dims={1},
+          rhs_contracting_dims={0}
+      gate = bf16[1024,512] dot(x, w_gate), lhs_contracting_dims={1},
+          rhs_contracting_dims={0}
+      a2a = bf16[1024,64] all-to-all(router), dimensions={0},
+          replica_groups={{0,1}}
+      ROOT result = (bf16[1024,64], bf16[1024,512]) tuple(a2a, gate)
+    }
+  )";
+
+  auto count_gemms = [&](bool collective_aware) -> absl::StatusOr<int64_t> {
+    HloModuleConfig config = GetModuleConfigForTest(/*replica_count=*/2);
+    DebugOptions debug_options = config.debug_options();
+    debug_options.set_xla_gpu_dot_merger_collective_aware(collective_aware);
+    config.set_debug_options(debug_options);
+    ABSL_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> module,
+                          ParseAndReturnVerifiedModule(kHlo, config));
+    // Run only the HLO passes, so the test does not need two devices.
+    Compiler::CompileOptions compile_options;
+    compile_options.gpu_topology = GetSingleDeviceGpuTopology(
+        /*platform_version=*/"", gpu_target_config());
+    ABSL_ASSIGN_OR_RETURN(
+        std::unique_ptr<HloModule> optimized_module,
+        compiler()->RunHloPasses(std::move(module), /*executor=*/nullptr,
+                                 compile_options));
+    return CountGemms(*optimized_module);
+  };
+
+  EXPECT_THAT(count_gemms(/*collective_aware=*/false),
+              absl_testing::IsOkAndHolds(1));
+  EXPECT_THAT(count_gemms(/*collective_aware=*/true),
+              absl_testing::IsOkAndHolds(2));
 }
 
 TEST_F(GpuCompilerTest, CompilingSortsWorksWithoutDevice) {
