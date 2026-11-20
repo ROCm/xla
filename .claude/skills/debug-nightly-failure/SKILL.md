@@ -1,10 +1,10 @@
 ---
 name: debug-nightly-failure
-description: Hard-capped at 5 minutes - first checks whether this exact failure signature was already analyzed (by looking inside the detection comment itself) and, if so, does nothing further. Otherwise quickly categorizes (build/test/config/infra) and labels a single ROCm XLA nightly CI failure, checks whether a later upstream commit already fixed it, and does a fast code read for a likely root cause and possible fix. Full RBE reproduction/gdb debugging is optional and rarely fits the time budget. Never posts a new comment - edits the single detection comment in place, folding the triage and final report behind a collapsible "Analysis (click to expand)" section so the comment stays short, and adding a RESOLVED banner above that fold if the failure turned out to be fixed. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
+description: Hard-capped at 5 minutes - first checks whether this exact failure signature was already analyzed (by looking inside the detection comment itself) and, if so, does nothing further. Otherwise quickly categorizes (build/test/config/infra) and labels a single ROCm XLA nightly CI failure, checks whether a later upstream commit already fixed it, searches open upstream PRs for one that looks like it already addresses it, and does a fast code read for a likely root cause and possible fix. Full RBE reproduction/gdb debugging is optional and rarely fits the time budget. Never posts a new comment - edits the single detection comment in place, folding the triage and final report behind a collapsible "Analysis (click to expand)" section so the comment stays short, and adding a RESOLVED banner above that fold if the failure turned out to be fixed. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
 argument-hint: [ci-repo] [run-id] [job-id] [job-name] [step-name] [failure-url] [issue-number] [detection-comment-url]
 context: fork
 agent: general-purpose
-allowed-tools: Bash(gh issue edit *), Bash(gh label create *), Bash(gh api *), Bash(gh run view *), Bash(git *), Bash(build_tools/rocm/*), Bash(bazel *), Bash(gdb *), Bash(objdump *), Bash(grep *), Bash(cat *), Bash(timeout *), Read, Grep, Glob, Write, Edit
+allowed-tools: Bash(gh issue edit *), Bash(gh label create *), Bash(gh api *), Bash(gh run view *), Bash(gh search prs *), Bash(gh pr diff *), Bash(gh pr view *), Bash(git *), Bash(build_tools/rocm/*), Bash(bazel *), Bash(gdb *), Bash(objdump *), Bash(grep *), Bash(cat *), Bash(timeout *), Read, Grep, Glob, Write, Edit
 ---
 
 # Debug a ROCm Nightly CI Failure
@@ -258,9 +258,10 @@ Reread `job.log` (already fetched in Step 2) and extract:
 
 ## Step 4 — Check for an existing fix, then analyze the code
 
-Within your remaining time budget (roughly 2-3 minutes - see above), do two
-cheap checks using just git and reading code. This is the step that
-produces your estimate; by default you go straight from here to Step 7.
+Within your remaining time budget (roughly 2-3 minutes - see above), do
+three cheap checks using just git, `gh`, and reading code. This is the
+step that produces your estimate; by default you go straight from here to
+Step 7.
 
 **A. Check whether it's already fixed.** The checkout is a shallow clone of
 the exact failing commit, so get a bounded amount of extra history first:
@@ -288,7 +289,37 @@ a sign to stop digging and report with what you have. Then:
   over many prior runs is a standing issue - say which in your report, it
   changes how urgent/novel the finding is.
 
-**B. If nothing already fixes it**, analyze the code directly:
+**B. If nothing is merged yet, check for a relevant *open* PR upstream.**
+Someone may already be mid-flight fixing this in `openxla/xla` - worth a
+quick, targeted search before spending the remaining budget re-deriving
+the same fix from scratch:
+- Build 1-2 narrow search terms from the error signature (Step 3): the
+  specific implicated file's basename, the failing function/class/test
+  name, or a short distinctive fragment of the error text. Prefer a
+  file/symbol match over free text - PR titles/descriptions don't always
+  mention the exact runtime error.
+- Search open PRs: `gh search prs --repo openxla/xla --state open
+  --limit 5 "<query>"`. If that returns nothing useful, try one narrower
+  or differently-worded query - don't iterate endlessly, this is a quick
+  check, not an exhaustive one.
+- For each candidate, read the title first; only pull the full diff
+  (`gh pr diff <number> --repo openxla/xla`) for the one or two most
+  promising ones. A good candidate actually touches the exact failing
+  file/function/line, not just something nearby or a drive-by refactor.
+- If you find one that plausibly fixes this exact failure: note it in your
+  report (Step 7) - PR number, link, and a one-line reason it looks
+  relevant - and say explicitly that it is **unmerged and unverified**:
+  nobody should wait on or rely on it without checking its own CI status
+  and actually confirming it resolves this specific failure. This doesn't
+  change the category/outcome on its own (an open PR is not "already fixed
+  upstream" - that's reserved for a *merged* commit from part A); treat it
+  as supporting evidence for a "Possible fix (unverified)" report instead,
+  alongside or in place of your own code-read hypothesis from part C.
+- If nothing relevant turns up after checking the top few results, say so
+  in one line and move on - don't pad the report with a non-finding.
+
+**C. If nothing already fixes it (merged or open)**, analyze the code
+directly:
 - From the error signature (Step 3): identify the specific file(s)/
   function(s) implicated - a stack trace frame, the HLO pass or emitter
   named in the error, the assertion that fired, or (for a test failure) the
@@ -506,13 +537,21 @@ pasting whole blocks.
   reached this configuration/branch yet, not that it was never found.
 
 **Possible fix (quick estimate, unverified)** - the expected outcome given
-the 5-minute budget, when Step 4B found a plausible culprit but there was
-no time to reproduce and confirm it: comment with:
-- The file/function you suspect and why - point at the specific lines.
-- The fix as a diff, from `git diff` if you wrote one, or described in
-  words if you didn't have time to write it out.
-- State plainly that this is an estimate from reading the code, not a
-  verified fix - nobody should merge it without reproducing first.
+the 5-minute budget, when Step 4B found a relevant open PR, Step 4C found a
+plausible culprit from reading the code, or both, but there was no time to
+reproduce and confirm anything: comment with:
+- If Step 4C found a culprit: the file/function you suspect and why -
+  point at the specific lines. The fix as a diff, from `git diff` if you
+  wrote one, or described in words if you didn't have time to write it
+  out.
+- If Step 4B found a relevant open PR instead (or in addition): its number
+  and link, a one-line reason it looks relevant, and an explicit note that
+  it is unmerged and you did not verify it yourself - quote the specific
+  part of its diff that addresses this failure rather than just a link.
+- State plainly that this is an estimate - from reading the code, from an
+  unverified open PR, or both - not a verified fix. Nobody should merge
+  anything or rely on the open PR landing without reproducing/confirming
+  first.
 
 **Fix found** (you derived it yourself *and* verified it - only reachable
 if Steps 4/5 actually ran and finished within budget): before reporting,
@@ -563,7 +602,7 @@ time and make both:
    ```
    > **RESOLVED** — <one-line summary of the fix, matching Step 7's report -
    > reuse the report's own outcome heading verbatim where possible, don't
-   > write a new one from scratch. If Step 4A found a fixing commit/PR,
+   > write a new one from scratch. If Step 4A found a fixing commit,
    > working a short reference to it into this same line reads better than
    > a separate link line>
    > React 👍 if you want this dropped, or just ignore it - it's done.
