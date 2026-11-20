@@ -408,6 +408,11 @@ Measured on the Buildbarn single-GPU pool (MI350, DPX partitions; 4 runs of the
   differences, which the within-run spread cannot see.
 - Some large-model leaves can run out of device memory on these partitions;
   they show up as `NO_DATA` on every run.
+- All workers so far were `mi350x-gpu-dpx-*` hosts with "AMD Instinct MI350X
+  VF" devices (DPX partitions). SPX and CPX have not been measured: absolute
+  times, memory limits and noise differ between partition modes, so compare
+  runs only within one mode. `hlo_eval_summarize.py` prints each run's devices
+  and warns when runs differ.
 
 If a build fails with `lost inputs with digests`, Buildbarn evicted cached
 outputs Bazel still referenced; rerun, or try one build with
