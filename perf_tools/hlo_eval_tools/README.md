@@ -369,7 +369,10 @@ and runs all of them in one uncached `bazel test`, so they run concurrently as
 pool capacity allows. The ROCm tarball, RBE container image, GPU target and
 single-GPU pool are the ones the checkout's ROCm CI pins in
 `.github/workflows/rocm_ci.yml`; the tarball falls back to the `rocm_redist.bzl`
-default. Do not run two invocations at once from the same XLA checkout.
+default. Runs with the same ROCm tarball share one Bazel output base, even from
+different checkouts, so the script allows one run at a time per output base and
+per XLA checkout and refuses a second one. To run in parallel, use another
+checkout and set `XLA_OUTPUT_BASE`.
 
 Results go to `hlo_eval_results/<xla commit>-<models>-<timestamp>/` in the
 current directory: `run_info.txt` (XLA checkout and commit, ROCm tarball,

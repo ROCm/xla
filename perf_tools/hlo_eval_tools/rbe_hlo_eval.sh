@@ -20,6 +20,13 @@ case "${1:-}" in
   --xla) [ "$#" -ge 2 ] || die "$USAGE"; XLA=$2; shift 2 ;;
   --xla=*) XLA=${1#*=}; shift ;;
 esac
+# One run at a time per XLA checkout (it holds _hlo_eval_rbe/ and bazel-testlogs)
+# and per output base (below). The locks are fds 9 and 8, closed for bazel so
+# its server, which outlives the run, does not inherit them.
+lock_checkout() {
+  mkdir -p "$1/_hlo_eval_rbe"; exec 9>"$1/_hlo_eval_rbe/.lock"
+  flock -n 9 || die "another run is using the XLA checkout $1"
+}
 if [ ! -d "$XLA" ]; then
   # A git ref: (re)use a detached worktree at worktrees/<ref> of this repo.
   repo=$(git -C "$HERE" rev-parse --show-toplevel)
@@ -29,6 +36,7 @@ if [ ! -d "$XLA" ]; then
   sha=$(git -C "$repo" rev-parse -q --verify "$XLA^{commit}") || die "--xla $XLA: no such directory or git ref"
   wt=$repo/worktrees/${XLA//\//-}
   if [ -d "$wt" ]; then
+    lock_checkout "$wt"
     git -C "$wt" diff --quiet HEAD || die "$wt has local changes"
     git -C "$wt" checkout -q --detach "$sha"
   else
@@ -39,6 +47,7 @@ fi
 XLA_DIR=$(realpath "$XLA")
 [ -f "$XLA_DIR/build_tools/rocm/rocm_xla_ci.bazelrc" ] ||
   die "$XLA_DIR is not an XLA checkout; run from one or pass --xla <dir|ref>"
+[ -e /proc/$$/fd/9 ] || lock_checkout "$XLA_DIR"
 XLA_SHA=$(git -C "$XLA_DIR" rev-parse --short=10 HEAD 2>/dev/null || echo nogit)
 git -C "$XLA_DIR" diff --quiet HEAD 2>/dev/null || XLA_SHA+=-dirty
 REPEATS=${REPEATS:-20} STAT=${STAT:-median} MAX_GPUS=${MAX_GPUS:-1}
@@ -72,6 +81,9 @@ for v in DISTRO_URL DISTRO_HASH DOCKER_IMAGE GPU_TARGET GPU_POOL; do
 done
 OB_TAG=$(printf '%s\n%s' "$DISTRO_URL" "$DISTRO_HASH" | sha256sum | cut -c1-12)
 OUTPUT_BASE=${XLA_OUTPUT_BASE:-$HOME/.cache/bazel/xla-rocm-$OB_TAG}
+# Every run with the same tarball shares this output base, whatever the checkout.
+mkdir -p "$(dirname "$OUTPUT_BASE")"; exec 8>"$OUTPUT_BASE.lock"
+flock -n 8 || die "another run is using $OUTPUT_BASE (same ROCm tarball); wait for it or set XLA_OUTPUT_BASE"
 
 [ "$#" -ge 1 ] || die "$USAGE"
 MODELS=$1; shift
@@ -164,7 +176,7 @@ run_bazel() {
     --repo_env=TF_ROCM_AMDGPU_TARGETS="$GPU_TARGET" \
     --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL="$GPU_POOL" \
     --repo_env=TF_ROCM_RBE_MULTI_GPU_POOL="$MULTI_GPU_POOL" \
-    "$@" "${TARGETS_TO_RUN[@]}"
+    "$@" "${TARGETS_TO_RUN[@]}" 8>&- 9>&-
 }
 # Copy the targets' test logs to $RESULTS_DIR/<model>/<leaf>/attempts/<round>/.
 # Only logs written by this round count: Bazel keeps the previous run's logs of
