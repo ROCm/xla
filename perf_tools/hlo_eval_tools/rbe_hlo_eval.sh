@@ -167,11 +167,15 @@ run_bazel() {
     "$@" "${TARGETS_TO_RUN[@]}"
 }
 # Copy the targets' test logs to $RESULTS_DIR/<model>/<leaf>/attempts/<round>/.
+# Only logs written by this round count: Bazel keeps the previous run's logs of
+# tests it did not run (e.g. after a build failure), and those leaves must show
+# up as NO_DATA, not as stale timings.
 collect() {
   local round=$1 t m l; shift
   for t; do
     m=${t#//_hlo_eval_rbe/} l=${t#*:}; m=${m%%:*}
     mkdir -p "$RESULTS_DIR/$m/$l/attempts/$round"
+    [ "bazel-testlogs/_hlo_eval_rbe/$m/$l/test.log" -nt "$RESULTS_DIR/.round_start" ] || continue
     cp -rf "bazel-testlogs/_hlo_eval_rbe/$m/$l/test.log" "bazel-testlogs/_hlo_eval_rbe/$m/$l/test.outputs/." \
       "$RESULTS_DIR/$m/$l/attempts/$round/" 2>/dev/null || true
   done
@@ -179,6 +183,7 @@ collect() {
 
 rc=0
 TARGETS_TO_RUN=("${TARGETS[@]}")
+touch "$RESULTS_DIR/.round_start"
 run_bazel "$@" || rc=$?
 collect 1 "${TARGETS[@]}"
 # Rerun leaves whose spread is too wide (failed leaves have no timings).
@@ -187,10 +192,12 @@ for ((round = 2; round <= RETRY_NOISY + 1; round++)); do
   mapfile -t TARGETS_TO_RUN < "$RESULTS_DIR/noisy.txt"
   [ "${#TARGETS_TO_RUN[@]}" -gt 0 ] || break
   echo "rbe_hlo_eval.sh: rerunning noisy leaves: ${TARGETS_TO_RUN[*]}" >&2
+  touch "$RESULTS_DIR/.round_start"
   run_bazel "$@" || true
   collect "$round" "${TARGETS_TO_RUN[@]}"
 done
 python3 -I "$HERE/hlo_eval_summarize.py" "$RESULTS_DIR" "$NOISY_PCT"
 echo "results: $RESULTS_DIR" >&2
+[ "$rc" -eq 0 ] || echo "rbe_hlo_eval.sh: warning: bazel test failed (exit $rc); leaves without new results are NO_DATA" >&2
 exit "$rc"
 }
