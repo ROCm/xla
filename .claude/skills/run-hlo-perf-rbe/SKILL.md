@@ -70,6 +70,8 @@ $T/hlo_eval_summarize.py <results dir A> <results dir B> [...]
 
 - Judge on the suite geomean line, "without 3 largest". Measured A/A noise:
   identical runs agree within 0.25% there.
+  That figure is printed only when more than 3 modules are compared; with
+  fewer, judge per module and repeat both arms.
 - Per module, run-to-run noise is large: median range 1.1%, 90th percentile
   4.4%. Do not report a single module's change below about 5% (beyond that
   90th percentile) as real unless it reproduces in repeated runs of both arms.

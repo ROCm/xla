@@ -113,6 +113,9 @@ def compare(runs):
             f"{rng:.2f}", f"{100 * st.stdev(meds) / mean:.2f}",
             f"{max(iqr_sigma(d[key][1]) for d in data):.2f}",
             ",".join(d[key][0].rsplit("-", 1)[-1] for d in data)]))
+    if not rows:
+        print("no module has results in every run")
+        return
     rows.sort(key=lambda r: -r[0])
     print_table([["model/leaf/module"] + [f"run{i + 1}" for i in range(len(runs))] +
                  ["range%", "cv%", "worst_iqr_sigma%", "hosts"]] + [r[2] for r in rows])
@@ -120,12 +123,13 @@ def compare(runs):
     print(f"\n{len(rows)} modules; range%: median {st.median(ranges):.2f}, "
           f"p90 {quantile(ranges, .9):.2f}; > 2%: {sum(r > 2 for r in ranges)}")
     # Suite geomean ratio per pair of runs, also without the pair's 3 largest
-    # per-module differences.
+    # per-module differences (when there are more than 3 modules).
     for i in range(len(runs)):
         for j in range(i + 1, len(runs)):
             logs = sorted((math.log(r[1][j] / r[1][i]) for r in rows), key=abs)
-            print(f"geomean run{j + 1}/run{i + 1}: {100 * math.expm1(st.mean(logs)):+.3f}% "
-                  f"(without 3 largest: {100 * math.expm1(st.mean(logs[:-3])):+.3f}%)")
+            trimmed = (f" (without 3 largest: {100 * math.expm1(st.mean(logs[:-3])):+.3f}%)"
+                       if len(logs) > 3 else "")
+            print(f"geomean run{j + 1}/run{i + 1}: {100 * math.expm1(st.mean(logs)):+.3f}%{trimmed}")
 
 
 if __name__ == "__main__":
