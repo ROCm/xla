@@ -1912,8 +1912,8 @@ message DebugOptions {
 
   // ROCm only. If true, ranks Triton GEMM configs with AMD's Origami analytic
   // model instead of the NVIDIA-calibrated gpu_dot_fusion_cost_model. Selects
-  // all configs belonging to the best-estimated tile shapes; the count is the
-  // "top_tile_shapes" key of
+  // all configs belonging to the best-estimated configurations; the count is
+  // the "top_configs" key of
   // xla_gpu_experimental_cost_model_gemm_tiling_options.
   optional bool xla_gpu_experimental_use_origami_cost_model = 584;
 

@@ -62,6 +62,21 @@ using TileShape = std::tuple<int, int, int>;
 // What Origami actually consumes: tile shape, MFMA size, occupancy.
 using OrigamiKey = std::tuple<int, int, int, int, int>;
 
+OrigamiKey KeyOf(const TritonGemmConfig& c) {
+  return {c.block_m, c.block_n, c.block_k, c.mfma_size > 0 ? c.mfma_size : 16,
+          c.waves_per_eu > 0 ? c.waves_per_eu : 1};
+}
+
+// Origami has no counterpart for these, so sweeping them multiplies the
+// candidate set without the model being able to discriminate. Values follow
+// tritonBLAS, which pins rather than searches them.
+bool HasAllowedKnobs(const TritonGemmConfig& c) {
+  if (c.is_tma_allowed || c.is_warp_specialization_allowed) return false;
+  if (c.num_warps != 4 && c.num_warps != 8) return false;
+  if (c.num_stages != 2 && c.num_stages != 3) return false;
+  return true;
+}
+
 struct MatrixInstruction {
   int64_t m;
   int64_t n;
@@ -361,44 +376,53 @@ OrigamiDotCostModel::EstimateRunTimes(
 }
 
 absl::StatusOr<std::vector<TritonGemmConfig>>
-OrigamiDotCostModel::SelectTopTileShapes(
+OrigamiDotCostModel::SelectTopConfigs(
     const HloDotInstruction* dot, absl::Span<const TritonGemmConfig> configs,
-    int64_t num_tile_shapes) const {
-  ABSL_ASSIGN_OR_RETURN(auto estimates, EstimateRunTimes(dot, configs));
+    int64_t num_groups, bool restrict_knobs) const {
+  std::vector<TritonGemmConfig> candidates;
+  candidates.reserve(configs.size());
+  for (const TritonGemmConfig& config : configs) {
+    if (!restrict_knobs || HasAllowedKnobs(config))
+      candidates.push_back(config);
+  }
+  if (candidates.empty()) candidates.assign(configs.begin(), configs.end());
 
-  absl::flat_hash_map<TileShape, absl::Duration> best_per_shape;
+  ABSL_ASSIGN_OR_RETURN(auto estimates, EstimateRunTimes(dot, candidates));
+
+  absl::flat_hash_map<OrigamiKey, absl::Duration> best_per_key;
   for (const auto& [config, duration] : estimates) {
-    const TileShape shape{config.block_m, config.block_n, config.block_k};
-    auto [it, inserted] = best_per_shape.try_emplace(shape, duration);
+    auto [it, inserted] = best_per_key.try_emplace(KeyOf(config), duration);
     if (!inserted && duration < it->second) it->second = duration;
   }
 
-  std::vector<std::pair<absl::Duration, TileShape>> ranked;
-  ranked.reserve(best_per_shape.size());
-  for (const auto& [shape, duration] : best_per_shape) {
-    ranked.push_back({duration, shape});
+  std::vector<std::pair<absl::Duration, OrigamiKey>> ranked;
+  ranked.reserve(best_per_key.size());
+  for (const auto& [key, duration] : best_per_key) {
+    ranked.push_back({duration, key});
   }
   absl::c_sort(ranked);
-  if (num_tile_shapes > 0 &&
-      static_cast<int64_t>(ranked.size()) > num_tile_shapes) {
-    ranked.resize(num_tile_shapes);
+  if (num_groups > 0 && static_cast<int64_t>(ranked.size()) > num_groups) {
+    ranked.resize(num_groups);
   }
 
-  absl::flat_hash_set<TileShape> keep;
+  absl::flat_hash_set<OrigamiKey> keep;
   keep.reserve(ranked.size());
-  for (const auto& [duration, shape] : ranked) keep.insert(shape);
+  for (const auto& [duration, key] : ranked) keep.insert(key);
 
+  absl::flat_hash_set<TileShape> shapes;
   std::vector<TritonGemmConfig> result;
-  result.reserve(configs.size());
-  for (const TritonGemmConfig& config : configs) {
+  result.reserve(candidates.size());
+  for (const TritonGemmConfig& config : candidates) {
     if (!estimates.contains(config)) continue;
-    if (keep.contains({config.block_m, config.block_n, config.block_k})) {
+    if (keep.contains(KeyOf(config))) {
       result.push_back(config);
+      shapes.insert({config.block_m, config.block_n, config.block_k});
     }
   }
 
   VLOG(2) << "Origami kept " << result.size() << " of " << configs.size()
-          << " configs across " << keep.size() << " tile shapes";
+          << " configs: " << keep.size() << " of " << best_per_key.size()
+          << " estimated configurations, " << shapes.size() << " tile shapes";
   return result;
 }
 

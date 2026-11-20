@@ -224,7 +224,8 @@ std::string CostModelGemmTilingOptions::ToString() const {
   if (filter.has_value()) {
     absl::StrAppend(&s, " filter: ", *filter);
   }
-  absl::StrAppend(&s, " top_tile_shapes: ", top_tile_shapes);
+  absl::StrAppend(&s, " top_configs: ", top_configs);
+  absl::StrAppend(&s, " restrict_knobs: ", restrict_knobs);
   absl::StrAppend(&s, " }");
   return s;
 }
@@ -273,13 +274,21 @@ absl::StatusOr<CostModelGemmTilingOptions> ParseCostModelGemmTilingOptions(
         return absl::InvalidArgumentError(
             absl::StrCat("Could not parse 'mixin_only_faster' value: ", value));
       }
-    } else if (key == "top_tile_shapes") {
+    } else if (key == "top_configs") {
       int val = 0;
       if (absl::SimpleAtoi(value, &val) && val > 0) {
-        parsed_options.top_tile_shapes = val;
+        parsed_options.top_configs = val;
       } else {
         return absl::InvalidArgumentError(
-            absl::StrCat("Could not parse 'top_tile_shapes' value: ", value));
+            absl::StrCat("Could not parse 'top_configs' value: ", value));
+      }
+    } else if (key == "restrict_knobs") {
+      int val = 0;
+      if (absl::SimpleAtoi(value, &val)) {
+        parsed_options.restrict_knobs = (val != 0);
+      } else {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Could not parse 'restrict_knobs' value: ", value));
       }
     } else if (key == "filter") {
       float val = 0.f;
@@ -407,12 +416,12 @@ absl::StatusOr<std::vector<TritonGemmConfig>> OptimizeConfigsWithCostModel(
   if (std::unique_ptr<OrigamiDotCostModel> origami =
           MaybeCreateOrigamiModel(dot, device_description, debug_options)) {
     absl::StatusOr<std::vector<TritonGemmConfig>> selected =
-        origami->SelectTopTileShapes(dot, all_configs,
-                                     options.top_tile_shapes);
+        origami->SelectTopConfigs(dot, all_configs, options.top_configs,
+                                  options.restrict_knobs);
     if (selected.ok() && !selected->empty()) {
       VLOG(1) << "Origami selected " << selected->size() << " of "
-              << all_configs.size() << " configs across "
-              << options.top_tile_shapes << " tile shapes";
+              << all_configs.size() << " configs from the top "
+              << options.top_configs << " estimated configurations";
       return *std::move(selected);
     }
     LOG(WARNING) << "Origami selection failed, falling back: "

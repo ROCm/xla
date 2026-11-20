@@ -52,9 +52,9 @@ OrigamiDotCostModel::EstimateRunTimes(
 }
 
 absl::StatusOr<std::vector<TritonGemmConfig>>
-OrigamiDotCostModel::SelectTopTileShapes(const HloDotInstruction*,
-                                         absl::Span<const TritonGemmConfig>,
-                                         int64_t) const {
+OrigamiDotCostModel::SelectTopConfigs(const HloDotInstruction*,
+                                      absl::Span<const TritonGemmConfig>,
+                                      int64_t, bool) const {
   return NotBuilt();
 }
 

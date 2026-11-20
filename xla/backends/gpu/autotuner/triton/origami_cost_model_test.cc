@@ -136,7 +136,7 @@ TEST_F(OrigamiDotCostModelTest, ConfigsSharingATileShapeTie) {
   EXPECT_EQ(estimates.at(configs[0]), estimates.at(configs[1]));
 }
 
-TEST_F(OrigamiDotCostModelTest, SelectTopTileShapesKeepsAllVariants) {
+TEST_F(OrigamiDotCostModelTest, SelectTopConfigsKeepsAllVariants) {
   TF_ASSERT_OK_AND_ASSIGN(auto model, OrigamiDotCostModel::Create(MI300X()));
   std::vector<TritonGemmConfig> configs = {
       Config(128, 128, 64, 2, 4), Config(128, 128, 64, 3, 8),
@@ -144,7 +144,8 @@ TEST_F(OrigamiDotCostModelTest, SelectTopTileShapesKeepsAllVariants) {
       Config(32, 32, 32, 2, 4),   Config(32, 32, 32, 3, 8),
   };
   TF_ASSERT_OK_AND_ASSIGN(
-      auto kept, model->SelectTopTileShapes(ParseDot(kBf16Gemm), configs, 2));
+      auto kept, model->SelectTopConfigs(ParseDot(kBf16Gemm), configs, 2,
+                                         /*restrict_knobs=*/false));
 
   EXPECT_EQ(kept.size(), 4);
   for (const TritonGemmConfig& c : kept) {
@@ -158,12 +159,13 @@ TEST_F(OrigamiDotCostModelTest, SelectTopTileShapesKeepsAllVariants) {
   }
 }
 
-TEST_F(OrigamiDotCostModelTest, SelectTopTileShapesPreservesInputOrder) {
+TEST_F(OrigamiDotCostModelTest, SelectTopConfigsPreservesInputOrder) {
   TF_ASSERT_OK_AND_ASSIGN(auto model, OrigamiDotCostModel::Create(MI300X()));
   std::vector<TritonGemmConfig> configs = {
       Config(32, 32, 32), Config(256, 256, 64), Config(128, 128, 64)};
   TF_ASSERT_OK_AND_ASSIGN(
-      auto kept, model->SelectTopTileShapes(ParseDot(kBf16Gemm), configs, 3));
+      auto kept, model->SelectTopConfigs(ParseDot(kBf16Gemm), configs, 3,
+                                         /*restrict_knobs=*/false));
   ASSERT_EQ(kept.size(), 3);
   EXPECT_EQ(kept[0].block_m, 32);
   EXPECT_EQ(kept[1].block_m, 256);

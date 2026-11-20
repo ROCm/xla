@@ -456,9 +456,8 @@ TEST_F(CostModelConfigOptimizationHloTest, OrigamiSelectsWholeTileShapes) {
 
   DebugOptions debug_options = module->config().debug_options();
   debug_options.set_xla_gpu_experimental_use_origami_cost_model(true);
-  (*debug_options
-        .mutable_xla_gpu_experimental_cost_model_gemm_tiling_options())
-      ["top_tile_shapes"] = "2";
+  (*debug_options.mutable_xla_gpu_experimental_cost_model_gemm_tiling_options())
+      ["top_configs"] = "2";
 
   ASSERT_OK_AND_ASSIGN(
       std::vector<TritonGemmConfig> optimized,
@@ -498,14 +497,14 @@ TEST_F(CostModelConfigOptimizationHloTest, OrigamiFallsBackOnCudaTarget) {
   EXPECT_EQ(optimized.size(), 2);
 }
 
-TEST_F(CostModelConfigOptimizationHloTest, ParsesTopTileShapesOption) {
+TEST_F(CostModelConfigOptimizationHloTest, ParsesTopConfigsOption) {
   google::protobuf::Map<std::string, std::string> options;
-  options["top_tile_shapes"] = "7";
+  options["top_configs"] = "7";
   ASSERT_OK_AND_ASSIGN(detail::CostModelGemmTilingOptions parsed,
                        detail::ParseCostModelGemmTilingOptions(options));
-  EXPECT_EQ(parsed.top_tile_shapes, 7);
+  EXPECT_EQ(parsed.top_configs, 7);
 
-  options["top_tile_shapes"] = "nonsense";
+  options["top_configs"] = "nonsense";
   EXPECT_FALSE(detail::ParseCostModelGemmTilingOptions(options).ok());
 }
 
