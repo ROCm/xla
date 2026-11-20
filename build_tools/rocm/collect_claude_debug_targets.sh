@@ -14,21 +14,34 @@
 # limitations under the License.
 # ==============================================================================
 #
-# For every failure in a JSON Lines file (as produced by
-# collect_run_failures.sh), append a detection comment to the single
-# tracking issue (see create_infra_error_issue.sh) and queue it for a
-# Claude debug run - but only for a failure signature (job_name/step_name)
-# that doesn't already have a debug report comment on the issue. A
-# recurrence of an already-analyzed signature gets neither: no new
-# comment, no new debug run, so a long-standing already-understood failure
-# doesn't keep adding noise to the issue every time it shows up again.
-# Prints a JSON array of the failures that got queued.
+# Two phases, every run:
 #
-# The caller (rocm_infra_monitor.yml) feeds this array straight into a
-# `strategy.matrix.include` on its own "debug" job, so every new failure
-# signature gets its own isolated Claude Code debug run on real GPU
-# hardware - all within the same workflow run, no cross-workflow dispatch
-# involved.
+# Phase 1 - report new failures. For every failure in a JSON Lines file (as
+# produced by collect_run_failures.sh), append ONE detection comment to the
+# single tracking issue (see create_infra_error_issue.sh) - but only for a
+# failure signature (job_name/step_name) that doesn't already have ANY
+# comment on the issue, analyzed or not. A recurrence of a signature that
+# already has a comment gets no new comment here, regardless of whether
+# that existing comment has actually been analyzed yet - that's Phase 2's
+# job, not this one's. This is what keeps the issue from accumulating
+# duplicate comments for the same signature.
+#
+# Phase 2 - catch up anything still unanalyzed. Separately, and
+# unconditionally (even on a run with no new failures at all), scan every
+# comment already on the issue and queue a debug run for any that carries a
+# `rocm-nightly-failure:` marker but no matching `rocm-nightly-claude-debug:`
+# marker yet - i.e. it was posted (by this run's Phase 1, an earlier run's
+# Phase 1, or an earlier run's Phase 2 that itself never got dispatched/
+# completed) but never actually got analyzed. This is what makes a comment
+# self-heal on the next run after something stopped its first attempt
+# (a cancelled monitoring run, a PR-validation-skipped debug job, a
+# transient infra error) instead of sitting unanalyzed forever.
+#
+# Both phases queue into the same output array, so both feed the exact same
+# `strategy.matrix.include` on the caller's "debug" job - a Phase 2 entry
+# behaves identically to a fresh Phase 1 one as far as the debug skill is
+# concerned, just with its checkout info recovered from the existing
+# comment's own "Failing job:" line instead of from collect_run_failures.sh.
 #
 # Usage: collect_claude_debug_targets.sh <issue_number> <failures_jsonl_file> <workflow_run_url>
 #
@@ -36,7 +49,7 @@
 #   A single compact JSON array on stdout (diagnostics on stderr), each
 #   element: {issue_number, repository, head_sha, run_id, job_id, job_name,
 #   step_name, failure_url, detection_comment_url}. "[]" if there is
-#   nothing new to debug.
+#   nothing to debug.
 #
 # Exit codes:
 #   0: Success
@@ -60,18 +73,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 TARGETS="[]"
 
+# Fetched once up front and reused by both phases - cheaper than one API
+# call per failure/comment, and nothing posted by Phase 1 needs to be
+# visible to Phase 2 through a second fetch: Phase 1 already queues
+# whatever it posts directly (see QUEUED_IN_THIS_RUN below), so Phase 2
+# would just be re-discovering the same signature redundantly.
+EXISTING_COMMENTS=$(gh api --paginate "/repos/${CI_REPO}/issues/${ISSUE_NUMBER}/comments")
+
+# Signatures queued in this run, by either phase - two different monitored
+# runs in the same window can share a job/step signature (Phase 1), and
+# Phase 2 must not re-queue something Phase 1 (or an earlier Phase-2 entry
+# this same run) already did.
+declare -A QUEUED_IN_THIS_RUN
+
+# ---------------------------------------------------------------------------
+# Phase 1 - report failures that don't have a comment yet.
+# ---------------------------------------------------------------------------
 if [ -s "$FAILURES_FILE" ]; then
-    # Fetch existing comments once up front - cheaper than one API call per
-    # failure, and the set of *debug report* comments can't change while
-    # this loop runs (the debug jobs it queues haven't started yet).
-    EXISTING_COMMENTS=$(gh api --paginate "/repos/${CI_REPO}/issues/${ISSUE_NUMBER}/comments")
-
-    # Signatures queued for debug earlier in this very run: two different
-    # monitored runs in the same window can share a job/step signature, and
-    # EXISTING_COMMENTS can't see a debug job this script itself is about
-    # to queue, so that check alone would double-queue it.
-    declare -A QUEUED_IN_THIS_RUN
-
     while IFS= read -r FAILURE; do
         [ -z "$FAILURE" ] && continue
 
@@ -82,35 +100,27 @@ if [ -s "$FAILURES_FILE" ]; then
         STEP_NAME=$(printf '%s' "$FAILURE" | jq -r '.step_name')
         SIGNATURE="${JOB_NAME} / ${STEP_NAME}"
 
-        echo "Processing failure: ${SIGNATURE} (run ${RUN_ID})" >&2
+        echo "[Phase 1] Processing failure: ${SIGNATURE} (run ${RUN_ID})" >&2
 
-        # Check first, before posting anything: a recurrence of a signature
-        # already queued earlier in this same run, or already carrying a
-        # debug report comment from a previous run, gets skipped entirely -
-        # no detection comment, no debug run. Cheapest check first (no API
-        # call) to avoid the EXISTING_COMMENTS scan when it's not needed.
         if [ -n "${QUEUED_IN_THIS_RUN[$SIGNATURE]:-}" ]; then
-            echo "  -> already queued for debug earlier in this run, skipping (no new comment)" >&2
+            echo "  -> already queued earlier in this run, skipping (no new comment)" >&2
             continue
         fi
 
-        # The debug skill no longer posts a separate report comment with
-        # this marker as its first line - it edits the detection comment
-        # itself in place, appending the marker somewhere into that same
-        # body once analysis is done (see debug-nightly-failure/SKILL.md
-        # Step 7) - so match it anywhere in a comment's body, not just at
-        # the start.
+        # A comment for this signature already existing at all - analyzed
+        # or not - is reason enough to skip posting a new one. Whether it
+        # still needs analysis is Phase 2's concern, not this check's.
+        DETECTION_MARKER="<!-- rocm-nightly-failure:${SIGNATURE} -->"
         DEBUG_MARKER="<!-- rocm-nightly-claude-debug:${SIGNATURE} -->"
-        ALREADY_DEBUGGED=$(printf '%s' "$EXISTING_COMMENTS" \
-            | jq --arg marker "$DEBUG_MARKER" '[.[] | select(.body | contains($marker))] | length')
+        ALREADY_HAS_COMMENT=$(printf '%s' "$EXISTING_COMMENTS" \
+            | jq --arg d "$DETECTION_MARKER" --arg g "$DEBUG_MARKER" \
+                '[.[] | select((.body | contains($d)) or (.body | contains($g)))] | length')
 
-        if [ "${ALREADY_DEBUGGED:-0}" -gt 0 ]; then
-            echo "  -> already has a debug report for this signature, skipping (no new comment)" >&2
+        if [ "${ALREADY_HAS_COMMENT:-0}" -gt 0 ]; then
+            echo "  -> a comment for this signature already exists (analyzed or not), skipping (no new comment)" >&2
             continue
         fi
 
-        # Not already analyzed and not queued yet this run - append a
-        # detection comment and queue it for debug.
         DETECTION_BODY="<!-- rocm-nightly-failure:${SIGNATURE} -->
 ## Nightly CI Failure Detected
 
@@ -151,5 +161,90 @@ if [ -s "$FAILURES_FILE" ]; then
         TARGETS=$(printf '%s' "$TARGETS" | jq -c --argjson t "$TARGET" '. + [$t]')
     done < "$FAILURES_FILE"
 fi
+
+# ---------------------------------------------------------------------------
+# Phase 2 - catch up any existing comment that never got analyzed, for
+# whatever reason (cancelled monitoring run, PR-validation-skipped debug
+# job, expired/aborted earlier attempt, ...). Runs every time, independent
+# of Phase 1 finding anything new this run.
+# ---------------------------------------------------------------------------
+echo "[Phase 2] Scanning the issue for previously-posted, never-analyzed signatures" >&2
+
+mapfile -t COMMENT_IDS < <(printf '%s' "$EXISTING_COMMENTS" | jq -r '.[].id')
+
+for COMMENT_ID in "${COMMENT_IDS[@]}"; do
+    BODY=$(printf '%s' "$EXISTING_COMMENTS" | jq -r --argjson id "$COMMENT_ID" '.[] | select(.id == $id) | .body')
+
+    SIGNATURE=$(printf '%s' "$BODY" | grep -oP '(?<=<!-- rocm-nightly-failure:)[^>]*(?= -->)' | head -1)
+    if [ -z "$SIGNATURE" ]; then
+        continue
+    fi
+
+    if [ -n "${QUEUED_IN_THIS_RUN[$SIGNATURE]:-}" ]; then
+        continue
+    fi
+
+    DEBUG_MARKER="<!-- rocm-nightly-claude-debug:${SIGNATURE} -->"
+    if printf '%s' "$BODY" | grep -qF "$DEBUG_MARKER"; then
+        continue
+    fi
+
+    echo "  -> ${SIGNATURE} (comment ${COMMENT_ID}) was never analyzed" >&2
+
+    FAILURE_URL=$(printf '%s' "$BODY" | grep -oP '(?<=- Failing job: )\S+' | head -1)
+    if [ -z "$FAILURE_URL" ]; then
+        echo "    -> no 'Failing job:' line found, skipping" >&2
+        continue
+    fi
+
+    JOB_ID=$(printf '%s' "$FAILURE_URL" | grep -oP '(?<=/job/)[0-9]+')
+    RUN_ID=$(printf '%s' "$FAILURE_URL" | grep -oP '(?<=/runs/)[0-9]+')
+    if [ -z "$JOB_ID" ]; then
+        echo "    -> could not parse a job ID out of ${FAILURE_URL}, skipping" >&2
+        continue
+    fi
+
+    # The job's log may have aged out of GitHub's retention window by now -
+    # don't fail the whole scan over one expired log, just skip this one
+    # with a diagnostic; it'll be tried again on the next run. A command
+    # used directly as an `if` condition is exempt from `set -e`, so this
+    # doesn't need any extra guarding.
+    if CHECKOUT_INFO=$("${SCRIPT_DIR}/get_checkout_source.sh" "$CI_REPO" "$JOB_ID" 2>/dev/null); then
+        HEAD_REPOSITORY=$(printf '%s\n' "$CHECKOUT_INFO" | sed -n '1p')
+        HEAD_SHA=$(printf '%s\n' "$CHECKOUT_INFO" | sed -n '2p')
+    else
+        echo "    -> could not resolve the original checkout (log likely expired), skipping" >&2
+        continue
+    fi
+
+    COMMENT_URL=$(printf '%s' "$EXISTING_COMMENTS" | jq -r --argjson id "$COMMENT_ID" '.[] | select(.id == $id) | .html_url')
+    # Split at the LAST " / ", not the first: JOB_NAME itself routinely
+    # contains " / " (reusable-workflow-called jobs are named
+    # "caller / callee", e.g. "jax-upstream / JAX Upstream Linux x86 ..."),
+    # while STEP_NAME never does. Concatenating job_name + " / " +
+    # step_name later reproduces the original SIGNATURE either way (the
+    # marker text is split-point-invariant), but splitting at the wrong
+    # occurrence would still feed Claude a truncated, misleading job_name.
+    JOB_NAME="${SIGNATURE% / *}"
+    STEP_NAME="${SIGNATURE##* / }"
+
+    echo "    -> queued for debug (catch-up)" >&2
+    QUEUED_IN_THIS_RUN[$SIGNATURE]=1
+    TARGET=$(jq -nc \
+        --arg issue_number "$ISSUE_NUMBER" \
+        --arg repository "$HEAD_REPOSITORY" \
+        --arg head_sha "$HEAD_SHA" \
+        --arg run_id "$RUN_ID" \
+        --arg job_id "$JOB_ID" \
+        --arg job_name "$JOB_NAME" \
+        --arg step_name "$STEP_NAME" \
+        --arg failure_url "$FAILURE_URL" \
+        --arg detection_comment_url "$COMMENT_URL" \
+        '{issue_number: $issue_number, repository: $repository, head_sha: $head_sha,
+          run_id: $run_id, job_id: $job_id, job_name: $job_name,
+          step_name: $step_name, failure_url: $failure_url,
+          detection_comment_url: $detection_comment_url}')
+    TARGETS=$(printf '%s' "$TARGETS" | jq -c --argjson t "$TARGET" '. + [$t]')
+done
 
 printf '%s\n' "$TARGETS"
