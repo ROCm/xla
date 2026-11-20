@@ -68,7 +68,9 @@ on:
       - "build_tools/rocm/collect_run_failures.sh"
       - "build_tools/rocm/create_infra_error_issue.sh"
       - "build_tools/rocm/collect_claude_debug_targets.sh"
+      - "build_tools/rocm/collect_claude_verify_targets.sh"
       - ".claude/skills/debug-nightly-failure/SKILL.md"
+      - ".claude/skills/verify-proposed-fix/SKILL.md"
 
 jobs:
   monitor:
@@ -367,6 +369,189 @@ jobs:
           # (actions/upload-artifact's include-hidden-files boolean input
           # not surviving the custom container-exec path), with no
           # escape-hatch input to route around it.
+
+      - name: Stop rocmless container
+        if: always()
+        run: docker rm -f rocmless-debug || true
+
+  collect_verify_targets:
+    # Independent of `monitor`: a human can react 🚀 on a comment analyzed
+    # days ago, so every run rescans the whole tracking issue for that
+    # reaction rather than only this window's newly-detected failures.
+    # Doesn't depend on (or feed) `monitor`'s own matrix.
+    name: Find proposed fixes to verify
+    runs-on: ubuntu-latest
+    outputs:
+      # A JSON array of {issue_number, comment_id, comment_url, job_name,
+      # step_name, repository, head_sha, failure_url, run_id, job_id} - one
+      # per 🚀-reacted comment that hasn't already been verified. "[]" means
+      # nothing to verify this run. See collect_claude_verify_targets.sh.
+      verify_targets: ${{ steps.collect.outputs.verify_targets }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.DEBUG_PIPELINE_REF }}
+          persist-credentials: false
+
+      - name: Find the tracking issue and collect 🚀-reacted fixes
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ISSUE_NUMBER=$(build_tools/rocm/create_infra_error_issue.sh)
+          TARGETS=$(build_tools/rocm/collect_claude_verify_targets.sh "${ISSUE_NUMBER}")
+          echo "verify_targets=${TARGETS}" >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: "Verify fix: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
+    needs: collect_verify_targets
+    if: needs.collect_verify_targets.outputs.verify_targets != '[]'
+    # Same runner/sidecar-container rationale as `debug` above
+    # (build-only-xla for LLM gateway access; rocmless-debug sidecar for
+    # the actual bazel/run_xla_ci_build.sh invocations).
+    runs-on: build-only-xla
+    # This job additionally needs to push a branch and open a draft PR,
+    # unlike every other job in this workflow (all read-mostly, aside from
+    # issue/label edits) - scoped here, not at the workflow level, so
+    # `monitor`/`debug` keep their narrower default permissions.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    # The skill self-caps its own non-build decision-making at 30 minutes
+    # (see SKILL.md) - this ceiling instead bounds the whole run, including
+    # three full build+test cycles (baseline red, with the fix applied,
+    # reverted again), which can legitimately take a long while.
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.collect_verify_targets.outputs.verify_targets) }}
+
+    steps:
+      # Same race-safety reasoning as debug's "already_debugged" check:
+      # collect_claude_verify_targets.sh already checks this before
+      # queuing, but re-verify against this exact signature right before
+      # doing anything expensive, in case of an overlapping run or a
+      # manual re-dispatch.
+      - name: Check whether this fix was already verified
+        id: already_verified
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MARKER='<!-- rocm-nightly-claude-verify:${{ matrix.job_name }} / ${{ matrix.step_name }} -->'
+          BODY=$(gh api "/repos/ROCm/xla/issues/comments/${{ matrix.comment_id }}" --jq '.body')
+          if printf '%s' "$BODY" | grep -qF "$MARKER"; then
+            echo "This fix was already verified - skipping" >&2
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Already verified, nothing to do
+        if: steps.already_verified.outputs.skip == 'true'
+        run: echo "${{ matrix.job_name }} / ${{ matrix.step_name }} was already verified - skipping this run."
+
+      # persist-credentials: false here too - this repo's existing
+      # push-from-a-workflow precedent (rocm_xla_jax_metrics_nightly.yml)
+      # pushes through an explicit x-access-token remote added at push
+      # time instead of relying on the checkout's own persisted
+      # credential, so the verify skill does the same (see SKILL.md).
+      - name: Checkout the commit that failed
+        if: steps.already_verified.outputs.skip != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.head_sha }}
+          persist-credentials: false
+
+      - name: Populate missing upstream ROCm build tools
+        if: steps.already_verified.outputs.skip != 'true' && hashFiles('build_tools/rocm/run_xla_ci_build.sh') == ''
+        run: |
+          tmpdir="$(mktemp -d)"
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/openxla/xla.git "$tmpdir"
+          git -C "$tmpdir" sparse-checkout set build_tools/rocm
+          cp -a "$tmpdir/build_tools/rocm/." build_tools/rocm/
+
+      - name: Fetch .claude config from ${{ env.DEBUG_PIPELINE_REF }}
+        if: steps.already_verified.outputs.skip != 'true'
+        run: |
+          git remote add rocm-xla https://github.com/ROCm/xla.git
+          git fetch rocm-xla "${{ env.DEBUG_PIPELINE_REF }}"
+          git restore --source=FETCH_HEAD --worktree -- .claude
+          find .claude -type f | sort
+
+      - name: Start rocmless container
+        if: steps.already_verified.outputs.skip != 'true'
+        run: |
+          docker run -d --name rocmless-debug \
+            -v "$(pwd)":"$(pwd)" -w "$(pwd)" \
+            -v /data/temp-rbe-cert.crt:/data/temp-rbe-cert.crt:ro \
+            -v /data/temp-rbe-cert.key:/data/temp-rbe-cert.key:ro \
+            -v /data/bb-rbe-ca.crt:/data/bb-rbe-ca.crt:ro \
+            -v /data/bb-rbe-client.key:/data/bb-rbe-client.key:ro \
+            -v /data/bb-rbe-client.crt:/data/bb-rbe-client.crt:ro \
+            ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f \
+            sleep infinity
+
+      - name: Verify Proposed Fix
+        if: steps.already_verified.outputs.skip != 'true'
+        id: claude-code
+        timeout-minutes: 175
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          ANTHROPIC_CUSTOM_HEADERS: |
+            Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}
+            user: ${{ secrets.USER_NTID }}
+          ANTHROPIC_MODEL: "Claude-Opus-5.5"
+          ANTHROPIC_DEFAULT_OPUS_MODEL: "Claude-Opus-5.5"
+          ANTHROPIC_DEFAULT_SONNET_MODEL: "Claude-Sonnet-4.6"
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "Claude-Haiku-4.5"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          anthropic_api_key: "sk-ant-dummy-gateway-key"
+          allowed_bots: "github-actions[bot]"
+          show_full_output: true
+          prompt: |
+            CI REPO (for job logs / issue comments / where the PR goes): ROCm/xla
+            SOURCE REPO (already checked out in the working directory): ${{ matrix.repository }}
+            HEAD SHA (already checked out): ${{ matrix.head_sha }}
+            NIGHTLY RUN ID: ${{ matrix.run_id }}
+            FAILING JOB ID: ${{ matrix.job_id }}
+            FAILING JOB NAME: ${{ matrix.job_name }}
+            FAILED STEP: ${{ matrix.step_name }}
+            FAILING JOB URL: ${{ matrix.failure_url }}
+            TRACKING ISSUE NUMBER (in ROCm/xla): ${{ matrix.issue_number }}
+            COMMENT URL (the proposed fix lives in here, folded; edit this
+            same comment with your verdict - never post a new one):
+            ${{ matrix.comment_url }}
+
+            A human reacted 🚀 on the comment above, asking you to actually
+            try the fix it already proposed (not to re-analyze the failure
+            from scratch). Run the /verify-proposed-fix skill, using the
+            values above as its arguments: CI repo, issue number, comment
+            URL, job name, step name, repository, head SHA, failure URL, in
+            that order. The skill self-caps its own non-build
+            decision-making at 30 minutes - time spent on the actual
+            reproduce/apply/revert build+test cycles doesn't count against
+            that, but the whole run still has to fit this step's own
+            timeout. The skill is responsible for the whole
+            reproduce-apply-revert verification, for opening the draft PR
+            against ROCm/xla only if the fix checks out, and for editing
+            its verdict directly into the comment above via
+            `gh api -X PATCH .../issues/comments/<id>`. Never post a new
+            comment on the tracking issue, and do not post anything to
+            GitHub yourself outside of what the skill does.
+          claude_args: |
+            --allowedTools "Skill,Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(gh pr create *),Bash(gh pr edit *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
+            --max-turns 100
+          settings: |
+            {
+              "hasCompletedOnboarding": true
+            }
 
       - name: Stop rocmless container
         if: always()

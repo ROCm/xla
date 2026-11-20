@@ -1,6 +1,6 @@
 ---
 name: debug-nightly-failure
-description: Hard-capped at 5 minutes - first checks whether this exact failure signature was already analyzed (by looking inside the detection comment itself) and, if so, does nothing further. Otherwise quickly categorizes (build/test/config/infra) and labels a single ROCm XLA nightly CI failure, checks whether a later upstream commit already fixed it, and does a fast code read for a likely root cause and possible fix. Full RBE reproduction/gdb debugging is optional and rarely fits the time budget. Never posts a new comment - edits the single detection comment in place (triage, then the final report appended into the same body), collapsing it behind a RESOLVED banner if the failure turned out to be fixed. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
+description: Hard-capped at 5 minutes - first checks whether this exact failure signature was already analyzed (by looking inside the detection comment itself) and, if so, does nothing further. Otherwise quickly categorizes (build/test/config/infra) and labels a single ROCm XLA nightly CI failure, checks whether a later upstream commit already fixed it, and does a fast code read for a likely root cause and possible fix. Full RBE reproduction/gdb debugging is optional and rarely fits the time budget. Never posts a new comment - edits the single detection comment in place, folding the triage and final report behind a collapsible "Analysis (click to expand)" section so the comment stays short, and adding a RESOLVED banner above that fold if the failure turned out to be fixed. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
 argument-hint: [ci-repo] [run-id] [job-id] [job-name] [step-name] [failure-url] [issue-number] [detection-comment-url]
 context: fork
 agent: general-purpose
@@ -34,9 +34,10 @@ each value on its own labeled line; read the values from there.
 - `DETECTION_COMMENT_URL`: the specific comment on that issue reporting
   *this* failure, and the **only** comment this skill ever writes to. You
   never post a new comment - Step 2 appends a triage section into this
-  comment's own body, and Step 7 appends the final report into that same
-  body (collapsing the whole thing behind a RESOLVED banner if the
-  failure turned out to be fixed). The numeric comment ID you need for
+  comment's own body, and Step 7 folds that triage plus the final report
+  behind a collapsible "Analysis (click to expand)" section in the same
+  body, adding a RESOLVED banner above the fold in Step 8 if the failure
+  turned out to be fixed. The numeric comment ID you need for
   `gh api .../issues/comments/<id>` is the part after `#issuecomment-` in
   this URL.
 
@@ -104,12 +105,13 @@ each value on its own labeled line; read the values from there.
 - Never `git push`, never create a branch, never open a PR, and **never
   post a new comment on the tracking issue**. The only GitHub writes you
   make are: one label (Step 2, corrected in Step 3 if needed, via
-  `gh issue edit`/`gh label create`), and two edits to the single existing
-  `DETECTION_COMMENT_URL` comment (Step 2's triage section, Step 7's final
-  report), both via
-  `gh api -X PATCH repos/<CI_REPO>/issues/comments/<id> -f body=@<file>` -
-  **or**, if Step 1 finds this was already analyzed, no GitHub writes at
-  all.
+  `gh issue edit`/`gh label create`), and two or three edits to the single
+  existing `DETECTION_COMMENT_URL` comment - Step 2's triage section, Step
+  7's fold-and-final-report, and Step 8's RESOLVED banner (only when the
+  outcome is resolved) - all via
+  `gh api -X PATCH repos/<CI_REPO>/issues/comments/<id> -F body=@<file>`
+  (note `-F`, not `-f` - see Step 7 for why) - **or**, if Step 1 finds this
+  was already analyzed, no GitHub writes at all.
 - This run also has a hard cap on agentic turns, on top of the 5-minute
   wall clock. If you notice you're repeating the same approach without
   learning anything new (re-running the same build, trying the same gdb
@@ -208,8 +210,11 @@ Then, before doing any further work:
    gh api "repos/<CI_REPO>/issues/comments/${COMMENT_ID}" --jq .body > /tmp/comment_body.txt
    cat /tmp/comment_body.txt > /tmp/new_body.txt
    # append a divider, then the triage section, to /tmp/new_body.txt
-   gh api -X PATCH "repos/<CI_REPO>/issues/comments/${COMMENT_ID}" -f body=@/tmp/new_body.txt
+   gh api -X PATCH "repos/<CI_REPO>/issues/comments/${COMMENT_ID}" -F body=@/tmp/new_body.txt
    ```
+   Use `-F`, not `-f` (see Step 7 for why), and if `/tmp` isn't writable by
+   this skill's sandbox, use a path inside the checkout instead - same
+   caveat as Step 7.
    Keep the fetched body byte-for-byte at the top - Step 7 fetches and
    appends again later, so never drop or rewrite what's already there.
    The appended section itself:
@@ -412,37 +417,76 @@ objdump -d <path-to.hsaco>
 ## Step 7 — Decide the outcome and report
 
 Append your final report into the same `DETECTION_COMMENT_URL` comment
-Step 2 already edited once - **never post a new comment**. Fetch its
-current body (now the original detection text plus Step 2's triage
-section), then PATCH it back with your report appended:
+Step 2 already edited once - **never post a new comment**. This is also
+where the comment gets folded: the detection header (Job/Step/links)
+stays visible, but everything analytical - Step 2's triage plus your
+report below - moves behind a single collapsible `<details>` block, so
+the comment stays short by default and a reader only expands it if they
+want the detail.
+
+Fetch the comment's current body (now the original detection text plus
+Step 2's triage section, still plain at this point), then restructure it:
+
 ```
 COMMENT_ID=<the numeric id after #issuecomment- in DETECTION_COMMENT_URL>
 gh api "repos/<CI_REPO>/issues/comments/${COMMENT_ID}" --jq .body > /tmp/comment_body.txt
-# append a divider, then your report (below), to /tmp/comment_body.txt -> /tmp/new_body.txt
-gh api -X PATCH "repos/<CI_REPO>/issues/comments/${COMMENT_ID}" -f body=@/tmp/new_body.txt
 ```
-Keep everything already in the comment byte-for-byte - Step 8 may fetch
-and rewrap this same body again right after. The appended section:
 
-1. A blank line, then `---`, then a blank line (same divider style as
-   Step 2).
-2. `<!-- rocm-nightly-claude-debug:JOB_NAME / STEP_NAME -->` - substitute
-   the literal `JOB_NAME` and `STEP_NAME` values you were given, separated
-   by ` / ` with no other change to the text. Step 1 (and the workflow's
-   own pre-dispatch check) look for this marker **anywhere** in this
-   comment's body - it no longer needs to be the first line, just present
-   somewhere - so that this specific failure never gets debugged a second
-   time even though the tracking issue is shared by many different
-   failures. Leaving it off, or using the wrong job/step text, would
-   defeat that check.
-3. `**Category:** <category>` - the label from Step 2 (or the corrected one
-   from Step 3, if you changed it).
-4. `**Outcome:** <outcome>` - exactly one of the four literal strings
-   `Fix found`, `Already fixed upstream`, `Possible fix (unverified)`,
-   `Not resolved`, matching which of the four shapes below you're about to
-   write. Get the literal string right - Step 8 greps for it to decide
-   whether to cross the comment out.
-5. Then your actual report, as below.
+Find the first `\n\n---\n\n` divider in that body - the boundary Step 2
+inserted between the original detection text and its own triage section.
+Split there: everything **before** it (the `## Nightly CI Failure
+Detected` block - Job/Step/links) is the part that stays outside the
+fold, byte-for-byte unchanged, so a reader sees at a glance what failed
+and where without expanding anything. Everything **from that divider
+onward** (Step 2's triage section) moves inside the fold together with
+your new report. Build the new body as:
+
+```
+<everything before the first "---" divider, byte-for-byte>
+
+<details><summary>Analysis (click to expand)</summary>
+
+<everything from that divider onward - Step 2's triage section, unchanged>
+
+---
+
+<!-- rocm-nightly-claude-debug:JOB_NAME / STEP_NAME -->
+**Category:** <category>
+**Outcome:** <outcome>
+
+<your actual report, as below>
+
+</details>
+```
+
+then PATCH it back:
+```
+gh api -X PATCH "repos/<CI_REPO>/issues/comments/${COMMENT_ID}" -F body=@/tmp/new_body.txt
+```
+Use `-F`, not `-f` - only `-F`/`--field` reads an `@file` argument from
+disk; `-f`/`--raw-field` treats `@file` as a literal string and silently
+sets the comment body to that text. Also note `/tmp` may not be writable
+by this skill's sandbox in every environment - if `gh api -F body=@/tmp/...`
+fails to find the file, write the scratch files inside the current
+checkout instead (for example `debug_tools/claude_scratch/`, cleaned up
+at the end same as Step 6's scratch files) and reference that path
+instead of `/tmp`.
+
+For the marker and outcome line specifically:
+- `<!-- rocm-nightly-claude-debug:JOB_NAME / STEP_NAME -->` - substitute
+  the literal `JOB_NAME` and `STEP_NAME` values you were given, separated
+  by ` / ` with no other change to the text. Step 1 (and the workflow's
+  own pre-dispatch check) look for this marker **anywhere** in this
+  comment's body - it doesn't need to be the first line, just present
+  somewhere - so that this specific failure never gets debugged a second
+  time even though the tracking issue is shared by many different
+  failures. Leaving it off, or using the wrong job/step text, would
+  defeat that check.
+- `**Outcome:** <outcome>` - exactly one of the four literal strings
+  `Fix found`, `Already fixed upstream`, `Possible fix (unverified)`,
+  `Not resolved`, matching which of the four shapes below you're about to
+  write. Get the literal string right - Step 8 greps for it to decide
+  whether to cross the comment out.
 
 Keep the appended text reasonably tight: GitHub caps a single comment body
 at 65536 characters, and this one comment now carries the detection text,
@@ -496,40 +540,38 @@ visibly read as resolved so a human can tell at a glance it needs no
 attention and drop it from their mental todo list - this step does that
 in place, right after Step 7's edit. If the outcome was
 `Possible fix (unverified)` or `Not resolved`, skip this step entirely and
-leave the comment exactly as Step 7 left it.
+leave the comment exactly as Step 7 left it (already folded behind
+"Analysis (click to expand)", just with no banner on top).
 
-Do **not** wrap the body in raw `~~strikethrough~~` - GFM strikethrough is
+Do **not** wrap anything in raw `~~strikethrough~~` - GFM strikethrough is
 an inline construct and doesn't reliably span headings or fenced code
 blocks, and the `Fix found` shape above has a mandatory \`\`\`diff fenced
-block that would get garbled by it. Instead, fetch the comment's current
-full body one more time (now detection + triage + the report you just
-appended in Step 7), and PATCH it into this shape:
+block that would get garbled by it. Step 7 already folded the analysis
+behind a `<details>` block, so this step only needs two small, surgical
+edits on top of that - fetch the comment's current full body one more
+time and make both:
 
-```
-<original marker line from the very top of the comment, byte-for-byte>
+1. In the part *outside* the fold (the detection header), change
+   `## Nightly CI Failure Detected` to
+   `## Nightly CI Failure Detected (Resolved)` - the one deliberate edit
+   to that otherwise-untouched text, so the resolved state is visible even
+   to a reader who expands the `<details>` block without first reading the
+   banner below.
+2. Immediately above the `<details><summary>Analysis (click to
+   expand)</summary>` line Step 7 wrote, insert this banner (don't touch
+   the `<details>` tag itself or anything inside it):
+   ```
+   > **RESOLVED** — <one-line summary of the fix, matching Step 7's report -
+   > reuse the report's own outcome heading verbatim where possible, don't
+   > write a new one from scratch. If Step 4A found a fixing commit/PR,
+   > working a short reference to it into this same line reads better than
+   > a separate link line>
+   > React 👍 if you want this dropped, or just ignore it - it's done.
+   ```
 
-> **RESOLVED** — <one-line summary of the fix, matching Step 7's report -
-> reuse the report's own outcome heading verbatim where possible, don't
-> write a new one from scratch. If Step 4A found a fixing commit/PR,
-> working a short reference to it into this same line reads better than a
-> separate link line>
-> React 👍 if you want this dropped, or just ignore it - it's done.
-
-<details><summary>Full analysis (click to expand)</summary>
-
-<everything from the original body's second line onward, byte-for-byte -
-the detection text, the triage section, and the report just appended in
-Step 7, all unchanged, EXCEPT: change the detection section's own heading
-line from `## Nightly CI Failure Detected` to
-`## Nightly CI Failure Detected (Resolved)` - this is the one deliberate
-edit to that otherwise-untouched text, so the resolved state is visible
-even to a reader who expands the `<details>` block without first reading
-the collapsed banner above it>
-
-</details>
-```
-
-This collapses the comment to a one-line banner by default while keeping
-the full analysis one click away - that's what actually lets a human drop
-it from attention, unlike raw strikethrough, which still shows all the
-clutter with just a line through it.
+PATCH the result back. This keeps the banner (and the react prompt) always
+visible without expanding anything, while the full analysis - detection
+triage and report alike - stays one click away behind the same fold
+Step 7 already built. That's what actually lets a human drop it from
+attention; raw strikethrough would still show all the clutter, just with
+a line through it.
