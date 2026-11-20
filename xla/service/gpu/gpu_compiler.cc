@@ -1038,7 +1038,8 @@ absl::Status RunOptimizationPasses(
       /*max_size_to_merge=*/int64_t{debug_options
                                         .xla_gpu_dot_merger_threshold_mb()}
           << 20,
-      queue_id);
+      queue_id,
+      /*collective_aware=*/debug_options.xla_gpu_experimental_dot_merger_collective_aware());
   // TODO(crem): Change the condition to !IsTritonGemmEnabled(debug_options,
   // gpu_version) once Triton emitter supports multiple non-contracting
   // dimensions.

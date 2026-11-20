@@ -47,13 +47,24 @@ namespace xla {
 // z whose live range is the union of x and y's live ranges, so can lead to
 // increased memory pressure.  You probably only want to do this optimization on
 // "small" dots which cannot saturate your device when run alone.
+//
+// If `collective_aware` is true, a dot that feeds a collective in its
+// computation (a collective is among its transitive data or control users) is
+// never merged with a dot that does not. Merging such a pair makes the
+// collective wait for the larger merged dot, which can lengthen the critical
+// path. Collectives whose replica groups have a single participant are ignored.
+// Each computation is analysed on its own: a collective inside a called
+// computation (e.g. a while body) does not count for dots in the caller.
 class DotMerger : public HloModulePass {
  public:
   explicit DotMerger(
       int64_t max_size_to_merge,
       std::function<int64_t(const HloInstruction* dot)> queue_id =
-          [](const HloInstruction* dot) -> int64_t { return 0; })
-      : max_size_to_merge_(max_size_to_merge), queue_id_(queue_id) {}
+          [](const HloInstruction* dot) -> int64_t { return 0; },
+      bool collective_aware = false)
+      : max_size_to_merge_(max_size_to_merge),
+        queue_id_(queue_id),
+        collective_aware_(collective_aware) {}
 
   absl::string_view name() const override { return "dot-merger"; }
 
@@ -66,6 +77,8 @@ class DotMerger : public HloModulePass {
   int64_t max_size_to_merge_;
   // Predicate function for backend-specific operation queue mapping.
   std::function<int64_t(const HloInstruction* dot)> queue_id_;
+  // Do not merge dots that feed a collective with dots that do not.
+  bool collective_aware_;
 };
 
 }  // namespace xla

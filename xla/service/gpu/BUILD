@@ -2106,6 +2106,7 @@ xla_test(
     shard_count = 2,
     deps = [
         ":backend_configs_cc",
+        ":cublas_cudnn",
         ":gpu_compiler",
         ":gpu_executable",
         ":metrics",
