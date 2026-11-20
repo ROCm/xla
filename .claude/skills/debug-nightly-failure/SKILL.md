@@ -1,10 +1,10 @@
 ---
 name: debug-nightly-failure
-description: Hard-capped at 5 minutes - first checks whether this exact failure signature was already analyzed on the tracking issue and, if so, just posts a reference to that instead of repeating the work. Otherwise quickly categorizes (build/test/config/infra) and labels a single ROCm XLA nightly CI failure, checks whether a later upstream commit already fixed it, and does a fast code read for a likely root cause and possible fix. Full RBE reproduction/gdb debugging is optional and rarely fits the time budget. Reports a quick estimate (or an already-found fix, or a callstack/analysis) directly on the tracking GitHub issue. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
+description: Hard-capped at 5 minutes - first checks whether this exact failure signature was already analyzed (by looking inside the detection comment itself) and, if so, does nothing further. Otherwise quickly categorizes (build/test/config/infra) and labels a single ROCm XLA nightly CI failure, checks whether a later upstream commit already fixed it, and does a fast code read for a likely root cause and possible fix. Full RBE reproduction/gdb debugging is optional and rarely fits the time budget. Never posts a new comment - edits the single detection comment in place (triage, then the final report appended into the same body), collapsing it behind a RESOLVED banner if the failure turned out to be fixed. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
 argument-hint: [ci-repo] [run-id] [job-id] [job-name] [step-name] [failure-url] [issue-number] [detection-comment-url]
 context: fork
 agent: general-purpose
-allowed-tools: Bash(gh issue comment *), Bash(gh issue edit *), Bash(gh label create *), Bash(gh api *), Bash(gh run view *), Bash(git *), Bash(build_tools/rocm/*), Bash(bazel *), Bash(gdb *), Bash(objdump *), Bash(grep *), Bash(cat *), Bash(timeout *), Read, Grep, Glob, Write, Edit
+allowed-tools: Bash(gh issue edit *), Bash(gh label create *), Bash(gh api *), Bash(gh run view *), Bash(git *), Bash(build_tools/rocm/*), Bash(bazel *), Bash(gdb *), Bash(objdump *), Bash(grep *), Bash(cat *), Bash(timeout *), Read, Grep, Glob, Write, Edit
 ---
 
 # Debug a ROCm Nightly CI Failure
@@ -32,9 +32,13 @@ each value on its own labeled line; read the values from there.
   about this specific failure, and never summarize or react to unrelated
   comments already on it.
 - `DETECTION_COMMENT_URL`: the specific comment on that issue reporting
-  *this* failure. Quote it in both comments you post (Steps 1 and 6) so a
-  reader can tell which of the issue's many comments your analysis
-  addresses.
+  *this* failure, and the **only** comment this skill ever writes to. You
+  never post a new comment - Step 2 appends a triage section into this
+  comment's own body, and Step 7 appends the final report into that same
+  body (collapsing the whole thing behind a RESOLVED banner if the
+  failure turned out to be fixed). The numeric comment ID you need for
+  `gh api .../issues/comments/<id>` is the part after `#issuecomment-` in
+  this URL.
 
 ## IMPORTANT: scope and safety
 
@@ -97,19 +101,23 @@ each value on its own labeled line; read the values from there.
   config touches.
 - Debug only this one job/step. Do not try to fix unrelated red steps you
   notice along the way.
-- Never `git push`, never create a branch, never open a PR. The only
-  GitHub writes you make are: one label (Step 2, corrected in Step 3 if
-  needed), one preliminary comment (Step 2), and one final report comment
-  (Step 7) - all via `gh issue edit`/`gh issue comment <ISSUE_NUMBER> --repo <CI_REPO>`/`gh label create` - **or**, if Step 1 finds this was already
-  analyzed, just the one short reference comment Step 1 describes, nothing
-  else.
+- Never `git push`, never create a branch, never open a PR, and **never
+  post a new comment on the tracking issue**. The only GitHub writes you
+  make are: one label (Step 2, corrected in Step 3 if needed, via
+  `gh issue edit`/`gh label create`), and two edits to the single existing
+  `DETECTION_COMMENT_URL` comment (Step 2's triage section, Step 7's final
+  report), both via
+  `gh api -X PATCH repos/<CI_REPO>/issues/comments/<id> -f body=@<file>` -
+  **or**, if Step 1 finds this was already analyzed, no GitHub writes at
+  all.
 - This run also has a hard cap on agentic turns, on top of the 5-minute
   wall clock. If you notice you're repeating the same approach without
   learning anything new (re-running the same build, trying the same gdb
   script a third time with no new evidence, going back and forth between
   two hypotheses), stop and go straight to Step 7 with whatever you have
-  (a "Possible fix" estimate or a "Not resolved" report) - don't
-  posted at all. A concrete partial finding beats silence.
+  (a "Possible fix" estimate or a "Not resolved" report) - don't let the
+  run end with nothing reported at all. A concrete partial finding beats
+  silence.
 - Clean up any scratch files before finishing - nothing from this debugging
   session is meant to be committed. This includes `/tmp/gdb_*`, extra build
   outputs, and - unlike `/tmp` - specifically `debug_tools/claude_scratch/`
@@ -126,24 +134,21 @@ queuing the same signature close together) or a manual re-run landing you
 here anyway.
 
 ```
-gh api repos/<CI_REPO>/issues/<ISSUE_NUMBER>/comments --paginate
+gh api repos/<CI_REPO>/issues/comments/<comment-id-from-DETECTION_COMMENT_URL>
 ```
 
-Look for a comment whose body starts with exactly
+Check whether its `body` already **contains**, anywhere (not necessarily as
+the first line - Step 2/7 append into this same comment, they don't start a
+fresh one),
 `<!-- rocm-nightly-claude-debug:JOB_NAME / STEP_NAME -->` (substitute the
 literal `JOB_NAME`/`STEP_NAME` values you were given, ` / ` separator, no
-other change). If one exists:
-- **Stop here - do not repeat the analysis.** Post one short comment
-  instead: quote the detection comment (same method as Step 7.2 below),
-  then a line or two noting this exact failure was already analyzed, with
-  a link to the existing report comment (`[Previous analysis](<url>)`).
-  Do **not** start this comment with the `-claude-debug:` marker - it isn't
-  a new completed analysis, just a pointer to one, and giving it the same
-  marker would make a future check here ambiguous about which comment is
-  the real one.
-- Then stop - do not proceed to Step 2.
+other change). If it does:
+- **Stop here - do not repeat the analysis, and make no GitHub writes at
+  all.** The full analysis is already sitting in that same comment for
+  anyone to read; there's nothing to add and no separate comment to point
+  to.
 
-If no such comment exists, proceed to Step 2.
+If the marker is absent, proceed to Step 2.
 
 ## Step 2 — Triage: categorize and label
 
@@ -180,7 +185,7 @@ and sort this failure into exactly one category:
 
 If more than one applies (e.g. an infra hiccup masked what might be a real
 test failure), pick the one that is the more likely root cause, and say so
-explicitly in the preliminary comment below.
+explicitly in the triage section below.
 
 Then, before doing any further work:
 
@@ -194,16 +199,22 @@ Then, before doing any further work:
    Use `d73a4a` for `nightly-build-failure`, `fbca04` for
    `nightly-test-failure`, `0075ca` for `nightly-config-failure`, `5319e7`
    for `nightly-infra-failure`.
-2. Post ONE preliminary comment (separate from, and before, your final
-   report in Step 7) via
-   `gh issue comment <ISSUE_NUMBER> --repo <CI_REPO> --body-file <file>`:
-   - First line exactly `<!-- rocm-nightly-claude-triage:JOB_NAME / STEP_NAME -->`
-     (substitute the literal values, ` / ` separator, no other change). This
-     is a *different* marker from the Step 7 completion marker and is never
-     checked for dedup - it only marks this comment as the triage pass for
-     this signature, so post it even if you end up unable to finish the
-     full analysis.
-   - Quote the detection comment (same method as Step 7.2 below).
+2. Append a triage section into the existing `DETECTION_COMMENT_URL`
+   comment - **never post a new comment**. Fetch its current body first
+   (this is the raw detection text posted when the failure was first
+   seen), then PATCH it back with your triage section appended:
+   ```
+   COMMENT_ID=<the numeric id after #issuecomment- in DETECTION_COMMENT_URL>
+   gh api "repos/<CI_REPO>/issues/comments/${COMMENT_ID}" --jq .body > /tmp/comment_body.txt
+   cat /tmp/comment_body.txt > /tmp/new_body.txt
+   # append a divider, then the triage section, to /tmp/new_body.txt
+   gh api -X PATCH "repos/<CI_REPO>/issues/comments/${COMMENT_ID}" -f body=@/tmp/new_body.txt
+   ```
+   Keep the fetched body byte-for-byte at the top - Step 7 fetches and
+   appends again later, so never drop or rewrite what's already there.
+   The appended section itself:
+   - A blank line, then `---`, then a blank line (visual divider from the
+     original detection text).
    - `**Category:** <category>`
    - `**Possible root cause (preliminary, unverified):** <1-3 sentences>` -
      a concrete guess from what the log shows so far (e.g. "the step hit a
@@ -211,8 +222,8 @@ Then, before doing any further work:
      which looks like an RBE connectivity issue rather than a hang in the
      test itself"). This is a hypothesis, not a conclusion - say so, and
      don't present it as certain.
-   - A closing line that full reproduction is starting and a complete
-     report will follow in a separate comment.
+   - A closing line that full analysis is in progress and will be appended
+     into this same comment when done.
 
 ## Step 3 — Understand what actually failed
 
@@ -400,30 +411,44 @@ objdump -d <path-to.hsaco>
 
 ## Step 7 — Decide the outcome and report
 
-Always report via exactly one comment (your *final* report - this is in
-addition to the Step 2 preliminary comment, not a replacement for it):
-`gh issue comment <ISSUE_NUMBER> --repo <CI_REPO> --body-file <file>`, built
-like this:
+Append your final report into the same `DETECTION_COMMENT_URL` comment
+Step 2 already edited once - **never post a new comment**. Fetch its
+current body (now the original detection text plus Step 2's triage
+section), then PATCH it back with your report appended:
+```
+COMMENT_ID=<the numeric id after #issuecomment- in DETECTION_COMMENT_URL>
+gh api "repos/<CI_REPO>/issues/comments/${COMMENT_ID}" --jq .body > /tmp/comment_body.txt
+# append a divider, then your report (below), to /tmp/comment_body.txt -> /tmp/new_body.txt
+gh api -X PATCH "repos/<CI_REPO>/issues/comments/${COMMENT_ID}" -f body=@/tmp/new_body.txt
+```
+Keep everything already in the comment byte-for-byte - Step 8 may fetch
+and rewrap this same body again right after. The appended section:
 
-1. The very first line must be exactly
-   `<!-- rocm-nightly-claude-debug:JOB_NAME / STEP_NAME -->` - substitute
+1. A blank line, then `---`, then a blank line (same divider style as
+   Step 2).
+2. `<!-- rocm-nightly-claude-debug:JOB_NAME / STEP_NAME -->` - substitute
    the literal `JOB_NAME` and `STEP_NAME` values you were given, separated
-   by ` / ` with no other change to the text. The caller checks for this
-   exact marker, for this exact signature, before starting a debug run, so
-   that this specific failure never gets debugged a second time even though
-   the tracking issue is shared by many different failures - leaving it
-   off, or using the wrong job/step text, would defeat that check.
-2. Next, quote the detection comment you were given
-   (`DETECTION_COMMENT_URL`): fetch it with
-   `gh api repos/<CI_REPO>/issues/comments/<comment-id>` (the numeric ID
-   after `#issuecomment-` in the URL), then reproduce its body as a
-   markdown blockquote (`>` prefix on every line), followed by a link back
-   to it (`[Original detection](DETECTION_COMMENT_URL)`). This is what lets
-   a reader tell which of the issue's many comments your analysis
-   addresses.
+   by ` / ` with no other change to the text. Step 1 (and the workflow's
+   own pre-dispatch check) look for this marker **anywhere** in this
+   comment's body - it no longer needs to be the first line, just present
+   somewhere - so that this specific failure never gets debugged a second
+   time even though the tracking issue is shared by many different
+   failures. Leaving it off, or using the wrong job/step text, would
+   defeat that check.
 3. `**Category:** <category>` - the label from Step 2 (or the corrected one
    from Step 3, if you changed it).
-4. Then your actual report, as below.
+4. `**Outcome:** <outcome>` - exactly one of the four literal strings
+   `Fix found`, `Already fixed upstream`, `Possible fix (unverified)`,
+   `Not resolved`, matching which of the four shapes below you're about to
+   write. Get the literal string right - Step 8 greps for it to decide
+   whether to cross the comment out.
+5. Then your actual report, as below.
+
+Keep the appended text reasonably tight: GitHub caps a single comment body
+at 65536 characters, and this one comment now carries the detection text,
+the triage section, and the final report together - trim log excerpts,
+diffs, and backtraces to the lines that actually matter rather than
+pasting whole blocks.
 
 **Already fixed upstream** (found in Step 4A): comment with:
 - The root cause, as understood from the fixing commit.
@@ -462,3 +487,49 @@ confirm it now passes. Then comment with:
   the divergence point, or a kernel disassembly snippet - whichever applies.
 - A concrete, specific suggestion for the next debugging step. Never end
   with a vague "could not reproduce" with no supporting detail.
+
+## Step 8 — Cross out the comment if resolved
+
+If Step 7's outcome was `Fix found` or `Already fixed upstream` (the
+failure is genuinely fixed, not merely suspected), the comment should
+visibly read as resolved so a human can tell at a glance it needs no
+attention and drop it from their mental todo list - this step does that
+in place, right after Step 7's edit. If the outcome was
+`Possible fix (unverified)` or `Not resolved`, skip this step entirely and
+leave the comment exactly as Step 7 left it.
+
+Do **not** wrap the body in raw `~~strikethrough~~` - GFM strikethrough is
+an inline construct and doesn't reliably span headings or fenced code
+blocks, and the `Fix found` shape above has a mandatory \`\`\`diff fenced
+block that would get garbled by it. Instead, fetch the comment's current
+full body one more time (now detection + triage + the report you just
+appended in Step 7), and PATCH it into this shape:
+
+```
+<original marker line from the very top of the comment, byte-for-byte>
+
+> **RESOLVED** — <one-line summary of the fix, matching Step 7's report -
+> reuse the report's own outcome heading verbatim where possible, don't
+> write a new one from scratch. If Step 4A found a fixing commit/PR,
+> working a short reference to it into this same line reads better than a
+> separate link line>
+> React 👍 if you want this dropped, or just ignore it - it's done.
+
+<details><summary>Full analysis (click to expand)</summary>
+
+<everything from the original body's second line onward, byte-for-byte -
+the detection text, the triage section, and the report just appended in
+Step 7, all unchanged, EXCEPT: change the detection section's own heading
+line from `## Nightly CI Failure Detected` to
+`## Nightly CI Failure Detected (Resolved)` - this is the one deliberate
+edit to that otherwise-untouched text, so the resolved state is visible
+even to a reader who expands the `<details>` block without first reading
+the collapsed banner above it>
+
+</details>
+```
+
+This collapses the comment to a one-line banner by default while keeping
+the full analysis one click away - that's what actually lets a human drop
+it from attention, unlike raw strikethrough, which still shows all the
+clutter with just a line through it.

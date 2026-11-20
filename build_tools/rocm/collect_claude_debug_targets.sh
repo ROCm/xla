@@ -94,9 +94,15 @@ if [ -s "$FAILURES_FILE" ]; then
             continue
         fi
 
+        # The debug skill no longer posts a separate report comment with
+        # this marker as its first line - it edits the detection comment
+        # itself in place, appending the marker somewhere into that same
+        # body once analysis is done (see debug-nightly-failure/SKILL.md
+        # Step 7) - so match it anywhere in a comment's body, not just at
+        # the start.
         DEBUG_MARKER="<!-- rocm-nightly-claude-debug:${SIGNATURE} -->"
         ALREADY_DEBUGGED=$(printf '%s' "$EXISTING_COMMENTS" \
-            | jq --arg marker "$DEBUG_MARKER" '[.[] | select(.body | startswith($marker))] | length')
+            | jq --arg marker "$DEBUG_MARKER" '[.[] | select(.body | contains($marker))] | length')
 
         if [ "${ALREADY_DEBUGGED:-0}" -gt 0 ]; then
             echo "  -> already has a debug report for this signature, skipping (no new comment)" >&2
