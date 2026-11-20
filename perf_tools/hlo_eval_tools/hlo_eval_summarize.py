@@ -35,6 +35,19 @@ def parse(log):
     return host, samples
 
 
+def device_kind(log):
+    """'<host type>, <device>, <GiB> GiB' of one test.log. The host type is the
+    worker name without its per-machine suffix (e.g. mi350x-gpu-dpx); with the
+    device memory it tells partition modes (SPX/DPX/CPX) apart."""
+    text = open(log, errors="replace").read()
+    host = re.search(r"^worker: (\S+)", text, re.M)
+    dev = re.search(r"StreamExecutor \[0\]: ([^,]+)", text)
+    mem = re.search(r"allocating ([\d.]+)GiB", text)
+    return ", ".join([host.group(1).rsplit("-", 1)[0] if host else "?",
+                      dev.group(1) if dev else "?",
+                      f"{round(float(mem.group(1)))} GiB" if mem else "?"])
+
+
 def quantile(v, p):
     v = sorted(v)
     k = (len(v) - 1) * p
@@ -96,14 +109,25 @@ def summarize(run, noisy_pct):
 
 def compare(runs):
     data = []  # per run: {(model, leaf, module): (host, samples)}
+    kinds = []  # per run: set of device_kind()
     for run in runs:
-        d = {}
+        d, k = {}, set()
         for log in glob.glob(os.path.join(run, "*", "*", "test.log")):
             model, leaf = log.split(os.sep)[-3:-1]
             host, samples = parse(log)
             for mod, v in samples.items():
                 d[(model, leaf, mod)] = (host, v)
+            if samples:
+                k.add(device_kind(log))
         data.append(d)
+        kinds.append(k)
+    for i, k in enumerate(kinds):
+        print(f"run{i + 1} devices: {'; '.join(sorted(k)) or '?'}")
+    mixed = len(set().union(*kinds)) > 1
+    warn = ("WARNING: the runs used different device types or partition modes "
+            "(SPX/DPX/CPX); their timings are not comparable." if mixed else "")
+    if warn:
+        print(warn)
     rows = []  # (range %, row)
     for key in sorted(set.intersection(*(set(d) for d in data))):
         meds = [st.median(d[key][1]) for d in data]
@@ -130,6 +154,8 @@ def compare(runs):
             trimmed = (f" (without 3 largest: {100 * math.expm1(st.mean(logs[:-3])):+.3f}%)"
                        if len(logs) > 3 else "")
             print(f"geomean run{j + 1}/run{i + 1}: {100 * math.expm1(st.mean(logs)):+.3f}%{trimmed}")
+    if warn:
+        print("\n" + warn)
 
 
 if __name__ == "__main__":

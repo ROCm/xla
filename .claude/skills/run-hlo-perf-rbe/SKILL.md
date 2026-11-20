@@ -83,6 +83,22 @@ $T/hlo_eval_summarize.py <results dir A> <results dir B> [...]
   so treat their differences as noise unless they are large and repeatable.
 - For a real A/B, run each arm at least twice and alternate them (A, B, A, B).
 
+## Hardware and partition modes
+
+- Every number above comes from the Buildbarn single-GPU pool as seen so far:
+  `mi350x-gpu-dpx-*` workers whose device reports "AMD Instinct MI350X VF" (a
+  virtual function of a DPX-partitioned MI350X) with about 108 GiB for XLA.
+  Nothing has been measured in SPX or CPX mode, and there are no known
+  SPX/DPX/CPX ratios; do not quote or estimate any.
+- Partition modes split the chip's compute, memory and caches between logical
+  devices, so absolute times, which models fit in memory, and cache-sensitive
+  behavior differ between modes. Never compare runs from different modes, and
+  do not reuse the noise figures above in another mode; measure them again
+  with identical runs there.
+- `hlo_eval_summarize.py` prints each run's devices (host type, device,
+  memory) and warns when runs differ. If a run shows a new host type or
+  memory size, say so and treat comparisons with older runs as invalid.
+
 ## When it fails
 
 - `lost inputs with digests`: Buildbarn evicted cached outputs. Rerun the same
@@ -95,6 +111,7 @@ $T/hlo_eval_summarize.py <results dir A> <results dir B> [...]
 
 ## Report
 
-State the XLA revision(s), ROCm tarball, `REPEATS`, and results directories;
+State the XLA revision(s), ROCm tarball, `REPEATS`, devices (the line
+`hlo_eval_summarize.py` prints), and results directories;
 the suite geomean (and "without 3 largest"); modules beyond the noise bands
 above; and any `NOISY` or `NO_DATA` leaves.
