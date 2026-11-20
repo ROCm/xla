@@ -139,7 +139,8 @@ std::optional<LegacyCache::Config> LegacyCache::GetConfig(
 AutotuneResult LegacyCache::GetAutotuneResult(
     const LegacyCache::Config& config) {
   AutotuneResult result;
-  if (config.codegen_backend == Backend::TRITON) {
+  if (config.codegen_backend == Backend::TRITON &&
+      config.backend_config.has_triton()) {
     *result.mutable_triton() = config.backend_config.triton();
   } else if (config.codegen_backend == Backend::CUBLASLT ||
              config.codegen_backend == Backend::CUBLASLT_FISSION) {
