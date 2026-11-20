@@ -15,16 +15,20 @@ limitations under the License.
 
 #include "xla/hlo/transforms/simplifiers/dot_merger.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
 #include "absl/algorithm/container.h"
+#include "absl/status/status_macros.h"
+#include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/strings/substitute.h"
 #include "xla/error_spec.h"
 #include "xla/hlo/evaluator/hlo_evaluator.h"
 #include "xla/hlo/ir/hlo_computation.h"
@@ -2309,6 +2313,16 @@ class DotMergerCollectiveAwareTest : public DotMergerTest {
                               return instr->opcode() == HloOpcode::kDot;
                             });
   }
+
+  // Runs the collective-aware pass on `module_string` and returns the number
+  // of dots left in the entry computation.
+  absl::StatusOr<int64_t> DotsAfterMerge(absl::string_view module_string) {
+    ABSL_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> module,
+                          ParseAndReturnVerifiedModule(module_string));
+    ABSL_RETURN_IF_ERROR(
+        RunDotMerger(module.get(), /*collective_aware=*/true).status());
+    return CountDots(module->entry_computation());
+  }
 };
 
 // dot0 feeds an all-to-all, dot1 does not.
@@ -2580,6 +2594,199 @@ TEST_F(DotMergerCollectiveAwareTest, WhileBodyAnalyzedOnItsOwn) {
   const HloComputation* body = module->GetComputationWithName("body");
   ASSERT_NE(body, nullptr);
   EXPECT_EQ(CountDots(body), 2);
+}
+
+// The Marin router case: the dot reaches the all-to-all through a custom call
+// (top-k), a get-tuple-element and a slice.
+TEST_F(DotMergerCollectiveAwareTest, MultiHopPathToCollectiveCounts) {
+  absl::string_view module_string = R"(
+  HloModule module, replica_count=2
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    topk = (f32[200,2], s32[200,2]) custom-call(dot0), custom_call_target="router_topk"
+    idx = s32[200,2] get-tuple-element(topk), index=1
+    first = s32[200,1] slice(idx), slice={[0:200], [0:1]}
+    a2a = s32[200,1] all-to-all(first), dimensions={0}, replica_groups={{0,1}}
+    ROOT tuple = (s32[200,1], f32[200,50]) tuple(a2a, dot1)
+  })";
+  EXPECT_THAT(DotsAfterMerge(module_string),
+              absl_testing::IsOkAndHolds(2));
+}
+
+// dot0 -> add, and add is a control predecessor of the collective.
+TEST_F(DotMergerCollectiveAwareTest, MixedDataAndControlPathCounts) {
+  absl::string_view module_string = R"(
+  HloModule module, replica_count=2
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    other = f32[64,8] parameter(3)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    sum = f32[200,10] add(dot0, dot0)
+    a2a = f32[64,8] all-to-all(other), dimensions={0}, replica_groups={{0,1}}, control-predecessors={sum}
+    ROOT tuple = (f32[200,10], f32[200,50], f32[64,8]) tuple(sum, dot1, a2a)
+  })";
+  EXPECT_THAT(DotsAfterMerge(module_string),
+              absl_testing::IsOkAndHolds(2));
+}
+
+TEST_F(DotMergerCollectiveAwareTest, CollectivePermuteCounts) {
+  absl::string_view module_string = R"(
+  HloModule module, replica_count=2
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    cp = f32[200,10] collective-permute(dot0), source_target_pairs={{0,1},{1,0}}
+    ROOT tuple = (f32[200,10], f32[200,50]) tuple(cp, dot1)
+  })";
+  EXPECT_THAT(DotsAfterMerge(module_string),
+              absl_testing::IsOkAndHolds(2));
+}
+
+TEST_F(DotMergerCollectiveAwareTest, ReduceScatterCounts) {
+  absl::string_view module_string = R"(
+  HloModule module, replica_count=2
+
+  add {
+    a = f32[] parameter(0)
+    b = f32[] parameter(1)
+    ROOT sum = f32[] add(a, b)
+  }
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    rs = f32[100,10] reduce-scatter(dot0), replica_groups={{0,1}}, dimensions={0}, to_apply=add
+    ROOT tuple = (f32[100,10], f32[200,50]) tuple(rs, dot1)
+  })";
+  EXPECT_THAT(DotsAfterMerge(module_string),
+              absl_testing::IsOkAndHolds(2));
+}
+
+// Iota replica groups: [1,2]<=[2] is one group of 2 (counts), [2,1]<=[2] is
+// two groups of 1 (degenerate, ignored).
+TEST_F(DotMergerCollectiveAwareTest, IotaReplicaGroups) {
+  constexpr absl::string_view kTemplate = R"(
+  HloModule module, replica_count=2
+
+  add {
+    a = f32[] parameter(0)
+    b = f32[] parameter(1)
+    ROOT sum = f32[] add(a, b)
+  }
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    ar = f32[200,10] all-reduce(dot0), replica_groups=$0, to_apply=add
+    ROOT tuple = (f32[200,10], f32[200,50]) tuple(ar, dot1)
+  })";
+  EXPECT_THAT(DotsAfterMerge(absl::Substitute(kTemplate, "[1,2]<=[2]")),
+              absl_testing::IsOkAndHolds(2));
+  EXPECT_THAT(DotsAfterMerge(absl::Substitute(kTemplate, "[2,1]<=[2]")),
+              absl_testing::IsOkAndHolds(1));
+}
+
+// Empty replica groups with 1 replica and 2 partitions: a cross-replica
+// all-reduce (no channel id) has 1 participant and is ignored, like the
+// psums over size-1 mesh axes in SPMD programs. With a channel id it is
+// cross-replica-and-partition and has 2 participants.
+TEST_F(DotMergerCollectiveAwareTest, EmptyReplicaGroupsUseGroupMode) {
+  constexpr absl::string_view kTemplate = R"(
+  HloModule module, replica_count=1, num_partitions=2
+
+  add {
+    a = f32[] parameter(0)
+    b = f32[] parameter(1)
+    ROOT sum = f32[] add(a, b)
+  }
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    ar = f32[200,10] all-reduce(dot0), replica_groups={}$0, to_apply=add
+    ROOT tuple = (f32[200,10], f32[200,50]) tuple(ar, dot1)
+  })";
+  EXPECT_THAT(DotsAfterMerge(absl::Substitute(kTemplate, "")),
+              absl_testing::IsOkAndHolds(1));
+  EXPECT_THAT(DotsAfterMerge(absl::Substitute(kTemplate, ", channel_id=1")),
+              absl_testing::IsOkAndHolds(2));
+}
+
+// The rule is symmetric: it also keeps a larger feeding dot apart from a
+// smaller non-feeding one.
+TEST_F(DotMergerCollectiveAwareTest, LargerDotFeedingCollectiveNotMerged) {
+  absl::string_view module_string = R"(
+  HloModule module, replica_count=2
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    rhs0 = f32[100,10] parameter(1)
+    rhs1 = f32[100,50] parameter(2)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    a2a = f32[200,50] all-to-all(dot1), dimensions={0}, replica_groups={{0,1}}
+    ROOT tuple = (f32[200,10], f32[200,50]) tuple(dot0, a2a)
+  })";
+  EXPECT_THAT(DotsAfterMerge(module_string),
+              absl_testing::IsOkAndHolds(2));
+}
+
+// dot1 shares lhs with dot0 (which feeds the collective) and rhs1 with dot2
+// (which does not). The lhs class is non-uniform and is not merged; the rhs1
+// class is uniform and is merged.
+TEST_F(DotMergerCollectiveAwareTest, DotInTwoEquivalenceClasses) {
+  absl::string_view module_string = R"(
+  HloModule module, replica_count=2
+
+  ENTRY main {
+    lhs  = f32[200,100] parameter(0)
+    lhs2 = f32[300,100] parameter(1)
+    rhs0 = f32[100,10] parameter(2)
+    rhs1 = f32[100,50] parameter(3)
+    dot0 = f32[200,10] dot(lhs, rhs0), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot1 = f32[200,50] dot(lhs, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    dot2 = f32[300,50] dot(lhs2, rhs1), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+    a2a = f32[200,10] all-to-all(dot0), dimensions={0}, replica_groups={{0,1}}
+    ROOT tuple = (f32[200,10], f32[200,50], f32[300,50]) tuple(a2a, dot1, dot2)
+  })";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(module_string));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       RunDotMerger(module.get(), /*collective_aware=*/true));
+  EXPECT_TRUE(changed);
+  SCOPED_TRACE(module->ToString());
+  EXPECT_EQ(CountDots(module->entry_computation()), 2);
+  const HloInstruction* merged1 = nullptr;
+  const HloInstruction* merged2 = nullptr;
+  EXPECT_THAT(
+      module->entry_computation()->root_instruction(),
+      GmockMatch(m::Tuple(
+          m::AllToAll(m::Dot(m::Parameter(0), m::Parameter(2))),
+          m::Slice(m::Dot(&merged1, m::Concatenate(), m::Parameter(3))),
+          m::Slice(m::Dot(&merged2, m::Concatenate(), m::Parameter(3))))));
+  EXPECT_EQ(merged1, merged2);
 }
 
 }  // namespace

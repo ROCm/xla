@@ -538,7 +538,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_experimental_disable_binary_libraries(false);
   opts.set_xla_gpu_experimental_enable_conv_fusion(false);
   opts.set_xla_gpu_dot_merger_threshold_mb(64);
-  opts.set_xla_gpu_dot_merger_collective_aware(false);
+  opts.set_xla_gpu_experimental_dot_merger_collective_aware(false);
   opts.set_xla_enable_fast_math(false);
   opts.set_xla_gpu_experimental_parallel_collective_overlap_limit(1);
   opts.set_xla_gpu_experimental_parallel_scale_up_collective_overlap_limit(1);
@@ -3639,9 +3639,10 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
         debug_options->xla_gpu_dot_merger_threshold_mb(),
         "[Stable] Dot merger pass threshold to be set in MB."));
     flag_list->push_back(tsl::Flag(
-        "xla_gpu_dot_merger_collective_aware",
-        bool_setter_for(&DebugOptions::set_xla_gpu_dot_merger_collective_aware),
-        debug_options->xla_gpu_dot_merger_collective_aware(),
+        "xla_gpu_experimental_dot_merger_collective_aware",
+        bool_setter_for(
+            &DebugOptions::set_xla_gpu_experimental_dot_merger_collective_aware),
+        debug_options->xla_gpu_experimental_dot_merger_collective_aware(),
         "If true, the dot merger does not merge a dot that feeds a "
         "collective in its computation with a dot that does not."));
     flag_list->push_back(

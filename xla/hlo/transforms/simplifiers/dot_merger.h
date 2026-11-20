@@ -53,6 +53,8 @@ namespace xla {
 // never merged with a dot that does not. Merging such a pair makes the
 // collective wait for the larger merged dot, which can lengthen the critical
 // path. Collectives whose replica groups have a single participant are ignored.
+// Each computation is analysed on its own: a collective inside a called
+// computation (e.g. a while body) does not count for dots in the caller.
 class DotMerger : public HloModulePass {
  public:
   explicit DotMerger(

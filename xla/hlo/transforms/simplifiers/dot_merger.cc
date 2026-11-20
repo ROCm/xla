@@ -72,8 +72,9 @@ using FeedsCollectiveSet = absl::flat_hash_set<const HloInstruction*>;
 
 // Returns true if `instr` is a collective (sync, or the start of an async one,
 // including send/recv) that does not have exactly one participant per group.
-// Single-participant collectives are no-ops that later passes remove, so they
-// do not put anything on the critical path.
+// Single-participant collectives move no data between devices (e.g.
+// AllReduceSimplifier and AllGatherSimplifier replace them with local ops), so
+// they do not put anything on the critical path.
 bool IsNonDegenerateCollective(const HloInstruction* instr) {
   if (!hlo_query::IsCollectiveCommunicationOp(instr->opcode()) &&
       !hlo_query::IsAsyncCollectiveStartOp(instr, /*include_send_recv=*/true)) {
@@ -85,6 +86,15 @@ bool IsNonDegenerateCollective(const HloInstruction* instr) {
   }
   // Collective-permute, send and recv have no replica groups.
   if (!HloCollectiveInstruction::ClassOf(collective)) {
+    return true;
+  }
+  // Fast path: explicit groups that all list 2+ ids have 2+ participants in
+  // every group mode. This avoids the module config copy in
+  // GetReplicaGroupCountAndSize for the common case.
+  const std::vector<ReplicaGroup>& groups = collective->replica_groups();
+  if (!groups.empty() && absl::c_all_of(groups, [](const ReplicaGroup& group) {
+        return group.replica_ids_size() > 1;
+      })) {
     return true;
   }
   absl::StatusOr<std::optional<std::pair<int64_t, int64_t>>> count_and_size =
@@ -926,14 +936,15 @@ absl::StatusOr<HloInstruction*> MergeCluster(
     return nullptr;
   }
 
-  // `feeds_collective` is computed once per computation and not updated for
-  // merged dots. That is exact only if every merged group is uniform.
-  if (feeds_collective != nullptr) {
-    const bool feeds = feeds_collective->contains(dots_to_merge[0].dot);
-    TF_RET_CHECK(absl::c_all_of(dots_to_merge, [&](const DotOperandUsage& u) {
-      return feeds_collective->contains(u.dot) == feeds;
-    })) << "Collective-aware DotMerger formed a non-uniform group.";
-  }
+  // `feeds_collective` is computed once per computation and only queried for
+  // original dots. It stays exact because FindDotsToMerge forms uniform groups:
+  // merging dots that all feed (or all do not feed) a collective cannot change
+  // whether any other original dot does.
+  DCHECK(feeds_collective == nullptr ||
+         absl::c_all_of(dots_to_merge, [&](const DotOperandUsage& u) {
+           return feeds_collective->contains(u.dot) ==
+                  feeds_collective->contains(dots_to_merge[0].dot);
+         }));
 
   // The shared operand of the new dot will be lhs or rhs, depending on which
   // side it appeared more often in the original dots (rhs if tied).

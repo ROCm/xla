@@ -795,7 +795,7 @@ message DebugOptions {
   // If true, the DotMerger pass does not merge a dot that feeds a collective in
   // its computation with a dot that does not, so the collective does not wait
   // for the larger merged dot.
-  optional bool xla_gpu_dot_merger_collective_aware = 588;
+  optional bool xla_gpu_experimental_dot_merger_collective_aware = 588;
 
   // DEPRECATED: Use `xla_dump_autotune_cache_to` instead.
   // File to write autotune results to. It will be a binary file unless the name

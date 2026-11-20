@@ -15,6 +15,9 @@ limitations under the License.
 
 #include "xla/service/gpu/gpu_compiler.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
@@ -27,8 +30,6 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
 #include "absl/algorithm/container.h"
 #include "absl/base/casts.h"
 #include "absl/base/log_severity.h"
@@ -48,6 +49,7 @@ limitations under the License.
 #include "absl/strings/substitute.h"
 #include "absl/types/span.h"
 #include "google/protobuf/text_format.h"
+#include "tsl/platform/regexp.h"
 #include "xla/autotune_cache.pb.h"
 #include "xla/autotune_results.pb.h"
 #include "xla/backends/autotuner/backends.pb.h"
@@ -123,7 +125,6 @@ limitations under the License.
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/regexp.h"
 
 namespace xla {
 namespace gpu {
@@ -1846,7 +1847,7 @@ int64_t CountGemms(const HloModule& module) {
 TEST_F(GpuCompilerTest, DotMergerCollectiveAwareKeepsCollectiveFeedingDot) {
   // A small "router" dot feeds an all-to-all; a larger sibling dot with the
   // same LHS does not. By default DotMerger merges them into one GEMM; with
-  // xla_gpu_dot_merger_collective_aware they stay separate.
+  // xla_gpu_experimental_dot_merger_collective_aware they stay separate.
   constexpr absl::string_view kHlo = R"(
     HloModule dot_merger_collective_aware, replica_count=2
 
@@ -1867,7 +1868,7 @@ TEST_F(GpuCompilerTest, DotMergerCollectiveAwareKeepsCollectiveFeedingDot) {
   auto count_gemms = [&](bool collective_aware) -> absl::StatusOr<int64_t> {
     HloModuleConfig config = GetModuleConfigForTest(/*replica_count=*/2);
     DebugOptions debug_options = config.debug_options();
-    debug_options.set_xla_gpu_dot_merger_collective_aware(collective_aware);
+    debug_options.set_xla_gpu_experimental_dot_merger_collective_aware(collective_aware);
     config.set_debug_options(debug_options);
     ABSL_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(kHlo, config));
