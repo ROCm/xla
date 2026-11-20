@@ -41,9 +41,12 @@ $T/rbe_hlo_eval.sh --xla <ref> sdxl,vit inference/1gpu -- --jobs=200
 - A full run takes 5-10 minutes when the build is cached and 30 minutes or
   more after a new XLA revision or tarball. Start it in the background and
   wait for it to finish; do not poll.
-  While it runs, do not edit the scripts or the XLA sources, and do not start
-  a second run from the same checkout (they share `_hlo_eval_rbe/` and
-  `bazel-testlogs`).
+  While it runs, do not edit the scripts or the XLA sources. Runs with the
+  same ROCm tarball share one Bazel output base even from different
+  checkouts, so the script refuses a second run with the same tarball or the
+  same checkout ("another run is using ..."): run the arms of an A/B one
+  after another, or in parallel only from separate checkouts with separate
+  `XLA_OUTPUT_BASE`.
 
 ## Read the results
 
