@@ -45,8 +45,9 @@ class OrigamiDotCostModel {
 
   // Configs Origami cannot price are absent from the map, not infinite.
   //
-  // Triton's num_warps and num_stages are deliberately not forwarded, so all
-  // configs sharing a (block_m, block_n, block_k) get the same estimate.
+  // Triton's num_warps and num_stages are deliberately not forwarded, so
+  // configs sharing a (block_m, block_n, block_k, mfma_size, waves_per_eu)
+  // get the same estimate.
   // Prefer SelectTopTileShapes over ranking this directly.
   absl::StatusOr<absl::flat_hash_map<TritonGemmConfig, absl::Duration>>
   EstimateRunTimes(const HloDotInstruction* dot,

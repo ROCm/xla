@@ -59,6 +59,8 @@ using ::origami::problem_t;
 using ::origami::transpose_t;
 
 using TileShape = std::tuple<int, int, int>;
+// What Origami actually consumes: tile shape, MFMA size, occupancy.
+using OrigamiKey = std::tuple<int, int, int, int, int>;
 
 struct MatrixInstruction {
   int64_t m;
@@ -214,14 +216,34 @@ class OrigamiDotCostModel::Impl {
     const int64_t rhs_bits = primitive_util::BitWidth(shape.rhs_type);
     const int64_t operand_bits = std::max(lhs_bits, rhs_bits);
 
+    // num_warps and num_stages are not forwarded to Origami, so the distinct
+    // inputs are far fewer than the configs. Shared-memory capacity does
+    // depend on num_stages, so that check stays per config.
+    absl::flat_hash_map<OrigamiKey, std::optional<absl::Duration>> priced;
     absl::flat_hash_map<TritonGemmConfig, absl::Duration> estimates;
     estimates.reserve(configs.size());
     for (const TritonGemmConfig& config : configs) {
       if (estimates.contains(config)) continue;
-      std::optional<absl::Duration> d =
-          Estimate(problem, config, operand_bits, lhs_bits, rhs_bits);
-      if (d.has_value()) estimates.emplace(config, *d);
+      if (config.block_m <= 0 || config.block_n <= 0 || config.block_k <= 0) {
+        continue;
+      }
+      if (TritonSharedMemoryBytes(config, lhs_bits, rhs_bits, async_copy_) >
+          shared_memory_limit_) {
+        continue;
+      }
+      const int mfma_size = config.mfma_size > 0 ? config.mfma_size : 16;
+      const int occupancy = config.waves_per_eu > 0 ? config.waves_per_eu : 1;
+      auto [it, inserted] =
+          priced.try_emplace(OrigamiKey{config.block_m, config.block_n,
+                                        config.block_k, mfma_size, occupancy});
+      if (inserted) {
+        it->second =
+            Estimate(problem, config, operand_bits, mfma_size, occupancy);
+      }
+      if (it->second.has_value()) estimates.emplace(config, *it->second);
     }
+    VLOG(2) << "Origami priced " << priced.size() << " distinct inputs for "
+            << configs.size() << " configs";
     return estimates;
   }
 
@@ -263,24 +285,17 @@ class OrigamiDotCostModel::Impl {
 
   std::optional<absl::Duration> Estimate(const problem_t& problem,
                                          const TritonGemmConfig& config,
-                                         int64_t operand_bits, int64_t lhs_bits,
-                                         int64_t rhs_bits) const {
-    if (config.block_m <= 0 || config.block_n <= 0 || config.block_k <= 0) {
-      return std::nullopt;
-    }
-    if (TritonSharedMemoryBytes(config, lhs_bits, rhs_bits, async_copy_) >
-        shared_memory_limit_) {
-      return std::nullopt;
-    }
+                                         int64_t operand_bits, int mfma_size,
+                                         int occupancy) const {
     std::optional<MatrixInstruction> mi =
-        GetMatrixInstruction(gfx_, operand_bits, config.mfma_size);
+        GetMatrixInstruction(gfx_, operand_bits, mfma_size);
     if (!mi.has_value()) return std::nullopt;
     if (config.block_m < mi->m || config.block_n < mi->n) return std::nullopt;
 
     config_t c;
     c.mt = dim3_t(config.block_m, config.block_n, config.block_k);
     c.mi = dim3_t(mi->m, mi->n, mi->k);
-    c.occupancy = config.waves_per_eu > 0 ? config.waves_per_eu : 1;
+    c.occupancy = occupancy;
     c.stream_k = 0;
     c.grid_selection = origami::grid_selection_t::data_parallel;
 
