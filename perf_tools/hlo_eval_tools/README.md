@@ -340,6 +340,81 @@ Behavior is tunable with environment variables:
 | `INPUT_FORMAT` | `hlo` | `hlo` profiles the `*.txt`/`*.hlo` modules; `stablehlo` profiles the `*.mlirbc` artifacts written by `convert_hlo_to_stablehlo.py` (see below). |
 | `XLA_TRANSLATE`, `STABLEHLO_TRANSLATE` | next to the runner in the same `bazel-bin` | Tools used to lower `*.mlirbc` to HLO when the runner lacks `--input_format=stablehlo`. Build them at the runner's revision. |
 
+### On ROCm RBE: `rbe_hlo_eval.sh`
+
+`rbe_hlo_eval.sh` runs `run_hlo_eval.sh` on the ROCm RBE GPU pools (Buildbarn,
+`--config=rocm_rbe_dev`) with a hermetic ROCm, so no local GPU or ROCm install
+is needed, only the Buildbarn client certificates in `/data/bb-rbe-*`.
+`hlo_runner_main` is built from the XLA checkout given by `--xla`: a directory,
+or a git ref that the script checks out detached into `worktrees/<ref>` of this
+repository (fetching first for `<remote>/<branch>`, reused on later runs,
+refused if it has local changes). Without `--xla`, the current directory must be
+an XLA checkout.
+
+```bash
+git clone git@github.com:ROCm/xla.git ~/xla-dev-infra   # default branch: rocm-dev-infra
+cd ~/xla-dev-infra
+./perf_tools/hlo_eval_tools/rbe_hlo_eval.sh --xla rocm/main all -- --jobs=200   # 40 1-GPU leaves
+./perf_tools/hlo_eval_tools/rbe_hlo_eval.sh --xla my-branch sdxl,vit inference/1gpu
+./perf_tools/hlo_eval_tools/rbe_hlo_eval.sh --xla ~/xla all       # an existing checkout
+```
+
+The XLA worktrees share this clone's objects. To hide the generated
+`_hlo_eval_rbe/` in them, run once:
+`echo _hlo_eval_rbe/ >> "$(git rev-parse --git-common-dir)/info/exclude"`.
+
+It generates a throwaway Bazel package per model in `<xla>/_hlo_eval_rbe/` with
+one `sh_test` per leaf (depending on `hlo_runner_main` and the leaf's modules)
+and runs all of them in one uncached `bazel test`, so they run concurrently as
+pool capacity allows. The ROCm tarball, RBE container image, GPU target and
+single-GPU pool are the ones the checkout's ROCm CI pins in
+`.github/workflows/rocm_ci.yml`; the tarball falls back to the `rocm_redist.bzl`
+default. Do not run two invocations at once from the same XLA checkout.
+
+Results go to `hlo_eval_results/<xla commit>-<models>-<timestamp>/` in the
+current directory: `run_info.txt` (XLA checkout and commit, ROCm tarball,
+settings), per leaf `<model>/<leaf>/` with the kept `test.log` and CSV and every
+attempt under `attempts/<k>/`, and `summary.tsv` with, per module, `n` timed samples, median, min, max, the IQR
+sigma ((q75 - q25) / 1.349, % of median), the kept attempt, worker host and
+status (`OK`, `NOISY`, `NO_DATA`). A leaf whose worst module exceeds `NOISY_PCT`
+is rerun up to `RETRY_NOISY` times and the attempt with the smallest spread is
+kept. Unlike stdev, the IQR sigma ignores single spikes and grows once more than
+about a quarter of the samples are disturbed, before the median moves.
+`hlo_eval_summarize.py <results dir> <results dir>...` compares runs.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `REPEATS`, `STAT` | `20`, `median` | Executions per module (the first is the warmup) and the CSV statistic. |
+| `NOISY_PCT`, `RETRY_NOISY` | `2`, `1` | Noise threshold (% of median) and reruns of noisy leaves. |
+| `MAX_GPUS`, `MULTI_GPU_POOL` | `1`, `linux_x64_multi4` | Leaves needing more GPUs are skipped; 2+ GPU leaves use that pool (unverified). |
+| `ROCM_DISTRO_URL`, `ROCM_DISTRO_HASH` | from the checkout | Hermetic ROCm tarball and sha256 (set both); `file://` works. |
+| `ROCM_DOCKER_IMAGE`, `ROCM_GPU_TARGET` | from the checkout | RBE container image and offload arch. |
+| `XLA_OUTPUT_BASE` | `~/.cache/bazel/xla-rocm-<hash>` | One output base per tarball; set it if `$HOME` is on NFS. |
+| `XLA_DIR` | `.` | Same as `--xla <dir>`. |
+| `RESULTS_DIR`, `RBE` | see above, `rocm_rbe_dev` | Results directory and RBE config. |
+| `CMD_BUFFER`, `ARG_MODE`, `SETTLE_SEC`, `XLA_FLAGS` | `run_hlo_eval.sh`'s | Forwarded when set. |
+
+Measured on the Buildbarn single-GPU pool (MI350, DPX partitions; 4 runs of the
+40 single-GPU leaves, about 5-6 minutes each with a warm cache):
+
+- Suite geomean: every pair of runs agrees within 0.25% (most within 0.05%)
+  once the pair's 3 largest per-module differences are dropped.
+- Per module: median run-to-run range 1.1%, 90th percentile 4.4%. Some modules
+  (`stable_diffusion_1_5` and `dit` inference, `clip`, `colabfold`) settle at a
+  different level per run while each run is tight: autotuning or host
+  differences, which the within-run spread cannot see.
+- Some large-model leaves can run out of device memory on these partitions;
+  they show up as `NO_DATA` on every run.
+
+If a build fails with `lost inputs with digests`, Buildbarn evicted cached
+outputs Bazel still referenced; rerun, or try one build with
+`-- --noremote_accept_cached`.
+
+Claude Code: the `run-hlo-perf-rbe` skill in `.claude/skills/` covers running and
+interpreting this; it loads automatically when Claude runs in this repository.
+To use it elsewhere, link it once:
+`ln -s ~/xla-dev-infra/.claude/skills/run-hlo-perf-rbe ~/.claude/skills/`.
+
 ### StableHLO portable artifacts (`INPUT_FORMAT=stablehlo`)
 
 HLO text has no cross-version compatibility guarantee, so a module dumped by one
