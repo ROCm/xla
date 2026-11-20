@@ -17,7 +17,7 @@ name: ROCm Nightly Failure Monitor
 permissions:
   contents: read
   issues: write
-  id-token: write  # Required by claude-code-action (cleanup, debug jobs) for OIDC auth.
+  id-token: write  # Required by claude-code-action (debug job) for OIDC auth.
 
 env:
   # Repository and workflows being monitored: our own nightly and sanitizers
@@ -68,39 +68,28 @@ on:
       - "build_tools/rocm/collect_run_failures.sh"
       - "build_tools/rocm/create_infra_error_issue.sh"
       - "build_tools/rocm/collect_claude_debug_targets.sh"
-      - "build_tools/rocm/find_closed_issue_needing_cleanup.sh"
       - ".claude/skills/debug-nightly-failure/SKILL.md"
-      - ".claude/skills/cleanup-closed-nightly-issue/SKILL.md"
 
 jobs:
-  collect:
-    name: Collect ROCm Nightly Failures
+  monitor:
+    name: Monitor ROCm Nightly Failures
     runs-on: ubuntu-latest
     outputs:
-      # Base64 of failures.json (may be empty) - handed to the "report" job,
-      # which runs after "cleanup" so a migrated/recreated tracking issue
-      # always exists (or doesn't need to) before any new failure is
-      # reported against it. See the "report" job below for why this is
-      # split out of what used to be a single "monitor" job.
-      failures_b64: ${{ steps.collect_failures.outputs.failures_b64 }}
-      # The oldest closed tracking issue that still needs the
-      # cleanup-closed-nightly-issue skill run against it, or empty if none
-      # does. See find_closed_issue_needing_cleanup.sh.
-      closed_issue_number: ${{ steps.find_closed_issue.outputs.closed_issue_number }}
+      # A JSON array of {issue_number, repository, head_sha, run_id, job_id,
+      # job_name, step_name, failure_url, detection_comment_url} - one per
+      # failure signature that doesn't already have a debug report this run.
+      # Fed into the "debug" job's matrix below, so each one gets its own
+      # isolated debug run. "[]" means nothing new to debug. Every detected
+      # failure gets a comment on the (single, shared) tracking issue
+      # regardless of whether it ends up here - see
+      # collect_claude_debug_targets.sh.
+      new_failures: ${{ steps.collect_targets.outputs.new_failures }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.DEBUG_PIPELINE_REF }}
           persist-credentials: false
-
-      - name: Find closed tracking issue needing cleanup
-        id: find_closed_issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          CLOSED_ISSUE=$(build_tools/rocm/find_closed_issue_needing_cleanup.sh)
-          echo "closed_issue_number=${CLOSED_ISSUE}" >> "$GITHUB_OUTPUT"
 
       - name: Determine monitoring window
         id: window
@@ -138,7 +127,6 @@ jobs:
           echo "${{ inputs.run_id }}" > run_ids.txt
 
       - name: Collect failures
-        id: collect_failures
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -158,107 +146,6 @@ jobs:
               echo "  -> no reportable failures"
             fi
           done < run_ids.txt
-
-          # Handed to the "report" job as a job output - base64 to survive
-          # GITHUB_OUTPUT as a single-line value regardless of how many
-          # failures landed in it. failures.json is realistically a handful
-          # of KB at most (one JSON line per failing job/step this hour).
-          echo "failures_b64=$(base64 -w0 failures.json)" >> "$GITHUB_OUTPUT"
-
-  cleanup:
-    name: "Clean up closed tracking issue #${{ needs.collect.outputs.closed_issue_number }}"
-    needs: collect
-    if: needs.collect.outputs.closed_issue_number != ''
-    # build-only-xla, not ubuntu-latest: same constraint as the "debug" job
-    # below - this is the only runner pool with network access to the LLM
-    # gateway claude-code-action needs (ANTHROPIC_BASE_URL), since this job
-    # also runs claude-code-action.
-    runs-on: build-only-xla
-    timeout-minutes: 25
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.DEBUG_PIPELINE_REF }}
-          persist-credentials: false
-
-      - name: Clean Up Closed Nightly Issue
-        id: claude-code
-        timeout-minutes: 20
-        uses: anthropics/claude-code-action@v1
-        env:
-          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
-          ANTHROPIC_CUSTOM_HEADERS: |
-            Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}
-            user: ${{ secrets.USER_NTID }}
-          ANTHROPIC_MODEL: "Claude-Opus-5.5"
-          ANTHROPIC_DEFAULT_OPUS_MODEL: "Claude-Opus-5.5"
-          ANTHROPIC_DEFAULT_SONNET_MODEL: "Claude-Sonnet-4.6"
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: "Claude-Haiku-4.5"
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          anthropic_api_key: "sk-ant-dummy-gateway-key"
-          allowed_bots: "github-actions[bot]"
-          show_full_output: true
-          prompt: |
-            CI REPO (for job logs / issue comments): ROCm/xla
-            CLOSED ISSUE NUMBER (a human just closed this tracking issue): ${{ needs.collect.outputs.closed_issue_number }}
-
-            Run the /cleanup-closed-nightly-issue skill, using the values
-            above as its arguments: CI repo, closed issue number, in that
-            order. The skill classifies every failure signature on that
-            closed issue, marks resolved ones in place, and migrates
-            everything else forward onto the current open tracking issue.
-            Do not post anything to GitHub yourself outside of what the
-            skill does, and never call `gh issue close` or
-            `gh issue reopen` - this issue stays exactly as closed as a
-            human left it.
-          claude_args: |
-            --allowedTools "Skill,Bash(gh issue comment *),Bash(gh api *),Bash(gh issue view *),Bash(gh issue list *),Bash(gh issue edit *),Bash(gh label create *),Bash(build_tools/rocm/create_infra_error_issue.sh),Read,Grep,Glob"
-            --max-turns 60
-          settings: |
-            {
-              "hasCompletedOnboarding": true
-            }
-
-  report:
-    name: Report ROCm Nightly Failures
-    needs: [collect, cleanup]
-    # Runs whenever "collect" succeeded, regardless of whether "cleanup" ran,
-    # was skipped (no closed issue needed cleanup), or failed -
-    # create_infra_error_issue.sh below is itself idempotent find-or-create,
-    # so a failed/skipped cleanup leaves nothing dangling for this job to
-    # trip over; a failed cleanup job is still visibly red on its own in the
-    # Actions UI. The real point of this job existing separately from
-    # "collect" is the "needs: [..., cleanup]" ordering guarantee itself:
-    # as a job depending on "cleanup", it cannot start until "cleanup" has
-    # fully finished (or been skipped) - so if "cleanup" migrated pending
-    # signatures onto a (possibly newly-created) open tracking issue, that
-    # issue is guaranteed to already exist by the time this job's own call
-    # to create_infra_error_issue.sh runs, instead of racing it and
-    # possibly creating a second, orphaned open issue with the same title.
-    if: ${{ always() && needs.collect.result == 'success' }}
-    runs-on: ubuntu-latest
-    outputs:
-      # A JSON array of {issue_number, repository, head_sha, run_id, job_id,
-      # job_name, step_name, failure_url, detection_comment_url} - one per
-      # failure signature that doesn't already have a debug report this run.
-      # Fed into the "debug" job's matrix below, so each one gets its own
-      # isolated debug run. "[]" means nothing new to debug. Every detected
-      # failure gets a comment on the (single, shared) tracking issue
-      # regardless of whether it ends up here - see
-      # collect_claude_debug_targets.sh.
-      new_failures: ${{ steps.collect_targets.outputs.new_failures }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.DEBUG_PIPELINE_REF }}
-          persist-credentials: false
-
-      - name: Decode failures from the collect job
-        run: |
-          echo "${{ needs.collect.outputs.failures_b64 }}" | base64 -d > failures.json
 
       - name: Report failures, collect new failures to debug
         id: collect_targets
@@ -282,8 +169,8 @@ jobs:
     # everything), so the job/step signature is what actually identifies
     # this entry.
     name: "Debug: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
-    needs: report
-    if: needs.report.outputs.new_failures != '[]'
+    needs: monitor
+    if: needs.monitor.outputs.new_failures != '[]'
     # build-only-xla, not a GPU runner: it's the only pool with network
     # access to the LLM gateway (amd-do-linux-xla-gpu-gfx950-dpx-4 can't
     # resolve/reach ANTHROPIC_BASE_URL). Since this node has no local GPU,
@@ -299,7 +186,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.report.outputs.new_failures) }}
+        include: ${{ fromJson(needs.monitor.outputs.new_failures) }}
     # No job-level container: claude_auto_review.yml (also on build-only-xla)
     # runs claude-code-action straight on the bare host with none of the
     # workarounds this job used to need (no custom gh/jq/bun install, no
