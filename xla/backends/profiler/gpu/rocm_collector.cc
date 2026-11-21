@@ -640,18 +640,9 @@ void RocmTraceCollectorImpl::Flush() {
           << " activity events, and aggregated them into "
           << aggregated_events.size() << " events.";
 
-  // device ids for GPUs filled in by roctracer are not zero indexed.
-  // They are offset by number of CPUs on the machine
-  uint32_t min_device_id = INT32_MAX;
-
-  for (const auto& event : aggregated_events) {
-    if (event.device_id < min_device_id) {
-      min_device_id = event.device_id;
-    }
-  }
-
   for (auto& event : aggregated_events) {
-    auto id = event.device_id - min_device_id;
+    // RocmTracer numbers GPU rows by HIP device; others are kInvalidDeviceId.
+    auto id = event.device_id;
     if (id < num_gpus_) {
       per_device_collector_[id].AddEvent(std::move(event));
     } else {

@@ -653,6 +653,7 @@ cc_library(
         "//xla/stream_executor/rocm:roctracer_wrapper",
         "//xla/tsl/platform:errors",
         "//xla/tsl/profiler/backends/cpu:annotation_stack",
+        "@com_google_absl//absl/base",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:inlined_vector",
@@ -664,6 +665,7 @@ cc_library(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
+        "@local_config_rocm//rocm:hip_runtime",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocm_headers",  # buildcleaner: keep
         "@local_config_rocm//rocm:rocprofiler_sdk",  # buildcleaner: keep
         "@tsl//tsl/platform:abi",
