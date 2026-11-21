@@ -1,0 +1,53 @@
+name: Sync Main Mirror
+
+# Keeps ROCm/xla's `main-mirror` branch as a byte-for-byte mirror of
+# openxla/xla's own `main` branch, always. This is a hard reset + force
+# push, not a fast-forward merge - unlike sync_upstream.yml's "Sync Fork
+# with Upstream" (which fast-forwards ROCm/xla's own `main` against
+# upstream via the GitHub `/merge-upstream` API, and would fail if the two
+# have diverged). `main-mirror` is never meant to carry any commit of its
+# own - anything pushed there directly between runs is silently discarded
+# the next time this fires, by design.
+
+on:
+  schedule:
+    # Every 2 hours.
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/sync_main_mirror.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Force main-mirror to match openxla/xla main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.ROCM_REPO_MANAGEMENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ROCM_REPO_MANAGEMENT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
+
+      - name: Checkout main-mirror
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main-mirror
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 1
+
+      - name: Reset main-mirror to openxla/xla main and force-push
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/openxla/xla.git
+          git fetch --depth=1 upstream main
+          git reset --hard upstream/main
+          git push -f origin HEAD:main-mirror
