@@ -540,6 +540,27 @@ jobs:
           permission-contents: write
           permission-workflows: write
 
+      # Claude's own Bash tool refuses to run any command containing a
+      # shell variable it can't verify is safe before running it - this
+      # isn't a GitHub permission problem, it's Claude Code's own
+      # permission engine, and it applies even to variables the workflow
+      # itself injected via `env:`. Confirmed in production: embedding a
+      # token directly in the skill's own `git remote add ...` command got
+      # rejected outright ("A variable in braces in this command can't be
+      # checked before it runs"). That's exactly why the skill no longer
+      # pushes or opens the PR itself at all - it only ever writes a patch
+      # file (see its Step 5) for the later, deterministic "Apply verified
+      # patch and open PR" step below to use. This rewrite configures the
+      # credential that later step needs, here, in a plain workflow step
+      # (not an agent Bash tool call, so none of the restriction above
+      # applies) - any `git push`/`git remote add .../ROCm/xla.git` from
+      # here on in this job is transparently authenticated without any
+      # token, or any variable at all, appearing in anyone's command text.
+      - name: Configure git to authenticate pushes to ROCm/xla
+        if: steps.already_verified.outputs.skip != 'true'
+        run: |
+          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/ROCm/xla.git".insteadOf "https://github.com/ROCm/xla.git"
+
       - name: Verify Proposed Fix
         if: steps.already_verified.outputs.skip != 'true'
         id: claude-code
@@ -558,10 +579,6 @@ jobs:
           # plain contents/issues/pull-requests operations this job's own
           # `permissions:` block already covers.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Scoped App token: only for the `git push` that creates the new
-          # branch - see the step that creates it for why that one push
-          # can't use the default token above.
-          PUSH_TOKEN: ${{ steps.app-token.outputs.token }}
         with:
           anthropic_api_key: "sk-ant-dummy-gateway-key"
           allowed_bots: "github-actions[bot]"
@@ -590,19 +607,98 @@ jobs:
             reproduce/apply/revert build+test cycles doesn't count against
             that, but the whole run still has to fit this step's own
             timeout. The skill is responsible for the whole
-            reproduce-apply-revert verification, for opening the draft PR
-            against ROCm/xla only if the fix checks out, and for editing
-            its verdict directly into the comment above via
-            `gh api -X PATCH .../issues/comments/<id>`. Never post a new
-            comment on the tracking issue, and do not post anything to
-            GitHub yourself outside of what the skill does.
+            reproduce-apply-revert verification and for editing its verdict
+            directly into the comment above via
+            `gh api -X PATCH .../issues/comments/<id>`. It never commits,
+            pushes, or opens a PR itself - if the fix verifies, it only
+            writes out a patch file plus a PR title/body for a later,
+            deterministic workflow step to apply and turn into a draft PR.
+            Never post a new comment on the tracking issue, and do not post
+            anything to GitHub yourself outside of what the skill does.
           claude_args: |
-            --allowedTools "Skill,Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(gh pr create *),Bash(gh pr edit *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
+            --allowedTools "Skill,Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
             --max-turns 100
           settings: |
             {
               "hasCompletedOnboarding": true
             }
+
+      # Deterministic, not agent-run: the skill above never commits,
+      # pushes, or opens the PR itself (Claude Code's own Bash permission
+      # check rejects any command referencing a token it can't verify
+      # ahead of time - see the skill's Step 5). It only leaves a patch
+      # file plus a PR title/body behind if the fix verified. This step
+      # does the actual git/gh work from that patch, entirely outside the
+      # agent, so none of that restriction applies.
+      - name: Apply verified patch and open PR
+        if: steps.already_verified.outputs.skip != 'true'
+        id: open_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ ! -s /tmp/claude_verify_fix.patch ]; then
+            echo "No verified fix to apply - skipping."
+            exit 0
+          fi
+
+          SLUG=$(echo "${{ matrix.job_name }} ${{ matrix.step_name }}" \
+            | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' \
+            | cut -c1-50 | sed -E 's/-+$//')
+          SHA_SHORT=$(echo "${{ matrix.head_sha }}" | cut -c1-7)
+          BRANCH="claude/verify-fix/${SLUG}-${SHA_SHORT}"
+
+          # A throwaway clone of just ROCm/xla's main-mirror tip - cheaper
+          # than reusing the job's own checkout, which is of
+          # matrix.repository (almost always openxla/xla, a different repo
+          # entirely) at matrix.head_sha, not ROCm/xla at all.
+          WORKDIR=$(mktemp -d)
+          git -C "$WORKDIR" init -q
+          git -C "$WORKDIR" remote add origin https://github.com/ROCm/xla.git
+          git -C "$WORKDIR" fetch -q --depth=1 origin main-mirror
+          git -C "$WORKDIR" checkout -q -b "$BRANCH" FETCH_HEAD
+
+          if ! git -C "$WORKDIR" apply --check /tmp/claude_verify_fix.patch; then
+            echo "::warning::Verified patch no longer applies cleanly to main-mirror - needs a manual rebase"
+            exit 0
+          fi
+          git -C "$WORKDIR" apply /tmp/claude_verify_fix.patch
+          git -C "$WORKDIR" \
+            -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -aq -F /tmp/claude_verify_pr_title.txt
+
+          if ! git -C "$WORKDIR" push -q origin "HEAD:refs/heads/${BRANCH}"; then
+            echo "::warning::Failed to push the verified-fix branch to ROCm/xla"
+            exit 0
+          fi
+
+          PR_URL=$(gh pr create --repo ROCm/xla --draft \
+            --title "$(head -1 /tmp/claude_verify_pr_title.txt)" \
+            --body-file /tmp/claude_verify_pr_body.txt \
+            --base main-mirror --head "$BRANCH") || {
+            echo "::warning::Failed to open the draft PR"
+            exit 0
+          }
+          echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Add the PR link to the tracking comment
+        if: steps.already_verified.outputs.skip != 'true' && steps.open_pr.outputs.pr_url != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ steps.open_pr.outputs.pr_url }}
+        run: |
+          set -euo pipefail
+          gh api "/repos/ROCm/xla/issues/comments/${{ matrix.comment_id }}" --jq .body > /tmp/comment_before_pr_link.txt
+          python3 -I -c "
+          import os
+          marker = '<!-- rocm-nightly-claude-verify-pr-pending -->'
+          link = f\"[draft PR]({os.environ['PR_URL']}) opened with the fix.\"
+          body = open('/tmp/comment_before_pr_link.txt').read()
+          body = body.replace(marker, link, 1) if marker in body else body
+          open('/tmp/comment_after_pr_link.txt', 'w').write(body)
+          "
+          gh api -X PATCH "/repos/ROCm/xla/issues/comments/${{ matrix.comment_id }}" -F body=@/tmp/comment_after_pr_link.txt
 
       - name: Stop rocmless container
         if: always()

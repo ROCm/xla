@@ -1,10 +1,10 @@
 ---
 name: verify-proposed-fix
-description: Hard-capped at 30 minutes of non-build decision-making - triggered when a human reacts 🚀 on a debug-nightly-failure comment's proposed fix, asking Claude to actually try it out. Reproduces the original failure under heavy repetition (nightly GPU CI can be flaky), applies the proposed fix, confirms it goes green, reverts the fix, and confirms it goes red again - a differential check that the fix, not noise, is responsible. If verified, opens a draft "[WIP] ..." PR against ROCm/xla with a Google-style CL description. Edits its verdict (a PR link, or a plain "not applicable" statement) back into the same comment, folded, and never repeats once attempted. Use when invoked by the "verify" job of rocm_infra_monitor.yml for one specific 🚀-reacted comment.
+description: Hard-capped at 30 minutes of non-build decision-making - triggered when a human reacts 🚀 on a debug-nightly-failure comment's proposed fix, asking Claude to actually try it out. Reproduces the original failure under heavy repetition (nightly GPU CI can be flaky), applies the proposed fix, confirms it goes green, reverts the fix, and confirms it goes red again - a differential check that the fix, not noise, is responsible. If verified, writes the fix out as a plain patch file (plus a PR title/body) for a deterministic workflow step to apply onto ROCm/xla's main-mirror and open a draft "[WIP] ..." PR with a Google-style CL description - never commits, pushes, or opens the PR itself. Edits its verdict (noting a PR is pending, or a plain "not applicable" statement) back into the same comment, folded, and never repeats once attempted. Use when invoked by the "verify" job of rocm_infra_monitor.yml for one specific 🚀-reacted comment.
 argument-hint: [ci-repo] [issue-number] [comment-url] [job-name] [step-name] [repository] [head-sha] [failure-url]
 context: fork
 agent: general-purpose
-allowed-tools: Bash(gh issue edit *), Bash(gh label create *), Bash(gh api *), Bash(gh run view *), Bash(gh pr create *), Bash(gh pr edit *), Bash(git *), Bash(docker exec rocmless-debug *), Bash(build_tools/rocm/*), Bash(bazel *), Bash(grep *), Bash(cat *), Bash(timeout *), Read, Grep, Glob, Write, Edit
+allowed-tools: Bash(gh issue edit *), Bash(gh label create *), Bash(gh api *), Bash(gh run view *), Bash(git *), Bash(docker exec rocmless-debug *), Bash(build_tools/rocm/*), Bash(bazel *), Bash(grep *), Bash(cat *), Bash(timeout *), Read, Grep, Glob, Write, Edit
 ---
 
 # Verify a Proposed Fix for a ROCm Nightly CI Failure
@@ -22,8 +22,10 @@ split `$ARGUMENTS` positionally by whitespace - the invoking prompt also
 restates each value on its own labeled line; read the values from there.
 
 - `CI_REPO`: `ROCm/xla` - the repo the tracking issue lives in, and the
-  **only** repo you ever push a branch or open a PR against, regardless of
-  what `REPOSITORY` says (see below).
+  only repo the patch you write in Step 5 is ever meant to land in
+  (applied and turned into a PR by a later, deterministic workflow step -
+  you don't push or open anything yourself), regardless of what
+  `REPOSITORY` says (see below).
 - `ISSUE_NUMBER`: the tracking issue (shared by many unrelated failures -
   don't react to or summarize anything else on it).
 - `COMMENT_URL`: the single comment carrying the proposed fix, and the
@@ -77,18 +79,19 @@ restates each value on its own labeled line; read the values from there.
   applies to `rocm_rbe`.
 - Verify only this one signature's proposed fix. Do not go looking for
   other red steps or other proposed fixes along the way.
-- **This is the one skill in the whole monitoring pipeline allowed to
-  `git push` and `gh pr create`.** Even so: only ever push to, and open a
-  PR against, `ROCm/xla` - never `openxla/xla`, even when `REPOSITORY` is
-  `openxla/xla` (the common case for nightly failures). We have no push
-  access upstream, so the PR's base is always `ROCm/xla`'s `main-mirror`
-  branch specifically (see Step 5) - never `openxla/xla` directly, and
-  never any other `ROCm/xla` branch either, even its own default one.
-  Pushing to or opening PRs on the separately-governed upstream project is
-  out of scope for this automation regardless of where the failing commit
-  came from. Never push anywhere else, never force-push, never open more
-  than one PR, never mark it ready-for-review (always a draft), never
-  merge anything.
+- **You never run `git push`, `git commit`, or `gh pr create` yourself -
+  not as a shortcut, not even to "double check" something.** A
+  deterministic workflow step does all three, from the patch file (plus
+  PR title/body) you write in Step 5 - see that step for why (a hard
+  Claude Code permission restriction, not a style choice). That step only
+  ever applies your patch to, and opens a PR against, `ROCm/xla`'s
+  `main-mirror` branch specifically - never `openxla/xla`, even though
+  `REPOSITORY` almost always is `openxla/xla` (there's no push access
+  upstream at all), and never any other `ROCm/xla` branch either, even its
+  own default one. Nothing you do in this skill should assume otherwise:
+  never try to push anywhere yourself, never force-push, never cause more
+  than one PR to be opened, and the resulting PR is always a draft, never
+  merged by anything in this pipeline.
 - The only other GitHub write is one edit to the single `COMMENT_URL`
   comment (Step 6, your final verdict) via
   `gh api -X PATCH repos/<CI_REPO>/issues/comments/<id> -F body=@<file>`
@@ -104,9 +107,10 @@ restates each value on its own labeled line; read the values from there.
   is slow enough that three cycles at this volume won't fit the job's
   timeout, and say so plainly in the report (Step 6) if you do.
 - Never claim "not applicable" without having completed the full
-  red→green→red cycle for that verdict, and never open a PR without having
-  personally observed it go green in this same run (not from the original
-  comment's own, earlier, unverified claim).
+  red→green→red cycle for that verdict, and never write the Step 5 patch
+  file (which leads directly to a PR) without having personally observed
+  the fix go green in this same run (not from the original comment's own,
+  earlier, unverified claim).
 - If you bail out partway through (budget exhausted, build infra failure,
   etc.), leave the working tree exactly as Step 1 found it (fix not
   applied) before reporting - a partial attempt with no code applied is
@@ -207,75 +211,54 @@ diff), then re-run the same heavily-repeated command once more.
   the green in Step 3 wasn't caused by it (worker/cache noise, or the
   original failure itself was flaky)."
 
-## Step 5 — If verified: open the draft PR against `ROCm/xla`
+## Step 5 — If verified: write the fix out as a patch for the workflow to apply
 
 Only reached if Step 4 confirmed red→green→red. The fix is currently
 re-applied in the working tree (you undid the revert at the end of Step
-4). Do this **before** Step 6's report, so the report can link the real
-PR instead of a placeholder.
+4), and nothing has been committed. **You do not commit, push, or run
+`gh pr create` yourself** - that is a hard rule, not a simplification of
+convenience. The first time this skill tried to push/open a PR directly,
+Claude Code's own Bash permission check rejected the command outright ("A
+variable in braces in this command can't be checked before it runs") the
+moment it needed to reference a token, and there is no variable-free way
+to write an authenticated `git push`/`gh pr create` yourself. Instead, a
+deterministic "Apply verified patch and open PR" step the workflow runs
+*after* this skill finishes does all of that - plain shell, no agent, no
+permission check to fight, working from a patch file you leave behind:
 
-1. **Commit** it:
+1. **Capture the fix as a patch**, nothing else:
    ```
-   git config user.name "github-actions[bot]"
-   git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-   git checkout -b claude/verify-fix/<slug>
-   git add -A
-   git commit -m "<one-line summary, same text as the PR title below>"
+   git diff > /tmp/claude_verify_fix.patch
    ```
-   `<slug>`: `JOB_NAME`/`STEP_NAME` lowercased, non-alphanumeric runs
-   collapsed to a single `-`, trimmed, plus a short prefix of `HEAD_SHA` for
-   uniqueness (e.g. `claude/verify-fix/gemm-rewriter-group-gemm-test-4a02f02`).
-2. **Push it to `ROCm/xla`** through an explicit token-embedded remote,
-   not the checkout's own ambient credential (this checkout used
-   `persist-credentials: false`, same precedent as
-   `rocm_xla_jax_metrics_nightly.yml`'s own pushes). Use `${PUSH_TOKEN}`
-   here, **not** `${GITHUB_TOKEN}`:
+   The working tree should have exactly the fix applied and nothing else
+   touched at this point, so this is exactly the fix, no more - don't
+   `git add`/`git commit`/`git checkout -b` anything.
+2. **Write the PR title and body to two more plain files** - fixed,
+   literal paths, no variables needed to produce them:
    ```
-   git remote add verify-target "https://x-access-token:${PUSH_TOKEN}@github.com/ROCm/xla.git"
-   git push verify-target claude/verify-fix/<slug>
+   cat > /tmp/claude_verify_pr_title.txt <<'EOF'
+   [WIP] <one-line summary of the fix>
+   EOF
+   cat > /tmp/claude_verify_pr_body.txt <<'EOF'
+   <Google-style CL description - see shape below>
+   EOF
    ```
-   `PUSH_TOKEN` is a separate, scoped GitHub App token the workflow creates
-   specifically for this push - the default `GITHUB_TOKEN` cannot push a
-   brand-new branch into this repo at all, because creating a ref makes
-   GitHub check whether it touches `.github/workflows/*`, which needs a
-   "workflows" permission scope the default token can never carry no
-   matter what the job's `permissions:` block grants it. This isn't
-   theoretical - it's exactly what failed the first time this skill ran
-   for real (`POST /git/refs` → 403 "Resource not accessible by
-   integration" / "workflows scope may be required"), even though the fix
-   itself never touched a workflow file - that check applies to any
-   brand-new ref, not just to the commit's own diff. Use `${GITHUB_TOKEN}`
-   (the default) for everything else in this skill, including `gh pr
-   create` below - opening a PR against an already-pushed branch needs
-   nothing but `pull-requests: write`, which the job's own `permissions:`
-   already grants the default token; it has no workflows-scope involved
-   and doesn't need `PUSH_TOKEN`.
-3. **Base the PR on `main-mirror`, not `ROCm/xla`'s own default branch.**
-   `REPOSITORY`/`HEAD_SHA` are almost always `openxla/xla@<sha>` - a
-   different history from `ROCm/xla`'s own default branch (which carries
-   ROCm-specific patches and has long since diverged from upstream). Using
-   that as `--base` would make GitHub diff your one-commit fix against the
-   wrong ancestry and show a huge, nonsensical PR. `main-mirror` is kept a
-   byte-for-byte copy of `openxla/xla`'s own `main` by the
-   `sync_main_mirror.yml` pipeline (resynced every 2 hours), so it shares
-   real ancestry with `HEAD_SHA` - that's what keeps the PR diff to just
-   your fix commit. Don't look up or use any other branch name here, even
-   if it looks like the "main" one for this repo.
-4. **Open the draft PR**:
-   ```
-   gh pr create --repo ROCm/xla --draft \
-     --title "[WIP] <one-line summary of the fix>" \
-     --body "<Google-style CL description - see shape below>" \
-     --base main-mirror \
-     --head claude/verify-fix/<slug>
-   ```
-   Body shape - a Google-style CL description, **not** a Summary/Test-plan
-   bullet template: the one-line subject is already in `--title`, so the
-   body is a blank line followed by prose paragraphs - what was broken,
-   the root cause (reuse the analysis already in the comment rather than
-   re-deriving it), and what this change does about it - then a closing
-   line disclosing how it was produced and verified, with a link back to
-   the comment:
+   The workflow step treats **the mere existence of a non-empty
+   `/tmp/claude_verify_fix.patch`** as "there is a verified fix to apply" -
+   if you reach this step, always write all three files; if you stop
+   earlier (Step 2/3/4's "not applicable" paths), never create any of
+   them. If `/tmp` isn't writable in this sandbox, write them under
+   `debug_tools/claude_scratch/` instead (same fallback as elsewhere in
+   this skill) and say so plainly in Step 6's report, since that path
+   needs to be cleaned up and the workflow step won't know to look there.
+
+   PR body shape - a Google-style CL description, **not** a Summary/Test
+   plan bullet template: the one-line subject is already in the title
+   file, so the body is a blank line followed by prose paragraphs - what
+   was broken, the root cause (reuse the analysis already in the comment
+   rather than re-deriving it), and what this change does about it - then
+   a closing line disclosing how it was produced and verified, with a link
+   back to the comment:
    ```
    <One or two prose paragraphs: what broke and why, what this change
    does differently. No bullet lists, no "## Summary"/"## Test plan"
@@ -286,7 +269,19 @@ PR instead of a placeholder.
    confirm causality - see the verification writeup on
    <COMMENT_URL>.
    ```
-   `gh pr create` prints the new PR's URL on success - keep it for Step 6.
+3. **The workflow applies this patch on top of `main-mirror`, not
+   `ROCm/xla`'s own default branch** - not your call to make here, it's
+   baked into the workflow step itself, but worth knowing why: `REPOSITORY`/
+   `HEAD_SHA` are almost always `openxla/xla@<sha>`, a different history
+   from `ROCm/xla`'s own default branch (which carries ROCm-specific
+   patches and has long since diverged from upstream) - applying your
+   patch there could conflict or land on the wrong base entirely.
+   `main-mirror` is kept a byte-for-byte copy of `openxla/xla`'s own `main`
+   by the `sync_main_mirror.yml` pipeline, so it shares real ancestry with
+   `HEAD_SHA` and the patch should apply cleanly. If `HEAD_SHA` is old
+   enough that `main-mirror` has since moved past the lines your fix
+   touches, the patch may fail to apply - that's the workflow step's
+   problem to detect and report, not something to pre-empt here.
 
 ## Step 6 — Report, folded, back into the same comment
 
@@ -318,11 +313,21 @@ values actually used - say which), applied the proposed fix (green),
 reverted it (red again) to confirm the fix - not noise - is responsible.
 
 <exactly one of:>
-- ✅ **Verified** — [draft PR #<n>](<the real URL from Step 5>) opened
-  with the fix.
+- ✅ **Verified** — opening a draft PR with the fix now.
+  <!-- rocm-nightly-claude-verify-pr-pending -->
 - ❌ **Not applicable** — <the specific reason from whichever step you
   stopped at: never reproduced red / still red with the fix applied /
   stayed green after reverting it>
 
 </details>
 ```
+For the "Verified" line, write the HTML comment marker
+`<!-- rocm-nightly-claude-verify-pr-pending -->` literally, on its own
+line right after it, exactly as shown - don't add the real PR link or
+number yourself, you don't have it yet. A later, deterministic workflow
+step finds that exact marker and replaces it with the real
+`[draft PR #<n>](<url>)` link once the PR actually exists - that's a
+second, small edit to this same comment (never a new one), made outside
+your own execution, specifically so this report doesn't have to wait on
+or guess at a PR URL that doesn't exist until after you've already
+finished.
