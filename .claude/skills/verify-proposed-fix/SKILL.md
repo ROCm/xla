@@ -4,7 +4,7 @@ description: Hard-capped at 30 minutes of non-build decision-making - triggered 
 argument-hint: [ci-repo] [issue-number] [comment-url] [job-name] [step-name] [repository] [head-sha] [failure-url]
 context: fork
 agent: general-purpose
-allowed-tools: Bash(gh issue edit *), Bash(gh label create *), Bash(gh api *), Bash(gh run view *), Bash(gh pr create *), Bash(gh pr edit *), Bash(gh repo view *), Bash(git *), Bash(docker exec rocmless-debug *), Bash(build_tools/rocm/*), Bash(bazel *), Bash(grep *), Bash(cat *), Bash(timeout *), Read, Grep, Glob, Write, Edit
+allowed-tools: Bash(gh issue edit *), Bash(gh label create *), Bash(gh api *), Bash(gh run view *), Bash(gh pr create *), Bash(gh pr edit *), Bash(git *), Bash(docker exec rocmless-debug *), Bash(build_tools/rocm/*), Bash(bazel *), Bash(grep *), Bash(cat *), Bash(timeout *), Read, Grep, Glob, Write, Edit
 ---
 
 # Verify a Proposed Fix for a ROCm Nightly CI Failure
@@ -80,11 +80,15 @@ restates each value on its own labeled line; read the values from there.
 - **This is the one skill in the whole monitoring pipeline allowed to
   `git push` and `gh pr create`.** Even so: only ever push to, and open a
   PR against, `ROCm/xla` - never `openxla/xla`, even when `REPOSITORY` is
-  `openxla/xla` (the common case for nightly failures). Pushing to or
-  opening PRs on that separately-governed upstream project is out of scope
-  for this automation regardless of where the failing commit came from.
-  Never push anywhere else, never force-push, never open more than one PR,
-  never mark it ready-for-review (always a draft), never merge anything.
+  `openxla/xla` (the common case for nightly failures). We have no push
+  access upstream, so the PR's base is always `ROCm/xla`'s `main-mirror`
+  branch specifically (see Step 5) - never `openxla/xla` directly, and
+  never any other `ROCm/xla` branch either, even its own default one.
+  Pushing to or opening PRs on the separately-governed upstream project is
+  out of scope for this automation regardless of where the failing commit
+  came from. Never push anywhere else, never force-push, never open more
+  than one PR, never mark it ready-for-review (always a draft), never
+  merge anything.
 - The only other GitHub write is one edit to the single `COMMENT_URL`
   comment (Step 6, your final verdict) via
   `gh api -X PATCH repos/<CI_REPO>/issues/comments/<id> -F body=@<file>`
@@ -229,18 +233,23 @@ PR instead of a placeholder.
    git remote add verify-target "https://x-access-token:${GITHUB_TOKEN}@github.com/ROCm/xla.git"
    git push verify-target claude/verify-fix/<slug>
    ```
-3. **Find `ROCm/xla`'s actual default branch** rather than assuming a
-   name - this repo's default branch is not necessarily `main` or
-   `rocm-main`:
-   ```
-   BASE_BRANCH=$(gh repo view ROCm/xla --json defaultBranchRef --jq '.defaultBranchRef.name')
-   ```
+3. **Base the PR on `main-mirror`, not `ROCm/xla`'s own default branch.**
+   `REPOSITORY`/`HEAD_SHA` are almost always `openxla/xla@<sha>` - a
+   different history from `ROCm/xla`'s own default branch (which carries
+   ROCm-specific patches and has long since diverged from upstream). Using
+   that as `--base` would make GitHub diff your one-commit fix against the
+   wrong ancestry and show a huge, nonsensical PR. `main-mirror` is kept a
+   byte-for-byte copy of `openxla/xla`'s own `main` by the
+   `sync_main_mirror.yml` pipeline (resynced every 2 hours), so it shares
+   real ancestry with `HEAD_SHA` - that's what keeps the PR diff to just
+   your fix commit. Don't look up or use any other branch name here, even
+   if it looks like the "main" one for this repo.
 4. **Open the draft PR**:
    ```
    gh pr create --repo ROCm/xla --draft \
      --title "[WIP] <one-line summary of the fix>" \
      --body "<Google-style CL description - see shape below>" \
-     --base "$BASE_BRANCH" \
+     --base main-mirror \
      --head claude/verify-fix/<slug>
    ```
    Body shape - a Google-style CL description, **not** a Summary/Test-plan
