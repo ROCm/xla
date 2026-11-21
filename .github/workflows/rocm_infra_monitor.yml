@@ -500,37 +500,6 @@ jobs:
             ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f \
             sleep infinity
 
-      # The default GITHUB_TOKEN cannot push a brand-new branch into
-      # ROCm/xla: creating a ref requires GitHub to validate whether it
-      # introduces/changes anything under .github/workflows/* - a check
-      # that needs a "workflows" permission scope the standard Actions
-      # token can never carry, regardless of what this job's own
-      # `permissions:` block grants (there is no such scope available to
-      # it). This bit us for real: the first live verify run got
-      # everything right (red->green->red) but failed to push with `POST
-      # /git/refs` -> 403 "Resource not accessible by integration" /
-      # "workflows scope may be required" - even though the fix itself
-      # never touched a workflow file, because that check applies to any
-      # brand-new ref, not just to the commit's own diff. Same root cause
-      # sync_main_mirror.yml already works around with a scoped GitHub App
-      # token. One token covers everything this job's skill does (editing
-      # the tracking comment, labels, the push, the PR) - same one-token
-      # shape as sync_main_mirror.yml, rather than juggling two differently
-      # scoped tokens side by side.
-      - name: Create GitHub App token
-        if: steps.already_verified.outputs.skip != 'true'
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ secrets.ROCM_REPO_MANAGEMENT_APP_CLIENT_ID }}
-          private-key: ${{ secrets.ROCM_REPO_MANAGEMENT_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          permission-workflows: write
-          permission-pull-requests: write
-          permission-issues: write
-
       - name: Verify Proposed Fix
         if: steps.already_verified.outputs.skip != 'true'
         id: claude-code
@@ -545,10 +514,7 @@ jobs:
           ANTHROPIC_DEFAULT_OPUS_MODEL: "Claude-Opus-5.5"
           ANTHROPIC_DEFAULT_SONNET_MODEL: "Claude-Sonnet-4.6"
           ANTHROPIC_DEFAULT_HAIKU_MODEL: "Claude-Haiku-4.5"
-          # The scoped App token from above, not the default GITHUB_TOKEN -
-          # see the step that creates it for why (it needs to cover the
-          # push and `gh pr create` too, which the default token can't).
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           anthropic_api_key: "sk-ant-dummy-gateway-key"
           allowed_bots: "github-actions[bot]"
