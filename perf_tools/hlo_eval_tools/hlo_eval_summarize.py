@@ -36,15 +36,18 @@ def parse(log):
 
 
 def device_kind(log):
-    """'<host type>, <device>, <GiB> GiB' of one test.log. The host type is the
-    worker name without its per-machine suffix (e.g. mi350x-gpu-dpx); with the
-    device memory it tells partition modes (SPX/DPX/CPX) apart."""
+    """The device a test.log ran on: worker host type (name without the
+    per-machine suffix, e.g. mi350x-gpu-dpx), device name, and either the
+    driver's partition/CU/XCC/VRAM line logged by the test, or (older logs)
+    the memory XLA allocated."""
     text = open(log, errors="replace").read()
     host = re.search(r"^worker: (\S+)", text, re.M)
     dev = re.search(r"StreamExecutor \[0\]: ([^,]+)", text)
+    part = re.search(r"^device: (.+)$", text, re.M)
     mem = re.search(r"allocating ([\d.]+)GiB", text)
     return ", ".join([host.group(1).rsplit("-", 1)[0] if host else "?",
                       dev.group(1) if dev else "?",
+                      part.group(1) if part else
                       f"{round(float(mem.group(1)))} GiB" if mem else "?"])
 
 
@@ -68,7 +71,7 @@ def print_table(rows):
 def summarize(run, noisy_pct):
     rows = [["model", "leaf", "module", "n", "median_ms", "min_ms", "max_ms",
              "iqr_sigma_pct", "attempt", "host", "status"]]
-    noisy = []
+    noisy, devices = [], set()
     for leaf_dir in sorted(glob.glob(os.path.join(run, "*", "*", "attempts"))):
         leaf_dir = os.path.dirname(leaf_dir)
         model, leaf = leaf_dir.split(os.sep)[-2:]
@@ -85,6 +88,7 @@ def summarize(run, noisy_pct):
             rows.append([model, leaf, "-", "0"] + ["-"] * 6 + ["NO_DATA"])
             continue
         worst, a, host, samples = best
+        devices.add(device_kind(os.path.join(a, "test.log")))
         for name in os.listdir(a):  # Bazel outputs are read-only: replace, don't overwrite.
             if os.path.isfile(os.path.join(a, name)):
                 dst = os.path.join(leaf_dir, name)
@@ -104,6 +108,8 @@ def summarize(run, noisy_pct):
     with open(os.path.join(run, "noisy.txt"), "w") as f:
         f.writelines(t + "\n" for t in noisy)
     print_table(rows)
+    for kind in sorted(devices):
+        print(f"\ndevices: {kind}")
     print(f"\nnoisy (IQR sigma > {noisy_pct}%): {' '.join(noisy) or 'none'}")
 
 
@@ -123,7 +129,10 @@ def compare(runs):
         kinds.append(k)
     for i, k in enumerate(kinds):
         print(f"run{i + 1} devices: {'; '.join(sorted(k)) or '?'}")
-    mixed = len(set().union(*kinds)) > 1
+    # Compare what every run recorded: all fields if the logs have the same
+    # format, else (partition line only in newer logs) host type and device.
+    full = len({"compute_partition=" in x for k in kinds for x in k}) <= 1
+    mixed = len({x if full else ", ".join(x.split(", ")[:2]) for k in kinds for x in k}) > 1
     warn = ("WARNING: the runs used different device types or partition modes "
             "(SPX/DPX/CPX); their timings are not comparable." if mixed else "")
     if warn:

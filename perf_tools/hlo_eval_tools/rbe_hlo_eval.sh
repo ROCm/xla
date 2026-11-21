@@ -116,6 +116,22 @@ for mdir in "${MODEL_DIRS[@]}"; do
   cat > "$XLA_DIR/$pkg/test.sh" <<'EOF'
 #!/usr/bin/env bash
 echo "worker: $(cat /proc/sys/kernel/hostname)"
+# The worker's GPU partitioning, from amdgpu and KFD sysfs ("?" where absent):
+# compute (SPX/DPX/CPX...) and memory (NPS1/NPS2...) partition, CUs, XCCs, VRAM.
+part() { cat /sys/class/drm/card*/device/"$1" 2>/dev/null | sort -u | paste -sd/ -; }
+gpus=$(awk '$1 == "simd_count" && $2 > 0 { print FILENAME }' \
+  /sys/class/kfd/kfd/topology/nodes/*/properties 2>/dev/null)
+kfd() { for f in $gpus; do awk "\$1 == \"simd_count\" { s = \$2 } \$1 == \"simd_per_cu\" { c = \$2 }
+  \$1 == \"num_xcc\" { x = \$2 } \$1 == \"local_mem_size\" { m = \$2 } END { print $1 }" "$f"; done |
+  sort -u | paste -sd/ -; }
+cp=$(part current_compute_partition)
+echo "device: compute_partition=${cp:-?} memory_partition=$(part current_memory_partition | grep . || echo '?')" \
+  "cus=$(kfd 'c ? s / c : "?"' | grep . || echo '?') xcc=$(kfd 'x ? x : "?"' | grep . || echo '?')" \
+  "vram_gib=$(kfd 'm ? int(m / 2^30) : "?"' | grep . || echo '?')"
+if [ -n "${REQUIRE_PARTITION:-}" ] && [ "${cp^^}" != "${REQUIRE_PARTITION^^}" ]; then
+  echo "error: worker compute partition is ${cp:-unknown}, not REQUIRE_PARTITION=$REQUIRE_PARTITION" >&2
+  exit 3
+fi
 export TMPDIR=$TEST_TMPDIR
 exec bash "$PWD/$2" "$PWD/$1" "$PWD/$3" "$TEST_UNDECLARED_OUTPUTS_DIR" "$HLO_EVAL_REPEATS"
 EOF
@@ -150,7 +166,7 @@ done
 [ "${#TARGETS[@]}" -gt 0 ] || die "nothing to run"
 
 TEST_ENV=(--test_env=HLO_EVAL_REPEATS="$REPEATS" --test_env=STAT="$STAT")
-for v in CMD_BUFFER ARG_MODE SETTLE_SEC XLA_FLAGS; do
+for v in CMD_BUFFER ARG_MODE SETTLE_SEC XLA_FLAGS REQUIRE_PARTITION; do
   [ -z "${!v+x}" ] || TEST_ENV+=(--test_env="$v=${!v}")
 done
 RESULTS_DIR=$(realpath -m "${RESULTS_DIR:-hlo_eval_results/$XLA_SHA-${MODELS//,/+}-$(date +%Y%m%d-%H%M%S)}")
