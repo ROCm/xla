@@ -396,6 +396,7 @@ about a quarter of the samples are disturbed, before the median moves.
 | `XLA_DIR` | `.` | Same as `--xla <dir>`. |
 | `RESULTS_DIR`, `RBE` | see above, `rocm_rbe_dev` | Results directory and RBE config. |
 | `CMD_BUFFER`, `ARG_MODE`, `SETTLE_SEC`, `XLA_FLAGS` | `run_hlo_eval.sh`'s | Forwarded when set. |
+| `REQUIRE_PARTITION` | (unset) | e.g. `DPX`: fail on a worker whose compute partition differs, before running. |
 
 Measured on the Buildbarn single-GPU pool (MI350, DPX partitions; 4 runs of the
 40 single-GPU leaves, about 5-6 minutes each with a warm cache):
@@ -411,8 +412,11 @@ Measured on the Buildbarn single-GPU pool (MI350, DPX partitions; 4 runs of the
 - All workers so far were `mi350x-gpu-dpx-*` hosts with "AMD Instinct MI350X
   VF" devices (DPX partitions). SPX and CPX have not been measured: absolute
   times, memory limits and noise differ between partition modes, so compare
-  runs only within one mode. `hlo_eval_summarize.py` prints each run's devices
-  and warns when runs differ.
+  runs only within one mode. Each test logs the worker's partitioning from
+  amdgpu/KFD sysfs (`device: compute_partition=... memory_partition=... cus=...
+  xcc=... vram_gib=...`, `?` where not exposed); `hlo_eval_summarize.py`
+  prints it and warns when compared runs differ, and `REQUIRE_PARTITION=DPX`
+  makes a worker in another mode fail before running.
 
 If a build fails with `lost inputs with digests`, Buildbarn evicted cached
 outputs Bazel still referenced; rerun, or try one build with

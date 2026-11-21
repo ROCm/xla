@@ -48,6 +48,25 @@ $T/rbe_hlo_eval.sh --xla <ref> sdxl,vit inference/1gpu -- --jobs=200
   after another, or in parallel only from separate checkouts with separate
   `XLA_OUTPUT_BASE`.
 
+## GPU modes: check first
+
+- RBE GPU workers can be configured in different compute partition modes
+  (SPX, DPX, CPX, ...) and memory modes (NPS1, NPS2, ...), and the pool's
+  configuration can change between runs, or between workers of one run. Never
+  assume a mode, including the one earlier runs had.
+- Each test logs the worker's mode before running, read from amdgpu/KFD
+  sysfs: `device: compute_partition=... memory_partition=... cus=... xcc=...
+  vram_gib=...`. The summary prints it as `devices:`. A `?` means the worker
+  does not expose that value: then the mode is unknown; say so and do not
+  infer it from the host name or memory size.
+- Modes split the chip's compute, memory and caches between logical devices,
+  so absolute times, which models fit in memory and run-to-run noise all
+  depend on the mode. Compare only runs whose device lines match
+  (`hlo_eval_summarize.py` warns when they differ); otherwise report them as
+  not comparable. No ratios between modes are known; do not estimate any.
+- To get every worker in one mode, set `REQUIRE_PARTITION=<mode>`: a worker
+  in another mode fails before running instead of producing timings.
+
 ## Read the results
 
 The script prints the summary table and the results directory
@@ -61,7 +80,7 @@ within-run spread in % of the median.
 - `NOISY`: spread still above 2% after the automatic rerun. Inconclusive;
   leave it out of conclusions.
 - `NO_DATA`: no timings; read the leaf's `test.log`. A common cause is that
-  a large model does not fit in the device memory of these partitions
+  a large model does not fit in the device memory of the worker's mode
   (`RESOURCE_EXHAUSTED: Out of memory`): that is a capacity limit, not a
   regression, and repeats on every run.
 
@@ -71,7 +90,12 @@ within-run spread in % of the median.
 $T/hlo_eval_summarize.py <results dir A> <results dir B> [...]
 ```
 
-- Judge on the suite geomean line, "without 3 largest". Measured A/A noise:
+- The noise figures below were measured with identical runs on workers named
+  `mi350x-gpu-dpx-*` with "AMD Instinct MI350X VF" devices, before the mode
+  was logged (so DPX by host name only). Use them only for runs on such
+  workers; in any other or unknown mode, run identical runs first to measure
+  the noise.
+- Judge on the suite geomean line, "without 3 largest". Reference A/A noise:
   identical runs agree within 0.25% there.
   That figure is printed only when more than 3 modules are compared; with
   fewer, judge per module and repeat both arms.
@@ -82,22 +106,6 @@ $T/hlo_eval_summarize.py <results dir A> <results dir B> [...]
   `colabfold` settle at different levels from run to run (autotuning or host),
   so treat their differences as noise unless they are large and repeatable.
 - For a real A/B, run each arm at least twice and alternate them (A, B, A, B).
-
-## Hardware and partition modes
-
-- Every number above comes from the Buildbarn single-GPU pool as seen so far:
-  `mi350x-gpu-dpx-*` workers whose device reports "AMD Instinct MI350X VF" (a
-  virtual function of a DPX-partitioned MI350X) with about 108 GiB for XLA.
-  Nothing has been measured in SPX or CPX mode, and there are no known
-  SPX/DPX/CPX ratios; do not quote or estimate any.
-- Partition modes split the chip's compute, memory and caches between logical
-  devices, so absolute times, which models fit in memory, and cache-sensitive
-  behavior differ between modes. Never compare runs from different modes, and
-  do not reuse the noise figures above in another mode; measure them again
-  with identical runs there.
-- `hlo_eval_summarize.py` prints each run's devices (host type, device,
-  memory) and warns when runs differ. If a run shows a new host type or
-  memory size, say so and treat comparisons with older runs as invalid.
 
 ## When it fails
 
@@ -111,7 +119,7 @@ $T/hlo_eval_summarize.py <results dir A> <results dir B> [...]
 
 ## Report
 
-State the XLA revision(s), ROCm tarball, `REPEATS`, devices (the line
-`hlo_eval_summarize.py` prints), and results directories;
+State the XLA revision(s), ROCm tarball, `REPEATS`, GPU mode (the `devices:`
+line, or that it is unknown), and results directories;
 the suite geomean (and "without 3 largest"); modules beyond the noise bands
 above; and any `NOISY` or `NO_DATA` leaves.
