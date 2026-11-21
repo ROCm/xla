@@ -513,11 +513,22 @@ jobs:
       # never touched a workflow file, because that check applies to any
       # brand-new ref, not just to the commit's own diff. Same root cause
       # sync_main_mirror.yml already works around with a scoped GitHub App
-      # token. One token covers everything this job's skill does (editing
-      # the tracking comment, labels, the push, the PR) - same one-token
-      # shape as sync_main_mirror.yml, rather than juggling two differently
-      # scoped tokens side by side.
-      - name: Create GitHub App token
+      # token - request only `contents`+`workflows` here, the exact same
+      # pair that token already works with there. Asking this App token
+      # for anything more (pull-requests, issues) fails outright: the
+      # installation itself was only ever granted a specific, narrower
+      # permission set, and GitHub validates a token request's scopes
+      # against that atomically - if even one requested scope exceeds what
+      # the installation has, the whole request is rejected with a 422
+      # ("level of access... not granted to this installation"), which is
+      # exactly what requesting pull-requests/issues on top of this hit.
+      # `gh pr create` doesn't need this token anyway: opening a PR against
+      # an already-pushed branch is a plain pull-requests:write operation
+      # with no workflows-scope involved, and the job's own `permissions:`
+      # block already grants that to the default GITHUB_TOKEN - so only the
+      # one `git push` below uses this App token, everything else
+      # (comment edits, labels, the PR itself) keeps using the default one.
+      - name: Create GitHub App token for the branch push only
         if: steps.already_verified.outputs.skip != 'true'
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -528,8 +539,6 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-workflows: write
-          permission-pull-requests: write
-          permission-issues: write
 
       - name: Verify Proposed Fix
         if: steps.already_verified.outputs.skip != 'true'
@@ -545,10 +554,14 @@ jobs:
           ANTHROPIC_DEFAULT_OPUS_MODEL: "Claude-Opus-5.5"
           ANTHROPIC_DEFAULT_SONNET_MODEL: "Claude-Sonnet-4.6"
           ANTHROPIC_DEFAULT_HAIKU_MODEL: "Claude-Haiku-4.5"
-          # The scoped App token from above, not the default GITHUB_TOKEN -
-          # see the step that creates it for why (it needs to cover the
-          # push and `gh pr create` too, which the default token can't).
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Default token: comment edits, labels, and `gh pr create` - all
+          # plain contents/issues/pull-requests operations this job's own
+          # `permissions:` block already covers.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Scoped App token: only for the `git push` that creates the new
+          # branch - see the step that creates it for why that one push
+          # can't use the default token above.
+          PUSH_TOKEN: ${{ steps.app-token.outputs.token }}
         with:
           anthropic_api_key: "sk-ant-dummy-gateway-key"
           allowed_bots: "github-actions[bot]"

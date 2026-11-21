@@ -228,23 +228,28 @@ PR instead of a placeholder.
 2. **Push it to `ROCm/xla`** through an explicit token-embedded remote,
    not the checkout's own ambient credential (this checkout used
    `persist-credentials: false`, same precedent as
-   `rocm_xla_jax_metrics_nightly.yml`'s own pushes):
+   `rocm_xla_jax_metrics_nightly.yml`'s own pushes). Use `${PUSH_TOKEN}`
+   here, **not** `${GITHUB_TOKEN}`:
    ```
-   git remote add verify-target "https://x-access-token:${GITHUB_TOKEN}@github.com/ROCm/xla.git"
+   git remote add verify-target "https://x-access-token:${PUSH_TOKEN}@github.com/ROCm/xla.git"
    git push verify-target claude/verify-fix/<slug>
    ```
-   `GITHUB_TOKEN` here is a scoped GitHub App token (the workflow creates
-   it specifically for this job), not the plain default Actions token -
-   that matters: the default token cannot push a brand-new branch into
-   this repo at all, because creating a ref makes GitHub check whether it
-   touches `.github/workflows/*`, which needs a "workflows" permission
-   scope the default token can never carry no matter what the job's
-   `permissions:` block grants it. This isn't theoretical - it's exactly
-   what failed the first time this skill ran for real (`POST /git/refs` →
-   403 "Resource not accessible by integration" / "workflows scope may be
-   required"), even though the fix itself never touched a workflow file -
-   that check applies to any brand-new ref, not just to the commit's own
-   diff.
+   `PUSH_TOKEN` is a separate, scoped GitHub App token the workflow creates
+   specifically for this push - the default `GITHUB_TOKEN` cannot push a
+   brand-new branch into this repo at all, because creating a ref makes
+   GitHub check whether it touches `.github/workflows/*`, which needs a
+   "workflows" permission scope the default token can never carry no
+   matter what the job's `permissions:` block grants it. This isn't
+   theoretical - it's exactly what failed the first time this skill ran
+   for real (`POST /git/refs` → 403 "Resource not accessible by
+   integration" / "workflows scope may be required"), even though the fix
+   itself never touched a workflow file - that check applies to any
+   brand-new ref, not just to the commit's own diff. Use `${GITHUB_TOKEN}`
+   (the default) for everything else in this skill, including `gh pr
+   create` below - opening a PR against an already-pushed branch needs
+   nothing but `pull-requests: write`, which the job's own `permissions:`
+   already grants the default token; it has no workflows-scope involved
+   and doesn't need `PUSH_TOKEN`.
 3. **Base the PR on `main-mirror`, not `ROCm/xla`'s own default branch.**
    `REPOSITORY`/`HEAD_SHA` are almost always `openxla/xla@<sha>` - a
    different history from `ROCm/xla`'s own default branch (which carries
