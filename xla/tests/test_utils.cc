@@ -1061,6 +1061,19 @@ void SetFakeArgumentCacheLimitsForTest(int64_t max_in_memory_bytes,
 
 absl::StatusOr<std::vector<Literal>> MakeFakeArguments(
     const HloModule* module, const FakeArgumentsOptions& options) {
+  std::vector<Literal> arguments(
+      module->entry_computation()->num_parameters());
+  ABSL_RETURN_IF_ERROR(ForEachFakeArgument(
+      module, options, [&](int64_t i, Literal argument) -> absl::Status {
+        arguments[i] = std::move(argument);
+        return absl::OkStatus();
+      }));
+  return std::move(arguments);
+}
+
+absl::Status ForEachFakeArgument(
+    const HloModule* module, const FakeArgumentsOptions& options,
+    absl::FunctionRef<absl::Status(int64_t, Literal)> consume) {
   if (!options.parameter_ranges.empty()) {
     return Unimplemented(
         "parameter_ranges is not currently supported in MakeFakeArguments.");
@@ -1082,7 +1095,6 @@ absl::StatusOr<std::vector<Literal>> MakeFakeArguments(
 
   ABSL_ASSIGN_OR_RETURN(auto dataflow, HloDataflowAnalysis::Run(*module));
   const auto params = module->entry_computation()->parameter_instructions();
-  std::vector<Literal> arguments(params.size());
   for (int i = 0; i < params.size(); ++i) {
     const HloModuleConfig& module_config = module->config();
     const Shape& param_shape = (module_config.has_entry_computation_layout() &&
@@ -1096,14 +1108,15 @@ absl::StatusOr<std::vector<Literal>> MakeFakeArguments(
                                    : params[i]->shape();
 
     ABSL_ASSIGN_OR_RETURN(
-        arguments[i],
+        Literal argument,
         MakeConstrainedArgument(
             *dataflow, *params[i], param_shape, engine, options.use_large_range,
             options.treat_gte_as_data_formatting, options.max_bits_of_precision,
             options.generate_aligned_ds_indices, options.get_index_known_zeroes,
             cache_ctx_ptr));
+    ABSL_RETURN_IF_ERROR(consume(i, std::move(argument)));
   }
-  return std::move(arguments);
+  return absl::OkStatus();
 }
 
 // Validates options for dataflow-constrained fake argument generation.

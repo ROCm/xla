@@ -27,6 +27,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/functional/function_ref.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -171,6 +172,14 @@ struct FakeArgumentsOptions {
 // Unimplemented error if provided.
 absl::StatusOr<std::vector<Literal>> MakeFakeArguments(
     const HloModule* module, const FakeArgumentsOptions& options = {});
+
+// Like MakeFakeArguments, but hands each argument to `consume` as soon as it
+// is generated, in parameter order, so callers can transfer and free one
+// argument before the next is built. Yields the same values as
+// MakeFakeArguments.
+absl::Status ForEachFakeArgument(
+    const HloModule* module, const FakeArgumentsOptions& options,
+    absl::FunctionRef<absl::Status(int64_t, Literal)> consume);
 
 // Generates a vector of arguments containing fake data using reverse constraint
 // propagation. The constraint propagator seeds initial constraints based on HLO

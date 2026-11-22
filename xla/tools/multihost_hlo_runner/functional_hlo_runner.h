@@ -115,6 +115,13 @@ enum class ModuleArgumentMode {
   kUninitialized,
   // Use random values from a normal distribution as arguments.
   kUseRandomNormalInputs,
+  // Like kUseRandomInputs, but floating point arrays with at least two
+  // dimensions larger than one are refilled with deterministic uniform values
+  // of mean zero and standard deviation 1/sqrt(fan_in), where fan_in is the
+  // element count divided by the last dimension. Floats that reach rsqrt,
+  // sqrt, log or power get values in (0, 1), and integers that reach a gather
+  // index are kept in range. This keeps the outputs of deep networks finite.
+  kUseFanInScaledRandomInputs,
 };
 
 bool AbslParseFlag(absl::string_view text, ModuleArgumentMode* argument_mode,

@@ -17,6 +17,7 @@ limitations under the License.
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -25,12 +26,14 @@ limitations under the License.
 #include <optional>
 #include <random>
 #include <string>
+#include <thread>  // NOLINT
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/cleanup/cleanup.h"
 #include "absl/container/btree_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/functional/function_ref.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
@@ -55,8 +58,11 @@ limitations under the License.
 #include "xla/debug_options_flags.h"
 #include "xla/future.h"
 #include "xla/hlo/builder/xla_computation.h"
+#include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_input_output_alias_config.h"
+#include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/ir/hlo_sharding.h"
 #include "xla/hlo/parser/hlo_parser.h"
 #include "xla/hlo/pass/hlo_pass_pipeline.h"
@@ -1211,6 +1217,423 @@ int64_t ComputeModuleParameterHostBytes(const HloModule& module) {
   return total_bytes;
 }
 
+namespace {
+
+// SplitMix64 finalizer, used as a counter based generator so every element
+// gets a value that depends only on its leaf and element index.
+uint64_t SplitMix64(uint64_t x) {
+  x += 0x9E3779B97F4A7C15ULL;
+  x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+  return x ^ (x >> 31);
+}
+
+// What the uses of one entry parameter leaf need from its values.
+struct LeafUseHints {
+  // Number of valid start positions of the smallest gather this leaf indexes,
+  // if it reaches a gather start index operand.
+  std::optional<int64_t> index_bound;
+  // True if the leaf reaches rsqrt, sqrt, log or the base of power, as a batch
+  // norm variance, an Adam second moment or a diffusion alpha does.
+  bool needs_positive = false;
+};
+
+// Whether a value used as operand `operand_index` of `user` flows on into the
+// result of `user` with its sign and range roughly kept.
+bool FlowsThrough(const HloInstruction* user, int64_t operand_index) {
+  switch (user->opcode()) {
+    case HloOpcode::kAdd:
+    case HloOpcode::kBitcast:
+    case HloOpcode::kBroadcast:
+    case HloOpcode::kClamp:
+    case HloOpcode::kConcatenate:
+    case HloOpcode::kConvert:
+    case HloOpcode::kCopy:
+    case HloOpcode::kMaximum:
+    case HloOpcode::kMinimum:
+    case HloOpcode::kMultiply:
+    case HloOpcode::kReshape:
+    case HloOpcode::kReverse:
+    case HloOpcode::kSlice:
+    case HloOpcode::kTranspose:
+      return true;
+    case HloOpcode::kDivide:
+    case HloOpcode::kDynamicSlice:
+    case HloOpcode::kGather:
+    case HloOpcode::kPad:
+    case HloOpcode::kSubtract:
+      return operand_index == 0;
+    case HloOpcode::kSelect:
+      return operand_index != 0;
+    default:
+      return false;
+  }
+}
+
+// Pushes onto `worklist` the reads of element `element` of the tuple valued
+// `tuple`, looking through fusions that take the whole tuple, as optimized
+// while loop bodies do.
+void PushTupleElementReads(const HloInstruction* tuple, int64_t element,
+                           std::vector<const HloInstruction*>& worklist,
+                           int depth = 0) {
+  if (depth > 8) {
+    return;
+  }
+  for (const HloInstruction* user : tuple->users()) {
+    if (user->opcode() == HloOpcode::kGetTupleElement) {
+      if (user->tuple_index() == element) {
+        worklist.push_back(user);
+      }
+    } else if (user->opcode() == HloOpcode::kFusion) {
+      for (int64_t i : user->OperandIndices(tuple)) {
+        PushTupleElementReads(user->fused_parameter(i), element, worklist,
+                              depth + 1);
+      }
+    }
+  }
+}
+
+// Follows the values that start at `worklist` through fusions and the ops
+// accepted by FlowsThrough, and records which constrained uses they reach.
+LeafUseHints AnalyzeLeafUses(std::vector<const HloInstruction*> worklist) {
+  constexpr size_t kMaxVisited = 4096;
+  LeafUseHints hints;
+  absl::flat_hash_set<const HloInstruction*> visited;
+  while (!worklist.empty() && visited.size() < kMaxVisited) {
+    const HloInstruction* value = worklist.back();
+    worklist.pop_back();
+    if (!visited.insert(value).second) {
+      continue;
+    }
+    const HloComputation* computation = value->parent();
+    if (computation->IsFusionComputation() &&
+        computation->root_instruction() == value) {
+      worklist.push_back(computation->FusionInstruction());
+    }
+    for (const HloInstruction* user : value->users()) {
+      for (int64_t operand_index : user->OperandIndices(value)) {
+        switch (user->opcode()) {
+          case HloOpcode::kFusion:
+            worklist.push_back(user->fused_parameter(operand_index));
+            break;
+          case HloOpcode::kGather:
+            if (operand_index == 1) {
+              const Shape& table = user->operand(0)->shape();
+              for (int64_t dim :
+                   user->gather_dimension_numbers().start_index_map()) {
+                const int64_t starts = std::max<int64_t>(
+                    1, table.dimensions(dim) -
+                           user->gather_slice_sizes()[dim] + 1);
+                hints.index_bound =
+                    std::min(hints.index_bound.value_or(starts), starts);
+              }
+            } else if (FlowsThrough(user, operand_index)) {
+              worklist.push_back(user);
+            }
+            break;
+          case HloOpcode::kLog:
+          case HloOpcode::kRsqrt:
+          case HloOpcode::kSqrt:
+            hints.needs_positive = true;
+            break;
+          case HloOpcode::kPower:
+            if (operand_index == 0) {
+              hints.needs_positive = true;
+            }
+            break;
+          case HloOpcode::kTuple:
+            // A multi output fusion root passes element `operand_index` on to
+            // the readers of that element of the fusion result.
+            if (user->parent()->IsFusionComputation() &&
+                user->parent()->root_instruction() == user) {
+              PushTupleElementReads(user->parent()->FusionInstruction(),
+                                    operand_index, worklist);
+            }
+            // Follow tuple element `operand_index` into while loops that take
+            // this tuple, both inside the loop and out of its result.
+            for (const HloInstruction* loop : user->users()) {
+              if (loop->opcode() != HloOpcode::kWhile) {
+                continue;
+              }
+              for (const HloInstruction* tuple :
+                   {static_cast<const HloInstruction*>(loop),
+                    static_cast<const HloInstruction*>(
+                        loop->while_body()->parameter_instruction(0)),
+                    static_cast<const HloInstruction*>(
+                        loop->while_condition()->parameter_instruction(0))}) {
+                PushTupleElementReads(tuple, operand_index, worklist);
+              }
+            }
+            break;
+          default:
+            if (FlowsThrough(user, operand_index)) {
+              worklist.push_back(user);
+            }
+        }
+      }
+    }
+  }
+  return hints;
+}
+
+// Returns the instructions in the entry computation of `module` that carry
+// leaf `index` of argument literal `literal_index`. With `flattened`, the
+// literals are the elements of the single tuple parameter.
+std::vector<const HloInstruction*> LeafValues(const HloModule& module,
+                                              bool flattened,
+                                              int64_t literal_index,
+                                              const ShapeIndex& index) {
+  const auto& params = module.entry_computation()->parameter_instructions();
+  ShapeIndex path;
+  const HloInstruction* param;
+  if (flattened) {
+    if (params.empty()) {
+      return {};
+    }
+    param = params[0];
+    path.push_back(literal_index);
+  } else {
+    if (literal_index >= static_cast<int64_t>(params.size())) {
+      return {};
+    }
+    param = params[literal_index];
+  }
+  for (int64_t i : index) {
+    path.push_back(i);
+  }
+  if (path.empty()) {
+    return {param};
+  }
+  std::vector<const HloInstruction*> values;
+  if (path.size() == 1) {
+    for (const HloInstruction* user : param->users()) {
+      if (user->opcode() == HloOpcode::kGetTupleElement &&
+          user->tuple_index() == path[0]) {
+        values.push_back(user);
+      }
+    }
+  }
+  return values;
+}
+
+// Uniform double in [0, 1) for element `i` of the leaf seeded with `seed`.
+double UniformAt(uint64_t seed, int64_t i) {
+  return static_cast<double>(SplitMix64(seed + static_cast<uint64_t>(i)) >>
+                             11) *
+         0x1.0p-53;
+}
+
+void FillFloatLeaf(tsl::thread::ThreadPool& pool, Literal& literal,
+                   const ShapeIndex& index, uint64_t seed, double lo,
+                   double hi) {
+  primitive_util::FloatingPointTypeSwitch(
+      [&](auto primitive_type_constant) {
+        using NativeT = primitive_util::NativeTypeOf<primitive_type_constant>;
+        absl::Span<NativeT> data = literal.data<NativeT>(index);
+        pool.ParallelFor(data.size(), /*cost_per_unit=*/10,
+                         [&](int64_t begin, int64_t end) {
+                           for (int64_t i = begin; i < end; ++i) {
+                             data[i] = static_cast<NativeT>(static_cast<float>(
+                                 lo + (hi - lo) * UniformAt(seed, i)));
+                           }
+                         });
+      },
+      ShapeUtil::GetSubshape(literal.shape(), index).element_type());
+}
+
+template <typename IntT>
+void FillIndexLeafTyped(tsl::thread::ThreadPool& pool, Literal& literal,
+                        const ShapeIndex& index, uint64_t seed,
+                        int64_t bound) {
+  absl::Span<IntT> data = literal.data<IntT>(index);
+  pool.ParallelFor(
+      data.size(), /*cost_per_unit=*/10, [&](int64_t begin, int64_t end) {
+        for (int64_t i = begin; i < end; ++i) {
+          data[i] = static_cast<IntT>(
+              SplitMix64(seed + static_cast<uint64_t>(i)) %
+              static_cast<uint64_t>(bound));
+        }
+      });
+}
+
+// Returns false if the leaf type is not a supported index type.
+bool FillIndexLeaf(tsl::thread::ThreadPool& pool, Literal& literal,
+                   const ShapeIndex& index, uint64_t seed, int64_t bound) {
+  switch (ShapeUtil::GetSubshape(literal.shape(), index).element_type()) {
+    case S32:
+      FillIndexLeafTyped<int32_t>(pool, literal, index, seed, bound);
+      return true;
+    case S64:
+      FillIndexLeafTyped<int64_t>(pool, literal, index, seed, bound);
+      return true;
+    case U32:
+      FillIndexLeafTyped<uint32_t>(pool, literal, index, seed, bound);
+      return true;
+    case U64:
+      FillIndexLeafTyped<uint64_t>(pool, literal, index, seed, bound);
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Rewrites the MakeFakeArguments values of `literals` so deep models stay
+// finite. Every leaf is filled from a counter based hash of its leaf and
+// element index, so values do not depend on thread count or the runner RNG.
+//
+// 1. F16, BF16, F32 and F64 leaves that reach rsqrt, sqrt, log or the base of
+//    power get uniform values in [0.25, 0.75), so both x and 1 minus x stay
+//    positive, as diffusion schedules need for alphas.
+// 2. Other such float leaves with at least two dimensions larger than one get
+//    uniform values in a zero centered interval of half width
+//    sqrt(3 / fan_in), so the standard deviation is 1/sqrt(fan_in). fan_in is
+//    the element count divided by the last dimension, which matches the HWIO
+//    and [in, out] weight layouts that JAX emits. Size one dimensions, such
+//    as the leading pmap axis, do not count, so biases stay small.
+// 3. S32, S64, U32 and U64 leaves that reach a gather start index get uniform
+//    values in [0, valid starts), so lookups such as JAX take in fill mode
+//    never fall out of range and return NaN.
+//
+// All other leaves keep their MakeFakeArguments values. Apply must see the
+// literals in argument order, so leaf ids and hence values match whether the
+// literals are rewritten all at once or one at a time while streaming.
+class FanInScaler {
+ public:
+  FanInScaler(const HloModule& module, bool flattened)
+      : module_(module),
+        flattened_(flattened),
+        pool_(tsl::Env::Default(), "XlaHloRunner_FanIn",
+              std::max(1,
+                       static_cast<int>(std::thread::hardware_concurrency()))) {
+  }
+
+  void Apply(int64_t literal_index, Literal& literal);
+
+  void LogSummary() const {
+    LOG(INFO) << "Fan in scaled " << fan_in_leaves_
+              << " floating point leaves (" << fan_in_elements_
+              << " elements), made " << positive_leaves_
+              << " leaves positive, bounded " << index_leaves_
+              << " gather index leaves.";
+  }
+
+ private:
+  const HloModule& module_;
+  const bool flattened_;
+  tsl::thread::ThreadPool pool_;
+  int64_t leaf_id_ = 0;
+  int64_t fan_in_leaves_ = 0;
+  int64_t positive_leaves_ = 0;
+  int64_t index_leaves_ = 0;
+  int64_t fan_in_elements_ = 0;
+};
+
+void FanInScaler::Apply(int64_t literal_index, Literal& literal) {
+  ShapeUtil::ForEachSubshape(
+      literal.shape(), [&](const Shape& subshape, const ShapeIndex& index) {
+        if (!subshape.IsArray()) {
+          return;
+        }
+        ++leaf_id_;
+        const int64_t num_elements = ShapeUtil::ElementsIn(subshape);
+        if (num_elements == 0) {
+          return;
+        }
+        const PrimitiveType type = subshape.element_type();
+        const bool is_float =
+            type == F16 || type == BF16 || type == F32 || type == F64;
+        const bool is_index =
+            type == S32 || type == S64 || type == U32 || type == U64;
+        if (!is_float && !is_index) {
+          return;
+        }
+        const uint64_t seed = SplitMix64(static_cast<uint64_t>(leaf_id_) << 40);
+        const LeafUseHints hints = AnalyzeLeafUses(
+            LeafValues(module_, flattened_, literal_index, index));
+        if (is_index) {
+          if (hints.index_bound.has_value() &&
+              FillIndexLeaf(pool_, literal, index, seed, *hints.index_bound)) {
+            ++index_leaves_;
+          }
+          return;
+        }
+        if (hints.needs_positive) {
+          FillFloatLeaf(pool_, literal, index, seed, 0.25, 0.75);
+          ++positive_leaves_;
+          return;
+        }
+        if (absl::c_count_if(subshape.dimensions(),
+                             [](int64_t d) { return d > 1; }) < 2) {
+          return;
+        }
+        const int64_t fan_in =
+            std::max<int64_t>(1, num_elements / subshape.dimensions().back());
+        const double bound = std::sqrt(3.0 / static_cast<double>(fan_in));
+        FillFloatLeaf(pool_, literal, index, seed, -bound, bound);
+        ++fan_in_leaves_;
+        fan_in_elements_ += num_elements;
+      });
+}
+
+void ApplyFanInScaling(const HloModule& module, bool flattened,
+                       LiteralVec& literals) {
+  FanInScaler scaler(module, flattened);
+  for (int64_t i = 0; i < static_cast<int64_t>(literals.size()); ++i) {
+    scaler.Apply(i, literals[i]);
+  }
+  scaler.LogSummary();
+}
+
+// Generates fan in scaled arguments for a single device executable whose
+// parameters are not one flattened tuple, and copies each to the device
+// before the next is generated. Host memory then peaks at about the largest
+// argument instead of the sum of all of them.
+absl::StatusOr<std::vector<std::unique_ptr<PjRtBuffer>>>
+StreamFanInScaledArgumentsToDevice(PjRtClient& client,
+                                   const PjRtLoadedExecutable& executable,
+                                   const HloModule& module,
+                                   const FakeArgumentsOptions& options) {
+  PjRtDevice* device = executable.addressable_devices().front();
+  ABSL_ASSIGN_OR_RETURN(
+      const std::vector<std::shared_ptr<const PjRtLayout>>& pjrt_layouts,
+      executable.GetParameterLayouts());
+  const ComputationLayout& entry_layout = module.entry_computation_layout();
+  FanInScaler scaler(module, /*flattened=*/false);
+  std::vector<std::unique_ptr<PjRtBuffer>> buffers;
+  ABSL_RETURN_IF_ERROR(ForEachFakeArgument(
+      &module, options, [&](int64_t i, Literal literal) -> absl::Status {
+        scaler.Apply(i, literal);
+        const Shape& shape = entry_layout.parameter_shape(i);
+        PjRtMemorySpace* memory_space;
+        if (shape.has_layout() &&
+            shape.layout().memory_space() == Layout::kHostMemorySpace) {
+          ABSL_ASSIGN_OR_RETURN(memory_space,
+                                device->memory_space_by_kind(
+                                    PinnedHostMemorySpace::kKind));
+        } else {
+          ABSL_ASSIGN_OR_RETURN(memory_space, device->default_memory_space());
+        }
+        const Layout* layout = i < static_cast<int64_t>(pjrt_layouts.size())
+                                   ? &pjrt_layouts[i]->xla_layout()
+                                   : nullptr;
+        absl::StatusOr<std::unique_ptr<PjRtBuffer>> buffer =
+            client.BufferFromHostLiteral(literal, memory_space, layout);
+        if (absl::IsUnimplemented(buffer.status())) {
+          buffer = client.BufferFromHostLiteral(literal, memory_space,
+                                                /*device_layout=*/nullptr);
+        }
+        ABSL_RETURN_IF_ERROR(buffer.status());
+        // The transfer reads `literal`, so wait before it is freed.
+        ABSL_RETURN_IF_ERROR((*buffer)->GetReadyFuture().Await());
+        buffers.push_back(*std::move(buffer));
+        return absl::OkStatus();
+      }));
+  scaler.LogSummary();
+  return buffers;
+}
+
+}  // namespace
+
 // Creates fake arguments to run the given executable.
 absl::StatusOr<std::vector<std::vector<std::unique_ptr<PjRtBuffer>>>>
 CreateArgumentsOnDevice(PjRtClient& client,
@@ -1242,10 +1665,15 @@ CreateArgumentsOnDevice(PjRtClient& client,
   CHECK_EQ(hlo_modules.size(), 1);
   HloModule* my_hlo_module = hlo_modules.front().get();
 
-  const bool use_random_inputs = running_options.module_argument_mode ==
-                                     ModuleArgumentMode::kUseRandomInputs ||
-                                 running_options.module_argument_mode ==
-                                     ModuleArgumentMode::kUseSharedRandomInputs;
+  const bool use_fan_in_scaling =
+      running_options.module_argument_mode ==
+      ModuleArgumentMode::kUseFanInScaledRandomInputs;
+  const bool use_random_inputs =
+      running_options.module_argument_mode ==
+          ModuleArgumentMode::kUseRandomInputs ||
+      running_options.module_argument_mode ==
+          ModuleArgumentMode::kUseSharedRandomInputs ||
+      use_fan_in_scaling;
   // Scale the minimum cached tensor size with total module parameter footprint
   // (up to 16 MiB on multi-GiB models) so small per-layer tensors such as MoE
   // router gates and quantization/norm scales stay independent across layers
@@ -1267,8 +1695,9 @@ CreateArgumentsOnDevice(PjRtClient& client,
           ModuleArgumentMode::kUseSharedRandomInputs ||
       running_options.module_argument_mode ==
           ModuleArgumentMode::kUseZerosAsInput ||
-      (running_options.module_argument_mode ==
-           ModuleArgumentMode::kUseRandomInputs &&
+      ((running_options.module_argument_mode ==
+            ModuleArgumentMode::kUseRandomInputs ||
+        use_fan_in_scaling) &&
        engine == nullptr);
   absl::BitGen rd;
 
@@ -1281,6 +1710,24 @@ CreateArgumentsOnDevice(PjRtClient& client,
   }
   std::function<double(std::minstd_rand0*)> float_generator =
       [&](std::minstd_rand0* engine) { return (*random_dist)(*engine); };
+
+  if (use_fan_in_scaling && num_addressable_devices == 1 &&
+      !flatten_arguments) {
+    FakeArgumentsOptions options;
+    options.engine = engine;
+    options.pseudo_random = true;
+    options.cache_arguments = true;
+    options.min_cached_argument_bytes = min_cached_argument_bytes;
+    ABSL_ASSIGN_OR_RETURN(std::vector<std::unique_ptr<PjRtBuffer>> buffers,
+                          StreamFanInScaledArgumentsToDevice(
+                              client, *executable, *my_hlo_module, options));
+    std::vector<std::vector<std::unique_ptr<PjRtBuffer>>> device_buffers;
+    device_buffers.push_back(std::move(buffers));
+    const double elapsed_secs = absl::ToDoubleSeconds(absl::Now() - init_start);
+    LOG(INFO) << "Initialized and loaded arguments on 1 addressable device(s) "
+              << "in " << elapsed_secs << "s.";
+    return device_buffers;
+  }
 
   for (int i = 0; i < num_addressable_devices; ++i) {
     VLOG(3) << "Creating fake arguments for device " << i;
@@ -1364,6 +1811,10 @@ CreateArgumentsOnDevice(PjRtClient& client,
       } else {
         ABSL_ASSIGN_OR_RETURN(argument_literals,
                               MakeFakeArguments(my_hlo_module, options));
+      }
+      if (use_fan_in_scaling) {
+        ApplyFanInScaling(*my_hlo_module, flatten_arguments,
+                          argument_literals);
       }
       if (use_shared_inputs) {
         break;
@@ -2223,7 +2674,9 @@ GetModuleArgumentModeParser() {
        {"use_zeros_as_input", ModuleArgumentMode::kUseZerosAsInput},
        {"uninitialized", ModuleArgumentMode::kUninitialized},
        {"use_random_normal_inputs",
-        ModuleArgumentMode::kUseRandomNormalInputs}});
+        ModuleArgumentMode::kUseRandomNormalInputs},
+       {"use_fan_in_scaled_random_inputs",
+        ModuleArgumentMode::kUseFanInScaledRandomInputs}});
   return parser;
 }
 }  // namespace

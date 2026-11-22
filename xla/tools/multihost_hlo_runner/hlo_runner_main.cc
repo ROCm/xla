@@ -160,12 +160,16 @@ ArgumentModeFromString(absl::string_view text) {
     return FunctionalHloRunner::ModuleArgumentMode::kUninitialized;
   } else if (text == "use_random_normal_inputs") {
     return FunctionalHloRunner::ModuleArgumentMode::kUseRandomNormalInputs;
+  } else if (text == "use_fan_in_scaled_random_inputs") {
+    return FunctionalHloRunner::ModuleArgumentMode::
+        kUseFanInScaledRandomInputs;
   }
   return absl::InvalidArgumentError(
       absl::StrCat(R"(Invalid --hlo_argument_mode specified. Expected one of: )"
                    R"("use_device_id_as_input", "use_random_inputs", )"
                    R"("use_shared_random_inputs", "use_zeros_as_input", )"
-                   R"("uninitialized", or "use_random_normal_inputs". Got: )",
+                   R"("uninitialized", "use_random_normal_inputs", or )"
+                   R"("use_fan_in_scaled_random_inputs". Got: )",
                    text));
 }
 
@@ -617,7 +621,8 @@ int main(int argc, char** argv) {
                 "Accepted values: "
                 "use_device_id_as_input, use_random_inputs, "
                 "use_shared_random_inputs, use_zeros_as_input, "
-                "uninitialized, or use_random_normal_inputs."),
+                "uninitialized, use_random_normal_inputs, or "
+                "use_fan_in_scaled_random_inputs."),
       tsl::Flag("random_seed", &opts.random_seed,
                 "Seed to be used for generating random inputs when "
                 "`hlo_argument_mode` is set to use_random_inputs or "
