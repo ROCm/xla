@@ -41,13 +41,14 @@
 #
 # Each qualifying comment is classified by the issue it's on:
 #   - "ci_failure": the issue carries the `rocm-infra-error` label, its
-#     title matches the `Nightly CI Failure: <job> / <step>` shape
-#     collect_claude_debug_targets.sh creates issues with, and a
-#     `- Failing job: <url>` line is present in its body - i.e. it's one
-#     of the nightly monitor's own per-failure issues. These get the full
-#     treatment: a specific commit to check out, a job/step signature, and
-#     the respond-to-mention skill's reproduce/apply/revert protocol.
-#     Mention marker: `<!-- rocm-nightly-claude-mention:JOB_NAME /
+#     body carries a `<!-- rocm-nightly-failure:SIGNATURE -->` marker
+#     (never the title - see collect_claude_debug_targets.sh for why: the
+#     title is free-form and debug-nightly-failure rewrites it once it has
+#     a root cause), and a `- Failing job: <url>` line is present too -
+#     i.e. it's one of the nightly monitor's own per-failure issues. These
+#     get the full treatment: a specific commit to check out, a job/step
+#     signature, and the respond-to-mention skill's reproduce/apply/revert
+#     protocol. Mention marker: `<!-- rocm-nightly-claude-mention:JOB_NAME /
 #     STEP_NAME:INSTRUCTIONS_HASH -->`.
 #   - "general": anything else - an ordinary issue with no CI-failure
 #     context to reproduce. These get the lighter respond-to-issue skill:
@@ -83,30 +84,34 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Checks one comment against every qualifying rule above and, if it
 # qualifies, prints its JSON target object on stdout (nothing otherwise).
 # Shared by both modes so the qualifying logic only ever lives in one
-# place. ISSUE_TITLE/ISSUE_BODY/ISSUE_HAS_LABEL describe the issue itself
-# (the signature and "Failing job:" line, if any, live there, not in any
-# comment). ALL_COMMENTS_TEXT is every existing comment's body on the
-# issue, newline-joined, searched only for the mention-marker dedup check
-# below.
+# place. ISSUE_BODY/ISSUE_HAS_LABEL describe the issue itself (the
+# signature and "Failing job:" line, if any, live in the body, not in any
+# comment, and never in the title - see the classification comment below).
+# ALL_COMMENTS_TEXT is every existing comment's body on the issue,
+# newline-joined, searched only for the mention-marker dedup check below.
 process_comment() {
-    local ISSUE_NUMBER="$1" COMMENT_ID="$2" COMMENT_BODY="$3" ISSUE_TITLE="$4" ISSUE_BODY="$5" ISSUE_HAS_LABEL="$6" ALL_COMMENTS_TEXT="$7"
+    local ISSUE_NUMBER="$1" COMMENT_ID="$2" COMMENT_BODY="$3" ISSUE_BODY="$4" ISSUE_HAS_LABEL="$5" ALL_COMMENTS_TEXT="$6"
 
     echo "Checking comment ${COMMENT_ID} on issue #${ISSUE_NUMBER}" >&2
 
     # Classify: does this look like one of the nightly monitor's own
-    # per-failure issues (label + title shape + a parseable "Failing job:"
-    # line), or an ordinary issue? Only an issue satisfying all three gets
-    # the "ci_failure" treatment - any one of them missing (a human-created
-    # issue that merely reuses the label, or a monitor issue whose title
-    # was edited) falls back to "general" rather than half-applying the
-    # CI-failure protocol to something it doesn't actually describe.
+    # per-failure issues (label + a `rocm-nightly-failure:` signature
+    # marker in the body + a parseable "Failing job:" line), or an
+    # ordinary issue? Only an issue satisfying all three gets the
+    # "ci_failure" treatment - any one of them missing (a human-created
+    # issue that merely reuses the label) falls back to "general" rather
+    # than half-applying the CI-failure protocol to something it doesn't
+    # actually describe. Deliberately NOT based on the title - that's
+    # free-form (debug-nightly-failure rewrites it to something more
+    # descriptive once it has a root cause), so the signature is always
+    # recovered from the body marker instead, same as
+    # collect_claude_debug_targets.sh.
     local IS_CI_FAILURE=false SIGNATURE="" FAILURE_URL=""
     if [ "$ISSUE_HAS_LABEL" = "true" ]; then
-        local STRIPPED_TITLE="${ISSUE_TITLE#Nightly CI Failure: }"
-        if [ "$STRIPPED_TITLE" != "$ISSUE_TITLE" ]; then
+        SIGNATURE=$(printf '%s' "$ISSUE_BODY" | grep -oP '(?<=<!-- rocm-nightly-failure:)[^>]*(?= -->)' | head -1 || true)
+        if [ -n "$SIGNATURE" ]; then
             FAILURE_URL=$(printf '%s' "$ISSUE_BODY" | grep -oP '(?<=- Failing job: )\S+' | head -1 || true)
             if [ -n "$FAILURE_URL" ]; then
-                SIGNATURE="$STRIPPED_TITLE"
                 IS_CI_FAILURE=true
             fi
         fi
@@ -221,12 +226,11 @@ if [ "${1:-}" = "--comment" ]; then
     COMMENT_ID="$3"
     COMMENT_BODY="$4"
 
-    ISSUE_JSON=$(gh issue view "$ISSUE_NUMBER" --repo "$CI_REPO" --json title,body,labels)
-    ISSUE_TITLE=$(printf '%s' "$ISSUE_JSON" | jq -r '.title')
+    ISSUE_JSON=$(gh issue view "$ISSUE_NUMBER" --repo "$CI_REPO" --json body,labels)
     ISSUE_BODY=$(printf '%s' "$ISSUE_JSON" | jq -r '.body')
     ISSUE_HAS_LABEL=$(printf '%s' "$ISSUE_JSON" | jq --arg l "$LABEL" '[.labels[].name] | any(. == $l)')
     ALL_COMMENTS_TEXT=$(gh api --paginate "/repos/${CI_REPO}/issues/${ISSUE_NUMBER}/comments" | jq -r '[.[].body] | join("\n")')
-    TARGET=$(process_comment "$ISSUE_NUMBER" "$COMMENT_ID" "$COMMENT_BODY" "$ISSUE_TITLE" "$ISSUE_BODY" "$ISSUE_HAS_LABEL" "$ALL_COMMENTS_TEXT")
+    TARGET=$(process_comment "$ISSUE_NUMBER" "$COMMENT_ID" "$COMMENT_BODY" "$ISSUE_BODY" "$ISSUE_HAS_LABEL" "$ALL_COMMENTS_TEXT")
     if [ -n "$TARGET" ]; then
         TARGETS=$(printf '%s' "$TARGETS" | jq -c --argjson t "$TARGET" '. + [$t]')
     fi
@@ -234,12 +238,11 @@ elif [ $# -eq 0 ]; then
     # No `--label` filter: a qualifying comment can now be on any open
     # issue, not just the nightly monitor's own rocm-infra-error ones.
     OPEN_ISSUES=$(gh issue list --repo "$CI_REPO" --state open --limit 1000 \
-        --json number,title,body,labels)
+        --json number,body,labels)
 
     mapfile -t ISSUE_NUMBERS < <(printf '%s' "$OPEN_ISSUES" | jq -r '.[].number')
 
     for ISSUE_NUMBER in "${ISSUE_NUMBERS[@]}"; do
-        ISSUE_TITLE=$(printf '%s' "$OPEN_ISSUES" | jq -r --argjson n "$ISSUE_NUMBER" '.[] | select(.number == $n) | .title')
         ISSUE_BODY=$(printf '%s' "$OPEN_ISSUES" | jq -r --argjson n "$ISSUE_NUMBER" '.[] | select(.number == $n) | .body')
         ISSUE_HAS_LABEL=$(printf '%s' "$OPEN_ISSUES" | jq --arg l "$LABEL" --argjson n "$ISSUE_NUMBER" \
             '[.[] | select(.number == $n) | .labels[].name] | any(. == $l)')
@@ -250,7 +253,7 @@ elif [ $# -eq 0 ]; then
 
         for COMMENT_ID in "${COMMENT_IDS[@]}"; do
             COMMENT_BODY=$(printf '%s' "$COMMENTS" | jq -r --argjson id "$COMMENT_ID" '.[] | select(.id == $id) | .body')
-            TARGET=$(process_comment "$ISSUE_NUMBER" "$COMMENT_ID" "$COMMENT_BODY" "$ISSUE_TITLE" "$ISSUE_BODY" "$ISSUE_HAS_LABEL" "$ALL_COMMENTS_TEXT")
+            TARGET=$(process_comment "$ISSUE_NUMBER" "$COMMENT_ID" "$COMMENT_BODY" "$ISSUE_BODY" "$ISSUE_HAS_LABEL" "$ALL_COMMENTS_TEXT")
             if [ -n "$TARGET" ]; then
                 TARGETS=$(printf '%s' "$TARGETS" | jq -c --argjson t "$TARGET" '. + [$t]')
             fi

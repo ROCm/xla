@@ -1,6 +1,6 @@
 ---
 name: debug-nightly-failure
-description: Hard-capped at 5 minutes - first checks whether this exact failure signature was already analyzed (by looking at the issue's comments) and, if so, does nothing further. Otherwise quickly categorizes (build/test/config/infra) and labels a single ROCm XLA nightly CI failure, checks whether a later upstream commit already fixed it, searches open upstream PRs for one that looks like it already addresses it, and does a fast code read for a likely root cause and possible fix. Full RBE reproduction/gdb debugging is optional and rarely fits the time budget. Never edits the issue body - posts a preliminary triage comment, then a final-report comment (with a RESOLVED banner at the top of that same comment if the failure turned out to be fixed). Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
+description: Hard-capped at 5 minutes - first checks whether this exact failure signature was already analyzed (by looking at the issue's comments) and, if so, does nothing further. Otherwise quickly categorizes (build/test/config/infra) and labels a single ROCm XLA nightly CI failure, checks whether a later upstream commit already fixed it, searches open upstream PRs for one that looks like it already addresses it, and does a fast code read for a likely root cause and possible fix. Full RBE reproduction/gdb debugging is optional and rarely fits the time budget. Never edits the issue body - posts a preliminary triage comment, then a final-report comment (with a RESOLVED banner at the top of that same comment if the failure turned out to be fixed), and rewrites the issue's generic placeholder title into a one-line summary of what actually broke now that it knows. Use when invoked by the "debug" job of rocm_infra_monitor.yml for one specific failed job/step.
 argument-hint: "[ci-repo] [run-id] [job-id] [job-name] [step-name] [failure-url] [issue-number]"
 context: fork
 agent: general-purpose
@@ -29,10 +29,13 @@ labeled line; read the values from there.
 - `ISSUE_NUMBER`: the GitHub issue dedicated solely to this one failure
   signature (`JOB_NAME / STEP_NAME`), found or created for you before this
   skill was invoked. Its body is the static detection text (Job/Step/
-  links) and you never touch it - Step 2 posts a preliminary triage
-  comment, and Step 7 posts the final report as its own comment,
-  prepending a RESOLVED banner to that same comment if the failure turned
-  out to be fixed.
+  links, including the `<!-- rocm-nightly-failure:... -->` marker that
+  identifies this issue to the pipeline) and you never touch it - Step 2
+  posts a preliminary triage comment, Step 7 posts the final report as its
+  own comment (prepending a RESOLVED banner to that same comment if the
+  failure turned out to be fixed), and Step 7b retitles the issue itself
+  (its title starts as a generic placeholder; that's the one thing besides
+  comments you do change).
 
 ## IMPORTANT: scope and safety
 
@@ -98,11 +101,13 @@ labeled line; read the values from there.
 - Never `git push`, never create a branch, never open a PR, and **never
   edit the issue body**. The only GitHub writes you make are: one label
   (Step 2, corrected in Step 3 if needed, via `gh issue edit`/
-  `gh label create`), and two new comments on the `ISSUE_NUMBER` issue -
-  Step 2's preliminary triage comment and Step 7's final report (with a
+  `gh label create`), two new comments on the `ISSUE_NUMBER` issue - Step
+  2's preliminary triage comment and Step 7's final report (with a
   RESOLVED banner at the top of that same comment when the outcome is
   resolved) - both via `gh issue comment <ISSUE_NUMBER> --repo <CI_REPO>
-  --body-file <file>` - **or**, if Step 1 finds this was already analyzed,
+  --body-file <file>`, and one title update (Step 7b, via `gh issue edit
+  <ISSUE_NUMBER> --repo <CI_REPO> --title "..."`) - **or**, if Step 1 finds
+  this was already analyzed,
   no GitHub writes at all.
 - This run also has a hard cap on agentic turns, on top of the 5-minute
   wall clock. If you notice you're repeating the same approach without
@@ -535,3 +540,35 @@ headings or fenced code blocks, and the `Fix found` shape above has a
 mandatory \`\`\`diff fenced block that would get garbled by it. The
 RESOLVED banner above the comment already makes the resolution visible at
 a glance in the issue's comment list; nothing else needs to change.
+
+## Step 7b — Retitle the issue now that you know what actually broke
+
+The issue was created with a generic placeholder title
+(`Nightly CI Failure: JOB_NAME / STEP_NAME`) because nothing more was known
+yet. Now that you've actually analyzed it, replace that with something a
+human can recognize at a glance in an issue list, without opening it:
+
+```
+gh issue edit <ISSUE_NUMBER> --repo <CI_REPO> --title "<new title>"
+```
+
+`<new title>` is `<one-line summary of what actually broke, ≤80
+characters> (JOB_NAME / STEP_NAME)` - lead with the summary (that's the
+part worth scanning for; the job/step suffix is there for cross-referencing
+with CI logs, not for skimming) and keep it concrete and specific to this
+failure, e.g. `HSA frame-buffer vs. HIP VRAM size mismatch on gfx950
+(execute-xla-ut-sanitizers (asan) / Test XLA [asan] [single_gpu])`, not a
+restatement of the category label (`nightly-test-failure`) or something as
+generic as "test failure". Base it on whatever you found in Steps 2-4,
+regardless of outcome - even a `Not resolved` report usually has a
+concrete symptom (a specific crash, a specific wrong value, a specific
+timeout) worth naming, which is more useful here than the raw job/step
+string alone.
+
+This is always safe to do, however you phrase it: every lookup that needs
+to find this issue again (Step 1 above, collect_claude_debug_targets.sh,
+collect_claude_mention_targets.sh) keys off the
+`<!-- rocm-nightly-failure:JOB_NAME / STEP_NAME -->` marker already sitting
+in the issue's body, never the title - so rewriting the title here cannot
+break anything downstream, including a later run finding this same issue
+again for a recurrence of the same signature.

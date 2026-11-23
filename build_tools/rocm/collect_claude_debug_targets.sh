@@ -17,19 +17,23 @@
 # Each distinct failure signature (job_name/step_name) gets its own
 # dedicated GitHub issue, found-or-created here - never a comment on a
 # shared tracking issue. The issue BODY is set once, at creation, to the
-# static detection text (job/step/links) and never touched again -
-# everything debug-nightly-failure adds later (triage, final report) is a
-# plain new comment, not an edit to that body.
+# static detection text (job/step/links, including the
+# `<!-- rocm-nightly-failure:SIGNATURE -->` marker) and never touched again
+# - everything debug-nightly-failure adds later (triage, final report) is a
+# plain new comment, not an edit to that body. A signature's issue is
+# always found again by that body marker, never by title - the title is
+# free-form and debug-nightly-failure rewrites it to something more
+# descriptive once it has a root cause, with no effect on this lookup.
 #
 # Two phases, every run:
 #
 # Phase 1 - report new failures. For every failure in a JSON Lines file (as
 # produced by collect_run_failures.sh), find an existing OPEN issue labeled
-# rocm-infra-error whose title matches this failure's signature, or create
-# one if none exists. If a matching issue already has a comment carrying a
-# `rocm-nightly-claude-debug:` marker, it's already been analyzed - skip it
-# (no new issue, no re-queue). Otherwise queue it (whether brand new or a
-# pre-existing, never-analyzed issue).
+# rocm-infra-error whose body carries this failure's signature marker, or
+# create one if none exists. If a matching issue already has a comment
+# carrying a `rocm-nightly-claude-debug:` marker, it's already been
+# analyzed - skip it (no new issue, no re-queue). Otherwise queue it
+# (whether brand new or a pre-existing, never-analyzed issue).
 #
 # Phase 2 - catch up anything still unanalyzed. Separately, and
 # unconditionally (even on a run with no new failures at all), scan every
@@ -180,7 +184,12 @@ if [ -s "$FAILURES_FILE" ]; then
         JOB_URL=$(printf '%s' "$FAILURE" | jq -r '.job_url')
         STEP_NAME=$(printf '%s' "$FAILURE" | jq -r '.step_name')
         SIGNATURE="${JOB_NAME} / ${STEP_NAME}"
-        TITLE=$(issue_title "$SIGNATURE")
+        # Identity lives in this marker, in the issue BODY, never the title -
+        # debug-nightly-failure is free to rewrite the title to something
+        # more descriptive once it has a root cause, and this lookup (and
+        # Phase 2's, below) still finds the right issue regardless of what
+        # the title currently says.
+        DETECTION_MARKER="<!-- rocm-nightly-failure:${SIGNATURE} -->"
 
         echo "[Phase 1] Processing failure: ${SIGNATURE} (run ${RUN_ID})" >&2
 
@@ -195,7 +204,7 @@ if [ -s "$FAILURES_FILE" ]; then
         fi
 
         ISSUE_NUMBER=$(printf '%s' "$OPEN_ISSUES" \
-            | jq -r --arg title "$TITLE" 'map(select(.title == $title)) | .[0].number // empty')
+            | jq -r --arg m "$DETECTION_MARKER" 'map(select(.body | contains($m))) | .[0].number // empty')
 
         if [ -n "$ISSUE_NUMBER" ]; then
             DEBUG_MARKER="<!-- rocm-nightly-claude-debug:${SIGNATURE} -->"
@@ -253,14 +262,23 @@ for ISSUE_NUMBER in "${ISSUE_NUMBERS[@]}"; do
         continue
     fi
 
-    TITLE=$(printf '%s' "$OPEN_ISSUES" | jq -r --argjson n "$ISSUE_NUMBER" '.[] | select(.number == $n) | .title')
     BODY=$(printf '%s' "$OPEN_ISSUES" | jq -r --argjson n "$ISSUE_NUMBER" '.[] | select(.number == $n) | .body')
 
-    # Issues created before this script's prefix convention existed (or
-    # anything else carrying the label but not this title shape) have no
-    # recoverable signature - skip rather than guess.
-    SIGNATURE="${TITLE#Nightly CI Failure: }"
-    if [ "$SIGNATURE" = "$TITLE" ]; then
+    # Recovered from the body marker, never the title - the title may have
+    # been rewritten (debug-nightly-failure does this once it has a root
+    # cause) to something more descriptive than "Nightly CI Failure: ...",
+    # with no fixed shape to strip a prefix from. Anything carrying the
+    # label but no such marker in its body (pre-dating this convention, or
+    # not actually one of ours) has no recoverable signature - skip rather
+    # than guess.
+    # `|| true` matters, not `| head -1` alone: under `set -e -o pipefail`,
+    # the pipeline's exit status is the *rightmost command that exited
+    # non-zero* - if grep finds nothing (exit 1) and head still exits 0,
+    # pipefail still reports 1 for the whole pipe, which `set -e` then
+    # treats as this assignment failing and aborts the whole script, with
+    # no further diagnostic.
+    SIGNATURE=$(printf '%s' "$BODY" | grep -oP '(?<=<!-- rocm-nightly-failure:)[^>]*(?= -->)' | head -1 || true)
+    if [ -z "$SIGNATURE" ]; then
         continue
     fi
 
