@@ -1,6 +1,6 @@
 ---
 name: verify-proposed-fix
-description: Hard-capped at 30 minutes of non-build decision-making - triggered when a human reacts 🚀 on a debug-nightly-failure comment's proposed fix, asking Claude to actually try it out. Reproduces the original failure under heavy repetition (nightly GPU CI can be flaky), applies the proposed fix, confirms it goes green, reverts the fix, and confirms it goes red again - a differential check that the fix, not noise, is responsible. If verified, writes the fix out as a plain patch file (plus a PR title/body) for a deterministic workflow step to apply onto ROCm/xla's main-mirror and open a draft "[WIP] ..." PR with a Google-style CL description - never commits, pushes, or opens the PR itself. Edits its verdict (noting a PR is pending, or a plain "not applicable" statement) back into the same comment, folded, and never repeats once attempted. Use when invoked by the "verify" job of rocm_infra_monitor.yml for one specific 🚀-reacted comment.
+description: Hard-capped at 30 minutes of non-build decision-making - triggered when a human reacts 🚀 on a debug-nightly-failure comment's proposed fix, asking Claude to actually try it out. Reproduces the original failure under heavy repetition (nightly GPU CI can be flaky), applies the proposed fix, confirms it goes green, reverts the fix, and confirms it goes red again - a differential check that the fix, not noise, is responsible. If verified, writes the fix out as a plain patch file (plus a PR title/body) for a deterministic workflow step to apply onto ROCm/xla's own default branch (main) and open a draft "[WIP] ..." PR with a Google-style CL description - never commits, pushes, or opens the PR itself. Edits its verdict (noting a PR is pending, or a plain "not applicable" statement) back into the same comment, folded, and never repeats once attempted. Use when invoked by the "verify" job of rocm_infra_monitor.yml for one specific 🚀-reacted comment.
 argument-hint: [ci-repo] [issue-number] [comment-url] [job-name] [step-name] [repository] [head-sha] [failure-url]
 context: fork
 agent: general-purpose
@@ -84,14 +84,13 @@ restates each value on its own labeled line; read the values from there.
   deterministic workflow step does all three, from the patch file (plus
   PR title/body) you write in Step 5 - see that step for why (a hard
   Claude Code permission restriction, not a style choice). That step only
-  ever applies your patch to, and opens a PR against, `ROCm/xla`'s
-  `main-mirror` branch specifically - never `openxla/xla`, even though
-  `REPOSITORY` almost always is `openxla/xla` (there's no push access
-  upstream at all), and never any other `ROCm/xla` branch either, even its
-  own default one. Nothing you do in this skill should assume otherwise:
-  never try to push anywhere yourself, never force-push, never cause more
-  than one PR to be opened, and the resulting PR is always a draft, never
-  merged by anything in this pipeline.
+  ever applies your patch to, and opens a PR against, `ROCm/xla`'s own
+  default branch (`main`) specifically - never `openxla/xla` directly, even
+  though `REPOSITORY` almost always is `openxla/xla` (there's no push
+  access upstream at all). Nothing you do in this skill should assume
+  otherwise: never try to push anywhere yourself, never force-push, never
+  cause more than one PR to be opened, and the resulting PR is always a
+  draft, never merged by anything in this pipeline.
 - The only other GitHub write is one edit to the single `COMMENT_URL`
   comment (Step 6, your final verdict) via
   `gh api -X PATCH repos/<CI_REPO>/issues/comments/<id> -F body=@<file>`
@@ -269,19 +268,19 @@ permission check to fight, working from a patch file you leave behind:
    confirm causality - see the verification writeup on
    <COMMENT_URL>.
    ```
-3. **The workflow applies this patch on top of `main-mirror`, not
-   `ROCm/xla`'s own default branch** - not your call to make here, it's
-   baked into the workflow step itself, but worth knowing why: `REPOSITORY`/
-   `HEAD_SHA` are almost always `openxla/xla@<sha>`, a different history
-   from `ROCm/xla`'s own default branch (which carries ROCm-specific
-   patches and has long since diverged from upstream) - applying your
-   patch there could conflict or land on the wrong base entirely.
-   `main-mirror` is kept a byte-for-byte copy of `openxla/xla`'s own `main`
-   by the `sync_main_mirror.yml` pipeline, so it shares real ancestry with
-   `HEAD_SHA` and the patch should apply cleanly. If `HEAD_SHA` is old
-   enough that `main-mirror` has since moved past the lines your fix
-   touches, the patch may fail to apply - that's the workflow step's
-   problem to detect and report, not something to pre-empt here.
+3. **The workflow applies this patch directly on top of `REPOSITORY@HEAD_SHA`
+   itself** - the exact commit this very skill run just verified the fix
+   against (Steps 2-4), fetched fresh rather than reused from any branch
+   tip. Rebasing onto a later tip (`ROCm/xla`'s own `main`, or even
+   `openxla/xla`'s) would ship something that was never actually put
+   through the red->green->red cycle, so the workflow deliberately doesn't
+   do that. It then pushes the resulting commit as a new branch into
+   `ROCm/xla` (the only repo it can push to - `ROCm/xla` being a registered
+   GitHub fork of `openxla/xla` is what makes that branch's history
+   acceptable there) and opens the PR against `ROCm/xla`'s own `main`. Not
+   your call to make here, it's baked into the workflow step itself -
+   should essentially never fail to apply, since it's the same patch
+   against the same commit it was generated from.
 
 ## Step 6 — Report, folded, back into the same comment
 
