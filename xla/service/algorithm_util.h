@@ -59,8 +59,8 @@ absl::StatusOr<std::vector<PrimitiveType>> GetAllowedOperandsTypeForAlgorithm(
 absl::StatusOr<PrimitiveType> GetDotAccumulatorType(
     PrecisionConfig::Algorithm algorithm);
 
-// Get the default GEMM algorithm accumulator type for floating-point dots when
-// precision_config.algorithm() == ALG_UNSET.
+// Returns the default GEMM-style accumulator type for a dot, ragged-dot, or
+// convolution instruction when precision_config.algorithm() == ALG_UNSET.
 absl::StatusOr<PrimitiveType> GetDefaultGemmAlgorithmAccumulatorType(
     const HloInstruction* dot);
 
