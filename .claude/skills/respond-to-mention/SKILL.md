@@ -1,10 +1,10 @@
 ---
 name: respond-to-mention
-description: Hard-capped at 30 minutes of non-build decision-making - triggered when a human edits an `@claude <instructions>` line into a debug-nightly-failure comment, asking Claude to act on that failure - verify the already-proposed fix, dig further (e.g. set a breakpoint and inspect), try a different approach, or devise a new solution, per whatever the instructions literally say. When just asked to verify, reproduces the original failure under heavy repetition (nightly GPU CI can be flaky), applies the proposed fix, confirms it goes green, reverts the fix, and confirms it goes red again - a differential check that the fix, not noise, is responsible. If it ends up with a change it's confident actually fixes the problem, writes it out as a plain patch file (plus a PR title/body) for a deterministic workflow step to apply onto ROCm/xla's own default branch (main) and open a draft "[WIP] ..." PR with a Google-style CL description - never commits, pushes, or opens the PR itself. Edits its findings (noting a PR is pending, a plain "not applicable" statement, or whatever was actually investigated) back into the same comment, folded, and never repeats the exact same instruction once attempted. Use when invoked by the "respond_to_mention" job of rocm_infra_monitor.yml for one specific comment carrying an `@claude` instruction.
-argument-hint: "[ci-repo] [issue-number] [comment-url] [job-name] [step-name] [repository] [head-sha] [failure-url] [instructions] [instructions-hash]"
+description: Hard-capped at 30 minutes of non-build decision-making - triggered when a human posts a new `@claude <instructions>` comment on a per-failure issue debug-nightly-failure created, asking Claude to act on that failure - verify the already-proposed fix, dig further (e.g. set a breakpoint and inspect), try a different approach, or devise a new solution, per whatever the instructions literally say. When just asked to verify, reproduces the original failure under heavy repetition (nightly GPU CI can be flaky), applies the proposed fix, confirms it goes green, reverts the fix, and confirms it goes red again - a differential check that the fix, not noise, is responsible. If it ends up with a change it's confident actually fixes the problem, writes it out as a plain patch file (plus a PR title/body) for a deterministic workflow step to apply onto ROCm/xla's own default branch (main) and open a draft "[WIP] ..." PR with a Google-style CL description - never commits, pushes, or opens the PR itself. Posts its findings (noting a verified fix is pending a PR, a plain "not applicable" statement, or whatever was actually investigated) as a new comment on the issue, and never repeats the exact same instruction once attempted. Use when invoked by the "respond_to_mention" job of rocm_infra_monitor.yml for one specific comment carrying an `@claude` instruction.
+argument-hint: "[ci-repo] [issue-number] [job-name] [step-name] [repository] [head-sha] [failure-url] [instructions] [instructions-hash]"
 context: fork
 agent: general-purpose
-allowed-tools: Bash(gh issue edit *), Bash(gh label create *), Bash(gh api *), Bash(gh run view *), Bash(git *), Bash(docker exec rocmless-debug *), Bash(build_tools/rocm/*), Bash(bazel *), Bash(gdb *), Bash(objdump *), Bash(grep *), Bash(cat *), Bash(timeout *), Read, Grep, Glob, Write, Edit
+allowed-tools: Bash(gh issue edit *), Bash(gh issue comment *), Bash(gh label create *), Bash(gh api *), Bash(gh run view *), Bash(git *), Bash(docker exec rocmless-debug *), Bash(build_tools/rocm/*), Bash(bazel *), Bash(gdb *), Bash(objdump *), Bash(grep *), Bash(cat *), Bash(timeout *), Read, Grep, Glob, Write, Edit
 ---
 
 # Respond to an @claude Follow-Up on a ROCm Nightly CI Failure
@@ -15,37 +15,37 @@ eventually branch from if you end up with a verified fix.
 
 ## Arguments
 
-The caller passes ten values, space separated: `CI_REPO ISSUE_NUMBER
-COMMENT_URL JOB_NAME STEP_NAME REPOSITORY HEAD_SHA FAILURE_URL INSTRUCTIONS
+The caller passes nine values, space separated: `CI_REPO ISSUE_NUMBER
+JOB_NAME STEP_NAME REPOSITORY HEAD_SHA FAILURE_URL INSTRUCTIONS
 INSTRUCTIONS_HASH`. `JOB_NAME`, `STEP_NAME`, and especially `INSTRUCTIONS`
 can themselves contain spaces, punctuation, and quotes, so do not split
 `$ARGUMENTS` positionally by whitespace - the invoking prompt also restates
 each value on its own labeled line; read the values from there.
 
-- `CI_REPO`: `ROCm/xla` - the repo the tracking issue lives in, and the
-  only repo the patch you write in Step 5 is ever meant to land in
-  (applied and turned into a PR by a later, deterministic workflow step -
-  you don't push or open anything yourself), regardless of what
-  `REPOSITORY` says (see below).
-- `ISSUE_NUMBER`: the tracking issue (shared by many unrelated failures -
-  don't react to or summarize anything else on it).
-- `COMMENT_URL`: the single comment carrying the `@claude` instruction (and
-  usually the already-proposed fix too), and the **only** comment this
-  skill ever writes to - same "edit in place, never post a new comment"
-  rule as `debug-nightly-failure`. Its full analysis may be sitting behind
-  a `<details>` fold from that skill's Step 7 - that doesn't hide anything
-  from `gh api`, only from rendering, so read the raw body regardless of
-  fold state.
+- `CI_REPO`: `ROCm/xla` - the repo the issue lives in, and the only repo
+  the patch you write in Step 5 is ever meant to land in (applied and
+  turned into a PR by a later, deterministic workflow step - you don't
+  push or open anything yourself), regardless of what `REPOSITORY` says
+  (see below).
+- `ISSUE_NUMBER`: the issue dedicated to this one failure signature - you
+  never edit its body (same rule as `debug-nightly-failure`), only ever
+  post a new comment with your findings. The proposed fix you're asked to
+  verify usually already lives in one of `debug-nightly-failure`'s own
+  comments (its final-report comment, identifiable by the
+  `rocm-nightly-claude-debug:` marker and a `**Outcome:**` line) - fetch
+  **all** of the issue's comments (Step 1) rather than just its body.
 - `JOB_NAME` / `STEP_NAME`: the failure signature, used for the mention
   marker below.
 - `REPOSITORY` / `HEAD_SHA`: already checked out in the working directory -
   this is almost always `openxla/xla@<sha>`, **not** `ROCm/xla` (see the
   PR-target rule in Step 5).
 - `FAILURE_URL`: the original failing job, for re-fetching its log in Step
-  1 if the comment doesn't already spell out the exact command.
-- `INSTRUCTIONS`: the literal text a human typed after `@claude` in the
-  comment - this is what actually governs what you do in Step 1. Follow it
-  specifically; don't substitute your own idea of what would be useful.
+  1 if `debug-nightly-failure`'s report comment doesn't already spell out
+  the exact command.
+- `INSTRUCTIONS`: the literal text a human typed after `@claude` in a new
+  comment on the issue - this is what actually governs what you do in Step
+  1. Follow it specifically; don't substitute your own idea of what would
+  be useful.
 - `INSTRUCTIONS_HASH`: a short hash of `INSTRUCTIONS`, already computed for
   you - use it verbatim in the Step 0/Step 6 marker, don't recompute it.
 
@@ -97,14 +97,11 @@ each value on its own labeled line; read the values from there.
   otherwise: never try to push anywhere yourself, never force-push, never
   cause more than one PR to be opened, and the resulting PR is always a
   draft, never merged by anything in this pipeline.
-- The only other GitHub write is one edit to the single `COMMENT_URL`
-  comment (Step 6, your findings) via
-  `gh api -X PATCH repos/<CI_REPO>/issues/comments/<id> -F body=@<file>`
-  (note `-F`, not `-f` - `-f`/`--raw-field` treats `@file` as a literal
-  string and silently sets the body to that text; only `-F`/`--field`
-  actually reads the file). **Never post a new comment.** If Step 0 finds
-  this exact instruction was already acted on, make no GitHub writes at
-  all.
+- The only other GitHub write is one new comment on the `ISSUE_NUMBER`
+  issue (Step 6, your findings) via `gh issue comment <ISSUE_NUMBER>
+  --repo <CI_REPO> --body-file <file>`. **Never edit the issue body or an
+  existing comment.** If Step 0 finds this exact instruction was already
+  acted on, make no GitHub writes at all.
 - Use `--runs_per_test=20 --test_arg=--gtest_repeat=50
   --nocache_test_results` (20 independent RBE sandboxes × 50 in-process
   repeats = 1000 total executions) for every reproduce/verify attempt by
@@ -113,7 +110,7 @@ each value on its own labeled line; read the values from there.
   enough that three cycles at this volume won't fit the job's timeout, and
   say so plainly in the report (Step 6) if you do.
 - Never claim a fix is verified without having completed the full
-  red→green→red cycle yourself in this run (not from the original comment's
+  red→green→red cycle yourself in this run (not from the original issue's
   own, earlier, unverified claim), and never write the Step 5 patch file
   (which leads directly to a PR) without having personally observed it go
   green.
@@ -129,32 +126,36 @@ Before anything else, in case of a race (two runs queuing the same
 signature/instruction close together) or a manual re-run:
 
 ```
-gh api repos/<CI_REPO>/issues/comments/<comment-id-from-COMMENT_URL>
+gh api --paginate repos/<CI_REPO>/issues/<ISSUE_NUMBER>/comments
 ```
 
-Check whether its `body` already **contains**, anywhere,
+Check whether any comment's `body` already **contains**, anywhere,
 `<!-- rocm-nightly-claude-mention:JOB_NAME / STEP_NAME:INSTRUCTIONS_HASH -->`
 (substitute the literal `JOB_NAME`/`STEP_NAME`/`INSTRUCTIONS_HASH` values you
-were given, ` / ` separator before the hash, no other change). If it does:
+were given, ` / ` separator before the hash, no other change). If one does:
 **stop here, make no GitHub writes at all** - this exact instruction has
 already been attempted once, successfully or not, and is never retried. If
 a *different* `rocm-nightly-claude-mention:JOB_NAME / STEP_NAME:...` marker
-is present (a different hash), that's a previous, different instruction
-that was already handled - leave its report alone and proceed to act on the
-current one. If no marker for this signature is present at all, proceed to
-Step 1.
+is present instead (a different hash), that's a previous, different
+instruction that was already handled - leave its comment alone and proceed
+to act on the current one. If no marker for this signature is present at
+all, proceed to Step 1. Keep the fetched comments around - Step 1 reads
+them too.
 
 ## Step 1 — Read the instructions and decide how to proceed
 
-Fetch the comment's current body and read `INSTRUCTIONS` carefully - it
-governs everything that follows.
+Read `INSTRUCTIONS` carefully - it governs everything that follows. Find
+`debug-nightly-failure`'s final-report comment among the ones Step 0 just
+fetched (the one with the `<!-- rocm-nightly-claude-debug:... -->` marker
+and a `**Outcome:**` line) - that comment's analysis is what Step 1-4
+below work from.
 
-- **If `INSTRUCTIONS` is simply asking you to verify/try the fix the
-  comment already proposed** (e.g. "verify this", "try the fix", "does
-  this work?") and doesn't call for anything more specific: find the
-  comment's "Possible fix (quick estimate, unverified)" or "Fix found"
-  section (whichever is present - `debug-nightly-failure` only ever writes
-  one of the two), then follow the default method in Steps 2-4 below.
+- **If `INSTRUCTIONS` is simply asking you to verify/try the fix that
+  report already proposes** (e.g. "verify this", "try the fix", "does this
+  work?") and doesn't call for anything more specific: find its "Possible
+  fix (quick estimate, unverified)" or "Fix found" section (whichever is
+  present - `debug-nightly-failure` only ever writes one of the two), then
+  follow the default method in Steps 2-4 below.
   - **If it has a \`\`\`diff\`\`\` fenced block**: that's the fix. You'll
     apply it with `git apply` in Step 3.
   - **If it's described in prose only** (the "Possible fix" shape allows
@@ -163,7 +164,7 @@ governs everything that follows.
     implement the change yourself via `Edit`.
 - **If `INSTRUCTIONS` asks for something else** - setting a breakpoint and
   inspecting specific state, digging into a particular hypothesis, trying
-  a different approach than what's in the comment, re-deriving root cause,
+  a different approach than what's in that report, re-deriving root cause,
   or anything else a human might reasonably ask for - follow those literal
   instructions instead, not the default reproduce/apply/revert protocol.
   `gdb`/`objdump` are available for this (e.g. `gdb --batch -ex 'break
@@ -180,9 +181,9 @@ governs everything that follows.
 
 Also recover the exact original invocation: the specific failing
 target/test case and the full `build_tools/rocm/run_xla_ci_build.sh`/
-`bazel` command and flags. The comment's analysis usually already states
-this plainly; if it doesn't spell out the flags verbatim, re-fetch the
-original job's log instead of guessing:
+`bazel` command and flags. That report comment usually already states this
+plainly; if it doesn't spell out the flags verbatim, re-fetch the original
+job's log instead of guessing:
 ```
 gh api --allow-escape-sequences "repos/<CI_REPO>/actions/jobs/<job-id-from-FAILURE_URL>/logs" > job.log
 ```
@@ -300,10 +301,10 @@ write the files:
    PR body shape - a Google-style CL description, **not** a Summary/Test
    plan bullet template: the one-line subject is already in the title
    file, so the body is a blank line followed by prose paragraphs - what
-   was broken, the root cause (reuse the analysis already in the comment
-   rather than re-deriving it), and what this change does about it - then
-   a closing line disclosing how it was produced and verified, with a link
-   back to the comment:
+   was broken, the root cause (reuse the analysis already in
+   `debug-nightly-failure`'s report comment rather than re-deriving it),
+   and what this change does about it - then a closing line disclosing how
+   it was produced and verified, with a link back to the issue:
    ```
    <One or two prose paragraphs: what broke and why, what this change
    does differently. No bullet lists, no "## Summary"/"## Test plan"
@@ -312,7 +313,7 @@ write the files:
    Automatically verified by reproducing the original failure under heavy
    repetition, applying this fix (green), and reverting it (red again) to
    confirm causality - see the verification writeup on
-   <COMMENT_URL>.
+   https://github.com/<CI_REPO>/issues/<ISSUE_NUMBER>.
    ```
 3. **The workflow applies this patch directly on top of `REPOSITORY@HEAD_SHA`
    itself** - the exact commit this very skill run just verified the fix
@@ -328,32 +329,21 @@ write the files:
    never fail to apply, since it's the same patch against the same commit
    it was generated from.
 
-## Step 6 — Report, folded, back into the same comment
+## Step 6 — Report, as a new comment
 
 Whether you end up with a verified fix, "not applicable", or just the
-findings from a custom investigation: fetch the comment's current body,
-append your report, and PATCH it back - **never post a new comment**:
+findings from a custom investigation: post your report as a **new**
+comment - nothing to fetch or merge first:
 ```
-COMMENT_ID=<the numeric id after #issuecomment- in COMMENT_URL>
-gh api "repos/<CI_REPO>/issues/comments/${COMMENT_ID}" --jq .body > /tmp/comment_body.txt
-# append a divider, then the report below, to /tmp/comment_body.txt -> /tmp/new_body.txt
-gh api -X PATCH "repos/<CI_REPO>/issues/comments/${COMMENT_ID}" -F body=@/tmp/new_body.txt
+gh issue comment <ISSUE_NUMBER> --repo <CI_REPO> --body-file /tmp/response_comment.txt
 ```
-(same `/tmp`-not-writable fallback as `debug-nightly-failure`: if `gh api`
-can't find the file there, write it inside the checkout instead, e.g.
-`debug_tools/claude_scratch/`, and clean it up before finishing.)
+(same `/tmp`-not-writable fallback as `debug-nightly-failure`: write it
+inside the checkout instead, e.g. `debug_tools/claude_scratch/`, and clean
+it up before finishing.)
 
-Append, as a *nested* fold (the comment may already be wrapped in its own
-outer `<details>` from `debug-nightly-failure` Step 7, and may already
-carry earlier, different `rocm-nightly-claude-mention:...` folds from
-previous instructions - GFM nests these fine, and older folds are left
-untouched):
+Build that comment as:
 ```
----
-
 <!-- rocm-nightly-claude-mention:JOB_NAME / STEP_NAME:INSTRUCTIONS_HASH -->
-<details><summary>Response to "@claude <short echo of the instruction>" (click to expand)</summary>
-
 **You asked:** <quote INSTRUCTIONS verbatim, or a tight paraphrase if it was long>
 
 **What I did:** <one or two sentences - e.g. "reproduced the original
@@ -362,24 +352,19 @@ it (red again)", or "set a breakpoint at <file>:<line> and inspected
 <what>", or whatever actually happened>
 
 <exactly one of:>
-- ✅ **Verified** — opening a draft PR with the fix now.
-  <!-- rocm-nightly-claude-mention-pr-pending -->
+- ✅ **Verified** — opening a draft PR with the fix now. A follow-up
+  comment will link to it once opened.
 - ❌ **Not applicable** — <the specific reason: never reproduced red /
   still red with the fix applied / stayed green after reverting it>
 - 🔍 **Investigated, no fix proposed** — <findings from the custom
   investigation you were asked to do, with specific evidence: variable
   values at the breakpoint, a backtrace excerpt, whatever directly answers
   what was asked>
-
-</details>
 ```
-For the "Verified" line, write the HTML comment marker
-`<!-- rocm-nightly-claude-mention-pr-pending -->` literally, on its own
-line right after it, exactly as shown - don't add the real PR link or
-number yourself, you don't have it yet. A later, deterministic workflow
-step finds that exact marker and replaces it with the real
-`[draft PR #<n>](<url>)` link once the PR actually exists - that's a
-second, small edit to this same comment (never a new one), made outside
-your own execution, specifically so this report doesn't have to wait on
-or guess at a PR URL that doesn't exist until after you've already
-finished.
+The marker is what Step 0 (and `claude_issue_triage.yml`'s pre-dispatch
+check) scan the issue's comments for to know this exact instruction was
+already attempted - get `JOB_NAME`/`STEP_NAME`/`INSTRUCTIONS_HASH` right,
+same substitution rule as Step 0. For a verified fix, you don't need to
+(and can't yet) include the real PR link or number - a separate,
+deterministic workflow step posts its own follow-up comment with that link
+once the PR actually exists, entirely outside your own execution.

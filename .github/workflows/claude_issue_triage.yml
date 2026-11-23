@@ -50,16 +50,16 @@ on:
         description: "Branch to fetch this repo's own .claude/ config from"
         required: true
         type: string
-      comment_url:
-        description: 'The tracking-issue comment this run may edit - only its trailing numeric ID is used, to check already_handled_marker before doing anything expensive'
+      issue_number:
+        description: 'The per-failure issue this run may comment on - checked for already_handled_marker before doing anything expensive'
         required: true
         type: string
       already_handled_marker:
-        description: 'Exact HTML comment marker string - if already present in the comment body, this run does nothing'
+        description: 'Exact HTML comment marker string - if already present in any comment on the issue, this run does nothing'
         required: true
         type: string
       required_marker:
-        description: 'Exact substring that must be present in the comment body for this run to do anything - e.g. gating an automatic follow-up (like auto-verifying a proposed fix) on the specific report outcome it only makes sense for. Leave unset to always proceed.'
+        description: 'Exact substring that must be present in some comment on the issue for this run to do anything - e.g. gating an automatic follow-up (like auto-verifying a proposed fix) on the specific report outcome it only makes sense for. Leave unset to always proceed.'
         required: false
         type: string
         default: ''
@@ -118,12 +118,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          COMMENT_ID=$(echo "${{ inputs.comment_url }}" | grep -oE '[0-9]+$')
-          BODY=$(gh api "/repos/ROCm/xla/issues/comments/${COMMENT_ID}" --jq '.body')
-          if printf '%s' "$BODY" | grep -qF '${{ inputs.already_handled_marker }}'; then
+          COMMENTS=$(gh api --paginate "/repos/ROCm/xla/issues/${{ inputs.issue_number }}/comments" --jq '[.[].body] | join("\n")')
+          if printf '%s' "$COMMENTS" | grep -qF '${{ inputs.already_handled_marker }}'; then
             echo "Already acted on - skipping" >&2
             echo "skip=true" >> "$GITHUB_OUTPUT"
-          elif [ -n "${{ inputs.required_marker }}" ] && ! printf '%s' "$BODY" | grep -qF '${{ inputs.required_marker }}'; then
+          elif [ -n "${{ inputs.required_marker }}" ] && ! printf '%s' "$COMMENTS" | grep -qF '${{ inputs.required_marker }}'; then
             echo "Precondition not met (missing: ${{ inputs.required_marker }}) - nothing to do" >&2
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else

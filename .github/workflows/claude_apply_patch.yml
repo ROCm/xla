@@ -38,8 +38,8 @@ on:
         description: 'The exact commit the patch was generated against'
         required: true
         type: string
-      comment_url:
-        description: 'Tracking-issue comment to post the draft PR link back into, once opened'
+      issue_number:
+        description: 'Per-failure issue to post the draft PR link back into, once opened'
         required: true
         type: string
       artifact_name:
@@ -193,21 +193,12 @@ jobs:
           }
           echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
 
-      - name: Add the PR link to the tracking comment
+      - name: Post the PR link as a new comment on the issue
         if: steps.open_pr.outputs.pr_url != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ steps.open_pr.outputs.pr_url }}
         run: |
           set -euo pipefail
-          COMMENT_ID=$(echo "${{ inputs.comment_url }}" | grep -oE '[0-9]+$')
-          gh api "/repos/ROCm/xla/issues/comments/${COMMENT_ID}" --jq .body > /tmp/comment_before_pr_link.txt
-          python3 -I -c "
-          import os
-          marker = '<!-- rocm-nightly-claude-mention-pr-pending -->'
-          link = f\"[draft PR]({os.environ['PR_URL']}) opened with the fix.\"
-          body = open('/tmp/comment_before_pr_link.txt').read()
-          body = body.replace(marker, link, 1) if marker in body else body
-          open('/tmp/comment_after_pr_link.txt', 'w').write(body)
-          "
-          gh api -X PATCH "/repos/ROCm/xla/issues/comments/${COMMENT_ID}" -F body=@/tmp/comment_after_pr_link.txt
+          gh issue comment "${{ inputs.issue_number }}" --repo ROCm/xla \
+            --body "[draft PR](${PR_URL}) opened with the fix."

@@ -68,7 +68,6 @@ on:
       - "build_tools/rocm/get_monitoring_window.sh"
       - "build_tools/rocm/get_runs_since.sh"
       - "build_tools/rocm/collect_run_failures.sh"
-      - "build_tools/rocm/create_infra_error_issue.sh"
       - "build_tools/rocm/collect_claude_debug_targets.sh"
       - ".claude/skills/debug-nightly-failure/SKILL.md"
       - ".claude/skills/respond-to-mention/SKILL.md"
@@ -79,15 +78,15 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       # A JSON array of {issue_number, repository, head_sha, run_id, job_id,
-      # job_name, step_name, failure_url, detection_comment_url} - one per
-      # signature that still needs a debug run: either a brand new failure
-      # this run (gets one new detection comment - never a duplicate for a
-      # signature that already has one, analyzed or not), or an existing
-      # comment on the tracking issue that was never actually analyzed
-      # (caught up every run, independent of whether this run found any
-      # new failures of its own). Fed into the "debug" job's matrix below,
-      # so each one gets its own isolated debug run. "[]" means nothing to
-      # debug. See collect_claude_debug_targets.sh for the two-phase logic.
+      # job_name, step_name, failure_url} - one per signature that still
+      # needs a debug run: either a brand new failure this run (gets its
+      # own dedicated issue - never a duplicate for a signature that
+      # already has one open, analyzed or not), or an existing open issue
+      # that was never actually analyzed (caught up every run, independent
+      # of whether this run found any new failures of its own). Fed into
+      # the "debug" job's matrix below, so each one gets its own isolated
+      # debug run. "[]" means nothing to debug. See
+      # collect_claude_debug_targets.sh for the two-phase logic.
       new_failures: ${{ steps.collect_targets.outputs.new_failures }}
     steps:
       - name: Checkout repository
@@ -158,28 +157,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # Always runs, even when failures.json is empty: besides
-          # reporting this run's new failures (Phase 1), the script also
-          # scans the whole tracking issue every time for a comment that
-          # was posted earlier but never actually got analyzed - a
-          # cancelled monitoring run, a PR-validation-skipped debug job, or
-          # some other interrupted attempt (Phase 2) - and queues that for
-          # debug too. See collect_claude_debug_targets.sh.
-          ISSUE_NUMBER=$(build_tools/rocm/create_infra_error_issue.sh)
+          # reporting this run's new failures (Phase 1, each getting its
+          # own dedicated issue), the script also scans every open
+          # rocm-infra-error issue every time for one that was created
+          # earlier but never actually got analyzed - a cancelled
+          # monitoring run, a PR-validation-skipped debug job, or some
+          # other interrupted attempt (Phase 2) - and queues that for debug
+          # too. See collect_claude_debug_targets.sh.
           TARGETS=$(build_tools/rocm/collect_claude_debug_targets.sh \
-            "${ISSUE_NUMBER}" \
             failures.json \
             "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}")
           echo "new_failures=${TARGETS}" >> "$GITHUB_OUTPUT"
 
   debug:
-    # issue_number is shared by every matrix entry (one tracking issue for
-    # everything), so the job/step signature is what actually identifies
-    # this entry. build-only-xla (inside the called workflow), not a GPU
-    # runner: it's the only pool with network access to the LLM gateway
-    # (amd-do-linux-xla-gpu-gfx950-dpx-4 can't resolve/reach
-    # ANTHROPIC_BASE_URL) - the debug skill must force GPU test execution
-    # onto a remote RBE worker instead (--strategy=TestRunner=remote,local
-    # - see SKILL.md).
+    # Each matrix entry has its own dedicated issue_number (one issue per
+    # failure signature now), but the job/step signature is still what a
+    # human reads to tell entries apart at a glance. build-only-xla (inside
+    # the called workflow), not a GPU runner: it's the only pool with
+    # network access to the LLM gateway (amd-do-linux-xla-gpu-gfx950-dpx-4
+    # can't resolve/reach ANTHROPIC_BASE_URL) - the debug skill must force
+    # GPU test execution onto a remote RBE worker instead
+    # (--strategy=TestRunner=remote,local - see SKILL.md).
     name: "Debug: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
     needs: monitor
     if: needs.monitor.outputs.new_failures != '[]'
@@ -197,7 +195,7 @@ jobs:
       # same computation DEBUG_PIPELINE_REF itself does at the top of this
       # file instead of reading it back out.
       debug_pipeline_ref: ${{ github.head_ref || github.ref_name }}
-      comment_url: ${{ matrix.detection_comment_url }}
+      issue_number: ${{ matrix.issue_number }}
       already_handled_marker: "<!-- rocm-nightly-claude-debug:${{ matrix.job_name }} / ${{ matrix.step_name }} -->"
       claude_step_name: Debug Nightly Failure
       # The 5-minute analysis cap mentioned below only covers
@@ -210,9 +208,9 @@ jobs:
       job_timeout_minutes: 35
       claude_timeout_minutes: 30
       max_turns: 60
-      allowed_tools: "Skill,Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(gh search prs *),Bash(gh pr diff *),Bash(gh pr view *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
+      allowed_tools: "Skill,Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(gh search prs *),Bash(gh pr diff *),Bash(gh pr view *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
       prompt: |
-        CI REPO (for job logs / issue comments): ROCm/xla
+        CI REPO (for job logs / the issue below): ROCm/xla
         SOURCE REPO (already checked out in the working directory): ${{ matrix.repository }}
         HEAD SHA (already checked out): ${{ matrix.head_sha }}
         NIGHTLY RUN ID: ${{ matrix.run_id }}
@@ -220,12 +218,7 @@ jobs:
         FAILING JOB NAME: ${{ matrix.job_name }}
         FAILED STEP: ${{ matrix.step_name }}
         FAILING JOB URL: ${{ matrix.failure_url }}
-        TRACKING ISSUE NUMBER (in ROCm/xla): ${{ matrix.issue_number }}
-        DETECTION COMMENT URL (quote this in your report): ${{ matrix.detection_comment_url }}
-
-        Note: this tracking issue is shared by many unrelated failures -
-        your report must quote the detection comment above so readers
-        can tell which occurrence it addresses.
+        ISSUE NUMBER (in ROCm/xla, dedicated to this one failure signature): ${{ matrix.issue_number }}
 
         Your triage/analysis (SKILL.md Steps 1-3, before any build) is
         hard-capped at 5 minutes - time spent on an actual bazel
@@ -233,14 +226,12 @@ jobs:
         run still has to fit this step's own timeout. Run the
         /debug-nightly-failure skill, using the values above as its
         arguments: CI repo, run ID, job ID, job name, step name, failure
-        URL, issue number, detection comment URL, in that order. The
-        skill is responsible for a quick triage and root-cause estimate
-        first, a real reproduction only if that leaves enough of the
-        remaining budget to also report on it, and for editing its
-        findings directly into the detection comment via
-        `gh api -X PATCH .../issues/comments/<id>`. Never post a new
-        comment on the tracking issue, and do not post anything to
-        GitHub yourself outside of what the skill does.
+        URL, issue number, in that order. The skill is responsible for a
+        quick triage and root-cause estimate first, a real reproduction
+        only if that leaves enough of the remaining budget to also report
+        on it, and for posting its findings as new comments on the issue
+        via `gh issue comment`. Never edit the issue body, and do not post
+        anything to GitHub yourself outside of what the skill does.
     secrets: inherit
 
   auto_verify:
@@ -250,10 +241,10 @@ jobs:
     # green, revert, confirm red again - using the exact same
     # respond-to-mention skill a human's `@claude verify this` would
     # trigger in rocm_infra_agent.yml, just with a fixed, canned
-    # instruction instead of one someone typed. `@claude` on the detection
-    # comment is still there for anything beyond plain verification -
-    # digging deeper, trying a different approach, devising a new
-    # solution - see rocm_infra_agent.yml.
+    # instruction instead of one someone typed. Posting a new `@claude`
+    # comment on the issue is still there for anything beyond plain
+    # verification - digging deeper, trying a different approach, devising
+    # a new solution - see rocm_infra_agent.yml.
     name: "Auto-verify: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
     needs: [monitor, debug]
     if: needs.monitor.outputs.new_failures != '[]'
@@ -266,15 +257,15 @@ jobs:
       repository: ${{ matrix.repository }}
       head_sha: ${{ matrix.head_sha }}
       debug_pipeline_ref: ${{ github.head_ref || github.ref_name }}
-      comment_url: ${{ matrix.detection_comment_url }}
+      issue_number: ${{ matrix.issue_number }}
       # "auto" instead of a real instructions hash: this is always the
       # exact same canned instruction (never a human-authored one), so
       # there's nothing to disambiguate - respond-to-mention's Step 0/6
       # marker format is JOB_NAME / STEP_NAME:INSTRUCTIONS_HASH regardless
       # of who's asking, so this is just that same format with a fixed,
       # well-known hash value standing in for "the automatic one". A human
-      # later adding a *different* `@claude` instruction to the same
-      # comment gets its own real hash and is never confused with this.
+      # later posting a *different* `@claude` instruction on the same
+      # issue gets its own real hash and is never confused with this.
       already_handled_marker: "<!-- rocm-nightly-claude-mention:${{ matrix.job_name }} / ${{ matrix.step_name }}:auto -->"
       # Only proceed if debug-nightly-failure's report literally says this
       # - skips the "Fix found" (already self-verified), "Already fixed
@@ -287,10 +278,10 @@ jobs:
       job_timeout_minutes: 180
       claude_timeout_minutes: 175
       max_turns: 100
-      allowed_tools: "Skill,Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
+      allowed_tools: "Skill,Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
       artifact_name: "autoverify-patch-${{ matrix.job_id }}"
       prompt: |
-        CI REPO (for job logs / issue comments / where the PR goes): ROCm/xla
+        CI REPO (for job logs / the issue / where the PR goes): ROCm/xla
         SOURCE REPO (already checked out in the working directory): ${{ matrix.repository }}
         HEAD SHA (already checked out): ${{ matrix.head_sha }}
         NIGHTLY RUN ID: ${{ matrix.run_id }}
@@ -298,16 +289,17 @@ jobs:
         FAILING JOB NAME: ${{ matrix.job_name }}
         FAILED STEP: ${{ matrix.step_name }}
         FAILING JOB URL: ${{ matrix.failure_url }}
-        TRACKING ISSUE NUMBER (in ROCm/xla): ${{ matrix.issue_number }}
-        COMMENT URL (the proposed fix lives here, folded; edit this same
-        comment with your findings - never post a new one):
-        ${{ matrix.detection_comment_url }}
+        ISSUE NUMBER (in ROCm/xla, dedicated to this one failure signature;
+        the proposed fix lives in one of debug-nightly-failure's own
+        comments on it; post a new comment with your findings - never edit
+        the issue body or an existing comment): ${{ matrix.issue_number }}
         INSTRUCTIONS (use literally, this is not something a human wrote -
         it's this pipeline automatically asking to verify what
         debug-nightly-failure just proposed): Verify the proposed fix
-        described in this comment's "Possible fix (quick estimate,
-        unverified)" section - reproduce the original failure, apply the
-        fix, confirm it goes green, then revert it and confirm red again.
+        described in debug-nightly-failure's "Possible fix (quick
+        estimate, unverified)" comment - reproduce the original failure,
+        apply the fix, confirm it goes green, then revert it and confirm
+        red again.
         INSTRUCTIONS HASH (use literally in the Step 0/6 marker, don't
         recompute it): auto
 
@@ -316,18 +308,17 @@ jobs:
         pipeline automatically verifies every one of those rather than
         waiting for someone to ask. Run the /respond-to-mention skill,
         using the values above as its arguments: CI repo, issue number,
-        comment URL, job name, step name, repository, head SHA, failure
-        URL, instructions, instructions hash, in that order. The skill
+        job name, step name, repository, head SHA, failure URL,
+        instructions, instructions hash, in that order. The skill
         self-caps its own non-build decision-making at 30 minutes - time
         spent on actual build+test cycles doesn't count against that, but
         the whole run still has to fit this step's own timeout. It is
-        responsible for editing its findings directly into the comment
-        above via `gh api -X PATCH .../issues/comments/<id>`. It never
-        commits, pushes, or opens a PR itself - if the fix verifies, it
-        only writes out a patch file plus a PR title/body for a later,
-        deterministic workflow step to apply and turn into a draft PR.
-        Never post a new comment on the tracking issue, and do not post
-        anything to GitHub yourself outside of what the skill does.
+        responsible for posting its findings as a new comment on the issue
+        via `gh issue comment`. It never commits, pushes, or opens a PR
+        itself - if the fix verifies, it only writes out a patch file plus
+        a PR title/body for a later, deterministic workflow step to apply
+        and turn into a draft PR. Never edit the issue body, and do not
+        post anything to GitHub yourself outside of what the skill does.
     secrets: inherit
 
   apply_auto_verified_patch:
@@ -355,7 +346,7 @@ jobs:
     with:
       repository: ${{ matrix.repository }}
       head_sha: ${{ matrix.head_sha }}
-      comment_url: ${{ matrix.detection_comment_url }}
+      issue_number: ${{ matrix.issue_number }}
       artifact_name: "autoverify-patch-${{ matrix.job_id }}"
     secrets: inherit
 

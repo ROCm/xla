@@ -14,42 +14,58 @@
 # limitations under the License.
 # ==============================================================================
 #
-# Find comments a human has edited to add an `@claude <instructions>` line,
-# asking Claude to act on a failure it already reported - verify an
-# already-proposed fix, dig further, try a different approach, whatever the
-# instructions say - and queue each one that qualifies for the
-# respond-to-mention skill.
+# Find new comments starting with `@claude <instructions>` on ANY issue in
+# CI_REPO - not just the per-failure issues the nightly monitor creates -
+# and queue each one that qualifies. Authorization (who is allowed to
+# trigger this at all) is the caller's job, not this script's: see
+# rocm_infra_agent.yml's author_association check in the workflow `if:`.
 #
 # Two modes:
-#   - Full scan (`collect_claude_mention_targets.sh <issue_number>`): checks
-#     every comment on the tracking issue. Used by the scheduled run, which
-#     has no way to know which comment (if any) changed since last time -
-#     an `@claude` line can land on a comment analyzed days ago.
-#   - Single comment (`collect_claude_mention_targets.sh <issue_number>
-#     --comment <comment_id> <comment_url> <comment_body>`): checks only
-#     the one comment an `issue_comment: edited` event already told us
-#     changed - no need to page through the rest of the issue. Used by the
-#     event-triggered run for an immediate response; the full scan above
-#     remains the fallback that catches anything the event-triggered path
-#     missed (a run that failed to dispatch, GitHub Actions degraded, etc).
+#   - Single comment (`collect_claude_mention_targets.sh --comment
+#     <issue_number> <comment_id> <comment_body>`): checks only the one
+#     comment an `issue_comment: created` event already told us about - no
+#     need to page through anything else. Used by the event-triggered run
+#     for an immediate response.
+#   - Full scan (`collect_claude_mention_targets.sh`): checks every open
+#     issue's comments. Used by the scheduled run, which is the fallback
+#     that catches anything the event-triggered path missed (a run that
+#     failed to dispatch, GitHub Actions degraded, etc).
 #
 # A comment qualifies if, and only if:
-#   - it carries a `rocm-nightly-failure:` or `rocm-nightly-claude-debug:`
-#     marker (so a signature/job/step can be recovered from it), AND
-#   - its body contains a line starting with `@claude` (case-insensitive) -
-#     editing someone else's comment on GitHub requires write/triage access
-#     to the repo, so this is naturally restricted to trusted
-#     collaborators, unlike a reaction, AND
-#   - it does NOT already contain a `rocm-nightly-claude-mention:` marker
-#     for this same signature *and* this exact instruction text - once a
-#     given instruction has been attempted, it is never repeated, but
-#     editing the comment with a *new* instruction (different text after
-#     `@claude`) queues a fresh run, since that's a new, distinct ask.
+#   - its body starts with `@claude` (case-insensitive), AND
+#   - no comment already on the issue contains the matching mention marker
+#     for this exact instruction text (see below) - once a given
+#     instruction has been attempted, it is never repeated, but a new
+#     comment with different text after `@claude` queues a fresh run,
+#     since that's a new, distinct ask.
+#
+# Each qualifying comment is classified by the issue it's on:
+#   - "ci_failure": the issue carries the `rocm-infra-error` label, its
+#     title matches the `Nightly CI Failure: <job> / <step>` shape
+#     collect_claude_debug_targets.sh creates issues with, and a
+#     `- Failing job: <url>` line is present in its body - i.e. it's one
+#     of the nightly monitor's own per-failure issues. These get the full
+#     treatment: a specific commit to check out, a job/step signature, and
+#     the respond-to-mention skill's reproduce/apply/revert protocol.
+#     Mention marker: `<!-- rocm-nightly-claude-mention:JOB_NAME /
+#     STEP_NAME:INSTRUCTIONS_HASH -->`.
+#   - "general": anything else - an ordinary issue with no CI-failure
+#     context to reproduce. These get the lighter respond-to-issue skill:
+#     no checkout of a specific commit, no build/test, just the repo's own
+#     default branch to read code from and a comment in reply. Mention
+#     marker: `<!-- claude-mention:INSTRUCTIONS_HASH -->` (no job/step to
+#     fold in, since the marker only needs to be unique within this one
+#     issue's own comments).
 #
 # Output:
-#   A single compact JSON array on stdout (diagnostics on stderr), each
-#   element: {issue_number, comment_id, comment_url, job_name, step_name,
-#   repository, head_sha, failure_url, instructions, instructions_hash}.
+#   A single compact JSON array on stdout (diagnostics on stderr). Each
+#   element has `type: "ci_failure"` and {issue_number, comment_id,
+#   job_name, step_name, repository, head_sha, failure_url, run_id,
+#   job_id, instructions, instructions_hash}, or `type: "general"` and
+#   {issue_number, comment_id, repository, head_sha, instructions,
+#   instructions_hash} (repository/head_sha fixed at "ROCm/xla"/"main" -
+#   there's no failing job to derive them from - included only so a patch
+#   this target's skill run produces can still be applied the same way).
 #   "[]" if there is nothing to act on.
 #
 # Exit codes:
@@ -58,74 +74,90 @@
 
 set -euo pipefail
 
-if [ $# -lt 1 ]; then
-    echo "Usage: $0 <issue_number> [--comment <comment_id> <comment_url> <comment_body>]" >&2
-    exit 1
-fi
-
-ISSUE_NUMBER="$1"
-shift
-
-# Repository hosting the monitored runs and the tracking issue.
+# Repository hosting the monitored runs and the per-failure issues.
 CI_REPO="ROCm/xla"
+LABEL="rocm-infra-error"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Checks one comment against every qualifying rule above and, if it
 # qualifies, prints its JSON target object on stdout (nothing otherwise).
 # Shared by both modes so the qualifying logic only ever lives in one
-# place.
+# place. ISSUE_TITLE/ISSUE_BODY/ISSUE_HAS_LABEL describe the issue itself
+# (the signature and "Failing job:" line, if any, live there, not in any
+# comment). ALL_COMMENTS_TEXT is every existing comment's body on the
+# issue, newline-joined, searched only for the mention-marker dedup check
+# below.
 process_comment() {
-    local COMMENT_ID="$1" BODY="$2" COMMENT_URL="$3"
+    local ISSUE_NUMBER="$1" COMMENT_ID="$2" COMMENT_BODY="$3" ISSUE_TITLE="$4" ISSUE_BODY="$5" ISSUE_HAS_LABEL="$6" ALL_COMMENTS_TEXT="$7"
 
-    # The signature is whatever job/step marker is present - a comment
-    # that debug-nightly-failure hasn't finished analyzing yet only has
-    # the `rocm-nightly-failure:` detection marker; one it has finished
-    # also carries `rocm-nightly-claude-debug:` further down (now inside
-    # Step 7's fold). Either anchors the same signature text.
-    # `|| true` matters, not `| head -1` alone: under `set -e -o pipefail`,
-    # the pipeline's exit status is the *rightmost command that exited
-    # non-zero* - if grep finds nothing (exit 1) and head still exits 0,
-    # pipefail still reports 1 for the whole pipe, which `set -e` then
-    # treats as this assignment failing and aborts the whole script, with
-    # no further diagnostic. This is hit by any plain comment with neither
-    # marker at all (a human reply, not a detection comment) - `head -1`
-    # alone never actually protected against that.
-    local SIGNATURE
-    SIGNATURE=$(printf '%s' "$BODY" | grep -oP '(?<=<!-- rocm-nightly-failure:)[^>]*(?= -->)' | head -1 || true)
-    if [ -z "$SIGNATURE" ]; then
-        SIGNATURE=$(printf '%s' "$BODY" | grep -oP '(?<=<!-- rocm-nightly-claude-debug:)[^>]*(?= -->)' | head -1 || true)
+    echo "Checking comment ${COMMENT_ID} on issue #${ISSUE_NUMBER}" >&2
+
+    # Classify: does this look like one of the nightly monitor's own
+    # per-failure issues (label + title shape + a parseable "Failing job:"
+    # line), or an ordinary issue? Only an issue satisfying all three gets
+    # the "ci_failure" treatment - any one of them missing (a human-created
+    # issue that merely reuses the label, or a monitor issue whose title
+    # was edited) falls back to "general" rather than half-applying the
+    # CI-failure protocol to something it doesn't actually describe.
+    local IS_CI_FAILURE=false SIGNATURE="" FAILURE_URL=""
+    if [ "$ISSUE_HAS_LABEL" = "true" ]; then
+        local STRIPPED_TITLE="${ISSUE_TITLE#Nightly CI Failure: }"
+        if [ "$STRIPPED_TITLE" != "$ISSUE_TITLE" ]; then
+            FAILURE_URL=$(printf '%s' "$ISSUE_BODY" | grep -oP '(?<=- Failing job: )\S+' | head -1 || true)
+            if [ -n "$FAILURE_URL" ]; then
+                SIGNATURE="$STRIPPED_TITLE"
+                IS_CI_FAILURE=true
+            fi
+        fi
     fi
-    if [ -z "$SIGNATURE" ]; then
+
+    # The whole comment *is* the instruction now (it's a brand-new comment,
+    # not a line edited into a larger existing one) - just strip the
+    # leading `@claude` token and any immediately-following punctuation/
+    # whitespace, keeping every line after that.
+    if ! printf '%s' "$COMMENT_BODY" | grep -qP '^[[:space:]]*@[Cc][Ll][Aa][Uu][Dd][Ee]([^a-zA-Z]|$)'; then
+        echo "  -> comment does not start with @claude, skipping" >&2
         return
     fi
-
-    echo "Checking comment ${COMMENT_ID} (${SIGNATURE})" >&2
-
-    # Capture the `@claude` line itself plus any immediately following
-    # non-blank lines, so a short freeform paragraph works, e.g.:
-    #   @claude verify the solution, try to set a breakpoint there and
-    #   adjust this code. Inspect if it works.
-    # Stops at the first blank line, HTML comment, or <details> tag, so it
-    # never swallows a divider or an existing fold below it.
     local INSTRUCTIONS
-    INSTRUCTIONS=$(printf '%s' "$BODY" | awk '
-        /^[[:space:]]*@[Cc][Ll][Aa][Uu][Dd][Ee]([^a-zA-Z]|$)/ { capture=1 }
-        capture {
-            if ($0 ~ /^[[:space:]]*$/ || $0 ~ /<!--/ || $0 ~ /<details>/) exit
-            print
-        }
-    ' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
+    INSTRUCTIONS=$(printf '%s' "$COMMENT_BODY" \
+        | sed -E '1s/^[[:space:]]*@[Cc][Ll][Aa][Uu][Dd][Ee][[:space:]:,]*//' \
+        | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
     if [ -z "$INSTRUCTIONS" ]; then
-        echo "  -> no @claude line in the comment body, skipping" >&2
+        echo "  -> no instructions after @claude, skipping" >&2
         return
     fi
 
     local INSTRUCTIONS_HASH MENTION_MARKER
     INSTRUCTIONS_HASH=$(printf '%s' "$INSTRUCTIONS" | sha256sum | cut -c1-12)
-    MENTION_MARKER="<!-- rocm-nightly-claude-mention:${SIGNATURE}:${INSTRUCTIONS_HASH} -->"
-    if printf '%s' "$BODY" | grep -qF "$MENTION_MARKER"; then
+    if [ "$IS_CI_FAILURE" = true ]; then
+        MENTION_MARKER="<!-- rocm-nightly-claude-mention:${SIGNATURE}:${INSTRUCTIONS_HASH} -->"
+    else
+        MENTION_MARKER="<!-- claude-mention:${INSTRUCTIONS_HASH} -->"
+    fi
+    if printf '%s' "$ALL_COMMENTS_TEXT" | grep -qF "$MENTION_MARKER"; then
         echo "  -> this exact instruction was already acted on, skipping" >&2
+        return
+    fi
+
+    if [ "$IS_CI_FAILURE" != true ]; then
+        echo "  -> queued (general): ${INSTRUCTIONS}" >&2
+        # repository/head_sha are fixed, not derived from any failing job -
+        # there isn't one here. Still included so apply_patch_and_open_pr
+        # can apply a patch this target's skill run might produce the
+        # exact same way it does for a "ci_failure" target, with no
+        # type-specific branching of its own.
+        jq -nc \
+            --arg issue_number "$ISSUE_NUMBER" \
+            --arg comment_id "$COMMENT_ID" \
+            --arg repository "$CI_REPO" \
+            --arg head_sha "main" \
+            --arg instructions "$INSTRUCTIONS" \
+            --arg instructions_hash "$INSTRUCTIONS_HASH" \
+            '{type: "general", issue_number: $issue_number, comment_id: $comment_id,
+              repository: $repository, head_sha: $head_sha,
+              instructions: $instructions, instructions_hash: $instructions_hash}'
         return
     fi
 
@@ -135,16 +167,7 @@ process_comment() {
     # while STEP_NAME never does.
     local JOB_NAME="${SIGNATURE% / *}" STEP_NAME="${SIGNATURE##* / }"
 
-    local FAILURE_URL
-    FAILURE_URL=$(printf '%s' "$BODY" | grep -oP '(?<=- Failing job: )\S+' | head -1 || true)
-    if [ -z "$FAILURE_URL" ]; then
-        echo "  -> @claude'd but no 'Failing job:' line found, skipping" >&2
-        return
-    fi
-
     # .../actions/runs/<run_id>/job/<job_id>
-    # See the SIGNATURE extraction above for why `|| true` (not just
-    # `head -1`) is required here too.
     local JOB_ID RUN_ID
     JOB_ID=$(printf '%s' "$FAILURE_URL" | grep -oP '(?<=/job/)[0-9]+' | head -1 || true)
     RUN_ID=$(printf '%s' "$FAILURE_URL" | grep -oP '(?<=/runs/)[0-9]+' | head -1 || true)
@@ -167,11 +190,10 @@ process_comment() {
         return
     fi
 
-    echo "  -> queued: ${INSTRUCTIONS}" >&2
+    echo "  -> queued (ci_failure): ${INSTRUCTIONS}" >&2
     jq -nc \
         --arg issue_number "$ISSUE_NUMBER" \
         --arg comment_id "$COMMENT_ID" \
-        --arg comment_url "$COMMENT_URL" \
         --arg job_name "$JOB_NAME" \
         --arg step_name "$STEP_NAME" \
         --arg repository "$HEAD_REPOSITORY" \
@@ -181,7 +203,7 @@ process_comment() {
         --arg job_id "$JOB_ID" \
         --arg instructions "$INSTRUCTIONS" \
         --arg instructions_hash "$INSTRUCTIONS_HASH" \
-        '{issue_number: $issue_number, comment_id: $comment_id, comment_url: $comment_url,
+        '{type: "ci_failure", issue_number: $issue_number, comment_id: $comment_id,
           job_name: $job_name, step_name: $step_name, repository: $repository,
           head_sha: $head_sha, failure_url: $failure_url, run_id: $run_id,
           job_id: $job_id, instructions: $instructions,
@@ -192,30 +214,51 @@ TARGETS="[]"
 
 if [ "${1:-}" = "--comment" ]; then
     if [ $# -ne 4 ]; then
-        echo "Usage: $0 <issue_number> --comment <comment_id> <comment_url> <comment_body>" >&2
+        echo "Usage: $0 --comment <issue_number> <comment_id> <comment_body>" >&2
         exit 1
     fi
-    TARGET=$(process_comment "$2" "$4" "$3")
+    ISSUE_NUMBER="$2"
+    COMMENT_ID="$3"
+    COMMENT_BODY="$4"
+
+    ISSUE_JSON=$(gh issue view "$ISSUE_NUMBER" --repo "$CI_REPO" --json title,body,labels)
+    ISSUE_TITLE=$(printf '%s' "$ISSUE_JSON" | jq -r '.title')
+    ISSUE_BODY=$(printf '%s' "$ISSUE_JSON" | jq -r '.body')
+    ISSUE_HAS_LABEL=$(printf '%s' "$ISSUE_JSON" | jq --arg l "$LABEL" '[.labels[].name] | any(. == $l)')
+    ALL_COMMENTS_TEXT=$(gh api --paginate "/repos/${CI_REPO}/issues/${ISSUE_NUMBER}/comments" | jq -r '[.[].body] | join("\n")')
+    TARGET=$(process_comment "$ISSUE_NUMBER" "$COMMENT_ID" "$COMMENT_BODY" "$ISSUE_TITLE" "$ISSUE_BODY" "$ISSUE_HAS_LABEL" "$ALL_COMMENTS_TEXT")
     if [ -n "$TARGET" ]; then
         TARGETS=$(printf '%s' "$TARGETS" | jq -c --argjson t "$TARGET" '. + [$t]')
     fi
-else
-    COMMENTS=$(gh api --paginate "/repos/${CI_REPO}/issues/${ISSUE_NUMBER}/comments")
+elif [ $# -eq 0 ]; then
+    # No `--label` filter: a qualifying comment can now be on any open
+    # issue, not just the nightly monitor's own rocm-infra-error ones.
+    OPEN_ISSUES=$(gh issue list --repo "$CI_REPO" --state open --limit 1000 \
+        --json number,title,body,labels)
 
-    # mapfile populates the array fully before the loop starts, so an
-    # early `continue`/error inside the loop never closes a pipe a
-    # producer is still writing to (the SIGPIPE-under-pipefail gotcha
-    # documented in get_checkout_source.sh).
-    mapfile -t COMMENT_IDS < <(printf '%s' "$COMMENTS" | jq -r '.[].id')
+    mapfile -t ISSUE_NUMBERS < <(printf '%s' "$OPEN_ISSUES" | jq -r '.[].number')
 
-    for COMMENT_ID in "${COMMENT_IDS[@]}"; do
-        BODY=$(printf '%s' "$COMMENTS" | jq -r --argjson id "$COMMENT_ID" '.[] | select(.id == $id) | .body')
-        COMMENT_URL=$(printf '%s' "$COMMENTS" | jq -r --argjson id "$COMMENT_ID" '.[] | select(.id == $id) | .html_url')
-        TARGET=$(process_comment "$COMMENT_ID" "$BODY" "$COMMENT_URL")
-        if [ -n "$TARGET" ]; then
-            TARGETS=$(printf '%s' "$TARGETS" | jq -c --argjson t "$TARGET" '. + [$t]')
-        fi
+    for ISSUE_NUMBER in "${ISSUE_NUMBERS[@]}"; do
+        ISSUE_TITLE=$(printf '%s' "$OPEN_ISSUES" | jq -r --argjson n "$ISSUE_NUMBER" '.[] | select(.number == $n) | .title')
+        ISSUE_BODY=$(printf '%s' "$OPEN_ISSUES" | jq -r --argjson n "$ISSUE_NUMBER" '.[] | select(.number == $n) | .body')
+        ISSUE_HAS_LABEL=$(printf '%s' "$OPEN_ISSUES" | jq --arg l "$LABEL" --argjson n "$ISSUE_NUMBER" \
+            '[.[] | select(.number == $n) | .labels[].name] | any(. == $l)')
+
+        COMMENTS=$(gh api --paginate "/repos/${CI_REPO}/issues/${ISSUE_NUMBER}/comments")
+        ALL_COMMENTS_TEXT=$(printf '%s' "$COMMENTS" | jq -r '[.[].body] | join("\n")')
+        mapfile -t COMMENT_IDS < <(printf '%s' "$COMMENTS" | jq -r '.[].id')
+
+        for COMMENT_ID in "${COMMENT_IDS[@]}"; do
+            COMMENT_BODY=$(printf '%s' "$COMMENTS" | jq -r --argjson id "$COMMENT_ID" '.[] | select(.id == $id) | .body')
+            TARGET=$(process_comment "$ISSUE_NUMBER" "$COMMENT_ID" "$COMMENT_BODY" "$ISSUE_TITLE" "$ISSUE_BODY" "$ISSUE_HAS_LABEL" "$ALL_COMMENTS_TEXT")
+            if [ -n "$TARGET" ]; then
+                TARGETS=$(printf '%s' "$TARGETS" | jq -c --argjson t "$TARGET" '. + [$t]')
+            fi
+        done
     done
+else
+    echo "Usage: $0 [--comment <issue_number> <comment_id> <comment_body>]" >&2
+    exit 1
 fi
 
 printf '%s\n' "$TARGETS"
