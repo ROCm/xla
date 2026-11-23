@@ -1,7 +1,7 @@
 ---
 name: run-hlo-perf-rbe
 description: Run the hlo_eval_tools HLO perf suite (multihost_hlo_runner on the pre-optimization model modules) on the ROCm RBE GPU pools with rbe_hlo_eval.sh, read summary.tsv, and compare runs or an A/B between two XLA revisions. Use when asked to run perf, benchmark, measure or A/B XLA changes on RBE / Buildbarn / MI350, or to interpret hlo_eval_results.
-argument-hint: [all | model[,model...]] [leaf...]
+argument-hint: "[all | model[,model...]] [leaf...]"
 ---
 
 # Run the HLO perf suite on ROCm RBE

@@ -1,7 +1,7 @@
 ---
 name: update-pr-review
 description: Given fresh review findings (from a prior review skill) and a PR number, fetch previous Claude inline comments, cross-reference findings, and update the PR in a thread-aware way. Resolves addressed issues, replies to active threads, and posts only genuinely new findings as new inline comments. Never posts the same issue twice.
-argument-hint: [PR-number]
+argument-hint: "[PR-number]"
 context: fork
 agent: general-purpose
 allowed-tools: Bash(gh *), Bash(jq *), Bash(grep *), Bash(head *), Read, Grep, Glob
