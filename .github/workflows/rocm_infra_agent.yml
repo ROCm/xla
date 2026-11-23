@@ -53,6 +53,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/rocm_infra_agent.yml"
+      - ".github/workflows/claude_issue_triage.yml"
       - "build_tools/rocm/create_infra_error_issue.sh"
       - "build_tools/rocm/collect_claude_mention_targets.sh"
       - ".claude/skills/respond-to-mention/SKILL.md"
@@ -128,94 +129,117 @@ jobs:
     name: "Respond: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
     needs: collect_mention_targets
     if: needs.collect_mention_targets.outputs.mention_targets != '[]'
-    # Same runner/sidecar-container rationale as rocm_infra_monitor.yml's
-    # `debug` job (build-only-xla for LLM gateway access; rocmless-debug
-    # sidecar for the actual bazel/run_xla_ci_build.sh invocations).
-    runs-on: build-only-xla
-    # This job additionally needs to push a branch and open a draft PR,
-    # unlike `collect_mention_targets` above (read-mostly, aside from
-    # issue/label edits) - scoped here, not at the workflow level.
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-      id-token: write
-    # The skill self-caps its own non-build decision-making at 30 minutes
-    # (see SKILL.md) - this ceiling instead bounds the whole run, including
-    # whatever build+test cycles the instruction ends up requiring, which
-    # can legitimately take a long while.
-    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.collect_mention_targets.outputs.mention_targets) }}
+    uses: ./.github/workflows/claude_issue_triage.yml
+    with:
+      repository: ${{ matrix.repository }}
+      head_sha: ${{ matrix.head_sha }}
+      debug_pipeline_ref: ${{ env.DEBUG_PIPELINE_REF }}
+      comment_url: ${{ matrix.comment_url }}
+      already_handled_marker: "<!-- rocm-nightly-claude-mention:${{ matrix.job_name }} / ${{ matrix.step_name }}:${{ matrix.instructions_hash }} -->"
+      claude_step_name: Respond to @claude Mention
+      # The skill self-caps its own non-build decision-making at 30 minutes
+      # (see SKILL.md) - job_timeout_minutes instead bounds the whole run,
+      # including whatever build+test cycles the instruction ends up
+      # requiring, which can legitimately take a long while.
+      job_timeout_minutes: 180
+      claude_timeout_minutes: 175
+      max_turns: 100
+      allowed_tools: "Skill,Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
+      # Keyed by comment_id (not job/step/instructions_hash): one comment
+      # only ever has one instruction in flight at a time, and
+      # apply_patch_and_open_pr below computes this exact same name
+      # independently (from the same collect_mention_targets output) to
+      # find it - they don't need to agree on anything else.
+      artifact_name: "mention-patch-${{ matrix.comment_id }}"
+      prompt: |
+        CI REPO (for job logs / issue comments / where the PR goes): ROCm/xla
+        SOURCE REPO (already checked out in the working directory): ${{ matrix.repository }}
+        HEAD SHA (already checked out): ${{ matrix.head_sha }}
+        NIGHTLY RUN ID: ${{ matrix.run_id }}
+        FAILING JOB ID: ${{ matrix.job_id }}
+        FAILING JOB NAME: ${{ matrix.job_name }}
+        FAILED STEP: ${{ matrix.step_name }}
+        FAILING JOB URL: ${{ matrix.failure_url }}
+        TRACKING ISSUE NUMBER (in ROCm/xla): ${{ matrix.issue_number }}
+        COMMENT URL (the instruction and usually a proposed fix live
+        here, folded; edit this same comment with your findings - never
+        post a new one): ${{ matrix.comment_url }}
+        INSTRUCTIONS (a human wrote this verbatim after "@claude" in the
+        comment above - follow it literally, it governs what you do):
+        ${{ matrix.instructions }}
+        INSTRUCTIONS HASH (use literally in the Step 0/6 marker, don't
+        recompute it): ${{ matrix.instructions_hash }}
 
+        A human added the instructions above by editing the comment,
+        asking you to act on this failure - that could mean verifying
+        the already-proposed fix, digging further (e.g. setting a
+        breakpoint and inspecting specific state), trying a different
+        approach, or devising a new solution, depending on what the
+        instructions actually say. Run the /respond-to-mention skill,
+        using the values above as its arguments: CI repo, issue number,
+        comment URL, job name, step name, repository, head SHA, failure
+        URL, instructions, instructions hash, in that order. The skill
+        self-caps its own non-build decision-making at 30 minutes - time
+        spent on actual build+test cycles doesn't count against that,
+        but the whole run still has to fit this step's own timeout. The
+        skill decides how much of the reproduce/apply/revert protocol
+        applies based on what was actually asked, and is responsible for
+        editing its findings directly into the comment above via
+        `gh api -X PATCH .../issues/comments/<id>`. It never commits,
+        pushes, or opens a PR itself - if it ends up with a verified
+        fix, it only writes out a patch file plus a PR title/body for a
+        later, deterministic workflow step to apply and turn into a
+        draft PR. Never post a new comment on the tracking issue, and do
+        not post anything to GitHub yourself outside of what the skill
+        does.
+    secrets: inherit
+
+  apply_patch_and_open_pr:
+    name: "Apply fix: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
+    needs: [collect_mention_targets, respond_to_mention]
+    if: needs.collect_mention_targets.outputs.mention_targets != '[]'
+    runs-on: ubuntu-latest
+    # Needs to push a branch and open a draft PR, unlike every other job in
+    # this workflow (all read-mostly, aside from issue/label edits) -
+    # scoped here, not at the workflow level.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      # Deliberately not `needs.respond_to_mention`'s own per-entry result:
+      # a reusable-workflow call's outputs collapse across matrix entries
+      # (GitHub Actions only exposes one arbitrary entry's value to a
+      # downstream job, not a map keyed by entry), so this job can't learn
+      # "did matrix entry N produce a patch" from `respond_to_mention`
+      # directly. Instead it reuses the same source matrix and just
+      # attempts the download below for every entry, tolerating "no such
+      # artifact" as the normal/expected outcome for anything that wasn't
+      # verified (not applicable, still red, or a purely investigative
+      # ask with no fix) - functionally identical to today's "if the patch
+      # file doesn't exist, skip" check, just preceded by a best-effort
+      # download instead of being guaranteed by the same job's own earlier
+      # step.
+      matrix:
+        include: ${{ fromJson(needs.collect_mention_targets.outputs.mention_targets) }}
     steps:
-      # Same race-safety reasoning as rocm_infra_monitor.yml's
-      # "already_debugged" check: collect_claude_mention_targets.sh already
-      # checks this before queuing, but re-check against this exact
-      # signature+instruction right before doing anything expensive, in
-      # case of an overlapping run or a manual re-dispatch.
-      - name: Check whether this instruction was already acted on
-        id: already_handled
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          MARKER='<!-- rocm-nightly-claude-mention:${{ matrix.job_name }} / ${{ matrix.step_name }}:${{ matrix.instructions_hash }} -->'
-          BODY=$(gh api "/repos/ROCm/xla/issues/comments/${{ matrix.comment_id }}" --jq '.body')
-          if printf '%s' "$BODY" | grep -qF "$MARKER"; then
-            echo "This exact instruction was already acted on - skipping" >&2
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Already handled, nothing to do
-        if: steps.already_handled.outputs.skip == 'true'
-        run: echo "${{ matrix.job_name }} / ${{ matrix.step_name }} - this instruction was already acted on, skipping this run."
-
-      # persist-credentials: false here too - this repo's existing
-      # push-from-a-workflow precedent (rocm_xla_jax_metrics_nightly.yml)
-      # pushes through an explicit x-access-token remote added at push
-      # time instead of relying on the checkout's own persisted
-      # credential, so the respond-to-mention skill does the same (see
-      # SKILL.md).
-      - name: Checkout the commit that failed
-        if: steps.already_handled.outputs.skip != 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # continue-on-error, not an `if-no-files-found`-style flag: there's
+      # no download-side equivalent, so a missing artifact just fails this
+      # one step, which is exactly what "nothing to apply" looks like -
+      # the file-existence check right below treats that identically to
+      # the artifact having been found empty.
+      - name: Download patch artifact, if one was produced
+        continue-on-error: true
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
-          repository: ${{ matrix.repository }}
-          ref: ${{ matrix.head_sha }}
-          persist-credentials: false
-
-      - name: Populate missing upstream ROCm build tools
-        if: steps.already_handled.outputs.skip != 'true' && hashFiles('build_tools/rocm/run_xla_ci_build.sh') == ''
-        run: |
-          tmpdir="$(mktemp -d)"
-          git clone --depth 1 --filter=blob:none --sparse https://github.com/openxla/xla.git "$tmpdir"
-          git -C "$tmpdir" sparse-checkout set build_tools/rocm
-          cp -a "$tmpdir/build_tools/rocm/." build_tools/rocm/
-
-      - name: Fetch .claude config from ${{ env.DEBUG_PIPELINE_REF }}
-        if: steps.already_handled.outputs.skip != 'true'
-        run: |
-          git remote add rocm-xla https://github.com/ROCm/xla.git
-          git fetch rocm-xla "${{ env.DEBUG_PIPELINE_REF }}"
-          git restore --source=FETCH_HEAD --worktree -- .claude
-          find .claude -type f | sort
-
-      - name: Start rocmless container
-        if: steps.already_handled.outputs.skip != 'true'
-        run: |
-          docker run -d --name rocmless-debug \
-            -v "$(pwd)":"$(pwd)" -w "$(pwd)" \
-            -v /data/temp-rbe-cert.crt:/data/temp-rbe-cert.crt:ro \
-            -v /data/temp-rbe-cert.key:/data/temp-rbe-cert.key:ro \
-            -v /data/bb-rbe-ca.crt:/data/bb-rbe-ca.crt:ro \
-            -v /data/bb-rbe-client.key:/data/bb-rbe-client.key:ro \
-            -v /data/bb-rbe-client.crt:/data/bb-rbe-client.crt:ro \
-            ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f \
-            sleep infinity
+          name: "mention-patch-${{ matrix.comment_id }}"
+          path: /tmp
 
       # The default GITHUB_TOKEN cannot push a brand-new branch into
       # ROCm/xla: creating a ref requires GitHub to validate whether it
@@ -241,12 +265,12 @@ jobs:
       # exactly what requesting pull-requests/issues on top of this hit.
       # `gh pr create` doesn't need this token anyway: opening a PR against
       # an already-pushed branch is a plain pull-requests:write operation
-      # with no workflows-scope involved, and the job's own `permissions:`
-      # block already grants that to the default GITHUB_TOKEN - so only the
-      # one `git push` below uses this App token, everything else
-      # (comment edits, labels, the PR itself) keeps using the default one.
+      # with no workflows-scope involved, and this job's own
+      # `permissions:` block already grants that to the default
+      # GITHUB_TOKEN - so only the one `git push` below uses this App
+      # token, everything else (comment edits, the PR itself) keeps using
+      # the default one.
       - name: Create GitHub App token for the branch push only
-        if: steps.already_handled.outputs.skip != 'true'
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
@@ -257,113 +281,29 @@ jobs:
           permission-contents: write
           permission-workflows: write
 
-      # Claude's own Bash tool refuses to run any command containing a
-      # shell variable it can't verify is safe before running it - this
-      # isn't a GitHub permission problem, it's Claude Code's own
-      # permission engine, and it applies even to variables the workflow
-      # itself injected via `env:`. Confirmed in production: embedding a
-      # token directly in the skill's own `git remote add ...` command got
-      # rejected outright ("A variable in braces in this command can't be
-      # checked before it runs"). That's exactly why the skill no longer
-      # pushes or opens the PR itself at all - it only ever writes a patch
-      # file (see its Step 5) for the later, deterministic "Apply verified
-      # patch and open PR" step below to use. This rewrite configures the
-      # credential that later step needs, here, in a plain workflow step
-      # (not an agent Bash tool call, so none of the restriction above
-      # applies) - any `git push`/`git remote add .../ROCm/xla.git` from
-      # here on in this job is transparently authenticated without any
-      # token, or any variable at all, appearing in anyone's command text.
+      # Configuring this here (a plain workflow step, not an agent Bash
+      # tool call) rather than inside the skill matters: Claude Code's own
+      # Bash tool refuses to run any command referencing a credential it
+      # can't verify is safe before running it, even one injected via
+      # `env:` - confirmed in production, embedding a token directly in a
+      # skill's own `git remote add ...` command got rejected outright ("A
+      # variable in braces in this command can't be checked before it
+      # runs"). That's exactly why the skill never pushes or opens the PR
+      # itself - it only ever writes a patch file for this job to use.
+      # Any `git push`/`git remote add .../ROCm/xla.git` from here on in
+      # this job is transparently authenticated without any token, or any
+      # variable at all, appearing in anyone's command text.
       - name: Configure git to authenticate pushes to ROCm/xla
-        if: steps.already_handled.outputs.skip != 'true'
         run: |
           git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/ROCm/xla.git".insteadOf "https://github.com/ROCm/xla.git"
 
-      - name: Respond to @claude Mention
-        if: steps.already_handled.outputs.skip != 'true'
-        id: claude-code
-        timeout-minutes: 175
-        uses: anthropics/claude-code-action@v1
-        env:
-          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
-          ANTHROPIC_CUSTOM_HEADERS: |
-            Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}
-            user: ${{ secrets.USER_NTID }}
-          ANTHROPIC_MODEL: "Claude-Opus-5.5"
-          ANTHROPIC_DEFAULT_OPUS_MODEL: "Claude-Opus-5.5"
-          ANTHROPIC_DEFAULT_SONNET_MODEL: "Claude-Sonnet-4.6"
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: "Claude-Haiku-4.5"
-          # Default token: comment edits, labels, and `gh pr create` - all
-          # plain contents/issues/pull-requests operations this job's own
-          # `permissions:` block already covers.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          anthropic_api_key: "sk-ant-dummy-gateway-key"
-          allowed_bots: "github-actions[bot]"
-          show_full_output: true
-          prompt: |
-            CI REPO (for job logs / issue comments / where the PR goes): ROCm/xla
-            SOURCE REPO (already checked out in the working directory): ${{ matrix.repository }}
-            HEAD SHA (already checked out): ${{ matrix.head_sha }}
-            NIGHTLY RUN ID: ${{ matrix.run_id }}
-            FAILING JOB ID: ${{ matrix.job_id }}
-            FAILING JOB NAME: ${{ matrix.job_name }}
-            FAILED STEP: ${{ matrix.step_name }}
-            FAILING JOB URL: ${{ matrix.failure_url }}
-            TRACKING ISSUE NUMBER (in ROCm/xla): ${{ matrix.issue_number }}
-            COMMENT URL (the instruction and usually a proposed fix live
-            here, folded; edit this same comment with your findings - never
-            post a new one): ${{ matrix.comment_url }}
-            INSTRUCTIONS (a human wrote this verbatim after "@claude" in the
-            comment above - follow it literally, it governs what you do):
-            ${{ matrix.instructions }}
-            INSTRUCTIONS HASH (use literally in the Step 0/6 marker, don't
-            recompute it): ${{ matrix.instructions_hash }}
-
-            A human added the instructions above by editing the comment,
-            asking you to act on this failure - that could mean verifying
-            the already-proposed fix, digging further (e.g. setting a
-            breakpoint and inspecting specific state), trying a different
-            approach, or devising a new solution, depending on what the
-            instructions actually say. Run the /respond-to-mention skill,
-            using the values above as its arguments: CI repo, issue number,
-            comment URL, job name, step name, repository, head SHA, failure
-            URL, instructions, instructions hash, in that order. The skill
-            self-caps its own non-build decision-making at 30 minutes - time
-            spent on actual build+test cycles doesn't count against that,
-            but the whole run still has to fit this step's own timeout. The
-            skill decides how much of the reproduce/apply/revert protocol
-            applies based on what was actually asked, and is responsible for
-            editing its findings directly into the comment above via
-            `gh api -X PATCH .../issues/comments/<id>`. It never commits,
-            pushes, or opens a PR itself - if it ends up with a verified
-            fix, it only writes out a patch file plus a PR title/body for a
-            later, deterministic workflow step to apply and turn into a
-            draft PR. Never post a new comment on the tracking issue, and do
-            not post anything to GitHub yourself outside of what the skill
-            does.
-          claude_args: |
-            --allowedTools "Skill,Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
-            --max-turns 100
-          settings: |
-            {
-              "hasCompletedOnboarding": true
-            }
-
-      # Deterministic, not agent-run: the skill above never commits,
-      # pushes, or opens the PR itself (Claude Code's own Bash permission
-      # check rejects any command referencing a token it can't verify
-      # ahead of time - see the skill's Step 5). It only leaves a patch
-      # file plus a PR title/body behind if the fix verified. This step
-      # does the actual git/gh work from that patch, entirely outside the
-      # agent, so none of that restriction applies.
       - name: Apply verified patch and open PR
-        if: steps.already_handled.outputs.skip != 'true'
         id: open_pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
-          if [ ! -s /tmp/claude_mention_fix.patch ]; then
+          if [ ! -s /tmp/claude_fix.patch ]; then
             echo "No verified fix to apply - skipping."
             exit 0
           fi
@@ -376,37 +316,37 @@ jobs:
           # the branch name has no dependency on anything beyond what this
           # step actually consumes.
           SHA_SHORT=$(echo "${{ matrix.head_sha }}" | cut -c1-7)
-          PATCH_HASH=$(sha256sum /tmp/claude_mention_fix.patch | cut -c1-8)
+          PATCH_HASH=$(sha256sum /tmp/claude_fix.patch | cut -c1-8)
           BRANCH="claude/verify-fix/${SHA_SHORT}-${PATCH_HASH}"
 
           # Base the fix on the exact commit the respond-to-mention skill
           # actually tested (matrix.repository@matrix.head_sha - the same
-          # commit "Checkout the commit that failed" checked out earlier in
-          # this job), not on any branch tip. The red->green->red cycle in
-          # that skill only proves the fix works against that one commit -
-          # rebasing onto a later tip (ROCm/xla's or even openxla/xla's own
-          # main) would ship something that was never actually verified.
-          # GitHub allows fetching an arbitrary commit SHA directly (no need
-          # to walk main's history to find it), and since head_sha only
-          # gets older relative to ROCm/xla's main (kept in sync by
-          # sync_upstream.yml) the push below is normally pushing a commit
-          # the remote already has as an ancestor, not a fresh tip it might
-          # not have caught up to yet.
+          # commit the called workflow's "Checkout the commit that failed"
+          # step checked out), not on any branch tip. The red->green->red
+          # cycle in that skill only proves the fix works against that one
+          # commit - rebasing onto a later tip (ROCm/xla's or even
+          # openxla/xla's own main) would ship something that was never
+          # actually verified. GitHub allows fetching an arbitrary commit
+          # SHA directly (no need to walk main's history to find it), and
+          # since head_sha only gets older relative to ROCm/xla's main
+          # (kept in sync by sync_upstream.yml) the push below is normally
+          # pushing a commit the remote already has as an ancestor, not a
+          # fresh tip it might not have caught up to yet.
           WORKDIR=$(mktemp -d)
           git -C "$WORKDIR" init -q
           git -C "$WORKDIR" remote add upstream "https://github.com/${{ matrix.repository }}.git"
           git -C "$WORKDIR" fetch -q --depth=1 upstream "${{ matrix.head_sha }}"
           git -C "$WORKDIR" checkout -q -b "$BRANCH" FETCH_HEAD
 
-          if ! git -C "$WORKDIR" apply --check /tmp/claude_mention_fix.patch; then
+          if ! git -C "$WORKDIR" apply --check /tmp/claude_fix.patch; then
             echo "::warning::Verified patch no longer applies cleanly to ${{ matrix.head_sha }} - needs a manual rebase"
             exit 0
           fi
-          git -C "$WORKDIR" apply /tmp/claude_mention_fix.patch
+          git -C "$WORKDIR" apply /tmp/claude_fix.patch
           git -C "$WORKDIR" \
             -c user.name="github-actions[bot]" \
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -aq -F /tmp/claude_mention_pr_title.txt
+            commit -aq -F /tmp/claude_pr_title.txt
 
           git -C "$WORKDIR" remote add origin https://github.com/ROCm/xla.git
           if ! git -C "$WORKDIR" push -q origin "HEAD:refs/heads/${BRANCH}"; then
@@ -415,8 +355,8 @@ jobs:
           fi
 
           PR_URL=$(gh pr create --repo ROCm/xla --draft \
-            --title "$(head -1 /tmp/claude_mention_pr_title.txt)" \
-            --body-file /tmp/claude_mention_pr_body.txt \
+            --title "$(head -1 /tmp/claude_pr_title.txt)" \
+            --body-file /tmp/claude_pr_body.txt \
             --base main --head "$BRANCH") || {
             echo "::warning::Failed to open the draft PR"
             exit 0
@@ -424,7 +364,7 @@ jobs:
           echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
 
       - name: Add the PR link to the tracking comment
-        if: steps.already_handled.outputs.skip != 'true' && steps.open_pr.outputs.pr_url != ''
+        if: steps.open_pr.outputs.pr_url != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ steps.open_pr.outputs.pr_url }}
@@ -440,7 +380,3 @@ jobs:
           open('/tmp/comment_after_pr_link.txt', 'w').write(body)
           "
           gh api -X PATCH "/repos/ROCm/xla/issues/comments/${{ matrix.comment_id }}" -F body=@/tmp/comment_after_pr_link.txt
-
-      - name: Stop rocmless container
-        if: always()
-        run: docker rm -f rocmless-debug || true

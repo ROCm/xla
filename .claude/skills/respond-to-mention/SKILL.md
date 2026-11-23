@@ -260,13 +260,19 @@ Claude Code's own Bash permission check rejected the command outright ("A
 variable in braces in this command can't be checked before it runs") the
 moment it needed to reference a token, and there is no variable-free way
 to write an authenticated `git push`/`gh pr create` yourself. Instead, a
-deterministic "Apply verified patch and open PR" step the workflow runs
-*after* this skill finishes does all of that - plain shell, no agent, no
-permission check to fight, working from a patch file you leave behind:
+deterministic `apply_patch_and_open_pr` job the workflow runs afterward
+does all of that - plain shell, no agent, no permission check to fight,
+working from a patch file you leave behind. That job runs separately from
+this skill's own job (a reusable-workflow invocation can't share a runner
+filesystem with whatever calls it), so the patch file doesn't just sit
+there waiting to be read - the calling workflow uploads whatever you leave
+at the fixed paths below as an artifact, which `apply_patch_and_open_pr`
+then downloads. None of that is this skill's concern; it only needs to
+write the files:
 
 1. **Capture the fix as a patch**, nothing else:
    ```
-   git diff > /tmp/claude_mention_fix.patch
+   git diff > /tmp/claude_fix.patch
    ```
    The working tree should have exactly the fix applied and nothing else
    touched at this point, so this is exactly the fix, no more - don't
@@ -274,21 +280,22 @@ permission check to fight, working from a patch file you leave behind:
 2. **Write the PR title and body to two more plain files** - fixed,
    literal paths, no variables needed to produce them:
    ```
-   cat > /tmp/claude_mention_pr_title.txt <<'EOF'
+   cat > /tmp/claude_pr_title.txt <<'EOF'
    [WIP] <one-line summary of the fix>
    EOF
-   cat > /tmp/claude_mention_pr_body.txt <<'EOF'
+   cat > /tmp/claude_pr_body.txt <<'EOF'
    <Google-style CL description - see shape below>
    EOF
    ```
-   The workflow step treats **the mere existence of a non-empty
-   `/tmp/claude_mention_fix.patch`** as "there is a verified fix to apply" -
-   if you reach this step, always write all three files; if you stop
-   earlier, never create any of them. If `/tmp` isn't writable in this
-   sandbox, write them under `debug_tools/claude_scratch/` instead (same
-   fallback as elsewhere in this skill) and say so plainly in Step 6's
-   report, since that path needs to be cleaned up and the workflow step
-   won't know to look there.
+   The workflow treats **the mere existence of a non-empty
+   `/tmp/claude_fix.patch`** as "there is a verified fix to apply" - if you
+   reach this step, always write all three files; if you stop earlier,
+   never create any of them. If `/tmp` isn't writable in this sandbox,
+   write them under `debug_tools/claude_scratch/` instead (same fallback
+   as elsewhere in this skill) and say so plainly in Step 6's report,
+   since in that case the workflow's upload step won't find them at all -
+   no patch will reach `apply_patch_and_open_pr`, so mention that
+   explicitly rather than letting the report imply a PR is coming.
 
    PR body shape - a Google-style CL description, **not** a Summary/Test
    plan bullet template: the one-line subject is already in the title
