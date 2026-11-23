@@ -3341,6 +3341,70 @@ ENTRY entry {
   EXPECT_TRUE(RunAndCompareNoHloPasses(kHloText, kExactMatch));
 }
 
+class MixedF8ConvEmitterTest
+    : public TritonEmitterTest,
+      public ::testing::WithParamInterface<
+          std::tuple<PrimitiveType, PrimitiveType, PrimitiveType>> {
+ public:
+  static std::string ParamToString(
+      const ::testing::TestParamInfo<ParamType>& info) {
+    auto [lhs_type, rhs_type, result_type] = info.param;
+    return absl::StrCat(
+        primitive_util::LowercasePrimitiveTypeName(lhs_type), "_",
+        primitive_util::LowercasePrimitiveTypeName(rhs_type), "_",
+        primitive_util::LowercasePrimitiveTypeName(result_type));
+  }
+};
+
+TEST_P(MixedF8ConvEmitterTest, Conv2DIsEmittedCorrectly) {
+  if (GpuComputeCapability().IsCuda()) {
+    GTEST_SKIP() << "Mixed-F8 Triton convolution is only validated on ROCm.";
+  }
+  auto [lhs_type, rhs_type, result_type] = GetParam();
+  constexpr absl::string_view kHloTextTemplate = R"(
+HloModule m
+
+triton_computation {
+  input = $0[2,6,6,16] parameter(0)
+  kernel = $1[3,3,16,16] parameter(1)
+  ROOT conv = $2[2,4,4,16] convolution(input, kernel),
+    window={size=3x3}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","16"]}
+}
+
+ENTRY entry {
+  p0 = $0[2,6,6,16] parameter(0)
+  p1 = $1[3,3,16,16] parameter(1)
+  ROOT fusion = $2[2,4,4,16] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["2","4","4","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+  const std::string hlo_text = absl::Substitute(
+      kHloTextTemplate, primitive_util::LowercasePrimitiveTypeName(lhs_type),
+      primitive_util::LowercasePrimitiveTypeName(rhs_type),
+      primitive_util::LowercasePrimitiveTypeName(result_type));
+
+  const ErrorSpec error_spec = result_type == BF16
+                                   ? ErrorSpec{/*aabs=*/1e-2, /*arel=*/1e-2}
+                                   : ErrorSpec{/*aabs=*/1e-3, /*arel=*/1e-3};
+  EXPECT_TRUE(RunAndCompareNoHloPasses(hlo_text, error_spec));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MixedF8ConvEmitterTestSuite, MixedF8ConvEmitterTest,
+    ::testing::Values(std::make_tuple(F8E5M2, F8E4M3FN, F32),
+                      std::make_tuple(F8E4M3FN, F8E5M2, F32),
+                      std::make_tuple(F8E5M2FNUZ, F8E4M3FNUZ, F32),
+                      std::make_tuple(F8E4M3FNUZ, F8E5M2FNUZ, F32),
+                      std::make_tuple(F8E5M2, F8E4M3FN, BF16)),
+    MixedF8ConvEmitterTest::ParamToString);
+
 TEST_F(TritonEmitterTest, Conv2DWindowDilationIsEmittedCorrectly) {
   const std::string kHloText = R"(
 HloModule m

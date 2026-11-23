@@ -3716,6 +3716,91 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::ValuesIn(AllDevicesToTest())),
     OperandPrecisionTestName);
 
+class MixedF8ConvTest
+    : public SupportTest,
+      public ::testing::WithParamInterface<
+          std::tuple<PrimitiveType, PrimitiveType, se::GpuComputeCapability>> {
+ public:
+  static std::string ParamToString(
+      const ::testing::TestParamInfo<ParamType>& info) {
+    auto [lhs_type, rhs_type, cc] = info.param;
+    return absl::StrCat(primitive_util::LowercasePrimitiveTypeName(lhs_type),
+                        "_",
+                        primitive_util::LowercasePrimitiveTypeName(rhs_type),
+                        "_", ComputeCapabilityToString(cc));
+  }
+};
+
+TEST_P(MixedF8ConvTest, MixedF8Conv) {
+  auto [lhs_type, rhs_type, cc] = GetParam();
+  if (lhs_type == rhs_type) {
+    GTEST_SKIP() << "Skipping same-type tests, covered by "
+                    "ConvolutionTestFullParametrization";
+  }
+
+  if (auto* cuda_cc = cc.cuda_compute_capability();
+      cuda_cc && !cuda_cc->IsAtLeastHopper()) {
+    GTEST_SKIP() << "F8 requires Hopper+ GPUs";
+  }
+
+  const std::string kHloTestTemplate = R"(
+ENTRY triton_computation {
+  input = $0[1,8,8,16] parameter(0)   // N=1, H=8, W=8, C_in=16
+  kernel = $1[3,3,16,16] parameter(1) // H=3, W=3, C_in=16, C_out=16
+  ROOT conv = f32[1,8,8,16] convolution(input, kernel),
+    window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","16"]}
+})";
+  std::string hlo_text = absl::Substitute(
+      kHloTestTemplate, primitive_util::LowercasePrimitiveTypeName(lhs_type),
+      primitive_util::LowercasePrimitiveTypeName(rhs_type));
+
+  ASSERT_OK_AND_ASSIGN(
+      TestedInstruction ti,
+      ParseTemplateAndGetInstruction(hlo_text, PRIMITIVE_TYPE_INVALID,
+                                     HloOpcode::kConvolution));
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 4, 4, 16}, cc);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MixedF8ConvTestSuite, MixedF8ConvTest,
+    ::testing::Combine(::testing::Values(F8E5M2, F8E4M3FN),
+                       ::testing::Values(F8E5M2, F8E4M3FN),
+                       ::testing::ValuesIn(AllDevicesToTest())),
+    MixedF8ConvTest::ParamToString);
+
+using ConvolutionTestSimple = SupportTest;
+
+TEST_F(ConvolutionTestSimple,
+       MixedFnuzF8ConvIsSupportedOnRocmAndRejectedOnCuda) {
+  const std::string kHloTestTemplate = R"(
+ENTRY triton_computation {
+  input = f8e4m3fnuz[1,8,8,16] parameter(0)   // N=1, H=8, W=8, C_in=16
+  kernel = f8e5m2fnuz[3,3,16,16] parameter(1) // H=3, W=3, C_in=16, C_out=16
+  ROOT conv = f32[1,8,8,16] convolution(input, kernel),
+    window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","16"]}
+})";
+
+  se::GpuComputeCapability rocm_cc(se::RocmComputeCapability("gfx942"));
+  ASSERT_OK_AND_ASSIGN(
+      TestedInstruction ti_rocm,
+      ParseTemplateAndGetInstruction(kHloTestTemplate, PRIMITIVE_TYPE_INVALID,
+                                     HloOpcode::kConvolution));
+  EXPECT_TRUE(IsTritonSupportedInstruction(ti_rocm.Instruction(), rocm_cc));
+  RunSupportTest(std::move(ti_rocm), /*output_tile_sizes=*/{1, 4, 4, 16},
+                 rocm_cc);
+
+  se::GpuComputeCapability cuda_cc(se::CudaComputeCapability::Hopper());
+  ASSERT_OK_AND_ASSIGN(
+      TestedInstruction ti_cuda,
+      ParseTemplateAndGetInstruction(kHloTestTemplate, PRIMITIVE_TYPE_INVALID,
+                                     HloOpcode::kConvolution));
+  EXPECT_FALSE(IsTritonSupportedInstruction(ti_cuda.Instruction(), cuda_cc));
+  RunSupportTest(std::move(ti_cuda), /*output_tile_sizes=*/{1, 4, 4, 16},
+                 cuda_cc);
+}
+
 using ConvolutionTestCcOnly = SupportTestWithDeviceParam;
 
 // Test a convolution with stride > 1

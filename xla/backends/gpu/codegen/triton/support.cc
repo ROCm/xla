@@ -911,9 +911,19 @@ CodegenDecision IsTritonSupportedConv(
   const PrimitiveType lhs_type = conv.operand(0)->shape().element_type();
   const PrimitiveType rhs_type = conv.operand(1)->shape().element_type();
   const PrimitiveType result_type = conv.shape().element_type();
-  if (lhs_type != rhs_type) {
+
+  auto types_are = [&](PrimitiveType compare1, PrimitiveType compare2) {
+    return (lhs_type == compare1 && rhs_type == compare2) ||
+           (lhs_type == compare2 && rhs_type == compare1);
+  };
+  
+  const bool mixed_fp8_ok =
+      types_are(F8E5M2, F8E4M3FN) ||
+      (gpu_version.IsRocm() && types_are(F8E5M2FNUZ, F8E4M3FNUZ));
+  if (lhs_type != rhs_type && !mixed_fp8_ok) {
     return CodegenDecision::Forbid(
-        "Convolution only supports same types for lhs and rhs.");
+        "Convolution only supports same types for lhs and rhs, except mixed "
+        "F8.");
   }
   if (result_type == PrimitiveType::S4) {
     return CodegenDecision::Forbid("S4 is not supported.");
@@ -925,6 +935,11 @@ CodegenDecision IsTritonSupportedConv(
   }
   if (CodegenDecision decision =
           AreTypesSupportedByAlgUnsetDot(lhs_type, result_type, gpu_version);
+      !decision) {
+    return decision;
+  }
+  if (CodegenDecision decision =
+          AreTypesSupportedByAlgUnsetDot(rhs_type, result_type, gpu_version);
       !decision) {
     return decision;
   }
