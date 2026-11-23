@@ -58,6 +58,11 @@ on:
         description: 'Exact HTML comment marker string - if already present in the comment body, this run does nothing'
         required: true
         type: string
+      required_marker:
+        description: 'Exact substring that must be present in the comment body for this run to do anything - e.g. gating an automatic follow-up (like auto-verifying a proposed fix) on the specific report outcome it only makes sense for. Leave unset to always proceed.'
+        required: false
+        type: string
+        default: ''
       claude_step_name:
         description: 'Display name for the claude-code-action step (and this called job)'
         required: true
@@ -103,7 +108,11 @@ jobs:
       # Guards against acting on the same signature/instruction twice: the
       # caller's own collect script already checks this before queuing,
       # but this re-verifies right before doing anything expensive, in
-      # case of an overlapping run or a manual re-dispatch.
+      # case of an overlapping run or a manual re-dispatch. Also doubles
+      # as the precondition gate for an automatic follow-up (required_marker)
+      # - both checks are cheap (one gh api call) and share the "skip"
+      # output, so a caller that doesn't need the precondition just leaves
+      # required_marker unset and gets the original behavior.
       - name: Check whether this was already acted on
         id: already_handled
         env:
@@ -113,6 +122,9 @@ jobs:
           BODY=$(gh api "/repos/ROCm/xla/issues/comments/${COMMENT_ID}" --jq '.body')
           if printf '%s' "$BODY" | grep -qF '${{ inputs.already_handled_marker }}'; then
             echo "Already acted on - skipping" >&2
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.required_marker }}" ] && ! printf '%s' "$BODY" | grep -qF '${{ inputs.required_marker }}'; then
+            echo "Precondition not met (missing: ${{ inputs.required_marker }}) - nothing to do" >&2
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
