@@ -642,24 +642,38 @@ jobs:
             exit 0
           fi
 
-          SLUG=$(echo "${{ matrix.job_name }} ${{ matrix.step_name }}" \
-            | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' \
-            | cut -c1-50 | sed -E 's/-+$//')
+          # Derived purely from this step's two real inputs - the commit
+          # and the patch - rather than from job/step name metadata: the
+          # patch hash disambiguates two different verified fixes landing
+          # on the same commit (two unrelated failures at the same
+          # head_sha), which a job/step slug would do too, but this way
+          # the branch name has no dependency on anything beyond what this
+          # step actually consumes.
           SHA_SHORT=$(echo "${{ matrix.head_sha }}" | cut -c1-7)
-          BRANCH="claude/verify-fix/${SLUG}-${SHA_SHORT}"
+          PATCH_HASH=$(sha256sum /tmp/claude_verify_fix.patch | cut -c1-8)
+          BRANCH="claude/verify-fix/${SHA_SHORT}-${PATCH_HASH}"
 
-          # A throwaway clone of just ROCm/xla's main-mirror tip - cheaper
-          # than reusing the job's own checkout, which is of
-          # matrix.repository (almost always openxla/xla, a different repo
-          # entirely) at matrix.head_sha, not ROCm/xla at all.
+          # Base the fix on the exact commit the verify skill actually
+          # tested (matrix.repository@matrix.head_sha - the same commit
+          # "Checkout the commit that failed" checked out earlier in this
+          # job), not on any branch tip. The red->green->red cycle in
+          # verify-proposed-fix only proves the fix works against that one
+          # commit - rebasing onto a later tip (ROCm/xla's or even
+          # openxla/xla's own main) would ship something that was never
+          # actually verified. GitHub allows fetching an arbitrary commit
+          # SHA directly (no need to walk main's history to find it), and
+          # since head_sha only gets older relative to ROCm/xla's main
+          # (kept in sync by sync_upstream.yml) the push below is normally
+          # pushing a commit the remote already has as an ancestor, not a
+          # fresh tip it might not have caught up to yet.
           WORKDIR=$(mktemp -d)
           git -C "$WORKDIR" init -q
-          git -C "$WORKDIR" remote add origin https://github.com/ROCm/xla.git
-          git -C "$WORKDIR" fetch -q --depth=1 origin main-mirror
+          git -C "$WORKDIR" remote add upstream "https://github.com/${{ matrix.repository }}.git"
+          git -C "$WORKDIR" fetch -q --depth=1 upstream "${{ matrix.head_sha }}"
           git -C "$WORKDIR" checkout -q -b "$BRANCH" FETCH_HEAD
 
           if ! git -C "$WORKDIR" apply --check /tmp/claude_verify_fix.patch; then
-            echo "::warning::Verified patch no longer applies cleanly to main-mirror - needs a manual rebase"
+            echo "::warning::Verified patch no longer applies cleanly to ${{ matrix.head_sha }} - needs a manual rebase"
             exit 0
           fi
           git -C "$WORKDIR" apply /tmp/claude_verify_fix.patch
@@ -668,6 +682,7 @@ jobs:
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -aq -F /tmp/claude_verify_pr_title.txt
 
+          git -C "$WORKDIR" remote add origin https://github.com/ROCm/xla.git
           if ! git -C "$WORKDIR" push -q origin "HEAD:refs/heads/${BRANCH}"; then
             echo "::warning::Failed to push the verified-fix branch to ROCm/xla"
             exit 0
@@ -676,7 +691,7 @@ jobs:
           PR_URL=$(gh pr create --repo ROCm/xla --draft \
             --title "$(head -1 /tmp/claude_verify_pr_title.txt)" \
             --body-file /tmp/claude_verify_pr_body.txt \
-            --base main-mirror --head "$BRANCH") || {
+            --base main --head "$BRANCH") || {
             echo "::warning::Failed to open the draft PR"
             exit 0
           }
