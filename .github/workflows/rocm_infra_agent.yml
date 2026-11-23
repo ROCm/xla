@@ -312,7 +312,18 @@ jobs:
   apply_patch_and_open_pr:
     name: "Apply fix: issue #${{ matrix.issue_number }}"
     needs: [collect_mention_targets, respond_to_mention, respond_to_issue_mention]
-    if: needs.collect_mention_targets.outputs.mention_targets != '[]'
+    # `!cancelled()` is required, not optional: a job's *default* `if:` is
+    # equivalent to `success()`, which is false whenever ANY of its `needs`
+    # was skipped - not just failed. Every matrix entry here is exactly one
+    # of `ci_failure`/`general`, so exactly one of
+    # respond_to_mention/respond_to_issue_mention is *always* skipped for
+    # it (by their own, mutually exclusive `if:` conditions) - without this
+    # override, that skip alone silently skipped this job for every single
+    # entry, every time, regardless of whether the other one actually
+    # produced a patch. (Confirmed in production: a verified fix on
+    # ROCm/xla#1551 reported "opening a draft PR now" and then nothing ever
+    # followed - this job never ran at all.)
+    if: ${{ !cancelled() && needs.collect_mention_targets.outputs.mention_targets != '[]' }}
     # Needs to push a branch and open a draft PR, unlike every other job in
     # this workflow (all read-mostly, aside from issue/label edits) -
     # scoped here, not at the workflow level.
