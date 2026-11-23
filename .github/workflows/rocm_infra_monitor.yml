@@ -68,13 +68,29 @@ on:
       - "build_tools/rocm/collect_run_failures.sh"
       - "build_tools/rocm/create_infra_error_issue.sh"
       - "build_tools/rocm/collect_claude_debug_targets.sh"
-      - "build_tools/rocm/collect_claude_verify_targets.sh"
+      - "build_tools/rocm/collect_claude_mention_targets.sh"
       - ".claude/skills/debug-nightly-failure/SKILL.md"
-      - ".claude/skills/verify-proposed-fix/SKILL.md"
+      - ".claude/skills/respond-to-mention/SKILL.md"
+  issue_comment:
+    # Fires immediately when someone *edits* an existing comment - not
+    # `created`, deliberately: editing someone else's comment requires
+    # write/triage access to the repo, so this stays restricted to trusted
+    # collaborators the same way the rest of this trigger already is.
+    # `created` would fire for any comment any logged-in user posts on a
+    # public repo, which is a very different (and much wider) trust
+    # boundary we're not opting into here. This only ever feeds
+    # `collect_mention_targets`/`respond_to_mention` below - `monitor`/
+    # `debug` stay on their own `schedule`/`workflow_dispatch` triggers,
+    # gated off explicitly since a skipped `needs:` job leaves its outputs
+    # empty rather than "[]", which `fromJson` would otherwise choke on.
+    types: [edited]
 
 jobs:
   monitor:
     name: Monitor ROCm Nightly Failures
+    # Irrelevant to an issue_comment event - that only ever carries an
+    # @claude follow-up, never a nightly run to scan for.
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     outputs:
       # A JSON array of {issue_number, repository, head_sha, run_id, job_id,
@@ -176,7 +192,12 @@ jobs:
     # this entry.
     name: "Debug: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
     needs: monitor
-    if: needs.monitor.outputs.new_failures != '[]'
+    # github.event_name check comes first and short-circuits: `monitor` is
+    # skipped outright (not merely empty) on an issue_comment event, which
+    # leaves `needs.monitor.outputs.new_failures` as an empty string, not
+    # "[]" - evaluating the `!= '[]'` half first would be true for the
+    # wrong reason, and fromJson(empty string) below would then fail hard.
+    if: github.event_name != 'issue_comment' && needs.monitor.outputs.new_failures != '[]'
     # build-only-xla, not a GPU runner: it's the only pool with network
     # access to the LLM gateway (amd-do-linux-xla-gpu-gfx950-dpx-4 can't
     # resolve/reach ANTHROPIC_BASE_URL). Since this node has no local GPU,
@@ -378,19 +399,33 @@ jobs:
         if: always()
         run: docker rm -f rocmless-debug || true
 
-  collect_verify_targets:
-    # Independent of `monitor`: a human can react 🚀 on a comment analyzed
-    # days ago, so every run rescans the whole tracking issue for that
-    # reaction rather than only this window's newly-detected failures.
-    # Doesn't depend on (or feed) `monitor`'s own matrix.
-    name: Find proposed fixes to verify
+  collect_mention_targets:
+    # On a schedule/workflow_dispatch run, a human could have edited an
+    # `@claude <instructions>` line into a comment analyzed days ago, so
+    # that path rescans the whole tracking issue rather than only this
+    # window's newly-detected failures - same reasoning as before, now just
+    # the fallback path. An issue_comment event already tells us exactly
+    # which comment changed, so that path checks only the one comment -
+    # see collect_claude_mention_targets.sh for both modes. Neither depends
+    # on (or feeds) `monitor`'s own matrix.
+    #
+    # The `contains()` check below is a cheap, best-effort pre-filter (it
+    # only matches a literal lowercase "@claude", unlike the script's own
+    # case-insensitive check) so an issue_comment event for an unrelated
+    # edit skips even the checkout - it's fine for this to occasionally
+    # under-match an unusual capitalization, since the scheduled full scan
+    # still catches anything missed here.
+    if: github.event_name != 'issue_comment' || contains(github.event.comment.body, '@claude')
+    name: Find @claude follow-ups to act on
     runs-on: ubuntu-latest
     outputs:
       # A JSON array of {issue_number, comment_id, comment_url, job_name,
-      # step_name, repository, head_sha, failure_url, run_id, job_id} - one
-      # per 🚀-reacted comment that hasn't already been verified. "[]" means
-      # nothing to verify this run. See collect_claude_verify_targets.sh.
-      verify_targets: ${{ steps.collect.outputs.verify_targets }}
+      # step_name, repository, head_sha, failure_url, run_id, job_id,
+      # instructions, instructions_hash} - one per @claude-instructed
+      # comment that hasn't already had this exact instruction acted on.
+      # "[]" means nothing to do this run. See
+      # collect_claude_mention_targets.sh.
+      mention_targets: ${{ steps.collect.outputs.mention_targets }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -398,19 +433,35 @@ jobs:
           ref: ${{ env.DEBUG_PIPELINE_REF }}
           persist-credentials: false
 
-      - name: Find the tracking issue and collect 🚀-reacted fixes
+      - name: Find the tracking issue and collect @claude follow-ups
         id: collect
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          # Passed via env, never interpolated directly into the script
+          # below: COMMENT_BODY is attacker-controlled free text (anyone
+          # who can edit a comment controls it), and `${{ }}` substitution
+          # into a `run:` block is literal text splicing - embedding it
+          # directly would let a comment body break out into arbitrary
+          # shell. Env var expansion (`"$COMMENT_BODY"`) is just data, so
+          # it's safe however it's shaped.
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           ISSUE_NUMBER=$(build_tools/rocm/create_infra_error_issue.sh)
-          TARGETS=$(build_tools/rocm/collect_claude_verify_targets.sh "${ISSUE_NUMBER}")
-          echo "verify_targets=${TARGETS}" >> "$GITHUB_OUTPUT"
+          if [ "${EVENT_NAME}" = "issue_comment" ]; then
+            TARGETS=$(build_tools/rocm/collect_claude_mention_targets.sh \
+              "${ISSUE_NUMBER}" --comment "${COMMENT_ID}" "${COMMENT_URL}" "${COMMENT_BODY}")
+          else
+            TARGETS=$(build_tools/rocm/collect_claude_mention_targets.sh "${ISSUE_NUMBER}")
+          fi
+          echo "mention_targets=${TARGETS}" >> "$GITHUB_OUTPUT"
 
-  verify:
-    name: "Verify fix: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
-    needs: collect_verify_targets
-    if: needs.collect_verify_targets.outputs.verify_targets != '[]'
+  respond_to_mention:
+    name: "Respond: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
+    needs: collect_mention_targets
+    if: needs.collect_mention_targets.outputs.mention_targets != '[]'
     # Same runner/sidecar-container rationale as `debug` above
     # (build-only-xla for LLM gateway access; rocmless-debug sidecar for
     # the actual bazel/run_xla_ci_build.sh invocations).
@@ -426,45 +477,46 @@ jobs:
       id-token: write
     # The skill self-caps its own non-build decision-making at 30 minutes
     # (see SKILL.md) - this ceiling instead bounds the whole run, including
-    # three full build+test cycles (baseline red, with the fix applied,
-    # reverted again), which can legitimately take a long while.
+    # whatever build+test cycles the instruction ends up requiring, which
+    # can legitimately take a long while.
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.collect_verify_targets.outputs.verify_targets) }}
+        include: ${{ fromJson(needs.collect_mention_targets.outputs.mention_targets) }}
 
     steps:
       # Same race-safety reasoning as debug's "already_debugged" check:
-      # collect_claude_verify_targets.sh already checks this before
-      # queuing, but re-verify against this exact signature right before
-      # doing anything expensive, in case of an overlapping run or a
-      # manual re-dispatch.
-      - name: Check whether this fix was already verified
-        id: already_verified
+      # collect_claude_mention_targets.sh already checks this before
+      # queuing, but re-check against this exact signature+instruction
+      # right before doing anything expensive, in case of an overlapping
+      # run or a manual re-dispatch.
+      - name: Check whether this instruction was already acted on
+        id: already_handled
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          MARKER='<!-- rocm-nightly-claude-verify:${{ matrix.job_name }} / ${{ matrix.step_name }} -->'
+          MARKER='<!-- rocm-nightly-claude-mention:${{ matrix.job_name }} / ${{ matrix.step_name }}:${{ matrix.instructions_hash }} -->'
           BODY=$(gh api "/repos/ROCm/xla/issues/comments/${{ matrix.comment_id }}" --jq '.body')
           if printf '%s' "$BODY" | grep -qF "$MARKER"; then
-            echo "This fix was already verified - skipping" >&2
+            echo "This exact instruction was already acted on - skipping" >&2
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Already verified, nothing to do
-        if: steps.already_verified.outputs.skip == 'true'
-        run: echo "${{ matrix.job_name }} / ${{ matrix.step_name }} was already verified - skipping this run."
+      - name: Already handled, nothing to do
+        if: steps.already_handled.outputs.skip == 'true'
+        run: echo "${{ matrix.job_name }} / ${{ matrix.step_name }} - this instruction was already acted on, skipping this run."
 
       # persist-credentials: false here too - this repo's existing
       # push-from-a-workflow precedent (rocm_xla_jax_metrics_nightly.yml)
       # pushes through an explicit x-access-token remote added at push
       # time instead of relying on the checkout's own persisted
-      # credential, so the verify skill does the same (see SKILL.md).
+      # credential, so the respond-to-mention skill does the same (see
+      # SKILL.md).
       - name: Checkout the commit that failed
-        if: steps.already_verified.outputs.skip != 'true'
+        if: steps.already_handled.outputs.skip != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ matrix.repository }}
@@ -472,7 +524,7 @@ jobs:
           persist-credentials: false
 
       - name: Populate missing upstream ROCm build tools
-        if: steps.already_verified.outputs.skip != 'true' && hashFiles('build_tools/rocm/run_xla_ci_build.sh') == ''
+        if: steps.already_handled.outputs.skip != 'true' && hashFiles('build_tools/rocm/run_xla_ci_build.sh') == ''
         run: |
           tmpdir="$(mktemp -d)"
           git clone --depth 1 --filter=blob:none --sparse https://github.com/openxla/xla.git "$tmpdir"
@@ -480,7 +532,7 @@ jobs:
           cp -a "$tmpdir/build_tools/rocm/." build_tools/rocm/
 
       - name: Fetch .claude config from ${{ env.DEBUG_PIPELINE_REF }}
-        if: steps.already_verified.outputs.skip != 'true'
+        if: steps.already_handled.outputs.skip != 'true'
         run: |
           git remote add rocm-xla https://github.com/ROCm/xla.git
           git fetch rocm-xla "${{ env.DEBUG_PIPELINE_REF }}"
@@ -488,7 +540,7 @@ jobs:
           find .claude -type f | sort
 
       - name: Start rocmless container
-        if: steps.already_verified.outputs.skip != 'true'
+        if: steps.already_handled.outputs.skip != 'true'
         run: |
           docker run -d --name rocmless-debug \
             -v "$(pwd)":"$(pwd)" -w "$(pwd)" \
@@ -529,7 +581,7 @@ jobs:
       # one `git push` below uses this App token, everything else
       # (comment edits, labels, the PR itself) keeps using the default one.
       - name: Create GitHub App token for the branch push only
-        if: steps.already_verified.outputs.skip != 'true'
+        if: steps.already_handled.outputs.skip != 'true'
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
@@ -557,12 +609,12 @@ jobs:
       # here on in this job is transparently authenticated without any
       # token, or any variable at all, appearing in anyone's command text.
       - name: Configure git to authenticate pushes to ROCm/xla
-        if: steps.already_verified.outputs.skip != 'true'
+        if: steps.already_handled.outputs.skip != 'true'
         run: |
           git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/ROCm/xla.git".insteadOf "https://github.com/ROCm/xla.git"
 
-      - name: Verify Proposed Fix
-        if: steps.already_verified.outputs.skip != 'true'
+      - name: Respond to @claude Mention
+        if: steps.already_handled.outputs.skip != 'true'
         id: claude-code
         timeout-minutes: 175
         uses: anthropics/claude-code-action@v1
@@ -593,28 +645,37 @@ jobs:
             FAILED STEP: ${{ matrix.step_name }}
             FAILING JOB URL: ${{ matrix.failure_url }}
             TRACKING ISSUE NUMBER (in ROCm/xla): ${{ matrix.issue_number }}
-            COMMENT URL (the proposed fix lives in here, folded; edit this
-            same comment with your verdict - never post a new one):
-            ${{ matrix.comment_url }}
+            COMMENT URL (the instruction and usually a proposed fix live
+            here, folded; edit this same comment with your findings - never
+            post a new one): ${{ matrix.comment_url }}
+            INSTRUCTIONS (a human wrote this verbatim after "@claude" in the
+            comment above - follow it literally, it governs what you do):
+            ${{ matrix.instructions }}
+            INSTRUCTIONS HASH (use literally in the Step 0/6 marker, don't
+            recompute it): ${{ matrix.instructions_hash }}
 
-            A human reacted 🚀 on the comment above, asking you to actually
-            try the fix it already proposed (not to re-analyze the failure
-            from scratch). Run the /verify-proposed-fix skill, using the
-            values above as its arguments: CI repo, issue number, comment
-            URL, job name, step name, repository, head SHA, failure URL, in
-            that order. The skill self-caps its own non-build
-            decision-making at 30 minutes - time spent on the actual
-            reproduce/apply/revert build+test cycles doesn't count against
-            that, but the whole run still has to fit this step's own
-            timeout. The skill is responsible for the whole
-            reproduce-apply-revert verification and for editing its verdict
-            directly into the comment above via
+            A human added the instructions above by editing the comment,
+            asking you to act on this failure - that could mean verifying
+            the already-proposed fix, digging further (e.g. setting a
+            breakpoint and inspecting specific state), trying a different
+            approach, or devising a new solution, depending on what the
+            instructions actually say. Run the /respond-to-mention skill,
+            using the values above as its arguments: CI repo, issue number,
+            comment URL, job name, step name, repository, head SHA, failure
+            URL, instructions, instructions hash, in that order. The skill
+            self-caps its own non-build decision-making at 30 minutes - time
+            spent on actual build+test cycles doesn't count against that,
+            but the whole run still has to fit this step's own timeout. The
+            skill decides how much of the reproduce/apply/revert protocol
+            applies based on what was actually asked, and is responsible for
+            editing its findings directly into the comment above via
             `gh api -X PATCH .../issues/comments/<id>`. It never commits,
-            pushes, or opens a PR itself - if the fix verifies, it only
-            writes out a patch file plus a PR title/body for a later,
-            deterministic workflow step to apply and turn into a draft PR.
-            Never post a new comment on the tracking issue, and do not post
-            anything to GitHub yourself outside of what the skill does.
+            pushes, or opens a PR itself - if it ends up with a verified
+            fix, it only writes out a patch file plus a PR title/body for a
+            later, deterministic workflow step to apply and turn into a
+            draft PR. Never post a new comment on the tracking issue, and do
+            not post anything to GitHub yourself outside of what the skill
+            does.
           claude_args: |
             --allowedTools "Skill,Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
             --max-turns 100
@@ -631,13 +692,13 @@ jobs:
       # does the actual git/gh work from that patch, entirely outside the
       # agent, so none of that restriction applies.
       - name: Apply verified patch and open PR
-        if: steps.already_verified.outputs.skip != 'true'
+        if: steps.already_handled.outputs.skip != 'true'
         id: open_pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
-          if [ ! -s /tmp/claude_verify_fix.patch ]; then
+          if [ ! -s /tmp/claude_mention_fix.patch ]; then
             echo "No verified fix to apply - skipping."
             exit 0
           fi
@@ -650,37 +711,37 @@ jobs:
           # the branch name has no dependency on anything beyond what this
           # step actually consumes.
           SHA_SHORT=$(echo "${{ matrix.head_sha }}" | cut -c1-7)
-          PATCH_HASH=$(sha256sum /tmp/claude_verify_fix.patch | cut -c1-8)
+          PATCH_HASH=$(sha256sum /tmp/claude_mention_fix.patch | cut -c1-8)
           BRANCH="claude/verify-fix/${SHA_SHORT}-${PATCH_HASH}"
 
-          # Base the fix on the exact commit the verify skill actually
-          # tested (matrix.repository@matrix.head_sha - the same commit
-          # "Checkout the commit that failed" checked out earlier in this
-          # job), not on any branch tip. The red->green->red cycle in
-          # verify-proposed-fix only proves the fix works against that one
-          # commit - rebasing onto a later tip (ROCm/xla's or even
-          # openxla/xla's own main) would ship something that was never
-          # actually verified. GitHub allows fetching an arbitrary commit
-          # SHA directly (no need to walk main's history to find it), and
-          # since head_sha only gets older relative to ROCm/xla's main
-          # (kept in sync by sync_upstream.yml) the push below is normally
-          # pushing a commit the remote already has as an ancestor, not a
-          # fresh tip it might not have caught up to yet.
+          # Base the fix on the exact commit the respond-to-mention skill
+          # actually tested (matrix.repository@matrix.head_sha - the same
+          # commit "Checkout the commit that failed" checked out earlier in
+          # this job), not on any branch tip. The red->green->red cycle in
+          # that skill only proves the fix works against that one commit -
+          # rebasing onto a later tip (ROCm/xla's or even openxla/xla's own
+          # main) would ship something that was never actually verified.
+          # GitHub allows fetching an arbitrary commit SHA directly (no need
+          # to walk main's history to find it), and since head_sha only
+          # gets older relative to ROCm/xla's main (kept in sync by
+          # sync_upstream.yml) the push below is normally pushing a commit
+          # the remote already has as an ancestor, not a fresh tip it might
+          # not have caught up to yet.
           WORKDIR=$(mktemp -d)
           git -C "$WORKDIR" init -q
           git -C "$WORKDIR" remote add upstream "https://github.com/${{ matrix.repository }}.git"
           git -C "$WORKDIR" fetch -q --depth=1 upstream "${{ matrix.head_sha }}"
           git -C "$WORKDIR" checkout -q -b "$BRANCH" FETCH_HEAD
 
-          if ! git -C "$WORKDIR" apply --check /tmp/claude_verify_fix.patch; then
+          if ! git -C "$WORKDIR" apply --check /tmp/claude_mention_fix.patch; then
             echo "::warning::Verified patch no longer applies cleanly to ${{ matrix.head_sha }} - needs a manual rebase"
             exit 0
           fi
-          git -C "$WORKDIR" apply /tmp/claude_verify_fix.patch
+          git -C "$WORKDIR" apply /tmp/claude_mention_fix.patch
           git -C "$WORKDIR" \
             -c user.name="github-actions[bot]" \
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -aq -F /tmp/claude_verify_pr_title.txt
+            commit -aq -F /tmp/claude_mention_pr_title.txt
 
           git -C "$WORKDIR" remote add origin https://github.com/ROCm/xla.git
           if ! git -C "$WORKDIR" push -q origin "HEAD:refs/heads/${BRANCH}"; then
@@ -689,8 +750,8 @@ jobs:
           fi
 
           PR_URL=$(gh pr create --repo ROCm/xla --draft \
-            --title "$(head -1 /tmp/claude_verify_pr_title.txt)" \
-            --body-file /tmp/claude_verify_pr_body.txt \
+            --title "$(head -1 /tmp/claude_mention_pr_title.txt)" \
+            --body-file /tmp/claude_mention_pr_body.txt \
             --base main --head "$BRANCH") || {
             echo "::warning::Failed to open the draft PR"
             exit 0
@@ -698,7 +759,7 @@ jobs:
           echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
 
       - name: Add the PR link to the tracking comment
-        if: steps.already_verified.outputs.skip != 'true' && steps.open_pr.outputs.pr_url != ''
+        if: steps.already_handled.outputs.skip != 'true' && steps.open_pr.outputs.pr_url != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ steps.open_pr.outputs.pr_url }}
@@ -707,7 +768,7 @@ jobs:
           gh api "/repos/ROCm/xla/issues/comments/${{ matrix.comment_id }}" --jq .body > /tmp/comment_before_pr_link.txt
           python3 -I -c "
           import os
-          marker = '<!-- rocm-nightly-claude-verify-pr-pending -->'
+          marker = '<!-- rocm-nightly-claude-mention-pr-pending -->'
           link = f\"[draft PR]({os.environ['PR_URL']}) opened with the fix.\"
           body = open('/tmp/comment_before_pr_link.txt').read()
           body = body.replace(marker, link, 1) if marker in body else body
