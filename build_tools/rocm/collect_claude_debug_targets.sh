@@ -175,7 +175,16 @@ mapfile -t COMMENT_IDS < <(printf '%s' "$EXISTING_COMMENTS" | jq -r '.[].id')
 for COMMENT_ID in "${COMMENT_IDS[@]}"; do
     BODY=$(printf '%s' "$EXISTING_COMMENTS" | jq -r --argjson id "$COMMENT_ID" '.[] | select(.id == $id) | .body')
 
-    SIGNATURE=$(printf '%s' "$BODY" | grep -oP '(?<=<!-- rocm-nightly-failure:)[^>]*(?= -->)' | head -1)
+    # `|| true` matters, not `| head -1` alone: under `set -e -o pipefail`,
+    # the pipeline's exit status is the *rightmost command that exited
+    # non-zero* - if grep finds nothing (exit 1) and head still exits 0,
+    # pipefail still reports 1 for the whole pipe, which `set -e` then
+    # treats as this assignment failing and aborts the whole script, with
+    # no further diagnostic. This killed a real production run the moment
+    # Phase 2 scanned a plain comment with no `rocm-nightly-failure:`
+    # marker at all (a human reply, not a detection comment) - `head -1`
+    # alone had silently never actually protected against that.
+    SIGNATURE=$(printf '%s' "$BODY" | grep -oP '(?<=<!-- rocm-nightly-failure:)[^>]*(?= -->)' | head -1 || true)
     if [ -z "$SIGNATURE" ]; then
         continue
     fi
@@ -191,14 +200,16 @@ for COMMENT_ID in "${COMMENT_IDS[@]}"; do
 
     echo "  -> ${SIGNATURE} (comment ${COMMENT_ID}) was never analyzed" >&2
 
-    FAILURE_URL=$(printf '%s' "$BODY" | grep -oP '(?<=- Failing job: )\S+' | head -1)
+    FAILURE_URL=$(printf '%s' "$BODY" | grep -oP '(?<=- Failing job: )\S+' | head -1 || true)
     if [ -z "$FAILURE_URL" ]; then
         echo "    -> no 'Failing job:' line found, skipping" >&2
         continue
     fi
 
-    JOB_ID=$(printf '%s' "$FAILURE_URL" | grep -oP '(?<=/job/)[0-9]+')
-    RUN_ID=$(printf '%s' "$FAILURE_URL" | grep -oP '(?<=/runs/)[0-9]+')
+    # See the SIGNATURE extraction above for why `|| true` (not just
+    # `head -1`) is required here too.
+    JOB_ID=$(printf '%s' "$FAILURE_URL" | grep -oP '(?<=/job/)[0-9]+' | head -1 || true)
+    RUN_ID=$(printf '%s' "$FAILURE_URL" | grep -oP '(?<=/runs/)[0-9]+' | head -1 || true)
     if [ -z "$JOB_ID" ]; then
         echo "    -> could not parse a job ID out of ${FAILURE_URL}, skipping" >&2
         continue

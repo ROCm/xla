@@ -552,12 +552,17 @@ reproduce and confirm anything: comment with:
   unverified open PR, or both - not a verified fix. Nobody should merge
   anything or rely on the open PR landing without reproducing/confirming
   first.
-- End with a line telling a reviewer how to ask for follow-up: `To have
-  this looked at further - verify this fix, dig deeper, try something
-  else - edit this comment and add a line like \`@claude verify this fix\`
-  (or whatever you'd like investigated).` The `respond_to_mention` job of
-  `rocm_infra_monitor.yml` polls for exactly that line - see
-  `collect_claude_mention_targets.sh`.
+- End with a line telling a reviewer this will be verified automatically
+  and how to ask for anything beyond that: `This will be verified
+  automatically - no action needed for that. For anything else (a
+  different approach, a deeper look, a specific thing to inspect), edit
+  this comment and add a line like \`@claude <what you'd like
+  investigated>\`.` rocm_infra_monitor.yml's `auto_verify` job picks up
+  this exact "Possible fix (unverified)" outcome on its own, right after
+  this report is posted - see that job and respond-to-mention/SKILL.md.
+  rocm_infra_agent.yml's `@claude` mechanism (see
+  `collect_claude_mention_targets.sh`) stays for anything beyond plain
+  verification.
 
 **Fix found** (you derived it yourself *and* verified it - only reachable
 if Steps 4/5 actually ran and finished within budget): before reporting,

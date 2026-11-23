@@ -83,10 +83,18 @@ process_comment() {
     # the `rocm-nightly-failure:` detection marker; one it has finished
     # also carries `rocm-nightly-claude-debug:` further down (now inside
     # Step 7's fold). Either anchors the same signature text.
+    # `|| true` matters, not `| head -1` alone: under `set -e -o pipefail`,
+    # the pipeline's exit status is the *rightmost command that exited
+    # non-zero* - if grep finds nothing (exit 1) and head still exits 0,
+    # pipefail still reports 1 for the whole pipe, which `set -e` then
+    # treats as this assignment failing and aborts the whole script, with
+    # no further diagnostic. This is hit by any plain comment with neither
+    # marker at all (a human reply, not a detection comment) - `head -1`
+    # alone never actually protected against that.
     local SIGNATURE
-    SIGNATURE=$(printf '%s' "$BODY" | grep -oP '(?<=<!-- rocm-nightly-failure:)[^>]*(?= -->)' | head -1)
+    SIGNATURE=$(printf '%s' "$BODY" | grep -oP '(?<=<!-- rocm-nightly-failure:)[^>]*(?= -->)' | head -1 || true)
     if [ -z "$SIGNATURE" ]; then
-        SIGNATURE=$(printf '%s' "$BODY" | grep -oP '(?<=<!-- rocm-nightly-claude-debug:)[^>]*(?= -->)' | head -1)
+        SIGNATURE=$(printf '%s' "$BODY" | grep -oP '(?<=<!-- rocm-nightly-claude-debug:)[^>]*(?= -->)' | head -1 || true)
     fi
     if [ -z "$SIGNATURE" ]; then
         return
@@ -128,16 +136,18 @@ process_comment() {
     local JOB_NAME="${SIGNATURE% / *}" STEP_NAME="${SIGNATURE##* / }"
 
     local FAILURE_URL
-    FAILURE_URL=$(printf '%s' "$BODY" | grep -oP '(?<=- Failing job: )\S+' | head -1)
+    FAILURE_URL=$(printf '%s' "$BODY" | grep -oP '(?<=- Failing job: )\S+' | head -1 || true)
     if [ -z "$FAILURE_URL" ]; then
         echo "  -> @claude'd but no 'Failing job:' line found, skipping" >&2
         return
     fi
 
     # .../actions/runs/<run_id>/job/<job_id>
+    # See the SIGNATURE extraction above for why `|| true` (not just
+    # `head -1`) is required here too.
     local JOB_ID RUN_ID
-    JOB_ID=$(printf '%s' "$FAILURE_URL" | grep -oP '(?<=/job/)[0-9]+')
-    RUN_ID=$(printf '%s' "$FAILURE_URL" | grep -oP '(?<=/runs/)[0-9]+')
+    JOB_ID=$(printf '%s' "$FAILURE_URL" | grep -oP '(?<=/job/)[0-9]+' | head -1 || true)
+    RUN_ID=$(printf '%s' "$FAILURE_URL" | grep -oP '(?<=/runs/)[0-9]+' | head -1 || true)
     if [ -z "$JOB_ID" ]; then
         echo "  -> could not parse a job ID out of ${FAILURE_URL}, skipping" >&2
         return

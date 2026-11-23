@@ -54,6 +54,7 @@ on:
     paths:
       - ".github/workflows/rocm_infra_agent.yml"
       - ".github/workflows/claude_issue_triage.yml"
+      - ".github/workflows/claude_apply_patch.yml"
       - "build_tools/rocm/create_infra_error_issue.sh"
       - "build_tools/rocm/collect_claude_mention_targets.sh"
       - ".claude/skills/respond-to-mention/SKILL.md"
@@ -137,7 +138,12 @@ jobs:
     with:
       repository: ${{ matrix.repository }}
       head_sha: ${{ matrix.head_sha }}
-      debug_pipeline_ref: ${{ env.DEBUG_PIPELINE_REF }}
+      # Can't reference env.DEBUG_PIPELINE_REF here - the `env` context
+      # isn't available in a uses:-job's `with:` block (only github, needs,
+      # strategy, matrix, inputs, vars, secrets are), so this repeats the
+      # same computation DEBUG_PIPELINE_REF itself does at the top of this
+      # file instead of reading it back out.
+      debug_pipeline_ref: ${{ github.head_ref || github.ref_name }}
       comment_url: ${{ matrix.comment_url }}
       already_handled_marker: "<!-- rocm-nightly-claude-mention:${{ matrix.job_name }} / ${{ matrix.step_name }}:${{ matrix.instructions_hash }} -->"
       claude_step_name: Respond to @claude Mention
@@ -202,7 +208,6 @@ jobs:
     name: "Apply fix: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
     needs: [collect_mention_targets, respond_to_mention]
     if: needs.collect_mention_targets.outputs.mention_targets != '[]'
-    runs-on: ubuntu-latest
     # Needs to push a branch and open a draft PR, unlike every other job in
     # this workflow (all read-mostly, aside from issue/label edits) -
     # scoped here, not at the workflow level.
@@ -210,7 +215,6 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-    timeout-minutes: 15
     strategy:
       fail-fast: false
       # Deliberately not `needs.respond_to_mention`'s own per-entry result:
@@ -218,165 +222,16 @@ jobs:
       # (GitHub Actions only exposes one arbitrary entry's value to a
       # downstream job, not a map keyed by entry), so this job can't learn
       # "did matrix entry N produce a patch" from `respond_to_mention`
-      # directly. Instead it reuses the same source matrix and just
-      # attempts the download below for every entry, tolerating "no such
-      # artifact" as the normal/expected outcome for anything that wasn't
-      # verified (not applicable, still red, or a purely investigative
-      # ask with no fix) - functionally identical to today's "if the patch
-      # file doesn't exist, skip" check, just preceded by a best-effort
-      # download instead of being guaranteed by the same job's own earlier
-      # step.
+      # directly. Instead it reuses the same source matrix - claude_apply_
+      # patch.yml's own download step tolerates "no such artifact" as the
+      # normal/expected outcome for anything that wasn't verified (not
+      # applicable, still red, or a purely investigative ask with no fix).
       matrix:
         include: ${{ fromJson(needs.collect_mention_targets.outputs.mention_targets) }}
-    steps:
-      # continue-on-error, not an `if-no-files-found`-style flag: there's
-      # no download-side equivalent, so a missing artifact just fails this
-      # one step, which is exactly what "nothing to apply" looks like -
-      # the file-existence check right below treats that identically to
-      # the artifact having been found empty.
-      - name: Download patch artifact, if one was produced
-        continue-on-error: true
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
-        with:
-          name: "mention-patch-${{ matrix.comment_id }}"
-          path: /tmp
-
-      # The default GITHUB_TOKEN cannot push a brand-new branch into
-      # ROCm/xla: creating a ref requires GitHub to validate whether it
-      # introduces/changes anything under .github/workflows/* - a check
-      # that needs a "workflows" permission scope the standard Actions
-      # token can never carry, regardless of what this job's own
-      # `permissions:` block grants (there is no such scope available to
-      # it). This bit us for real: the first live verify run got
-      # everything right (red->green->red) but failed to push with `POST
-      # /git/refs` -> 403 "Resource not accessible by integration" /
-      # "workflows scope may be required" - even though the fix itself
-      # never touched a workflow file, because that check applies to any
-      # brand-new ref, not just to the commit's own diff. Same root cause
-      # sync_main_mirror.yml already works around with a scoped GitHub App
-      # token - request only `contents`+`workflows` here, the exact same
-      # pair that token already works with there. Asking this App token
-      # for anything more (pull-requests, issues) fails outright: the
-      # installation itself was only ever granted a specific, narrower
-      # permission set, and GitHub validates a token request's scopes
-      # against that atomically - if even one requested scope exceeds what
-      # the installation has, the whole request is rejected with a 422
-      # ("level of access... not granted to this installation"), which is
-      # exactly what requesting pull-requests/issues on top of this hit.
-      # `gh pr create` doesn't need this token anyway: opening a PR against
-      # an already-pushed branch is a plain pull-requests:write operation
-      # with no workflows-scope involved, and this job's own
-      # `permissions:` block already grants that to the default
-      # GITHUB_TOKEN - so only the one `git push` below uses this App
-      # token, everything else (comment edits, the PR itself) keeps using
-      # the default one.
-      - name: Create GitHub App token for the branch push only
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ secrets.ROCM_REPO_MANAGEMENT_APP_CLIENT_ID }}
-          private-key: ${{ secrets.ROCM_REPO_MANAGEMENT_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          permission-workflows: write
-
-      # Configuring this here (a plain workflow step, not an agent Bash
-      # tool call) rather than inside the skill matters: Claude Code's own
-      # Bash tool refuses to run any command referencing a credential it
-      # can't verify is safe before running it, even one injected via
-      # `env:` - confirmed in production, embedding a token directly in a
-      # skill's own `git remote add ...` command got rejected outright ("A
-      # variable in braces in this command can't be checked before it
-      # runs"). That's exactly why the skill never pushes or opens the PR
-      # itself - it only ever writes a patch file for this job to use.
-      # Any `git push`/`git remote add .../ROCm/xla.git` from here on in
-      # this job is transparently authenticated without any token, or any
-      # variable at all, appearing in anyone's command text.
-      - name: Configure git to authenticate pushes to ROCm/xla
-        run: |
-          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/ROCm/xla.git".insteadOf "https://github.com/ROCm/xla.git"
-
-      - name: Apply verified patch and open PR
-        id: open_pr
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -uo pipefail
-          if [ ! -s /tmp/claude_fix.patch ]; then
-            echo "No verified fix to apply - skipping."
-            exit 0
-          fi
-
-          # Derived purely from this step's two real inputs - the commit
-          # and the patch - rather than from job/step name metadata: the
-          # patch hash disambiguates two different verified fixes landing
-          # on the same commit (two unrelated failures at the same
-          # head_sha), which a job/step slug would do too, but this way
-          # the branch name has no dependency on anything beyond what this
-          # step actually consumes.
-          SHA_SHORT=$(echo "${{ matrix.head_sha }}" | cut -c1-7)
-          PATCH_HASH=$(sha256sum /tmp/claude_fix.patch | cut -c1-8)
-          BRANCH="claude/verify-fix/${SHA_SHORT}-${PATCH_HASH}"
-
-          # Base the fix on the exact commit the respond-to-mention skill
-          # actually tested (matrix.repository@matrix.head_sha - the same
-          # commit the called workflow's "Checkout the commit that failed"
-          # step checked out), not on any branch tip. The red->green->red
-          # cycle in that skill only proves the fix works against that one
-          # commit - rebasing onto a later tip (ROCm/xla's or even
-          # openxla/xla's own main) would ship something that was never
-          # actually verified. GitHub allows fetching an arbitrary commit
-          # SHA directly (no need to walk main's history to find it), and
-          # since head_sha only gets older relative to ROCm/xla's main
-          # (kept in sync by sync_upstream.yml) the push below is normally
-          # pushing a commit the remote already has as an ancestor, not a
-          # fresh tip it might not have caught up to yet.
-          WORKDIR=$(mktemp -d)
-          git -C "$WORKDIR" init -q
-          git -C "$WORKDIR" remote add upstream "https://github.com/${{ matrix.repository }}.git"
-          git -C "$WORKDIR" fetch -q --depth=1 upstream "${{ matrix.head_sha }}"
-          git -C "$WORKDIR" checkout -q -b "$BRANCH" FETCH_HEAD
-
-          if ! git -C "$WORKDIR" apply --check /tmp/claude_fix.patch; then
-            echo "::warning::Verified patch no longer applies cleanly to ${{ matrix.head_sha }} - needs a manual rebase"
-            exit 0
-          fi
-          git -C "$WORKDIR" apply /tmp/claude_fix.patch
-          git -C "$WORKDIR" \
-            -c user.name="github-actions[bot]" \
-            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -aq -F /tmp/claude_pr_title.txt
-
-          git -C "$WORKDIR" remote add origin https://github.com/ROCm/xla.git
-          if ! git -C "$WORKDIR" push -q origin "HEAD:refs/heads/${BRANCH}"; then
-            echo "::warning::Failed to push the verified-fix branch to ROCm/xla"
-            exit 0
-          fi
-
-          PR_URL=$(gh pr create --repo ROCm/xla --draft \
-            --title "$(head -1 /tmp/claude_pr_title.txt)" \
-            --body-file /tmp/claude_pr_body.txt \
-            --base main --head "$BRANCH") || {
-            echo "::warning::Failed to open the draft PR"
-            exit 0
-          }
-          echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
-
-      - name: Add the PR link to the tracking comment
-        if: steps.open_pr.outputs.pr_url != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ steps.open_pr.outputs.pr_url }}
-        run: |
-          set -euo pipefail
-          gh api "/repos/ROCm/xla/issues/comments/${{ matrix.comment_id }}" --jq .body > /tmp/comment_before_pr_link.txt
-          python3 -I -c "
-          import os
-          marker = '<!-- rocm-nightly-claude-mention-pr-pending -->'
-          link = f\"[draft PR]({os.environ['PR_URL']}) opened with the fix.\"
-          body = open('/tmp/comment_before_pr_link.txt').read()
-          body = body.replace(marker, link, 1) if marker in body else body
-          open('/tmp/comment_after_pr_link.txt', 'w').write(body)
-          "
-          gh api -X PATCH "/repos/ROCm/xla/issues/comments/${{ matrix.comment_id }}" -F body=@/tmp/comment_after_pr_link.txt
+    uses: ./.github/workflows/claude_apply_patch.yml
+    with:
+      repository: ${{ matrix.repository }}
+      head_sha: ${{ matrix.head_sha }}
+      comment_url: ${{ matrix.comment_url }}
+      artifact_name: "mention-patch-${{ matrix.comment_id }}"
+    secrets: inherit

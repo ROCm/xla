@@ -63,6 +63,7 @@ on:
     paths:
       - ".github/workflows/rocm_infra_monitor.yml"
       - ".github/workflows/claude_issue_triage.yml"
+      - ".github/workflows/claude_apply_patch.yml"
       - "build_tools/rocm/get_last_pipeline_run.sh"
       - "build_tools/rocm/get_monitoring_window.sh"
       - "build_tools/rocm/get_runs_since.sh"
@@ -70,6 +71,7 @@ on:
       - "build_tools/rocm/create_infra_error_issue.sh"
       - "build_tools/rocm/collect_claude_debug_targets.sh"
       - ".claude/skills/debug-nightly-failure/SKILL.md"
+      - ".claude/skills/respond-to-mention/SKILL.md"
 
 jobs:
   monitor:
@@ -189,7 +191,12 @@ jobs:
     with:
       repository: ${{ matrix.repository }}
       head_sha: ${{ matrix.head_sha }}
-      debug_pipeline_ref: ${{ env.DEBUG_PIPELINE_REF }}
+      # Can't reference env.DEBUG_PIPELINE_REF here - the `env` context
+      # isn't available in a uses:-job's `with:` block (only github, needs,
+      # strategy, matrix, inputs, vars, secrets are), so this repeats the
+      # same computation DEBUG_PIPELINE_REF itself does at the top of this
+      # file instead of reading it back out.
+      debug_pipeline_ref: ${{ github.head_ref || github.ref_name }}
       comment_url: ${{ matrix.detection_comment_url }}
       already_handled_marker: "<!-- rocm-nightly-claude-debug:${{ matrix.job_name }} / ${{ matrix.step_name }} -->"
       claude_step_name: Debug Nightly Failure
@@ -234,5 +241,121 @@ jobs:
         `gh api -X PATCH .../issues/comments/<id>`. Never post a new
         comment on the tracking issue, and do not post anything to
         GitHub yourself outside of what the skill does.
+    secrets: inherit
+
+  auto_verify:
+    # Automatic, no human action needed: if `debug` just reported a
+    # proposed-but-unverified fix, this immediately tries it - reproduce
+    # the original failure under heavy repetition, apply the fix, confirm
+    # green, revert, confirm red again - using the exact same
+    # respond-to-mention skill a human's `@claude verify this` would
+    # trigger in rocm_infra_agent.yml, just with a fixed, canned
+    # instruction instead of one someone typed. `@claude` on the detection
+    # comment is still there for anything beyond plain verification -
+    # digging deeper, trying a different approach, devising a new
+    # solution - see rocm_infra_agent.yml.
+    name: "Auto-verify: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
+    needs: [monitor, debug]
+    if: needs.monitor.outputs.new_failures != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.monitor.outputs.new_failures) }}
+    uses: ./.github/workflows/claude_issue_triage.yml
+    with:
+      repository: ${{ matrix.repository }}
+      head_sha: ${{ matrix.head_sha }}
+      debug_pipeline_ref: ${{ github.head_ref || github.ref_name }}
+      comment_url: ${{ matrix.detection_comment_url }}
+      # "auto" instead of a real instructions hash: this is always the
+      # exact same canned instruction (never a human-authored one), so
+      # there's nothing to disambiguate - respond-to-mention's Step 0/6
+      # marker format is JOB_NAME / STEP_NAME:INSTRUCTIONS_HASH regardless
+      # of who's asking, so this is just that same format with a fixed,
+      # well-known hash value standing in for "the automatic one". A human
+      # later adding a *different* `@claude` instruction to the same
+      # comment gets its own real hash and is never confused with this.
+      already_handled_marker: "<!-- rocm-nightly-claude-mention:${{ matrix.job_name }} / ${{ matrix.step_name }}:auto -->"
+      # Only proceed if debug-nightly-failure's report literally says this
+      # - skips the "Fix found" (already self-verified), "Already fixed
+      # upstream", and "Not resolved" outcomes without spinning up a
+      # runner/container for them at all.
+      required_marker: "**Outcome:** Possible fix (unverified)"
+      claude_step_name: Auto-Verify Proposed Fix
+      # Same budget as a human-triggered verify in rocm_infra_agent.yml -
+      # this is the exact same work, just automatically kicked off.
+      job_timeout_minutes: 180
+      claude_timeout_minutes: 175
+      max_turns: 100
+      allowed_tools: "Skill,Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
+      artifact_name: "autoverify-patch-${{ matrix.job_id }}"
+      prompt: |
+        CI REPO (for job logs / issue comments / where the PR goes): ROCm/xla
+        SOURCE REPO (already checked out in the working directory): ${{ matrix.repository }}
+        HEAD SHA (already checked out): ${{ matrix.head_sha }}
+        NIGHTLY RUN ID: ${{ matrix.run_id }}
+        FAILING JOB ID: ${{ matrix.job_id }}
+        FAILING JOB NAME: ${{ matrix.job_name }}
+        FAILED STEP: ${{ matrix.step_name }}
+        FAILING JOB URL: ${{ matrix.failure_url }}
+        TRACKING ISSUE NUMBER (in ROCm/xla): ${{ matrix.issue_number }}
+        COMMENT URL (the proposed fix lives here, folded; edit this same
+        comment with your findings - never post a new one):
+        ${{ matrix.detection_comment_url }}
+        INSTRUCTIONS (use literally, this is not something a human wrote -
+        it's this pipeline automatically asking to verify what
+        debug-nightly-failure just proposed): Verify the proposed fix
+        described in this comment's "Possible fix (quick estimate,
+        unverified)" section - reproduce the original failure, apply the
+        fix, confirm it goes green, then revert it and confirm red again.
+        INSTRUCTIONS HASH (use literally in the Step 0/6 marker, don't
+        recompute it): auto
+
+        No human asked for this specifically - debug-nightly-failure just
+        reported an unverified possible fix for this failure, and this
+        pipeline automatically verifies every one of those rather than
+        waiting for someone to ask. Run the /respond-to-mention skill,
+        using the values above as its arguments: CI repo, issue number,
+        comment URL, job name, step name, repository, head SHA, failure
+        URL, instructions, instructions hash, in that order. The skill
+        self-caps its own non-build decision-making at 30 minutes - time
+        spent on actual build+test cycles doesn't count against that, but
+        the whole run still has to fit this step's own timeout. It is
+        responsible for editing its findings directly into the comment
+        above via `gh api -X PATCH .../issues/comments/<id>`. It never
+        commits, pushes, or opens a PR itself - if the fix verifies, it
+        only writes out a patch file plus a PR title/body for a later,
+        deterministic workflow step to apply and turn into a draft PR.
+        Never post a new comment on the tracking issue, and do not post
+        anything to GitHub yourself outside of what the skill does.
+    secrets: inherit
+
+  apply_auto_verified_patch:
+    name: "Apply fix: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
+    needs: [monitor, auto_verify]
+    if: needs.monitor.outputs.new_failures != '[]'
+    # Needs to push a branch and open a draft PR, unlike `monitor`/`debug`
+    # (read-mostly, aside from issue/label edits) - scoped here, not at
+    # the workflow level.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    strategy:
+      fail-fast: false
+      # Deliberately not `needs.auto_verify`'s own per-entry result - see
+      # rocm_infra_agent.yml's `apply_patch_and_open_pr` for why
+      # reusable-workflow matrix outputs can't be read that way.
+      # claude_apply_patch.yml's own download step tolerates "no such
+      # artifact" as the normal/expected outcome for every entry that
+      # wasn't verified (no fix was ever proposed, or it didn't pan out).
+      matrix:
+        include: ${{ fromJson(needs.monitor.outputs.new_failures) }}
+    uses: ./.github/workflows/claude_apply_patch.yml
+    with:
+      repository: ${{ matrix.repository }}
+      head_sha: ${{ matrix.head_sha }}
+      comment_url: ${{ matrix.detection_comment_url }}
+      artifact_name: "autoverify-patch-${{ matrix.job_id }}"
     secrets: inherit
 
