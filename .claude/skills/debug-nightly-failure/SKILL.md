@@ -552,6 +552,11 @@ reproduce and confirm anything: comment with:
   unverified open PR, or both - not a verified fix. Nobody should merge
   anything or rely on the open PR landing without reproducing/confirming
   first.
+- End with a line telling a reviewer how to ask for an actual verification
+  run: `To try this fix for real, edit this comment and add a line with
+  just \`/verify\` (don't change anything else).` The `verify` job of
+  `rocm_infra_monitor.yml` polls for exactly that line - see
+  `collect_claude_verify_targets.sh`.
 
 **Fix found** (you derived it yourself *and* verified it - only reachable
 if Steps 4/5 actually ran and finished within budget): before reporting,

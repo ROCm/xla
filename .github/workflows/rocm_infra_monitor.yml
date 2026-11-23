@@ -379,16 +379,16 @@ jobs:
         run: docker rm -f rocmless-debug || true
 
   collect_verify_targets:
-    # Independent of `monitor`: a human can react 🚀 on a comment analyzed
-    # days ago, so every run rescans the whole tracking issue for that
-    # reaction rather than only this window's newly-detected failures.
-    # Doesn't depend on (or feed) `monitor`'s own matrix.
+    # Independent of `monitor`: a human can edit a `/verify` command into a
+    # comment analyzed days ago, so every run rescans the whole tracking
+    # issue for that command rather than only this window's newly-detected
+    # failures. Doesn't depend on (or feed) `monitor`'s own matrix.
     name: Find proposed fixes to verify
     runs-on: ubuntu-latest
     outputs:
       # A JSON array of {issue_number, comment_id, comment_url, job_name,
       # step_name, repository, head_sha, failure_url, run_id, job_id} - one
-      # per 🚀-reacted comment that hasn't already been verified. "[]" means
+      # per /verify'd comment that hasn't already been verified. "[]" means
       # nothing to verify this run. See collect_claude_verify_targets.sh.
       verify_targets: ${{ steps.collect.outputs.verify_targets }}
     steps:
@@ -398,7 +398,7 @@ jobs:
           ref: ${{ env.DEBUG_PIPELINE_REF }}
           persist-credentials: false
 
-      - name: Find the tracking issue and collect 🚀-reacted fixes
+      - name: Find the tracking issue and collect /verify'd fixes
         id: collect
         env:
           GH_TOKEN: ${{ github.token }}
@@ -597,9 +597,9 @@ jobs:
             same comment with your verdict - never post a new one):
             ${{ matrix.comment_url }}
 
-            A human reacted 🚀 on the comment above, asking you to actually
-            try the fix it already proposed (not to re-analyze the failure
-            from scratch). Run the /verify-proposed-fix skill, using the
+            A human added a `/verify` command to the comment above, asking
+            you to actually try the fix it already proposed (not to
+            re-analyze the failure from scratch). Run the /verify-proposed-fix skill, using the
             values above as its arguments: CI repo, issue number, comment
             URL, job name, step name, repository, head SHA, failure URL, in
             that order. The skill self-caps its own non-build

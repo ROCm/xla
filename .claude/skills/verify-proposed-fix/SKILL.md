@@ -1,6 +1,6 @@
 ---
 name: verify-proposed-fix
-description: Hard-capped at 30 minutes of non-build decision-making - triggered when a human reacts 🚀 on a debug-nightly-failure comment's proposed fix, asking Claude to actually try it out. Reproduces the original failure under heavy repetition (nightly GPU CI can be flaky), applies the proposed fix, confirms it goes green, reverts the fix, and confirms it goes red again - a differential check that the fix, not noise, is responsible. If verified, writes the fix out as a plain patch file (plus a PR title/body) for a deterministic workflow step to apply onto ROCm/xla's own default branch (main) and open a draft "[WIP] ..." PR with a Google-style CL description - never commits, pushes, or opens the PR itself. Edits its verdict (noting a PR is pending, or a plain "not applicable" statement) back into the same comment, folded, and never repeats once attempted. Use when invoked by the "verify" job of rocm_infra_monitor.yml for one specific 🚀-reacted comment.
+description: Hard-capped at 30 minutes of non-build decision-making - triggered when a human edits a `/verify` command into a debug-nightly-failure comment's proposed fix, asking Claude to actually try it out. Reproduces the original failure under heavy repetition (nightly GPU CI can be flaky), applies the proposed fix, confirms it goes green, reverts the fix, and confirms it goes red again - a differential check that the fix, not noise, is responsible. If verified, writes the fix out as a plain patch file (plus a PR title/body) for a deterministic workflow step to apply onto ROCm/xla's own default branch (main) and open a draft "[WIP] ..." PR with a Google-style CL description - never commits, pushes, or opens the PR itself. Edits its verdict (noting a PR is pending, or a plain "not applicable" statement) back into the same comment, folded, and never repeats once attempted. Use when invoked by the "verify" job of rocm_infra_monitor.yml for one specific comment carrying a `/verify` command.
 argument-hint: [ci-repo] [issue-number] [comment-url] [job-name] [step-name] [repository] [head-sha] [failure-url]
 context: fork
 agent: general-purpose
@@ -144,8 +144,8 @@ estimate, unverified)" or "Fix found" section (whichever is present -
   read the description and the file/function it points at, and implement
   the change yourself via `Edit`. This is the one place in this entire
   pipeline this skill writes production code - and only because a human
-  explicitly reacted 🚀 asking for this exact proposal to be tried, not a
-  new one of your own devising.
+  explicitly added `/verify` asking for this exact proposal to be tried, not
+  a new one of your own devising.
 
 Also recover the exact original invocation: the specific failing
 target/test case and the full `build_tools/rocm/run_xla_ci_build.sh`/

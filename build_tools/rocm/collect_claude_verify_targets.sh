@@ -14,17 +14,20 @@
 # limitations under the License.
 # ==============================================================================
 #
-# Scan every comment on the tracking issue for ones a human has reacted to
-# with 🚀, asking Claude to actually try out a proposed fix it already
-# posted - and queue each one that qualifies for the verify-proposed-fix
-# skill. Unlike collect_claude_debug_targets.sh, this doesn't look at
-# "what failed in this monitoring window" - a 🚀 can land on a comment
-# analyzed days ago, so every run rescans the whole issue.
+# Scan every comment on the tracking issue for ones a human has edited to
+# add a `/verify` command, asking Claude to actually try out a proposed fix
+# it already posted - and queue each one that qualifies for the
+# verify-proposed-fix skill. Unlike collect_claude_debug_targets.sh, this
+# doesn't look at "what failed in this monitoring window" - a `/verify` can
+# land on a comment analyzed days ago, so every run rescans the whole issue.
 #
 # A comment qualifies if, and only if:
 #   - it carries a `rocm-nightly-failure:` or `rocm-nightly-claude-debug:`
 #     marker (so a signature/job/step can be recovered from it), AND
-#   - it has at least one 🚀 ("rocket") reaction, AND
+#   - its body contains a line consisting of just `/verify` (whitespace
+#     aside) - editing someone else's comment on GitHub requires write/
+#     triage access to the repo, so this is naturally restricted to
+#     trusted collaborators, unlike a reaction, AND
 #   - it does NOT already contain a `rocm-nightly-claude-verify:` marker
 #     for that same signature - once attempted, never repeated, regardless
 #     of outcome (same "no re-runs" rule debug targets follow).
@@ -89,10 +92,8 @@ for COMMENT_ID in "${COMMENT_IDS[@]}"; do
         continue
     fi
 
-    ROCKET_COUNT=$(gh api "/repos/${CI_REPO}/issues/comments/${COMMENT_ID}/reactions" \
-        --jq '[.[] | select(.content == "rocket")] | length')
-    if [ "${ROCKET_COUNT:-0}" -eq 0 ]; then
-        echo "  -> no 🚀 reaction, skipping" >&2
+    if ! printf '%s' "$BODY" | grep -qE '^[[:space:]]*/verify[[:space:]]*$'; then
+        echo "  -> no /verify command in the comment body, skipping" >&2
         continue
     fi
 
@@ -105,7 +106,7 @@ for COMMENT_ID in "${COMMENT_IDS[@]}"; do
 
     FAILURE_URL=$(printf '%s' "$BODY" | grep -oP '(?<=- Failing job: )\S+' | head -1)
     if [ -z "$FAILURE_URL" ]; then
-        echo "  -> 🚀'd but no 'Failing job:' line found, skipping" >&2
+        echo "  -> /verify'd but no 'Failing job:' line found, skipping" >&2
         continue
     fi
 
@@ -118,7 +119,7 @@ for COMMENT_ID in "${COMMENT_IDS[@]}"; do
     fi
 
     # The job's log may have aged out of GitHub's retention window by the
-    # time someone reacts 🚀 - don't fail the whole scan over one expired
+    # time someone adds `/verify` - don't fail the whole scan over one expired
     # log, just skip this one with a diagnostic. A command used directly as
     # an `if` condition is exempt from `set -e`, so this doesn't need any
     # extra guarding.
