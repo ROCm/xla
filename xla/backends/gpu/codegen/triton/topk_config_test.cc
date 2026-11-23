@@ -60,6 +60,7 @@ TEST(TopKKernelLimitsTest, AcceptsSupportedSpecs) {
   EXPECT_THAT(
       CheckTopKKernelLimits(Spec(8, 1024, 32, F32, ComparisonOrder::kPartial)),
       IsOk());
+  EXPECT_THAT(CheckTopKKernelLimits(Spec(24576, 64, 6, U64)), IsOk());
 }
 
 TEST(TopKKernelLimitsTest, RejectsUnsupportedSpecs) {
@@ -211,6 +212,28 @@ TEST(TopKKernelConfigTest, SingleKernelHasNoMergeOrScratch) {
   EXPECT_FALSE(GetTopKMergeConfig(spec, *config, mi350).has_value());
 }
 
+// The specializer configures the values of a TopK; the emitter configures the
+// u64 adapter's TopK of their keys.
+TEST(TopKKernelConfigTest, KeysGetTheConfigOfTheirValues) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  for (PrimitiveType type : {F32, BF16}) {
+    for (TopKKernelSpec spec :
+         {Spec(24576, 64, 6, type), Spec(7, 1000, 128, type),
+          Spec(2, 20000, 16, type), Spec(2, 1 << 20, 128, type)}) {
+      std::optional<TopKKernelConfig> values = GetTopKKernelConfig(spec, mi350);
+      TopKKernelSpec keys_spec = spec;
+      keys_spec.input_type = U64;
+      std::optional<TopKKernelConfig> keys =
+          GetTopKKernelConfig(keys_spec, mi350);
+      ASSERT_TRUE(values.has_value()) << spec.ToString();
+      ASSERT_TRUE(keys.has_value()) << keys_spec.ToString();
+      EXPECT_EQ(keys->ToString(), values->ToString());
+      EXPECT_EQ(GetTopKScratchElements(keys_spec, *keys),
+                GetTopKScratchElements(spec, *values));
+    }
+  }
+}
+
 TEST(TopKKernelConfigTest, SelectionDependsOnKAndTheRowLength) {
   se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
   auto selection = [&](const TopKKernelSpec& spec) {
@@ -312,6 +335,8 @@ TEST(TopKRoutingTest, Mi350TakesOtherShapes) {
 TEST(TopKRoutingTest, Mi350KeepsOtherTypes) {
   EXPECT_FALSE(IsTritonTopKFaster(Spec(24576, 64, 6, F16),
                                   TestGpuDeviceInfo::AMDMI350DeviceInfo()));
+  EXPECT_FALSE(IsTritonTopKFaster(Spec(24576, 64, 6, U64),
+                                  TestGpuDeviceInfo::AMDMI350DeviceInfo()));
 }
 
 TEST(TopKRoutingTest, OtherDevicesKeepTheDefaultPath) {
@@ -391,6 +416,17 @@ TEST_F(TopKCustomCallTest, MarkerOnAnEmptyConfig) {
   ASSERT_THAT(MarkAsTritonTopK(*topk), IsOk());
   EXPECT_EQ(topk->raw_backend_config_string(), R"({impl = "triton"})");
   EXPECT_TRUE(hlo_instruction_utils::IsTopKStable(topk));
+}
+
+// The u64 adapter clears the stability of its TopK after copying the config.
+TEST_F(TopKCustomCallTest, MarkerSurvivesClearingTheStability) {
+  ASSERT_OK_AND_ASSIGN(HloCustomCallInstruction * topk,
+                       ParseTopK(R"({is_stable = true, order = "TOTAL"})"));
+  ASSERT_THAT(MarkAsTritonTopK(*topk), IsOk());
+  hlo_instruction_utils::SetTopKStability(topk, false);
+  EXPECT_TRUE(IsTritonTopK(*topk));
+  EXPECT_FALSE(hlo_instruction_utils::IsTopKStable(topk));
+  EXPECT_EQ(hlo_instruction_utils::GetTopKOrder(topk), ComparisonOrder::kTotal);
 }
 
 }  // namespace

@@ -533,8 +533,9 @@ bool ShouldRewriteStableTopKToUint64(HloCustomCallInstruction* topk,
   return ShouldUseRaftSelectKU64(cuda_cc, dtype, batch, n, k);
 }
 
-absl::StatusOr<HloInstruction*> RewriteStableTopKToUint64(
-    HloCustomCallInstruction* topk, int sm_count) {
+// The __gpu$TopK custom call gets a U8 scratch output of `scratch_bytes`.
+absl::StatusOr<HloInstruction*> RewriteStableTopKToUint64WithScratch(
+    HloCustomCallInstruction* topk, int64_t scratch_bytes) {
   HloComputation* comp = topk->parent();
   HloInstruction* data = topk->mutable_operand(0);
   const Shape& data_shape = data->shape();
@@ -551,20 +552,6 @@ absl::StatusOr<HloInstruction*> RewriteStableTopKToUint64(
                         BuildPackF32ToU64(data, order, comp));
 
   // 2. Create the specialized __gpu$TopK custom call
-  const bool has_batch = data_shape.dimensions().size() == 2;
-  const uint32_t batch =
-      static_cast<uint32_t>(has_batch ? data_shape.dimensions(0) : 1);
-  const uint32_t n =
-      static_cast<uint32_t>(data_shape.dimensions(has_batch ? 1 : 0));
-  const uint32_t k = static_cast<uint32_t>(
-      topk->shape().tuple_shapes(0).dimensions(has_batch ? 1 : 0));
-  // TODO(b/409009349): Switch to RaftScratchPhaseMode::kMaxAcrossPhases
-  // after 2026-11-24 once the 14-day GPU AOT forward-compatibility window
-  // for FixedBufferDeviceMemoryResource phase reclamation has elapsed.
-  ABSL_ASSIGN_OR_RETURN(
-      const int64_t scratch_bytes,
-      EstimateRaftSelectKScratchBytesUInt64(
-          batch, n, k, sm_count, RaftScratchPhaseMode::kSumAcrossPhases));
   Shape k_shape =
       ShapeUtil::ChangeElementType(topk->shape().tuple_shapes(0), U64);
   Shape idx_shape = topk->shape().tuple_shapes(1);
@@ -603,6 +590,26 @@ absl::StatusOr<HloInstruction*> RewriteStableTopKToUint64(
 
   return comp->AddInstruction(
       HloInstruction::CreateTuple({unpacked_data, indices}));
+}
+
+absl::StatusOr<HloInstruction*> RewriteStableTopKToUint64(
+    HloCustomCallInstruction* topk, int sm_count) {
+  const Shape& data_shape = topk->operand(0)->shape();
+  const bool has_batch = data_shape.dimensions().size() == 2;
+  const uint32_t batch =
+      static_cast<uint32_t>(has_batch ? data_shape.dimensions(0) : 1);
+  const uint32_t n =
+      static_cast<uint32_t>(data_shape.dimensions(has_batch ? 1 : 0));
+  const uint32_t k = static_cast<uint32_t>(
+      topk->shape().tuple_shapes(0).dimensions(has_batch ? 1 : 0));
+  // TODO(b/409009349): Switch to RaftScratchPhaseMode::kMaxAcrossPhases
+  // after 2026-11-24 once the 14-day GPU AOT forward-compatibility window
+  // for FixedBufferDeviceMemoryResource phase reclamation has elapsed.
+  ABSL_ASSIGN_OR_RETURN(
+      const int64_t scratch_bytes,
+      EstimateRaftSelectKScratchBytesUInt64(
+          batch, n, k, sm_count, RaftScratchPhaseMode::kSumAcrossPhases));
+  return RewriteStableTopKToUint64WithScratch(topk, scratch_bytes);
 }
 
 absl::StatusOr<HloInstruction*> SmallBufferOptimization(
@@ -713,11 +720,23 @@ absl::StatusOr<HloInstruction*> SmallBufferOptimization(
 
 // Whether the Triton TopK kernels take `topk` on `device`. Without `force`,
 // only shapes where the kernels were measured faster on the device are taken.
+// The u64 adapter (`u64_adapter`) has no measured shapes, so it is only used
+// with `force`.
 Decision ShouldUseTritonTopK(const HloCustomCallInstruction* topk,
-                             const se::DeviceDescription& device, bool force) {
+                             const se::DeviceDescription& device, bool force,
+                             bool u64_adapter) {
   absl::StatusOr<TopKKernelSpec> spec = GetTopKKernelSpec(*topk);
   if (!spec.ok()) {
     return Decision(spec.status());
+  }
+  // U64 kernel inputs are adapter keys, not values.
+  if (spec->input_type != F32 && spec->input_type != BF16) {
+    return Decision::Forbid(
+        absl::StrCat(spec->ToString(), ": values are not f32 or bf16"));
+  }
+  if (u64_adapter && !force) {
+    return Decision::Forbid(absl::StrCat(
+        spec->ToString(), ": the u64 adapter is only used when forced"));
   }
   if (absl::Status limits = CheckTopKKernelLimits(*spec); !limits.ok()) {
     return Decision::Forbid(
@@ -761,6 +780,20 @@ absl::StatusOr<HloInstruction*> RewriteTopKForRocmTriton(
     return TupleUtil::ExtractPrefix(new_topk, 2);
   }
   return new_topk;
+}
+
+// Replaces `topk` by the stable TopK u64 adapter (pack, a __gpu$TopK of the
+// keys marked for the Triton TopK kernels, unpack). The adapter's scratch
+// output holds the chunk candidates of rows split into chunks.
+absl::StatusOr<HloInstruction*> RewriteTopKForRocmTritonU64Adapter(
+    HloCustomCallInstruction* topk, const se::DeviceDescription& device) {
+  ABSL_ASSIGN_OR_RETURN(TopKKernelSpec spec, GetTopKKernelSpec(*topk));
+  std::optional<TopKKernelConfig> config = GetTopKKernelConfig(spec, device);
+  TF_RET_CHECK(config.has_value()) << spec.ToString();
+  // The adapter's __gpu$TopK copies the backend config with the marker.
+  ABSL_RETURN_IF_ERROR(MarkAsTritonTopK(*topk));
+  return RewriteStableTopKToUint64WithScratch(
+      topk, GetTopKScratchElements(spec, *config) * int64_t{8});
 }
 
 // Returns the Triton TopK whose output `index` `inst` reads, also through the
@@ -986,14 +1019,24 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
 
     if (compute_capability_.IsRocm() &&
         debug_options.xla_gpu_experimental_enable_triton_topk()) {
+      const bool u64_adapter =
+          debug_options.xla_gpu_experimental_triton_topk_u64_adapter();
       Decision use_triton = ShouldUseTritonTopK(
           topk, device_description_,
-          debug_options.xla_gpu_experimental_force_triton_topk());
+          debug_options.xla_gpu_experimental_force_triton_topk(), u64_adapter);
       if (use_triton.IsAllowed()) {
-        VLOG(2) << "Rewriting TopK for the Triton TopK kernels";
         // No packed BF16 sort follows, and the new TopK copies the frontend
         // attributes.
         topk->erase_frontend_attribute(kTopKDeferredPackedBf16Attr);
+        if (u64_adapter) {
+          VLOG(2) << "Rewriting TopK for the Triton TopK kernels via the u64 "
+                     "adapter";
+          ABSL_ASSIGN_OR_RETURN(
+              HloInstruction * new_topk,
+              RewriteTopKForRocmTritonU64Adapter(topk, device_description_));
+          return ReplaceInstruction(topk, new_topk);
+        }
+        VLOG(2) << "Rewriting TopK for the Triton TopK kernels";
         ABSL_ASSIGN_OR_RETURN(
             HloInstruction * new_topk,
             RewriteTopKForRocmTriton(topk, device_description_));
