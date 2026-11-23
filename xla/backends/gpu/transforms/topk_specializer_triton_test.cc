@@ -44,11 +44,18 @@ limitations under the License.
 #include "xla/service/gpu/gpu_device_info_for_tests.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/xla.pb.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla::gpu {
 namespace {
 
-enum class TritonTopKFlags { kOff, kOn, kForced };
+enum class TritonTopKFlags {
+  kOff,
+  kOn,
+  kForced,
+  kOnU64Adapter,
+  kForcedU64Adapter
+};
 
 class TopkSpecializerTritonTest : public HloHardwareIndependentTestBase {
  protected:
@@ -58,7 +65,11 @@ class TopkSpecializerTritonTest : public HloHardwareIndependentTestBase {
     debug_options.set_xla_gpu_experimental_enable_triton_topk(
         flags_ != TritonTopKFlags::kOff);
     debug_options.set_xla_gpu_experimental_force_triton_topk(
-        flags_ == TritonTopKFlags::kForced);
+        flags_ == TritonTopKFlags::kForced ||
+        flags_ == TritonTopKFlags::kForcedU64Adapter);
+    debug_options.set_xla_gpu_experimental_triton_topk_u64_adapter(
+        flags_ == TritonTopKFlags::kOnU64Adapter ||
+        flags_ == TritonTopKFlags::kForcedU64Adapter);
     return debug_options;
   }
 
@@ -240,6 +251,7 @@ INSTANTIATE_TEST_SUITE_P(
     Shapes, TopkSpecializerTritonRejectedTest,
     ::testing::Values(
         RejectedCase{"F16", "f16[8,1000]", "f16[8,32]", "s32[8,32]"},
+        RejectedCase{"U64", "u64[8,1000]", "u64[8,32]", "s32[8,32]"},
         RejectedCase{"KAboveLimit", "f32[8,1000]", "f32[8,129]", "s32[8,129]"},
         RejectedCase{"KCloseToN", "f32[8,16]", "f32[8,14]", "s32[8,14]"},
         RejectedCase{"EmptyBatch", "f32[0,1000]", "f32[0,32]", "s32[0,32]"},
@@ -249,6 +261,105 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<RejectedCase>& info) {
       return info.param.name;
     });
+
+class TopkSpecializerTritonU64AdapterTest
+    : public TopkSpecializerTritonTest,
+      public ::testing::WithParamInterface<RoutedCase> {
+ protected:
+  // The only __gpu$TopK of `module`, or nullptr.
+  static const HloCustomCallInstruction* FindGpuTopK(const HloModule& module) {
+    const HloCustomCallInstruction* topk = nullptr;
+    for (const HloInstruction* inst :
+         module.entry_computation()->instructions()) {
+      if (inst->IsCustomCall("__gpu$TopK")) {
+        EXPECT_EQ(topk, nullptr) << inst->ToString();
+        topk = Cast<HloCustomCallInstruction>(inst);
+      }
+    }
+    return topk;
+  }
+};
+
+TEST_P(TopkSpecializerTritonU64AdapterTest, ForcedTopKUsesTheU64Adapter) {
+  const RoutedCase& c = GetParam();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseTopK(c.in, c.out, c.idx, c.backend_config,
+                                 TritonTopKFlags::kForcedU64Adapter));
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                 module.get()));
+  EXPECT_TRUE(changed);
+
+  const HloCustomCallInstruction* topk = FindGpuTopK(*module);
+  ASSERT_NE(topk, nullptr) << module->ToString();
+  EXPECT_TRUE(IsTritonTopK(*topk));
+  // The keys are distinct, so the adapter clears the stability.
+  EXPECT_FALSE(hlo_instruction_utils::IsTopKStable(topk));
+  EXPECT_EQ(hlo_instruction_utils::GetTopKOrder(topk), c.order);
+  EXPECT_EQ(topk->operand(0)->shape().element_type(), U64);
+  ASSERT_EQ(topk->shape().tuple_shapes().size(), 3);
+  EXPECT_EQ(topk->shape().tuple_shapes(0).element_type(), U64);
+  EXPECT_EQ(topk->shape().tuple_shapes(1).element_type(), S32);
+  EXPECT_EQ(topk->shape().tuple_shapes(2).ToString(), "u8[0]");
+
+  const HloInstruction* root = module->entry_computation()->root_instruction();
+  ASSERT_EQ(root->opcode(), HloOpcode::kTuple);
+  EXPECT_EQ(root->shape().ToString(),
+            absl::StrCat("(", c.out, ", ", c.idx, ")"));
+  for (const HloInstruction* inst :
+       module->entry_computation()->instructions()) {
+    EXPECT_FALSE(inst->IsCustomCall("TopK")) << inst->ToString();
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Shapes, TopkSpecializerTritonU64AdapterTest,
+    ::testing::Values(
+        RoutedCase{"StableTotalF32", "f32[8,1000]", "f32[8,32]", "s32[8,32]",
+                   "", true, ComparisonOrder::kTotal},
+        RoutedCase{"UnstablePartialBf16", "bf16[24576,64]", "bf16[24576,6]",
+                   "s32[24576,6]", R"({is_stable = false, order = "PARTIAL"})",
+                   false, ComparisonOrder::kPartial},
+        RoutedCase{"StableTotalBf16", "bf16[24576,64]", "bf16[24576,6]",
+                   "s32[24576,6]", R"({is_stable = true, order = "TOTAL"})",
+                   true, ComparisonOrder::kTotal},
+        RoutedCase{"RankOne", "f32[4096]", "f32[16]", "s32[16]", "", true,
+                   ComparisonOrder::kTotal}),
+    [](const ::testing::TestParamInfo<RoutedCase>& info) {
+      return info.param.name;
+    });
+
+TEST_F(TopkSpecializerTritonU64AdapterTest, LongRowGetsTheScratchInBytes) {
+  // 16 chunks of 4096 per row, 8 candidates each: 1024 keys of 8 bytes.
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      ParseTopK("f32[8,65536]", "f32[8,8]", "s32[8,8]",
+                R"({order = "PARTIAL"})", TritonTopKFlags::kForcedU64Adapter));
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                 module.get()));
+  EXPECT_TRUE(changed);
+  const HloCustomCallInstruction* topk = FindGpuTopK(*module);
+  ASSERT_NE(topk, nullptr) << module->ToString();
+  EXPECT_TRUE(IsTritonTopK(*topk));
+  EXPECT_EQ(topk->shape().ToString(), "(u64[8,8], s32[8,8], u8[8192])");
+}
+
+TEST_F(TopkSpecializerTritonU64AdapterTest, IsOnlyUsedWhenForced) {
+  // A shape the speed rule routes without the adapter.
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<HloModule> module,
+      ParseTopK("bf16[24576,64]", "bf16[24576,6]", "s32[24576,6]", "",
+                TritonTopKFlags::kOnU64Adapter));
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      RunHloPass(TopkSpecializer(TestGpuDeviceInfo::AMDMI350DeviceInfo()),
+                 module.get()));
+  EXPECT_FALSE(changed);
+  EXPECT_FALSE(HasTritonTopK(*module));
+}
 
 TEST_F(TopkSpecializerTritonTest, ForcedLongRowGetsAScratchOutput) {
   // 16 chunks of 4096 per row, 8 candidates each.
@@ -543,6 +654,17 @@ TEST_F(TopkSpecializerTritonSortTest, RemovesTheSpmdMergeSortAfterTheTopK) {
   ASSERT_EQ(root->opcode(), HloOpcode::kTuple);
   EXPECT_EQ(root->operand(0)->opcode(), HloOpcode::kGetTupleElement);
   EXPECT_EQ(root->operand(1)->name(), "offset");
+}
+
+// The u64 adapter's values come from its unpack, not from the Triton TopK.
+TEST_F(TopkSpecializerTritonSortTest, KeepsTheSortAfterTheU64Adapter) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseTopKThenSort("bf16", "24576,64", "24576,6", "",
+                                         TritonTopKFlags::kForcedU64Adapter));
+  ASSERT_OK_AND_ASSIGN(bool changed, RunOnMi350(module.get()));
+  EXPECT_TRUE(changed);
+  EXPECT_TRUE(HasTritonTopK(*module));
+  EXPECT_TRUE(HasSort(*module));
 }
 
 TEST_F(TopkSpecializerTritonSortTest, RemovesTheSortOfOtherIndexForms) {

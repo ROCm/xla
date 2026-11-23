@@ -215,6 +215,44 @@ TEST_F(TopKKernelTest, BitonicChunkAndMergeKernels) {
   EXPECT_THAT(merge, HasSubstr(": tensor<2x16x!tt.ptr<i32>>"));
 }
 
+TEST_F(TopKKernelTest, U64KernelSelectsKeysAndDecodesIndices) {
+  // The u64 adapter's TopK: (keys, values, indices, scratch).
+  ASSERT_OK_AND_ASSIGN(std::string ir, Build(Spec(24576, 64, 6, U64)));
+  EXPECT_THAT(ir,
+              HasSubstr("tt.func @topk(%arg0: !tt.ptr<i64> "
+                        "{tt.divisibility = 16 : i32}, %arg1: "
+                        "!tt.ptr<i64> {tt.divisibility = 16 : i32}, "
+                        "%arg2: !tt.ptr<i32> {tt.divisibility = 16 : i32}, "
+                        "%arg3: !tt.ptr<i64> {tt.divisibility = 16 : i32})"));
+  EXPECT_THAT(ir, HasSubstr("arith.maxui"));
+  // The keys are stored as they are; only the TOTAL index is decoded.
+  EXPECT_THAT(ir, HasSubstr(": tensor<64x8x!tt.ptr<i64>>"));
+  EXPECT_THAT(ir, Not(HasSubstr("tt.bitcast")));
+  EXPECT_THAT(ir, Not(HasSubstr("2147483647")));
+}
+
+TEST_F(TopKKernelTest, U64PartialKernelDecodesThePartialIndex) {
+  ASSERT_OK_AND_ASSIGN(std::string ir,
+                       Build(Spec(64, 128, 8, U64, ComparisonOrder::kPartial)));
+  EXPECT_THAT(ir, HasSubstr("2147483647"));
+  EXPECT_THAT(ir, Not(HasSubstr("tt.bitcast")));
+}
+
+TEST_F(TopKKernelTest, U64ChunkAndMergeKernels) {
+  // The adapter's keys already hold the index within the row.
+  ASSERT_OK_AND_ASSIGN(std::string chunk,
+                       Build(Spec(2, 20000, 16, U64), TopKKernelKind::kChunk));
+  EXPECT_THAT(chunk,
+              HasSubstr(": tensor<1x4096x!tt.ptr<i64>>, tensor<1x4096xi32>"));
+  EXPECT_THAT(chunk, HasSubstr(": tensor<1x16x!tt.ptr<i64>>"));
+  EXPECT_THAT(chunk, Not(HasSubstr("tt.bitcast")));
+  ASSERT_OK_AND_ASSIGN(std::string merge,
+                       Build(Spec(2, 20000, 16, U64), TopKKernelKind::kMerge));
+  EXPECT_THAT(merge, HasSubstr(": tensor<2x16x!tt.ptr<i64>>"));
+  EXPECT_THAT(merge, HasSubstr(": tensor<2x16x!tt.ptr<i32>>"));
+  EXPECT_THAT(merge, Not(HasSubstr("tt.bitcast")));
+}
+
 TEST_F(TopKKernelTest, RejectsChunkConfigsThatDoNotCoverTheRow) {
   TopKKernelSpec spec = Spec(2, 20000, 16);
   ASSERT_OK_AND_ASSIGN(TopKKernelConfig config, Config(spec));
@@ -313,7 +351,7 @@ TEST_F(TopKKernelTest, RejectsSpecsOutsideTheLimits) {
 TEST_F(TopKKernelTest, EveryConfigOfTheRuleBuilds) {
   const se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
   int built = 0;
-  for (PrimitiveType type : {F32, BF16}) {
+  for (PrimitiveType type : {F32, BF16, U64}) {
     for (ComparisonOrder order :
          {ComparisonOrder::kTotal, ComparisonOrder::kPartial}) {
       for (int64_t batch : {1, 3, 64, 1000, 24576}) {

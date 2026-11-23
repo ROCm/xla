@@ -143,9 +143,9 @@ class TopKKernelBuilder {
     Value x = ttir::LoadOp::create(b_, Ptrs(input, in_offsets, block), mask,
                                    Zero(in_type, block),
                                    /*isVolatile=*/false);
-    // The merge step loads keys; masked positions are already key 0.
+    // The merge step and U64 inputs load keys; masked positions load key 0.
     Value keys = x;
-    if (kind_ != TopKKernelKind::kMerge) {
+    if (kind_ != TopKKernelKind::kMerge && spec_.input_type != U64) {
       keys = arith::SelectOp::create(b_, mask, Pack(x, col_ids, partial),
                                      Const(i64_, 0, block));
     }
@@ -176,7 +176,10 @@ class TopKKernelBuilder {
     Value indices = args[2];
     Type value_type =
         mlir::cast<ttir::PointerType>(values.getType()).getPointeeType();
-    auto [top_values, top_indices] = Unpack(top, value_type, partial);
+    // U64 outputs keep the keys; the u64 adapter unpacks them.
+    auto [top_values, top_indices] =
+        spec_.input_type == U64 ? std::make_pair(top, UnpackIndex(top, partial))
+                                : Unpack(top, value_type, partial);
     ttir::StoreOp::create(b_, Ptrs(values, out_offsets, out_block), top_values,
                           out_mask, /*ignore_cta=*/false);
     ttir::StoreOp::create(b_, Ptrs(indices, out_offsets, out_block),
@@ -370,6 +373,18 @@ class TopKKernelBuilder {
         arith::ExtUIOp::create(b_, key_type, lo));
   }
 
+  // The index of each key, from its low 32 bits.
+  Value UnpackIndex(Value key, bool partial) {
+    auto shape = mlir::cast<RankedTensorType>(key.getType()).getShape();
+    Value lo = arith::TruncIOp::create(b_, Tensor(i32_, shape), key);
+    if (partial) {
+      return arith::SubIOp::create(
+          b_, Const(i32_, 0x7FFFFFFFu, shape),
+          arith::ShRUIOp::create(b_, lo, Const(i32_, 1, shape)));
+    }
+    return arith::SubIOp::create(b_, Const(i32_, 0xFFFFFFFFu, shape), lo);
+  }
+
   // The inverse of Pack, as BuildUnpackU64ToF32 in topk_specializer.cc.
   std::pair<Value, Value> Unpack(Value key, Type value_type, bool partial) {
     auto shape = mlir::cast<RankedTensorType>(key.getType()).getShape();
@@ -379,13 +394,9 @@ class TopKKernelBuilder {
         b_, i32_tensor,
         arith::ShRUIOp::create(b_, key, Const(i64_, 32, shape)));
     Value one = Const(i32_, 1, shape);
-    Value idx;
+    Value idx = UnpackIndex(key, partial);
     if (partial) {
-      idx = arith::SubIOp::create(b_, Const(i32_, 0x7FFFFFFFu, shape),
-                                  arith::ShRUIOp::create(b_, lo, one));
       hi = arith::SubIOp::create(b_, hi, arith::AndIOp::create(b_, lo, one));
-    } else {
-      idx = arith::SubIOp::create(b_, Const(i32_, 0xFFFFFFFFu, shape), lo);
     }
     // bits = r ^ (((r >>u 31) - 1) | 0x80000000)
     Value bits = arith::XOrIOp::create(
@@ -550,12 +561,22 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> BuildTopKKernel(
       llvm_ir::CreateMlirModuleOp(b.getLoc());
   b.setInsertionPointToEnd(module->getBody());
 
-  Type value_type =
-      spec.input_type == F32 ? Type(b.getF32Type()) : Type(b.getBF16Type());
+  Type value_type;
+  switch (spec.input_type) {
+    case F32:
+      value_type = b.getF32Type();
+      break;
+    case BF16:
+      value_type = b.getBF16Type();
+      break;
+    default:
+      value_type = b.getI64Type();
+      break;
+  }
   Type value_ptr = ttir::PointerType::get(value_type);
   Type index_ptr = ttir::PointerType::get(b.getI32Type());
   llvm::SmallVector<Type> arg_types = {value_ptr, value_ptr, index_ptr};
-  if (kind != TopKKernelKind::kSingle) {
+  if (kind != TopKKernelKind::kSingle || spec.input_type == U64) {
     arg_types.push_back(ttir::PointerType::get(b.getI64Type()));
   }
   auto function_type = b.getFunctionType(arg_types, /*results=*/{});

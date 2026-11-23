@@ -136,7 +136,8 @@ absl::StatusOr<TopKKernelSpec> GetTopKKernelSpec(
 }
 
 absl::Status CheckTopKKernelLimits(const TopKKernelSpec& spec) {
-  if (spec.input_type != F32 && spec.input_type != BF16) {
+  if (spec.input_type != F32 && spec.input_type != BF16 &&
+      spec.input_type != U64) {
     return InvalidArgument(
         "unsupported type %s",
         primitive_util::LowercasePrimitiveTypeName(spec.input_type));

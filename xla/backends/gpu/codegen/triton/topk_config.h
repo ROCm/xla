@@ -36,7 +36,9 @@ limitations under the License.
 namespace xla::gpu {
 
 // What a Triton TopK kernel computes: the `k` largest elements of each of the
-// `batch` rows of `n` elements, in the given comparison order.
+// `batch` rows of `n` elements, in the given comparison order. An F32 or BF16
+// input holds the values; a U64 input holds the keys of the stable TopK u64
+// adapter, which already order the elements in `order`.
 struct TopKKernelSpec {
   PrimitiveType input_type;
   ComparisonOrder order;
@@ -90,8 +92,8 @@ struct TopKKernelConfig {
 absl::StatusOr<TopKKernelSpec> GetTopKKernelSpec(
     const HloCustomCallInstruction& topk);
 
-// Checks what the kernels support regardless of the device: f32 or bf16, TOTAL
-// or PARTIAL order, batch >= 1, 1 <= k <= 128, n < 2^31 and k/n < 0.85.
+// Checks what the kernels support regardless of the device: f32, bf16 or u64,
+// TOTAL or PARTIAL order, batch >= 1, 1 <= k <= 128, n < 2^31 and k/n < 0.85.
 absl::Status CheckTopKKernelLimits(const TopKKernelSpec& spec);
 
 // Picks the configuration of the first kernel for `spec` on `device`: kSingle

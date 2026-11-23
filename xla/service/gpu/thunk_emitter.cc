@@ -1686,11 +1686,21 @@ Future<ThunkSequence> ThunkEmitter::EmitTritonTopK(
 
   const int64_t scratch_elements = GetTopKScratchElements(spec, *config);
   const int64_t num_outputs = instr->shape().tuple_shapes().size();
-  if (scratch_elements == 0
-          ? num_outputs != 2
-          : num_outputs != 3 ||
-                instr->shape().tuple_shapes(2) !=
-                    ShapeUtil::MakeShape(U64, {scratch_elements})) {
+  if (spec.input_type == U64) {
+    // The u64 adapter's TopK always has a scratch output, in bytes.
+    if (num_outputs != 3 ||
+        instr->shape().tuple_shapes(2) !=
+            ShapeUtil::MakeShape(U8, {scratch_elements * 8})) {
+      return absl::InternalError(absl::StrCat(
+          "Triton TopK ", instr->name(), " of u64 adapter keys with ",
+          config->ToString(), " needs a u8[", scratch_elements * 8,
+          "] scratch output, but has shape ", instr->shape().ToString()));
+    }
+  } else if (scratch_elements == 0
+                 ? num_outputs != 2
+                 : num_outputs != 3 ||
+                       instr->shape().tuple_shapes(2) !=
+                           ShapeUtil::MakeShape(U64, {scratch_elements})) {
     return absl::InternalError(absl::StrCat(
         "Triton TopK ", instr->name(), " with ", config->ToString(),
         " needs a u64[", scratch_elements, "] scratch output only for ",

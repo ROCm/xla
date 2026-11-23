@@ -37,6 +37,11 @@ namespace xla::gpu {
 //    Arguments as kChunk.
 // The arguments are the custom call's buffers in their order.
 //
+// For a U64 input, the elements already are the u64 adapter's keys: the kernels
+// select among them, write the selected keys as values and decode only the
+// indices. kSingle then also takes the adapter's scratch output as a fourth,
+// unused argument.
+//
 // Each element gets the 64-bit priority key of BuildPackF32ToU64 in
 // topk_specializer.cc, bit for bit: an order-preserving form of the value in
 // the high 32 bits and a reversed index in the low 32 bits. All keys of a row

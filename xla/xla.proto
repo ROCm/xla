@@ -2093,7 +2093,12 @@ message DebugOptions {
   // that the Triton TopK kernels support, faster or not.
   optional bool xla_gpu_experimental_force_triton_topk = 588;
 
-  // Next id: 589
+  // Test only. With xla_gpu_experimental_force_triton_topk, routes the TopKs
+  // through the stable TopK u64 adapter (pack, u64 Triton TopK, unpack) instead
+  // of the Triton TopK kernels on the original values.
+  optional bool xla_gpu_experimental_triton_topk_u64_adapter = 589;
+
+  // Next id: 590
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

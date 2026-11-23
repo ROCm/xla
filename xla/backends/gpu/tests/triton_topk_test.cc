@@ -117,11 +117,13 @@ class TritonTopKTest : public HloPjRtGpuTestBase {
     }
   }
 
-  HloModuleConfig ConfigWithTritonTopK(bool triton) const {
+  HloModuleConfig ConfigWithTritonTopK(bool triton,
+                                       bool u64_adapter = false) const {
     HloModuleConfig config = GetModuleConfigForTest();
     DebugOptions& options = config.mutable_debug_options();
     options.set_xla_gpu_experimental_enable_triton_topk(triton);
     options.set_xla_gpu_experimental_force_triton_topk(triton);
+    options.set_xla_gpu_experimental_triton_topk_u64_adapter(u64_adapter);
     return config;
   }
 
@@ -318,16 +320,17 @@ class TritonTopKGridTest : public TritonTopKTest,
   // config fits on this GPU, such as k = 128 over 2^20 keys with 32-wide
   // wavefronts, must keep the default path.
   absl::StatusOr<std::unique_ptr<OpaqueExecutable>> CompileForced(
-      absl::string_view hlo) {
+      absl::string_view hlo, bool u64_adapter = false) {
     const GridCase& c = GetParam();
     const TopKKernelSpec spec{c.type, ComparisonOrder::kTotal,
                               std::max<int64_t>(c.shape.batch, 1), c.shape.n,
                               c.shape.k};
+    const HloModuleConfig config = ConfigWithTritonTopK(true, u64_adapter);
     if (GetTopKKernelConfig(spec, device_description()).has_value()) {
-      return CompileWithTritonTopK(hlo);
+      return CompileWithTritonTopK(hlo, config);
     }
     ABSL_ASSIGN_OR_RETURN(std::unique_ptr<OpaqueExecutable> executable,
-                          Compile(hlo, ConfigWithTritonTopK(true)));
+                          Compile(hlo, config));
     ABSL_ASSIGN_OR_RETURN(const HloModule* optimized,
                           test_runner().HloModuleFromWrapped(executable.get()));
     for (const HloComputation* computation : optimized->computations()) {
@@ -355,6 +358,20 @@ TEST_P(TritonTopKGridTest, StableMatchesTheDefaultPathBitwise) {
   ASSERT_OK_AND_ASSIGN(Literal expected,
                        Run(default_path.get(), Pointers(args)));
   ASSERT_OK_AND_ASSIGN(Literal actual, Run(triton.get(), Pointers(args)));
+  EXPECT_TRUE(LiteralTestUtil::Equal(expected, actual));
+}
+
+TEST_P(TritonTopKGridTest, U64AdapterMatchesTheDefaultPathBitwise) {
+  const GridCase& c = GetParam();
+  const std::string hlo = TopKHlo(c.type, c.shape, "TOTAL", /*stable=*/true);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> adapter,
+                       CompileForced(hlo, /*u64_adapter=*/true));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> default_path,
+                       Compile(hlo, ConfigWithTritonTopK(false)));
+  ASSERT_OK_AND_ASSIGN(std::vector<Literal> args, FakeArguments(hlo));
+  ASSERT_OK_AND_ASSIGN(Literal expected,
+                       Run(default_path.get(), Pointers(args)));
+  ASSERT_OK_AND_ASSIGN(Literal actual, Run(adapter.get(), Pointers(args)));
   EXPECT_TRUE(LiteralTestUtil::Equal(expected, actual));
 }
 
@@ -800,6 +817,38 @@ TEST_P(TritonTopKEquivalenceTest, MatchesTheU64AdapterBitwise) {
 
 INSTANTIATE_TEST_SUITE_P(TritonTopKEquivalence, TritonTopKEquivalenceTest,
                          ::testing::ValuesIn(SpecialCases(false)),
+                         SpecialCaseName);
+
+// ---- The u64 adapter path equals the Triton kernels on the values ----------
+
+class TritonTopKU64AdapterTest
+    : public TritonTopKTest,
+      public ::testing::WithParamInterface<SpecialCase> {};
+
+// Signaling NaNs are left out, as for the adapter equivalence above.
+TEST_P(TritonTopKU64AdapterTest, MatchesTheKernelsOnTheValuesBitwise) {
+  const SpecialCase& c = GetParam();
+  if (!FitsTritonTopK(c.type, c.shape)) {
+    GTEST_SKIP() << "No Triton TopK kernel config fits this GPU.";
+  }
+  const std::string hlo =
+      TopKHlo(c.type, c.shape, c.partial ? "PARTIAL" : "TOTAL",
+              /*stable=*/true);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> values,
+                       CompileWithTritonTopK(hlo));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<OpaqueExecutable> adapter,
+      CompileWithTritonTopK(hlo,
+                            ConfigWithTritonTopK(true, /*u64_adapter=*/true)));
+  Literal input = c.type == F32 ? MakeInputLiteral<float>(c, false)
+                                : MakeInputLiteral<bfloat16>(c, false);
+  ASSERT_OK_AND_ASSIGN(Literal expected, Run(values.get(), {&input}));
+  ASSERT_OK_AND_ASSIGN(Literal actual, Run(adapter.get(), {&input}));
+  EXPECT_TRUE(LiteralTestUtil::Equal(expected, actual));
+}
+
+INSTANTIATE_TEST_SUITE_P(TritonTopKU64Adapter, TritonTopKU64AdapterTest,
+                         ::testing::ValuesIn(SpecialCases(true)),
                          SpecialCaseName);
 
 }  // namespace

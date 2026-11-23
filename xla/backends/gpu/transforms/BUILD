@@ -4046,6 +4046,7 @@ xla_cc_test(
     deps = [
         ":topk_specializer",
         "//xla:comparison_util",
+        "//xla:xla_data_proto_cc",
         "//xla:xla_proto_cc",
         "//xla/backends/gpu/codegen/triton:topk_config",
         "//xla/hlo/ir:hlo",
