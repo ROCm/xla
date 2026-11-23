@@ -1,0 +1,247 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+#
+# Shared by rocm_infra_monitor.yml's `debug` job and rocm_infra_agent.yml's
+# `respond_to_mention` job: both do the exact same mechanical setup around
+# a differently-parameterized Claude Code skill invocation - check whether
+# this was already acted on, check out the failing commit, populate
+# missing build tools, fetch this repo's own .claude/ config, start the
+# rocmless sidecar, invoke claude-code-action, upload any patch it
+# produced, tear the container down. A reusable `workflow_call` keeps that
+# in one place instead of two near-identical copies.
+#
+# Patch handoff: a reusable workflow call runs as its own job, with no
+# filesystem shared with the calling workflow's other jobs - unlike a
+# single job's own sequential steps (which is how this worked before this
+# was split out), there's no "just read the file the previous step wrote"
+# option here. If the invoked skill ends up writing /tmp/claude_fix.patch
+# (plus /tmp/claude_pr_title.txt and /tmp/claude_pr_body.txt), this
+# uploads them as an artifact under `inputs.artifact_name`, scoped to the
+# whole calling workflow run, for a later job in the caller to download
+# and apply. Callers that never produce a patch (debug-nightly-failure
+# doesn't) simply omit `artifact_name`.
+
+name: Claude Issue Triage
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: 'Repo the failing commit lives in (almost always openxla/xla)'
+        required: true
+        type: string
+      head_sha:
+        description: 'The exact commit that failed, to check out'
+        required: true
+        type: string
+      debug_pipeline_ref:
+        description: "Branch to fetch this repo's own .claude/ config from"
+        required: true
+        type: string
+      comment_url:
+        description: 'The tracking-issue comment this run may edit - only its trailing numeric ID is used, to check already_handled_marker before doing anything expensive'
+        required: true
+        type: string
+      already_handled_marker:
+        description: 'Exact HTML comment marker string - if already present in the comment body, this run does nothing'
+        required: true
+        type: string
+      claude_step_name:
+        description: 'Display name for the claude-code-action step (and this called job)'
+        required: true
+        type: string
+      prompt:
+        description: 'Full prompt text for claude-code-action'
+        required: true
+        type: string
+      allowed_tools:
+        description: 'Value for --allowedTools'
+        required: true
+        type: string
+      max_turns:
+        required: true
+        type: number
+      claude_timeout_minutes:
+        description: 'Timeout for the claude-code-action step specifically'
+        required: true
+        type: number
+      job_timeout_minutes:
+        description: 'Timeout for the whole job - covers an actual build/test attempt, not just triage'
+        required: true
+        type: number
+      artifact_name:
+        description: 'If set, upload /tmp/claude_fix.patch (+ pr_title/pr_body) under this name when non-empty. Leave unset for skills that never produce a patch.'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  invoke:
+    name: ${{ inputs.claude_step_name }}
+    runs-on: build-only-xla
+    timeout-minutes: ${{ inputs.job_timeout_minutes }}
+    # No job-level container: claude_auto_review.yml (also on build-only-xla)
+    # runs claude-code-action straight on the bare host - only the actual
+    # bazel/run_xla_ci_build.sh invocations the skill runs need the
+    # rocmless toolchain, reached via `docker exec rocmless-debug
+    # <command>`, not a job-level container wrapping claude-code-action
+    # itself. See rocm_infra_monitor.yml's git history for the fuller
+    # rationale (self-hosted-runner container-exec quirks this avoids).
+    steps:
+      # Guards against acting on the same signature/instruction twice: the
+      # caller's own collect script already checks this before queuing,
+      # but this re-verifies right before doing anything expensive, in
+      # case of an overlapping run or a manual re-dispatch.
+      - name: Check whether this was already acted on
+        id: already_handled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COMMENT_ID=$(echo "${{ inputs.comment_url }}" | grep -oE '[0-9]+$')
+          BODY=$(gh api "/repos/ROCm/xla/issues/comments/${COMMENT_ID}" --jq '.body')
+          if printf '%s' "$BODY" | grep -qF '${{ inputs.already_handled_marker }}'; then
+            echo "Already acted on - skipping" >&2
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Already handled, nothing to do
+        if: steps.already_handled.outputs.skip == 'true'
+        run: echo "Already acted on - skipping this run."
+
+      # This is the exact commit the failing job itself checked out -
+      # covers both the scheduled nightly (openxla/xla@main-at-the-time)
+      # and a pull_request_target-triggered run (the PR's own
+      # fork/branch), or, for respond_to_mention, whatever commit the
+      # original failure was detected against.
+      - name: Checkout the commit that failed
+        if: steps.already_handled.outputs.skip != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.head_sha }}
+          persist-credentials: false
+
+      - name: Populate missing upstream ROCm build tools
+        if: steps.already_handled.outputs.skip != 'true' && hashFiles('build_tools/rocm/run_xla_ci_build.sh') == ''
+        run: |
+          tmpdir="$(mktemp -d)"
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/openxla/xla.git "$tmpdir"
+          git -C "$tmpdir" sparse-checkout set build_tools/rocm
+          cp -a "$tmpdir/build_tools/rocm/." build_tools/rocm/
+
+      # The checked-out commit may be from openxla/xla or an arbitrary
+      # historical ROCm/xla commit, neither of which is guaranteed to carry
+      # the skills this pipeline invokes - they only live in this repo's
+      # .claude/ directory. Overlay from debug_pipeline_ref (the branch the
+      # calling workflow run is testing/running from), the same way
+      # claude_auto_review.yml does for the PR review skills, so a PR
+      # touching a skill exercises its own version of it.
+      - name: Fetch .claude config from ${{ inputs.debug_pipeline_ref }}
+        if: steps.already_handled.outputs.skip != 'true'
+        run: |
+          git remote add rocm-xla https://github.com/ROCm/xla.git
+          git fetch rocm-xla "${{ inputs.debug_pipeline_ref }}"
+          # FETCH_HEAD is a single top-level ref (refs/FETCH_HEAD), not
+          # namespaced under the remote name - "rocm-xla/FETCH_HEAD" is not
+          # a valid ref.
+          git restore --source=FETCH_HEAD --worktree -- .claude
+          find .claude -type f | sort
+
+      # Only the actual bazel/run_xla_ci_build.sh invocations a skill runs
+      # need the rocmless toolchain - start it here as a long-lived sidecar
+      # reached via `docker exec rocmless-debug <command>`. The workspace
+      # is bind-mounted at the identical path, so files a skill
+      # creates/reads directly on the host (BUILD files, gdb scripts,
+      # bazel-testlogs output) are visible inside the container with no
+      # extra copying.
+      - name: Start rocmless container
+        if: steps.already_handled.outputs.skip != 'true'
+        run: |
+          docker run -d --name rocmless-debug \
+            -v "$(pwd)":"$(pwd)" -w "$(pwd)" \
+            -v /data/temp-rbe-cert.crt:/data/temp-rbe-cert.crt:ro \
+            -v /data/temp-rbe-cert.key:/data/temp-rbe-cert.key:ro \
+            -v /data/bb-rbe-ca.crt:/data/bb-rbe-ca.crt:ro \
+            -v /data/bb-rbe-client.key:/data/bb-rbe-client.key:ro \
+            -v /data/bb-rbe-client.crt:/data/bb-rbe-client.crt:ro \
+            ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f \
+            sleep infinity
+
+      - name: ${{ inputs.claude_step_name }}
+        if: steps.already_handled.outputs.skip != 'true'
+        id: claude-code
+        timeout-minutes: ${{ inputs.claude_timeout_minutes }}
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          ANTHROPIC_CUSTOM_HEADERS: |
+            Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}
+            user: ${{ secrets.USER_NTID }}
+          ANTHROPIC_MODEL: "Claude-Opus-5.5"
+          ANTHROPIC_DEFAULT_OPUS_MODEL: "Claude-Opus-5.5"
+          ANTHROPIC_DEFAULT_SONNET_MODEL: "Claude-Sonnet-4.6"
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "Claude-Haiku-4.5"
+          # The triggering actor is github-actions[bot] (schedule) or a PR
+          # author (pull_request) or a repo collaborator (issue_comment),
+          # never a human reviewer acting through claude-code-action's own
+          # review flow - this token is only ever used for comment
+          # edits/labels and (for respond_to_mention's caller) `gh pr
+          # create` against an already-pushed branch.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          anthropic_api_key: "sk-ant-dummy-gateway-key"
+          allowed_bots: "github-actions[bot]"
+          show_full_output: true
+          prompt: ${{ inputs.prompt }}
+          claude_args: |
+            --allowedTools "${{ inputs.allowed_tools }}"
+            --max-turns ${{ inputs.max_turns }}
+          settings: |
+            {
+              "hasCompletedOnboarding": true
+            }
+          # No separate "Upload Claude Execution Log" artifact step: with
+          # show_full_output above, the full trace is already in this
+          # step's own console log, inspectable via `gh api
+          # .../jobs/<id>/logs` - an uploaded copy is redundant. It also
+          # kept hitting a systemic self-hosted-runner bug
+          # (actions/upload-artifact's include-hidden-files boolean input
+          # not surviving the custom container-exec path), with no
+          # escape-hatch input to route around it.
+
+      # Deterministic, not agent-run: the invoked skill never commits,
+      # pushes, or opens a PR itself (Claude Code's own Bash permission
+      # check rejects any command referencing a token it can't verify
+      # ahead of time) - it only ever leaves a patch file plus a PR
+      # title/body behind if it ends up with something verified to apply.
+      # A later job in the calling workflow does the actual git/gh work,
+      # entirely outside the agent - this just hands the files over.
+      - name: Upload patch artifact, if one was produced
+        if: steps.already_handled.outputs.skip != 'true' && inputs.artifact_name != ''
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: |
+            /tmp/claude_fix.patch
+            /tmp/claude_pr_title.txt
+            /tmp/claude_pr_body.txt
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Stop rocmless container
+        if: always()
+        run: docker rm -f rocmless-debug || true

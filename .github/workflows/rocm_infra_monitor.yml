@@ -62,15 +62,14 @@ on:
   pull_request:
     paths:
       - ".github/workflows/rocm_infra_monitor.yml"
+      - ".github/workflows/claude_issue_triage.yml"
       - "build_tools/rocm/get_last_pipeline_run.sh"
       - "build_tools/rocm/get_monitoring_window.sh"
       - "build_tools/rocm/get_runs_since.sh"
       - "build_tools/rocm/collect_run_failures.sh"
       - "build_tools/rocm/create_infra_error_issue.sh"
       - "build_tools/rocm/collect_claude_debug_targets.sh"
-      - "build_tools/rocm/collect_claude_verify_targets.sh"
       - ".claude/skills/debug-nightly-failure/SKILL.md"
-      - ".claude/skills/verify-proposed-fix/SKILL.md"
 
 jobs:
   monitor:
@@ -173,548 +172,67 @@ jobs:
   debug:
     # issue_number is shared by every matrix entry (one tracking issue for
     # everything), so the job/step signature is what actually identifies
-    # this entry.
+    # this entry. build-only-xla (inside the called workflow), not a GPU
+    # runner: it's the only pool with network access to the LLM gateway
+    # (amd-do-linux-xla-gpu-gfx950-dpx-4 can't resolve/reach
+    # ANTHROPIC_BASE_URL) - the debug skill must force GPU test execution
+    # onto a remote RBE worker instead (--strategy=TestRunner=remote,local
+    # - see SKILL.md).
     name: "Debug: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
     needs: monitor
     if: needs.monitor.outputs.new_failures != '[]'
-    # build-only-xla, not a GPU runner: it's the only pool with network
-    # access to the LLM gateway (amd-do-linux-xla-gpu-gfx950-dpx-4 can't
-    # resolve/reach ANTHROPIC_BASE_URL). Since this node has no local GPU,
-    # the debug skill must force GPU test execution onto a remote RBE
-    # worker instead (--strategy=TestRunner=remote,local) - see SKILL.md.
-    runs-on: build-only-xla
-    # The 5-minute analysis cap (see the "Debug Nightly Failure" step and
-    # SKILL.md) only covers triage/code-reading, not an actual bazel
-    # build+test - that can legitimately take much longer, so the job's own
-    # ceiling is sized to allow one real build attempt afterward, not to
-    # reintroduce the near-2-hour runs this used to allow.
-    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.monitor.outputs.new_failures) }}
-    # No job-level container: claude_auto_review.yml (also on build-only-xla)
-    # runs claude-code-action straight on the bare host with none of the
-    # workarounds this job used to need (no custom gh/jq/bun install, no
-    # "Trust the checked-out workspace" safe.directory fix, no
-    # continue-on-error on actions/upload-artifact) - those were all side
-    # effects of this self-hosted runner's custom container-exec
-    # implementation mishandling things (hyphenated boolean input names,
-    # per-step UID/ownership) specifically for job-level `container:` steps,
-    # not of the runner itself. Only the actual bazel/run_xla_ci_build.sh
-    # invocations need the rocmless toolchain, so those run via `docker exec`
-    # against a container the "Start rocmless container" step launches
-    # below - everything else (checkout, git, gh, Claude itself) runs
-    # directly on the host, same as claude_auto_review.yml.
+    uses: ./.github/workflows/claude_issue_triage.yml
+    with:
+      repository: ${{ matrix.repository }}
+      head_sha: ${{ matrix.head_sha }}
+      debug_pipeline_ref: ${{ env.DEBUG_PIPELINE_REF }}
+      comment_url: ${{ matrix.detection_comment_url }}
+      already_handled_marker: "<!-- rocm-nightly-claude-debug:${{ matrix.job_name }} / ${{ matrix.step_name }} -->"
+      claude_step_name: Debug Nightly Failure
+      # The 5-minute analysis cap mentioned below only covers
+      # triage/code-reading, not an actual bazel build+test - that can
+      # legitimately take much longer, so job_timeout_minutes is sized to
+      # allow one real build attempt afterward, not to reintroduce the
+      # near-2-hour runs this used to allow. claude_timeout_minutes is NOT
+      # that 5-minute cap either, for the same reason - it bounds the whole
+      # step including an actual build+test attempt.
+      job_timeout_minutes: 35
+      claude_timeout_minutes: 30
+      max_turns: 60
+      allowed_tools: "Skill,Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(gh search prs *),Bash(gh pr diff *),Bash(gh pr view *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
+      prompt: |
+        CI REPO (for job logs / issue comments): ROCm/xla
+        SOURCE REPO (already checked out in the working directory): ${{ matrix.repository }}
+        HEAD SHA (already checked out): ${{ matrix.head_sha }}
+        NIGHTLY RUN ID: ${{ matrix.run_id }}
+        FAILING JOB ID: ${{ matrix.job_id }}
+        FAILING JOB NAME: ${{ matrix.job_name }}
+        FAILED STEP: ${{ matrix.step_name }}
+        FAILING JOB URL: ${{ matrix.failure_url }}
+        TRACKING ISSUE NUMBER (in ROCm/xla): ${{ matrix.issue_number }}
+        DETECTION COMMENT URL (quote this in your report): ${{ matrix.detection_comment_url }}
 
-    steps:
-      # Guards against debugging the same failure signature twice: a
-      # re-dispatched matrix entry, a manually re-run job, or two
-      # overlapping monitor runs could otherwise all redo the same work.
-      # collect_claude_debug_targets.sh already checks this before queuing,
-      # but this check re-verifies against THIS signature specifically
-      # right before doing anything expensive. The skill never posts a new
-      # comment - it edits the detection comment itself (matrix entry's
-      # detection_comment_url) in place, appending this exact,
-      # signature-specific marker somewhere into its body once the analysis
-      # is complete (see SKILL.md Step 7) - so check that one comment
-      # directly rather than paginating over every comment on the issue.
-      - name: Check whether this signature was already debugged
-        id: already_debugged
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          COMMENT_ID=$(echo "${{ matrix.detection_comment_url }}" | grep -oE '[0-9]+$')
-          MARKER='<!-- rocm-nightly-claude-debug:${{ matrix.job_name }} / ${{ matrix.step_name }} -->'
-          BODY=$(gh api "/repos/ROCm/xla/issues/comments/${COMMENT_ID}" --jq '.body')
-          if printf '%s' "$BODY" | grep -qF "$MARKER"; then
-            echo "This signature already has a debug report in the detection comment - skipping" >&2
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
+        Note: this tracking issue is shared by many unrelated failures -
+        your report must quote the detection comment above so readers
+        can tell which occurrence it addresses.
 
-      - name: Already debugged, nothing to do
-        if: steps.already_debugged.outputs.skip == 'true'
-        run: echo "${{ matrix.job_name }} / ${{ matrix.step_name }} was already debugged - skipping this run."
+        Your triage/analysis (SKILL.md Steps 1-3, before any build) is
+        hard-capped at 5 minutes - time spent on an actual bazel
+        build/test afterward doesn't count against that, but the whole
+        run still has to fit this step's own timeout. Run the
+        /debug-nightly-failure skill, using the values above as its
+        arguments: CI repo, run ID, job ID, job name, step name, failure
+        URL, issue number, detection comment URL, in that order. The
+        skill is responsible for a quick triage and root-cause estimate
+        first, a real reproduction only if that leaves enough of the
+        remaining budget to also report on it, and for editing its
+        findings directly into the detection comment via
+        `gh api -X PATCH .../issues/comments/<id>`. Never post a new
+        comment on the tracking issue, and do not post anything to
+        GitHub yourself outside of what the skill does.
+    secrets: inherit
 
-      # This is the exact commit the failing job itself checked out - see
-      # collect_claude_debug_targets.sh for how `repository`/`head_sha` are
-      # derived from the monitored run (head_repository/head_sha), which
-      # covers both the scheduled nightly (openxla/xla@main-at-the-time) and
-      # a pull_request_target-triggered run (the PR's own fork/branch).
-      - name: Checkout the commit that failed
-        if: steps.already_debugged.outputs.skip != 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ matrix.repository }}
-          ref: ${{ matrix.head_sha }}
-          persist-credentials: false
-
-      - name: Populate missing upstream ROCm build tools
-        if: steps.already_debugged.outputs.skip != 'true' && hashFiles('build_tools/rocm/run_xla_ci_build.sh') == ''
-        run: |
-          tmpdir="$(mktemp -d)"
-          git clone --depth 1 --filter=blob:none --sparse https://github.com/openxla/xla.git "$tmpdir"
-          git -C "$tmpdir" sparse-checkout set build_tools/rocm
-          cp -a "$tmpdir/build_tools/rocm/." build_tools/rocm/
-
-      # The checked-out commit may be from openxla/xla or an arbitrary
-      # historical ROCm/xla commit, neither of which is guaranteed to carry
-      # the debug skill - it only lives in this repo's .claude/ directory.
-      # Overlay it from DEBUG_PIPELINE_REF (the branch this whole workflow
-      # run is testing/running from - see env above), the same way
-      # claude_auto_review.yml does for the PR review skills, so a PR
-      # touching the skill exercises its own version of it.
-      - name: Fetch .claude config from ${{ env.DEBUG_PIPELINE_REF }}
-        if: steps.already_debugged.outputs.skip != 'true'
-        run: |
-          git remote add rocm-xla https://github.com/ROCm/xla.git
-          git fetch rocm-xla "${{ env.DEBUG_PIPELINE_REF }}"
-          # FETCH_HEAD is a single top-level ref (refs/FETCH_HEAD), not
-          # namespaced under the remote name - "rocm-xla/FETCH_HEAD" is not
-          # a valid ref.
-          git restore --source=FETCH_HEAD --worktree -- .claude
-          find .claude -type f | sort
-
-      # Only the actual bazel/run_xla_ci_build.sh invocations the skill runs
-      # need the rocmless toolchain - start it here as a long-lived sidecar
-      # the skill reaches via `docker exec rocmless-debug <command>`
-      # (SKILL.md), rather than wrapping this whole job (including
-      # claude-code-action itself) in a job-level container. The workspace
-      # is bind-mounted at the identical path, so files the skill
-      # creates/reads directly on the host (BUILD files, gdb scripts,
-      # bazel-testlogs output) are visible inside the container with no
-      # extra copying.
-      - name: Start rocmless container
-        if: steps.already_debugged.outputs.skip != 'true'
-        run: |
-          docker run -d --name rocmless-debug \
-            -v "$(pwd)":"$(pwd)" -w "$(pwd)" \
-            -v /data/temp-rbe-cert.crt:/data/temp-rbe-cert.crt:ro \
-            -v /data/temp-rbe-cert.key:/data/temp-rbe-cert.key:ro \
-            -v /data/bb-rbe-ca.crt:/data/bb-rbe-ca.crt:ro \
-            -v /data/bb-rbe-client.key:/data/bb-rbe-client.key:ro \
-            -v /data/bb-rbe-client.crt:/data/bb-rbe-client.crt:ro \
-            ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f \
-            sleep infinity
-
-      - name: Debug Nightly Failure
-        if: steps.already_debugged.outputs.skip != 'true'
-        id: claude-code
-        # This step's own ceiling is NOT the 5-minute cap - that cap is on
-        # the triage/analysis phase only (Steps 1-3 in SKILL.md), before any
-        # bazel build starts, and is self-enforced by the skill itself since
-        # GitHub Actions has no way to pause a step timeout around a specific
-        # subprocess. This ceiling instead bounds the whole run including an
-        # actual build+test attempt (Step 4+), which can legitimately take a
-        # while - don't let it run for hours, but don't starve a real build.
-        timeout-minutes: 30
-        uses: anthropics/claude-code-action@v1
-        env:
-          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
-          ANTHROPIC_CUSTOM_HEADERS: |
-            Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}
-            user: ${{ secrets.USER_NTID }}
-          ANTHROPIC_MODEL: "Claude-Opus-5.5"
-          ANTHROPIC_DEFAULT_OPUS_MODEL: "Claude-Opus-5.5"
-          ANTHROPIC_DEFAULT_SONNET_MODEL: "Claude-Sonnet-4.6"
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: "Claude-Haiku-4.5"
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          anthropic_api_key: "sk-ant-dummy-gateway-key"
-          # The triggering actor is github-actions[bot] (schedule) or the PR
-          # author via pull_request, neither of which is a human reviewer.
-          allowed_bots: "github-actions[bot]"
-          show_full_output: true
-          prompt: |
-            CI REPO (for job logs / issue comments): ROCm/xla
-            SOURCE REPO (already checked out in the working directory): ${{ matrix.repository }}
-            HEAD SHA (already checked out): ${{ matrix.head_sha }}
-            NIGHTLY RUN ID: ${{ matrix.run_id }}
-            FAILING JOB ID: ${{ matrix.job_id }}
-            FAILING JOB NAME: ${{ matrix.job_name }}
-            FAILED STEP: ${{ matrix.step_name }}
-            FAILING JOB URL: ${{ matrix.failure_url }}
-            TRACKING ISSUE NUMBER (in ROCm/xla): ${{ matrix.issue_number }}
-            DETECTION COMMENT URL (quote this in your report): ${{ matrix.detection_comment_url }}
-
-            Note: this tracking issue is shared by many unrelated failures -
-            your report must quote the detection comment above so readers
-            can tell which occurrence it addresses.
-
-            Your triage/analysis (SKILL.md Steps 1-3, before any build) is
-            hard-capped at 5 minutes - time spent on an actual bazel
-            build/test afterward doesn't count against that, but the whole
-            run still has to fit this step's own timeout. Run the
-            /debug-nightly-failure skill, using the values above as its
-            arguments: CI repo, run ID, job ID, job name, step name, failure
-            URL, issue number, detection comment URL, in that order. The
-            skill is responsible for a quick triage and root-cause estimate
-            first, a real reproduction only if that leaves enough of the
-            remaining budget to also report on it, and for editing its
-            findings directly into the detection comment via
-            `gh api -X PATCH .../issues/comments/<id>`. Never post a new
-            comment on the tracking issue, and do not post anything to
-            GitHub yourself outside of what the skill does.
-          claude_args: |
-            --allowedTools "Skill,Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(gh search prs *),Bash(gh pr diff *),Bash(gh pr view *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
-            --max-turns 60
-          settings: |
-            {
-              "hasCompletedOnboarding": true
-            }
-          # No separate "Upload Claude Execution Log" artifact step: with
-          # show_full_output above, the full trace is already in this step's
-          # own console log (exactly how every debug run in this pipeline
-          # has been inspected so far, via `gh api .../jobs/<id>/logs`) - an
-          # uploaded copy is redundant. It also kept hitting the same
-          # systemic self-hosted-runner bug as the earlier setup-bun crash
-          # (actions/upload-artifact's include-hidden-files boolean input
-          # not surviving the custom container-exec path), with no
-          # escape-hatch input to route around it.
-
-      - name: Stop rocmless container
-        if: always()
-        run: docker rm -f rocmless-debug || true
-
-  collect_verify_targets:
-    # Independent of `monitor`: a human can react 🚀 on a comment analyzed
-    # days ago, so every run rescans the whole tracking issue for that
-    # reaction rather than only this window's newly-detected failures.
-    # Doesn't depend on (or feed) `monitor`'s own matrix.
-    name: Find proposed fixes to verify
-    runs-on: ubuntu-latest
-    outputs:
-      # A JSON array of {issue_number, comment_id, comment_url, job_name,
-      # step_name, repository, head_sha, failure_url, run_id, job_id} - one
-      # per 🚀-reacted comment that hasn't already been verified. "[]" means
-      # nothing to verify this run. See collect_claude_verify_targets.sh.
-      verify_targets: ${{ steps.collect.outputs.verify_targets }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.DEBUG_PIPELINE_REF }}
-          persist-credentials: false
-
-      - name: Find the tracking issue and collect 🚀-reacted fixes
-        id: collect
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          ISSUE_NUMBER=$(build_tools/rocm/create_infra_error_issue.sh)
-          TARGETS=$(build_tools/rocm/collect_claude_verify_targets.sh "${ISSUE_NUMBER}")
-          echo "verify_targets=${TARGETS}" >> "$GITHUB_OUTPUT"
-
-  verify:
-    name: "Verify fix: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
-    needs: collect_verify_targets
-    if: needs.collect_verify_targets.outputs.verify_targets != '[]'
-    # Same runner/sidecar-container rationale as `debug` above
-    # (build-only-xla for LLM gateway access; rocmless-debug sidecar for
-    # the actual bazel/run_xla_ci_build.sh invocations).
-    runs-on: build-only-xla
-    # This job additionally needs to push a branch and open a draft PR,
-    # unlike every other job in this workflow (all read-mostly, aside from
-    # issue/label edits) - scoped here, not at the workflow level, so
-    # `monitor`/`debug` keep their narrower default permissions.
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-      id-token: write
-    # The skill self-caps its own non-build decision-making at 30 minutes
-    # (see SKILL.md) - this ceiling instead bounds the whole run, including
-    # three full build+test cycles (baseline red, with the fix applied,
-    # reverted again), which can legitimately take a long while.
-    timeout-minutes: 180
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJson(needs.collect_verify_targets.outputs.verify_targets) }}
-
-    steps:
-      # Same race-safety reasoning as debug's "already_debugged" check:
-      # collect_claude_verify_targets.sh already checks this before
-      # queuing, but re-verify against this exact signature right before
-      # doing anything expensive, in case of an overlapping run or a
-      # manual re-dispatch.
-      - name: Check whether this fix was already verified
-        id: already_verified
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          MARKER='<!-- rocm-nightly-claude-verify:${{ matrix.job_name }} / ${{ matrix.step_name }} -->'
-          BODY=$(gh api "/repos/ROCm/xla/issues/comments/${{ matrix.comment_id }}" --jq '.body')
-          if printf '%s' "$BODY" | grep -qF "$MARKER"; then
-            echo "This fix was already verified - skipping" >&2
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Already verified, nothing to do
-        if: steps.already_verified.outputs.skip == 'true'
-        run: echo "${{ matrix.job_name }} / ${{ matrix.step_name }} was already verified - skipping this run."
-
-      # persist-credentials: false here too - this repo's existing
-      # push-from-a-workflow precedent (rocm_xla_jax_metrics_nightly.yml)
-      # pushes through an explicit x-access-token remote added at push
-      # time instead of relying on the checkout's own persisted
-      # credential, so the verify skill does the same (see SKILL.md).
-      - name: Checkout the commit that failed
-        if: steps.already_verified.outputs.skip != 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ matrix.repository }}
-          ref: ${{ matrix.head_sha }}
-          persist-credentials: false
-
-      - name: Populate missing upstream ROCm build tools
-        if: steps.already_verified.outputs.skip != 'true' && hashFiles('build_tools/rocm/run_xla_ci_build.sh') == ''
-        run: |
-          tmpdir="$(mktemp -d)"
-          git clone --depth 1 --filter=blob:none --sparse https://github.com/openxla/xla.git "$tmpdir"
-          git -C "$tmpdir" sparse-checkout set build_tools/rocm
-          cp -a "$tmpdir/build_tools/rocm/." build_tools/rocm/
-
-      - name: Fetch .claude config from ${{ env.DEBUG_PIPELINE_REF }}
-        if: steps.already_verified.outputs.skip != 'true'
-        run: |
-          git remote add rocm-xla https://github.com/ROCm/xla.git
-          git fetch rocm-xla "${{ env.DEBUG_PIPELINE_REF }}"
-          git restore --source=FETCH_HEAD --worktree -- .claude
-          find .claude -type f | sort
-
-      - name: Start rocmless container
-        if: steps.already_verified.outputs.skip != 'true'
-        run: |
-          docker run -d --name rocmless-debug \
-            -v "$(pwd)":"$(pwd)" -w "$(pwd)" \
-            -v /data/temp-rbe-cert.crt:/data/temp-rbe-cert.crt:ro \
-            -v /data/temp-rbe-cert.key:/data/temp-rbe-cert.key:ro \
-            -v /data/bb-rbe-ca.crt:/data/bb-rbe-ca.crt:ro \
-            -v /data/bb-rbe-client.key:/data/bb-rbe-client.key:ro \
-            -v /data/bb-rbe-client.crt:/data/bb-rbe-client.crt:ro \
-            ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f \
-            sleep infinity
-
-      # The default GITHUB_TOKEN cannot push a brand-new branch into
-      # ROCm/xla: creating a ref requires GitHub to validate whether it
-      # introduces/changes anything under .github/workflows/* - a check
-      # that needs a "workflows" permission scope the standard Actions
-      # token can never carry, regardless of what this job's own
-      # `permissions:` block grants (there is no such scope available to
-      # it). This bit us for real: the first live verify run got
-      # everything right (red->green->red) but failed to push with `POST
-      # /git/refs` -> 403 "Resource not accessible by integration" /
-      # "workflows scope may be required" - even though the fix itself
-      # never touched a workflow file, because that check applies to any
-      # brand-new ref, not just to the commit's own diff. Same root cause
-      # sync_main_mirror.yml already works around with a scoped GitHub App
-      # token - request only `contents`+`workflows` here, the exact same
-      # pair that token already works with there. Asking this App token
-      # for anything more (pull-requests, issues) fails outright: the
-      # installation itself was only ever granted a specific, narrower
-      # permission set, and GitHub validates a token request's scopes
-      # against that atomically - if even one requested scope exceeds what
-      # the installation has, the whole request is rejected with a 422
-      # ("level of access... not granted to this installation"), which is
-      # exactly what requesting pull-requests/issues on top of this hit.
-      # `gh pr create` doesn't need this token anyway: opening a PR against
-      # an already-pushed branch is a plain pull-requests:write operation
-      # with no workflows-scope involved, and the job's own `permissions:`
-      # block already grants that to the default GITHUB_TOKEN - so only the
-      # one `git push` below uses this App token, everything else
-      # (comment edits, labels, the PR itself) keeps using the default one.
-      - name: Create GitHub App token for the branch push only
-        if: steps.already_verified.outputs.skip != 'true'
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ secrets.ROCM_REPO_MANAGEMENT_APP_CLIENT_ID }}
-          private-key: ${{ secrets.ROCM_REPO_MANAGEMENT_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          permission-workflows: write
-
-      # Claude's own Bash tool refuses to run any command containing a
-      # shell variable it can't verify is safe before running it - this
-      # isn't a GitHub permission problem, it's Claude Code's own
-      # permission engine, and it applies even to variables the workflow
-      # itself injected via `env:`. Confirmed in production: embedding a
-      # token directly in the skill's own `git remote add ...` command got
-      # rejected outright ("A variable in braces in this command can't be
-      # checked before it runs"). That's exactly why the skill no longer
-      # pushes or opens the PR itself at all - it only ever writes a patch
-      # file (see its Step 5) for the later, deterministic "Apply verified
-      # patch and open PR" step below to use. This rewrite configures the
-      # credential that later step needs, here, in a plain workflow step
-      # (not an agent Bash tool call, so none of the restriction above
-      # applies) - any `git push`/`git remote add .../ROCm/xla.git` from
-      # here on in this job is transparently authenticated without any
-      # token, or any variable at all, appearing in anyone's command text.
-      - name: Configure git to authenticate pushes to ROCm/xla
-        if: steps.already_verified.outputs.skip != 'true'
-        run: |
-          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/ROCm/xla.git".insteadOf "https://github.com/ROCm/xla.git"
-
-      - name: Verify Proposed Fix
-        if: steps.already_verified.outputs.skip != 'true'
-        id: claude-code
-        timeout-minutes: 175
-        uses: anthropics/claude-code-action@v1
-        env:
-          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
-          ANTHROPIC_CUSTOM_HEADERS: |
-            Ocp-Apim-Subscription-Key: ${{ secrets.LLM_GATEWAY_KEY }}
-            user: ${{ secrets.USER_NTID }}
-          ANTHROPIC_MODEL: "Claude-Opus-5.5"
-          ANTHROPIC_DEFAULT_OPUS_MODEL: "Claude-Opus-5.5"
-          ANTHROPIC_DEFAULT_SONNET_MODEL: "Claude-Sonnet-4.6"
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: "Claude-Haiku-4.5"
-          # Default token: comment edits, labels, and `gh pr create` - all
-          # plain contents/issues/pull-requests operations this job's own
-          # `permissions:` block already covers.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          anthropic_api_key: "sk-ant-dummy-gateway-key"
-          allowed_bots: "github-actions[bot]"
-          show_full_output: true
-          prompt: |
-            CI REPO (for job logs / issue comments / where the PR goes): ROCm/xla
-            SOURCE REPO (already checked out in the working directory): ${{ matrix.repository }}
-            HEAD SHA (already checked out): ${{ matrix.head_sha }}
-            NIGHTLY RUN ID: ${{ matrix.run_id }}
-            FAILING JOB ID: ${{ matrix.job_id }}
-            FAILING JOB NAME: ${{ matrix.job_name }}
-            FAILED STEP: ${{ matrix.step_name }}
-            FAILING JOB URL: ${{ matrix.failure_url }}
-            TRACKING ISSUE NUMBER (in ROCm/xla): ${{ matrix.issue_number }}
-            COMMENT URL (the proposed fix lives in here, folded; edit this
-            same comment with your verdict - never post a new one):
-            ${{ matrix.comment_url }}
-
-            A human reacted 🚀 on the comment above, asking you to actually
-            try the fix it already proposed (not to re-analyze the failure
-            from scratch). Run the /verify-proposed-fix skill, using the
-            values above as its arguments: CI repo, issue number, comment
-            URL, job name, step name, repository, head SHA, failure URL, in
-            that order. The skill self-caps its own non-build
-            decision-making at 30 minutes - time spent on the actual
-            reproduce/apply/revert build+test cycles doesn't count against
-            that, but the whole run still has to fit this step's own
-            timeout. The skill is responsible for the whole
-            reproduce-apply-revert verification and for editing its verdict
-            directly into the comment above via
-            `gh api -X PATCH .../issues/comments/<id>`. It never commits,
-            pushes, or opens a PR itself - if the fix verifies, it only
-            writes out a patch file plus a PR title/body for a later,
-            deterministic workflow step to apply and turn into a draft PR.
-            Never post a new comment on the tracking issue, and do not post
-            anything to GitHub yourself outside of what the skill does.
-          claude_args: |
-            --allowedTools "Skill,Bash(gh issue edit *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
-            --max-turns 100
-          settings: |
-            {
-              "hasCompletedOnboarding": true
-            }
-
-      # Deterministic, not agent-run: the skill above never commits,
-      # pushes, or opens the PR itself (Claude Code's own Bash permission
-      # check rejects any command referencing a token it can't verify
-      # ahead of time - see the skill's Step 5). It only leaves a patch
-      # file plus a PR title/body behind if the fix verified. This step
-      # does the actual git/gh work from that patch, entirely outside the
-      # agent, so none of that restriction applies.
-      - name: Apply verified patch and open PR
-        if: steps.already_verified.outputs.skip != 'true'
-        id: open_pr
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -uo pipefail
-          if [ ! -s /tmp/claude_verify_fix.patch ]; then
-            echo "No verified fix to apply - skipping."
-            exit 0
-          fi
-
-          # Derived purely from this step's two real inputs - the commit
-          # and the patch - rather than from job/step name metadata: the
-          # patch hash disambiguates two different verified fixes landing
-          # on the same commit (two unrelated failures at the same
-          # head_sha), which a job/step slug would do too, but this way
-          # the branch name has no dependency on anything beyond what this
-          # step actually consumes.
-          SHA_SHORT=$(echo "${{ matrix.head_sha }}" | cut -c1-7)
-          PATCH_HASH=$(sha256sum /tmp/claude_verify_fix.patch | cut -c1-8)
-          BRANCH="claude/verify-fix/${SHA_SHORT}-${PATCH_HASH}"
-
-          # Base the fix on the exact commit the verify skill actually
-          # tested (matrix.repository@matrix.head_sha - the same commit
-          # "Checkout the commit that failed" checked out earlier in this
-          # job), not on any branch tip. The red->green->red cycle in
-          # verify-proposed-fix only proves the fix works against that one
-          # commit - rebasing onto a later tip (ROCm/xla's or even
-          # openxla/xla's own main) would ship something that was never
-          # actually verified. GitHub allows fetching an arbitrary commit
-          # SHA directly (no need to walk main's history to find it), and
-          # since head_sha only gets older relative to ROCm/xla's main
-          # (kept in sync by sync_upstream.yml) the push below is normally
-          # pushing a commit the remote already has as an ancestor, not a
-          # fresh tip it might not have caught up to yet.
-          WORKDIR=$(mktemp -d)
-          git -C "$WORKDIR" init -q
-          git -C "$WORKDIR" remote add upstream "https://github.com/${{ matrix.repository }}.git"
-          git -C "$WORKDIR" fetch -q --depth=1 upstream "${{ matrix.head_sha }}"
-          git -C "$WORKDIR" checkout -q -b "$BRANCH" FETCH_HEAD
-
-          if ! git -C "$WORKDIR" apply --check /tmp/claude_verify_fix.patch; then
-            echo "::warning::Verified patch no longer applies cleanly to ${{ matrix.head_sha }} - needs a manual rebase"
-            exit 0
-          fi
-          git -C "$WORKDIR" apply /tmp/claude_verify_fix.patch
-          git -C "$WORKDIR" \
-            -c user.name="github-actions[bot]" \
-            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -aq -F /tmp/claude_verify_pr_title.txt
-
-          git -C "$WORKDIR" remote add origin https://github.com/ROCm/xla.git
-          if ! git -C "$WORKDIR" push -q origin "HEAD:refs/heads/${BRANCH}"; then
-            echo "::warning::Failed to push the verified-fix branch to ROCm/xla"
-            exit 0
-          fi
-
-          PR_URL=$(gh pr create --repo ROCm/xla --draft \
-            --title "$(head -1 /tmp/claude_verify_pr_title.txt)" \
-            --body-file /tmp/claude_verify_pr_body.txt \
-            --base main --head "$BRANCH") || {
-            echo "::warning::Failed to open the draft PR"
-            exit 0
-          }
-          echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
-
-      - name: Add the PR link to the tracking comment
-        if: steps.already_verified.outputs.skip != 'true' && steps.open_pr.outputs.pr_url != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ steps.open_pr.outputs.pr_url }}
-        run: |
-          set -euo pipefail
-          gh api "/repos/ROCm/xla/issues/comments/${{ matrix.comment_id }}" --jq .body > /tmp/comment_before_pr_link.txt
-          python3 -I -c "
-          import os
-          marker = '<!-- rocm-nightly-claude-verify-pr-pending -->'
-          link = f\"[draft PR]({os.environ['PR_URL']}) opened with the fix.\"
-          body = open('/tmp/comment_before_pr_link.txt').read()
-          body = body.replace(marker, link, 1) if marker in body else body
-          open('/tmp/comment_after_pr_link.txt', 'w').write(body)
-          "
-          gh api -X PATCH "/repos/ROCm/xla/issues/comments/${{ matrix.comment_id }}" -F body=@/tmp/comment_after_pr_link.txt
-
-      - name: Stop rocmless container
-        if: always()
-        run: docker rm -f rocmless-debug || true
