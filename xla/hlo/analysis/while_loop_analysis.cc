@@ -1293,4 +1293,242 @@ optional<int64_t> ComputeWhileLoopTripCountUpperBound(
   return nullopt;
 }
 
+namespace {
+
+// Whether `instruction` depends on a side effect (which includes random
+// numbers), for which HloEvaluator would make up a value. Like HloEvaluator,
+// follows tuple elements through tuple and get-tuple-element, and the
+// parameter of a computation with a single caller into the caller's operands,
+// so this also covers values that come from enclosing loops.
+bool DependsOnSideEffect(const HloInstruction* instruction) {
+  // An instruction and the tuple element of its result that is used.
+  using Use = std::pair<const HloInstruction*, std::vector<int64_t>>;
+  std::vector<Use> stack = {{instruction, {}}};
+  absl::flat_hash_set<Use> visited = {stack.back()};
+  auto push = [&](const HloInstruction* h, std::vector<int64_t> index) {
+    Use use(h, std::move(index));
+    if (visited.insert(use).second) {
+      stack.push_back(std::move(use));
+    }
+  };
+  while (!stack.empty()) {
+    auto [h, index] = std::move(stack.back());
+    stack.pop_back();
+    if (h->HasSideEffect()) {
+      return true;
+    }
+    if (h->opcode() == HloOpcode::kGetTupleElement) {
+      index.insert(index.begin(), h->tuple_index());
+      push(h->operand(0), std::move(index));
+    } else if (h->opcode() == HloOpcode::kTuple && !index.empty()) {
+      const HloInstruction* operand = h->operand(index.front());
+      index.erase(index.begin());
+      push(operand, std::move(index));
+    } else if (h->opcode() == HloOpcode::kParameter) {
+      auto callers = h->parent()->caller_instructions();
+      if (callers.size() != 1) {
+        continue;
+      }
+      if (callers[0]->opcode() == HloOpcode::kWhile) {
+        push(callers[0]->operand(0), std::move(index));
+      } else {
+        for (const HloInstruction* operand : callers[0]->operands()) {
+          push(operand, {});
+        }
+      }
+    } else {
+      for (const HloInstruction* operand : h->operands()) {
+        push(operand, {});
+      }
+    }
+  }
+  return false;
+}
+
+// Whether evaluating `h` does O(n log n) element operations, n =
+// `max_elements`, plus O(n log n) calls of scalar computations: its outputs
+// have at most `max_elements` elements in total (each is scalar if
+// `scalar_only`), it is not an op whose work can be superlinear in its
+// operand and output sizes, and the computations it calls satisfy the same
+// bound (computations applied per element, such as reducers, are scalar).
+bool HasBoundedEvaluation(const HloInstruction* h, int64_t max_elements,
+                          bool scalar_only) {
+  int64_t elements = 0;
+  bool scalar = true;
+  ShapeUtil::ForEachSubshape(
+      h->shape(), [&](const Shape& subshape, const ShapeIndex&) {
+        if (subshape.IsArray()) {
+          elements += ShapeUtil::ElementsIn(subshape);
+          scalar = scalar && ShapeUtil::IsScalar(subshape);
+        }
+      });
+  if (elements > max_elements || (scalar_only && !scalar)) {
+    return false;
+  }
+  switch (h->opcode()) {
+    case HloOpcode::kCholesky:
+    case HloOpcode::kConvolution:
+    case HloOpcode::kDot:
+    case HloOpcode::kRaggedDot:
+    case HloOpcode::kReduceWindow:
+    case HloOpcode::kSelectAndScatter:
+    case HloOpcode::kTriangularSolve:
+    case HloOpcode::kWhile:
+      return false;
+    default:
+      break;
+  }
+  const bool called_once = h->opcode() == HloOpcode::kCall ||
+                           h->opcode() == HloOpcode::kConditional ||
+                           h->opcode() == HloOpcode::kFusion;
+  for (const HloComputation* called : h->called_computations()) {
+    for (const HloInstruction* c : called->instructions()) {
+      if (!HasBoundedEvaluation(c, max_elements, scalar_only || !called_once)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// The loop state elements that `scalar`, an instruction of the loop body,
+// reads, or nullopt if it reads the loop state other than through
+// get-tuple-element, has a side effect in the loop body, or depends on an
+// instruction without HasBoundedEvaluation(max_elements), which bounds the
+// work of evaluating it in one iteration.
+optional<absl::flat_hash_set<int64_t>> LoopStateElementsRead(
+    const HloInstruction* scalar, int64_t max_elements) {
+  const HloInstruction* param = scalar->parent()->parameter_instruction(0);
+  absl::flat_hash_set<int64_t> indices;
+  std::vector<const HloInstruction*> stack = {scalar};
+  absl::flat_hash_set<const HloInstruction*> visited = {scalar};
+  while (!stack.empty()) {
+    const HloInstruction* h = stack.back();
+    stack.pop_back();
+    if (h == param || h->HasSideEffect()) {
+      return nullopt;
+    }
+    if (!HasBoundedEvaluation(h, max_elements, /*scalar_only=*/false)) {
+      return nullopt;
+    }
+    if (h->opcode() == HloOpcode::kGetTupleElement && h->operand(0) == param) {
+      indices.insert(h->tuple_index());
+      continue;
+    }
+    for (const HloInstruction* operand : h->operands()) {
+      if (visited.insert(operand).second) {
+        stack.push_back(operand);
+      }
+    }
+  }
+  return indices;
+}
+
+}  // namespace
+
+std::optional<std::vector<int64_t>> EvaluateScalarPerIteration(
+    const HloInstruction* while_op, const HloInstruction* scalar,
+    int64_t max_trip_count) {
+  const HloComputation* body = while_op->while_body();
+  const HloInstruction* param = body->parameter_instruction(0);
+  const HloInstruction* root = body->root_instruction();
+  const HloInstruction* init = while_op->operand(0);
+  if (scalar->parent() != body || !ShapeUtil::IsScalar(scalar->shape()) ||
+      !primitive_util::IsIntegralType(scalar->shape().element_type()) ||
+      init->opcode() != HloOpcode::kTuple ||
+      root->opcode() != HloOpcode::kTuple || max_trip_count <= 0) {
+    return nullopt;
+  }
+  optional<int64_t> iv_index = GetLoopInductionVarTupleIdx(while_op);
+  optional<Range> range = MatchTrivialLoopRange(while_op);
+  if (!iv_index.has_value() || !range.has_value() || range->IsEmpty() ||
+      !range->IsBounded() || !range->IsStepKnown() ||
+      range->step()->GetSignedValue() <= 0) {
+    return nullopt;
+  }
+  // max >= min, so the difference fits in uint64_t even when it overflows
+  // int64_t; iterating over the trip count avoids overflowing the induction
+  // variable.
+  const int64_t min = range->min().GetSignedValue();
+  const uint64_t step = range->step()->GetSignedValue();
+  const uint64_t last_iteration =
+      (static_cast<uint64_t>(range->max()->GetSignedValue()) -
+       static_cast<uint64_t>(min)) /
+      step;
+  if (last_iteration >= static_cast<uint64_t>(max_trip_count)) {
+    return nullopt;
+  }
+  optional<absl::flat_hash_set<int64_t>> read =
+      LoopStateElementsRead(scalar, max_trip_count);
+  if (!read.has_value()) {
+    return nullopt;
+  }
+  // Every loop state element that `scalar` reads is substituted, so that the
+  // evaluator never resolves the loop state from the while init on its own:
+  // the induction variable with its value in each iteration, and loop-invariant
+  // integer arrays with their initial value, evaluated once.
+  HloEvaluator evaluator(/*max_loop_iterations=*/0);
+  absl::flat_hash_map<int64_t, Literal> invariants;
+  for (int64_t index : *read) {
+    if (index == *iv_index) {
+      continue;
+    }
+    const Shape& shape = param->shape().tuple_shapes(index);
+    const HloInstruction* next = root->operand(index);
+    if (!shape.IsArray() ||
+        !primitive_util::IsIntegralType(shape.element_type()) ||
+        ShapeUtil::ElementsIn(shape) > max_trip_count ||
+        next->opcode() != HloOpcode::kGetTupleElement ||
+        next->operand(0) != param || next->tuple_index() != index ||
+        DependsOnSideEffect(init->operand(index))) {
+      return nullopt;
+    }
+    absl::StatusOr<Literal> value =
+        evaluator.Evaluate(init->operand(index), /*precomputed_analyses=*/{},
+                           /*recursively_evaluate_nonconstant_operands=*/true);
+    if (!value.ok() || !value->IsKnown()) {
+      return nullopt;
+    }
+    invariants[index] = *std::move(value);
+  }
+  absl::flat_hash_map<const HloInstruction*, const LiteralBase*> subs;
+  std::vector<const HloInstruction*> iv_gtes;
+  for (const HloInstruction* gte : param->users()) {
+    if (gte->opcode() != HloOpcode::kGetTupleElement) {
+      continue;
+    }
+    if (gte->tuple_index() == *iv_index) {
+      iv_gtes.push_back(gte);
+    } else if (auto it = invariants.find(gte->tuple_index());
+               it != invariants.end()) {
+      subs[gte] = &it->second;
+    }
+  }
+  const PrimitiveType iv_type =
+      param->shape().tuple_shapes(*iv_index).element_type();
+  std::vector<int64_t> values;
+  values.reserve(last_iteration + 1);
+  for (uint64_t k = 0; k <= last_iteration; ++k) {
+    const int64_t i =
+        static_cast<int64_t>(static_cast<uint64_t>(min) + k * step);
+    absl::StatusOr<Literal> iv =
+        LiteralUtil::CreateR0<int64_t>(i).Convert(iv_type);
+    if (!iv.ok()) {
+      return nullopt;
+    }
+    for (const HloInstruction* gte : iv_gtes) {
+      subs[gte] = &*iv;
+    }
+    absl::StatusOr<Literal> value = evaluator.Evaluate(
+        scalar, /*precomputed_analyses=*/{},
+        /*recursively_evaluate_nonconstant_operands=*/true, subs);
+    optional<int64_t> v = value.ok() ? value->GetFirstInteger() : nullopt;
+    if (!v.has_value()) {
+      return nullopt;
+    }
+    values.push_back(*v);
+  }
+  return values;
+}
+
 }  // namespace xla
