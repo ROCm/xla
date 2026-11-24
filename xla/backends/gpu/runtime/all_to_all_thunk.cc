@@ -423,8 +423,10 @@ absl::Status RunMemCpyAllToAll(bool has_split_dimension,
         << "Number of inputs didn't match the number of participants.";
 
     for (int peer = 0; peer < num_ranks; ++peer) {
-      auto buffer_idx = (rank.value() + peer) % num_ranks;
-      // double buffer, exchange data with peer
+      // receive_pointer_map[peer] is the output buffer that rank
+      // `rank - peer` keeps for this rank (see Initialize), so it receives
+      // input `rank - peer`.
+      auto buffer_idx = (rank.value() - peer + num_ranks) % num_ranks;
       se::DeviceAddressBase dst_addr =
           se::DeviceAddressBase((void*)receive_pointer_map[peer]);
       ABSL_RETURN_IF_ERROR(

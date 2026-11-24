@@ -1759,6 +1759,56 @@ TEST_P(MemcpyCollectiveOps, AllToAll8Gpus) {
   }
 }
 
+// Tuple form (no split dimension). Groups of two ranks cannot tell a peer from
+// its mirror, so this needs at least three ranks to catch a wrong pairing.
+TEST_P(MemcpyCollectiveOps, AllToAllTuple4Gpus) {
+  // Replica r sends {10*r + j, 10*r + j} as tuple operand j, so replica r
+  // receives {10*j + r, 10*j + r} as tuple element j.
+  const absl::string_view kModuleStr = R"(
+  HloModule test
+  ENTRY test_computation {
+    id = u32[] replica-id()
+    ten = u32[] constant(10)
+    id_times_ten = u32[] multiply(id, ten)
+    base = u32[2] broadcast(id_times_ten), dimensions={}
+    c0 = u32[2] constant({0, 0})
+    c1 = u32[2] constant({1, 1})
+    c2 = u32[2] constant({2, 2})
+    c3 = u32[2] constant({3, 3})
+    in0 = u32[2] add(base, c0)
+    in1 = u32[2] add(base, c1)
+    in2 = u32[2] add(base, c2)
+    in3 = u32[2] add(base, c3)
+    a2a = (u32[2], u32[2], u32[2], u32[2]) all-to-all(in0, in1, in2, in3),
+      replica_groups={{0,1,2,3}}
+    gte0 = u32[2] get-tuple-element(a2a), index=0
+    gte1 = u32[2] get-tuple-element(a2a), index=1
+    gte2 = u32[2] get-tuple-element(a2a), index=2
+    gte3 = u32[2] get-tuple-element(a2a), index=3
+    ROOT out = u32[8] concatenate(gte0, gte1, gte2, gte3), dimensions={0}
+  }
+  )";
+  const int64_t kNumReplicas = 4;
+  if (device_count() < kNumReplicas) {
+    GTEST_SKIP() << "Test requires at least " << kNumReplicas << " devices ("
+                 << device_count() << " available)";
+  }
+
+  HloModuleConfig config =
+      GetModuleConfigForTest(/*replica_count=*/kNumReplicas);
+  ASSERT_OK_AND_ASSIGN(auto module,
+                       ParseAndReturnVerifiedModule(kModuleStr, config));
+
+  ASSERT_OK_AND_ASSIGN(ExecutionResult execution_result,
+                       ExecuteReplicated(std::move(module)));
+  const std::vector<Literal>& results = execution_result.results;
+  ASSERT_EQ(results.size(), kNumReplicas);
+  for (uint32_t r = 0; r < kNumReplicas; ++r) {
+    LiteralTestUtil::ExpectR1Equal<uint32_t>(
+        {r, r, 10 + r, 10 + r, 20 + r, 20 + r, 30 + r, 30 + r}, results[r]);
+  }
+}
+
 TEST_P(AsyncCollectiveOps, MatmulReplicated) {
   // collective_permute = f32[16,32]{1,0} collective-permute(x_unscaled),
   // source_target_pairs={{0,1}, {1,2}, {2,3}, {3,0}}
