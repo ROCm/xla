@@ -16,16 +16,18 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 
-#include "Eigen/Core"
 #include "absl/status/status.h"
+#include "Eigen/Core"
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/include/hipcub/backend/rocprim/device/device_radix_sort.hpp"
 #include "rocm/include/hipcub/backend/rocprim/device/device_segmented_radix_sort.hpp"
+#include "rocm/include/rocprim/iterator/counting_iterator.hpp"
+#include "rocm/include/rocprim/iterator/transform_iterator.hpp"
 #include "rocm/include/rocprim/thread/radix_key_codec.hpp"
 #include "rocm/include/rocprim/type_traits.hpp"
-#include "tsl/platform/bfloat16.h"
 #include "xla/stream_executor/rocm/cub_sort_kernel_rocm.h"
 #include "xla/stream_executor/rocm/rocm_status.h"
+#include "tsl/platform/bfloat16.h"
 
 // Required for sorting Eigen::half and bfloat16.
 namespace rocprim {
@@ -58,6 +60,28 @@ namespace stream_executor {
 namespace rocm {
 namespace {
 
+// Start offset of segment `i` of a batch of equally sized segments. The
+// offsets are computed on the device as the sort reads them, so no offsets
+// array has to be copied from the host before each sort.
+struct SegmentOffset {
+  int segment_size;
+  __host__ __device__ int operator()(int i) const { return i * segment_size; }
+};
+
+using SegmentOffsetIterator =
+    rocprim::transform_iterator<rocprim::counting_iterator<int>, SegmentOffset,
+                                int>;
+
+SegmentOffsetIterator SegmentBegins(int segment_size) {
+  return SegmentOffsetIterator(rocprim::counting_iterator<int>(0),
+                               SegmentOffset{segment_size});
+}
+
+SegmentOffsetIterator SegmentEnds(int segment_size) {
+  return SegmentOffsetIterator(rocprim::counting_iterator<int>(1),
+                               SegmentOffset{segment_size});
+}
+
 template <typename KeyT>
 absl::Status CubSortKeysImpl(void* d_temp_storage, size_t& temp_bytes,
                              const void* d_keys_in, void* d_keys_out,
@@ -85,22 +109,19 @@ absl::Status CubSortKeysImpl(void* d_temp_storage, size_t& temp_bytes,
     return CubSortKeysImpl<KeyT>(d_temp_storage, temp_bytes, d_keys_in,
                                  d_keys_out, num_items, descending, stream);
   }
-  void* d_offsets = static_cast<char*>(d_temp_storage) + temp_bytes;
-  int* start_offsets =
-      d_temp_storage != nullptr ? static_cast<int*>(d_offsets) : nullptr;
-  int* end_offsets = start_offsets != nullptr ? start_offsets + 1 : nullptr;
+  const int segment_size = static_cast<int>(num_items / batch_size);
   auto err =
       descending
           ? hipcub::DeviceSegmentedRadixSort::SortKeysDescending<KeyT>(
                 d_temp_storage, temp_bytes, static_cast<const KeyT*>(d_keys_in),
                 static_cast<KeyT*>(d_keys_out), num_items, batch_size,
-                start_offsets, end_offsets, /*begin_bit=*/0,
-                /*end_bit=*/sizeof(KeyT) * 8, stream)
+                SegmentBegins(segment_size), SegmentEnds(segment_size),
+                /*begin_bit=*/0, /*end_bit=*/sizeof(KeyT) * 8, stream)
           : hipcub::DeviceSegmentedRadixSort::SortKeys<KeyT>(
                 d_temp_storage, temp_bytes, static_cast<const KeyT*>(d_keys_in),
                 static_cast<KeyT*>(d_keys_out), num_items, batch_size,
-                start_offsets, end_offsets, /*begin_bit=*/0,
-                /*end_bit=*/sizeof(KeyT) * 8, stream);
+                SegmentBegins(segment_size), SegmentEnds(segment_size),
+                /*begin_bit=*/0, /*end_bit=*/sizeof(KeyT) * 8, stream);
   return stream_executor::gpu::ToStatus(err);
 }
 
@@ -138,10 +159,7 @@ absl::Status CubSortPairsImpl(void* d_temp_storage, size_t& temp_bytes,
                                         d_keys_out, d_values_in, d_values_out,
                                         num_items, descending, stream);
   }
-  void* d_offsets = static_cast<char*>(d_temp_storage) + temp_bytes;
-  int* start_offsets =
-      d_temp_storage != nullptr ? static_cast<int*>(d_offsets) : nullptr;
-  int* end_offsets = start_offsets != nullptr ? start_offsets + 1 : nullptr;
+  const int segment_size = static_cast<int>(num_items / batch_size);
   auto err =
       descending
           ? hipcub::DeviceSegmentedRadixSort::SortPairsDescending<KeyT, ValT>(
@@ -149,15 +167,15 @@ absl::Status CubSortPairsImpl(void* d_temp_storage, size_t& temp_bytes,
                 static_cast<KeyT*>(d_keys_out),
                 static_cast<const ValT*>(d_values_in),
                 static_cast<ValT*>(d_values_out), num_items, batch_size,
-                start_offsets, end_offsets, /*begin_bit=*/0,
-                /*end_bit=*/sizeof(KeyT) * 8, stream)
+                SegmentBegins(segment_size), SegmentEnds(segment_size),
+                /*begin_bit=*/0, /*end_bit=*/sizeof(KeyT) * 8, stream)
           : hipcub::DeviceSegmentedRadixSort::SortPairs<KeyT, ValT>(
                 d_temp_storage, temp_bytes, static_cast<const KeyT*>(d_keys_in),
                 static_cast<KeyT*>(d_keys_out),
                 static_cast<const ValT*>(d_values_in),
                 static_cast<ValT*>(d_values_out), num_items, batch_size,
-                start_offsets, end_offsets, /*begin_bit=*/0,
-                /*end_bit=*/sizeof(KeyT) * 8, stream);
+                SegmentBegins(segment_size), SegmentEnds(segment_size),
+                /*begin_bit=*/0, /*end_bit=*/sizeof(KeyT) * 8, stream);
   return stream_executor::gpu::ToStatus(err);
 }
 

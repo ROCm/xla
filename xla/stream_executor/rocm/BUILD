@@ -1438,7 +1438,6 @@ cc_library(
     ],
     deps = [
         ":cub_sort_kernel_rocm_header",
-        ":rocm_status",
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla/backends/gpu:ffi",
@@ -1455,6 +1454,27 @@ cc_library(
         for typename in get_cub_sort_kernel_types()
     ],
     alwayslink = 1,
+)
+
+xla_test(
+    name = "cub_sort_kernel_rocm_test",
+    srcs = ["cub_sort_kernel_rocm_test.cc"],
+    backends = ["gpu"],
+    # copybara:uncomment compatible_with = ["//buildenv/target:non_prod"],
+    tags = ["rocm-only"],
+    deps = [
+        ":cub_sort_kernel_rocm",
+        ":cub_sort_kernel_rocm_header",
+        "//xla/stream_executor:device_address",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:platform_manager",
+        "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_executor_h",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_googletest//:gtest_main",
+        "@local_config_rocm//rocm:rocm_headers",
+    ],
 )
 
 # CUB scan kernel implementation (hipCUB/rocPRIM) - compiled with hipcc

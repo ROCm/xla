@@ -18,7 +18,6 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <vector>
 
 #include "absl/status/status.h"
 #include "absl/status/status_macros.h"
@@ -32,7 +31,6 @@ limitations under the License.
 #include "xla/ffi/ffi_api.h"  // IWYU pragma: keep
 #include "xla/primitive_util.h"
 #include "xla/service/gpu/cublas_cudnn.h"
-#include "xla/stream_executor/rocm/rocm_status.h"
 #include "xla/xla_data.pb.h"
 
 namespace stream_executor {
@@ -139,19 +137,30 @@ absl::Status VerifySortPairsBuffers(ffi::AnyBuffer keys, ffi::AnyBuffer values,
                      ffi::match::Buffer().Like(values));
 }
 
-// Computes the scratch buffer size needed for CUB sort, including batch
-// offsets if batch_size > 1.
-absl::StatusOr<int64_t> ComputeScratchSize(SortKeysFn fn, int64_t num_items,
-                                           int64_t batch_size) {
-  size_t temp_bytes = 0;
-  ABSL_RETURN_IF_ERROR(fn(nullptr, temp_bytes, nullptr, nullptr, num_items,
-                          false, batch_size, nullptr));
+// Adds to the hipCUB scratch size the (batch_size + 1) int32 segment offsets
+// that older runtimes copy to the end of the scratch buffer of a batched sort.
+// The segment offsets are now computed on the device, but the scratch size is
+// fixed at compile time, so the space stays reserved for GPU AOT forward
+// compatibility (docs/gpu_aot_compatibility.md): an older runtime shrinks the
+// hipCUB scratch by that amount before sorting.
+// TODO(mminutoli): drop the reservation once the forward-compatibility
+// window has passed.
+int64_t AddLegacyOffsetsSize(size_t temp_bytes, int64_t batch_size) {
   int64_t scratch_size = temp_bytes;
   if (batch_size > 1) {
     scratch_size += sizeof(int32_t) - scratch_size % sizeof(int32_t);
     scratch_size += (batch_size + 1) * sizeof(int32_t);
   }
   return scratch_size;
+}
+
+// Computes the scratch buffer size needed for CUB sort.
+absl::StatusOr<int64_t> ComputeScratchSize(SortKeysFn fn, int64_t num_items,
+                                           int64_t batch_size) {
+  size_t temp_bytes = 0;
+  ABSL_RETURN_IF_ERROR(fn(nullptr, temp_bytes, nullptr, nullptr, num_items,
+                          false, batch_size, nullptr));
+  return AddLegacyOffsetsSize(temp_bytes, batch_size);
 }
 
 absl::StatusOr<int64_t> ComputeScratchSize(SortPairsFn fn, int64_t num_items,
@@ -159,34 +168,7 @@ absl::StatusOr<int64_t> ComputeScratchSize(SortPairsFn fn, int64_t num_items,
   size_t temp_bytes = 0;
   ABSL_RETURN_IF_ERROR(fn(nullptr, temp_bytes, nullptr, nullptr, nullptr,
                           nullptr, num_items, false, batch_size, nullptr));
-  int64_t scratch_size = temp_bytes;
-  if (batch_size > 1) {
-    scratch_size += sizeof(int32_t) - scratch_size % sizeof(int32_t);
-    scratch_size += (batch_size + 1) * sizeof(int32_t);
-  }
-  return scratch_size;
-}
-
-// N pairs of [start_offset, end_offset) require (N+1) storage.
-int64_t GetOffsetsSize(int64_t batch_size) {
-  return (batch_size + 1) * sizeof(int32_t);
-}
-
-// Copies segment offsets [0, segment_size, 2*segment_size, ...] to device
-// memory at the end of the scratch buffer for batched segmented sort.
-absl::Status CopyOffsets(void* scratch, size_t scratch_bytes,
-                         int64_t batch_size, int64_t segment_size,
-                         hipStream_t stream) {
-  int64_t offsets_size = GetOffsetsSize(batch_size);
-  char* offsets_buffer =
-      static_cast<char*>(scratch) + scratch_bytes - offsets_size;
-  std::vector<int32_t> h_offsets(batch_size + 1);
-  for (int32_t i = 0; i <= batch_size; ++i) {
-    h_offsets[i] = i * segment_size;
-  }
-  return gpu::ToStatus(hipMemcpyAsync(offsets_buffer, h_offsets.data(),
-                                      offsets_size, hipMemcpyHostToDevice,
-                                      stream));
+  return AddLegacyOffsetsSize(temp_bytes, batch_size);
 }
 
 //===----------------------------------------------------------------------===//
@@ -219,12 +201,6 @@ absl::Status CubSortKeysExecute(
   ABSL_ASSIGN_OR_RETURN(auto fn, GetSortKeysFn(d_keys_in.element_type()));
   size_t num_items = d_keys_in.element_count();
   size_t temp_bytes = d_temp_storage->size_bytes();
-  if (batch_size > 1) {
-    ABSL_RETURN_IF_ERROR(CopyOffsets(d_temp_storage->untyped_data(), temp_bytes,
-                                     batch_size, num_items / batch_size,
-                                     stream));
-    temp_bytes -= GetOffsetsSize(batch_size);
-  }
   return fn(d_temp_storage->untyped_data(), temp_bytes,
             d_keys_in.untyped_data(), d_keys_out->untyped_data(), num_items,
             descending, batch_size, stream);
@@ -311,12 +287,6 @@ absl::Status CubSortPairsExecute(
                    xla::primitive_util::BitWidth(d_values_in.element_type())));
   size_t num_items = d_keys_in.element_count();
   size_t temp_bytes = d_temp_storage->size_bytes();
-  if (batch_size > 1) {
-    ABSL_RETURN_IF_ERROR(CopyOffsets(d_temp_storage->untyped_data(), temp_bytes,
-                                     batch_size, num_items / batch_size,
-                                     stream));
-    temp_bytes -= GetOffsetsSize(batch_size);
-  }
   return fn(d_temp_storage->untyped_data(), temp_bytes,
             d_keys_in.untyped_data(), d_keys_out->untyped_data(),
             d_values_in.untyped_data(), d_values_out->untyped_data(), num_items,
