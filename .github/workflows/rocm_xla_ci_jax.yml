@@ -71,6 +71,7 @@ jobs:
   jax-upstream:
     needs: rocm-config
     name: JAX Upstream Linux x86 AMD Instinct GPU
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'nightly-pipeline' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'rocm-dev-infra')
     runs-on: amd-do-linux-xla-gpu-gfx950-dpx-4
     timeout-minutes: 220
     # Remove this once the JAX CI is stable.
