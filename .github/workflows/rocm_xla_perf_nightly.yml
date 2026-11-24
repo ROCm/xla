@@ -41,9 +41,24 @@ env:
   DATA_BRANCH: perf-metrics-data
 
 jobs:
+  # Trigger gate for the whole pipeline: scheduled runs, manual dispatch, the
+  # "nightly-pipeline" label, or a PR to rocm-dev-infra that touches it. Both
+  # jobs below hang off this one, so the condition is spelled out here once and
+  # they re-state it by reading the `enabled` output back. Gating here rather
+  # than only on the jobs below also means an unrelated label no longer spins
+  # up a runner at all.
   rocm-config:
+    if: >-
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || github.event.label.name == 'nightly-pipeline'
+      || (github.event_name == 'pull_request'
+          && github.event.pull_request.base.ref == 'rocm-dev-infra')
     runs-on: ubuntu-latest
     outputs:
+      # Constant: this job only runs when the gate above passed, so downstream
+      # jobs can read it as "the nightly pipeline is enabled for this event".
+      enabled: "true"
       docker-image: ${{ steps.out.outputs.docker-image }}
       # The benchmark matrix as JSON. Drives the matrix below *and* is recorded
       # verbatim in run.json, so a published directory says which ROCm build
@@ -127,8 +142,8 @@ jobs:
 
   execute-xla-perf-nightly:
     needs: rocm-config
-    # Run on schedule, workflow_dispatch, "nightly-pipeline" label, or PR to rocm-dev-infra with workflow changes
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'nightly-pipeline' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'rocm-dev-infra')
+    # See the gate on rocm-config above.
+    if: needs.rocm-config.outputs.enabled == 'true'
     runs-on: ${{ matrix.mode.runner }}
     env:
       COMMON_ARGS: >-
@@ -274,7 +289,9 @@ jobs:
     needs: [rocm-config, execute-xla-perf-nightly]
     # Publish whatever completed, even if some modes failed. PR runs publish
     # too, so that a change to this workflow exercises the push path as well.
-    if: always() && needs.rocm-config.result == 'success'
+    # always() also defeats the implicit "needs succeeded" check, so the gate
+    # on rocm-config has to be restated here rather than inherited.
+    if: always() && needs.rocm-config.outputs.enabled == 'true' && needs.rocm-config.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       # Needed to push the data branch back to this repository.
