@@ -114,6 +114,17 @@ jobs:
             -- \
             //xla/...
 
+      - name: Stop leftover Bazel
+        if: always() && !cancelled()
+        run: |
+          pkill -KILL -x bazel || true
+          pkill -KILL -x bazelisk || true
+          pkill -KILL -f -- '-jar .*/A-server\.jar' || true
+          for i in $(seq 1 30); do
+            pgrep -x bazel >/dev/null || pgrep -f -- '-jar .*/A-server\.jar' >/dev/null || break
+            sleep 1
+          done
+
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always() && !cancelled()
         timeout-minutes: 160
@@ -126,6 +137,17 @@ jobs:
             --bes_keywords=multi_gpu \
             -- \
             //xla/...
+
+      - name: Stop leftover Bazel
+        if: always() && !cancelled()
+        run: |
+          pkill -KILL -x bazel || true
+          pkill -KILL -x bazelisk || true
+          pkill -KILL -f -- '-jar .*/A-server\.jar' || true
+          for i in $(seq 1 30); do
+            pgrep -x bazel >/dev/null || pgrep -f -- '-jar .*/A-server\.jar' >/dev/null || break
+            sleep 1
+          done
 
       - name: Test XLA [${{ matrix.mode.name }}] [rocm_cpu]
         timeout-minutes: 160
