@@ -760,6 +760,58 @@ ROCm/XLA version under test) to spot per-module regressions over time.
 3. Run the suite with identical flags, appending into the **same** per-model CSVs.
 4. Compare rows across timestamps (or versions) to see which HLO modules got
    faster or slower.
+5. For an XLA-side regression, bisect the module that moved down to the commit
+   that caused it — see below.
+
+### Bisecting to a commit: `bisect_run.sh`
+
+The suite tells you *which* module regressed between two revisions;
+`bisect_run.sh` tells you *which commit* did it. It is a
+[`git bisect run`](https://git-scm.com/docs/git-bisect) script: for every
+revision git picks, it builds `hlo_runner_main`, replays the module(s) named,
+and reports one verdict, converging on the first bad commit in `log2(range)`
+steps.
+
+```bash
+cd /path/to/your/xla-checkout          # the tree to bisect, never this repo
+git bisect start <bad-rev> <good-rev>
+git bisect run /path/to/perf_tools/hlo_eval_tools/bisect_run.sh \
+    --module /path/to/perf_tools/hlo_eval_tools/large_language_models/flan_t5_large/inference/1gpu/module_0199.jit_predict_step.before_optimizations.mlirbc \
+    --threshold 12 --trials 3 \
+    --autotune-cache /path/to/merged-autotune.textproto \
+    --disk-cache "$BAZEL_DISK_CACHE" \
+    --tsv bisect-log.tsv --keep-logs bisect-logs
+```
+
+`--help` documents every flag and exit code. `--dry-run` prints the exact bazel
+and runner command lines and exits without touching anything — worth doing
+first, not least to check that the ROCm source matches how that checkout was
+last built, since a mismatch re-fetches `local_config_rocm` and rebuilds
+everything ROCm-dependent at the first revision.
+
+| `--mode` | A revision is BAD when | Typical use |
+|---|---|---|
+| `time` (default) | the metric is `>= --threshold` ms | perf regression |
+| `status` | the runner exits non-zero | crash, compile error, CHECK failure |
+| `grep` | the output matches `--pattern` | one specific error, ignoring others |
+
+`--invert` flips which side is bisect's "bad", so the same script finds the
+commit that *fixed* or *sped up* something; start the bisect the other way round
+in that case. Revisions that cannot answer the question — failed to build,
+missing or partial timings, a runner too old for `--input_format=stablehlo` —
+are skipped rather than blamed.
+
+The metric is the sum of the per-module medians, so several modules run in one
+process under a single `--input_format` and must share one. `--num-repeats` and
+`--warmup` set the median within a process, `--trials` with `--trial-agg`
+aggregates across processes, and `--autotune-cache` is what keeps the number
+comparable between revisions. Pick the threshold by measuring both endpoints
+first (`--threshold 0` prints the metric and calls everything BAD), then set it
+midway between the two medians; if that gap is not clearly larger than the
+run-to-run spread, the bisect cannot resolve it.
+
+`--tsv` appends one row per revision — `rev metric_ms samples trials build_s
+verdict detail` — so the measurement behind every verdict stays auditable.
 
 ## Collected results
 
