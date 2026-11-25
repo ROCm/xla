@@ -15,17 +15,15 @@ limitations under the License.
 
 #include "xla/backends/profiler/plugin/plugin_tracer_impl.h"
 
+#include <any>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 
 #include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
 #include "absl/status/statusor.h"
-#include "tsl/profiler/lib/profiler_factory.h"
-#include "tsl/profiler/lib/profiler_interface.h"
-#include "tsl/profiler/lib/profiler_lock.h"
-#include "tsl/profiler/protobuf/profiler_options.pb.h"
-#include "tsl/profiler/protobuf/xplane.pb.h"
 #include "xla/backends/profiler/plugin/plugin_tracer.h"
 #include "xla/backends/profiler/plugin/profiler_c_api.h"
 #include "xla/backends/profiler/plugin/profiler_error.h"
@@ -34,6 +32,11 @@ limitations under the License.
 #include "xla/tsl/profiler/utils/xplane_builder.h"
 #include "xla/tsl/profiler/utils/xplane_utils.h"
 #include "xla/tsl/profiler/utils/xplane_visitor.h"
+#include "tsl/profiler/lib/profiler_factory.h"
+#include "tsl/profiler/lib/profiler_interface.h"
+#include "tsl/profiler/lib/profiler_lock.h"
+#include "tsl/profiler/protobuf/profiler_options.pb.h"
+#include "tsl/profiler/protobuf/xplane.pb.h"
 
 namespace xla {
 namespace profiler {
@@ -69,6 +72,20 @@ class PluginTracerImpl : public ProfilerInterface {
     metadata->set_name("ProfileOptions");
 
     builder.AddStatValue(*metadata, options_.SerializeAsString());
+    space->add_errors("plugin error");
+    space->add_warnings("plugin warning");
+    return absl::OkStatus();
+  }
+
+  // The data is a placeholder; Serialize does not read it.
+  absl::StatusOr<tsl::profiler::ConsumeResult> Consume() override {
+    return tsl::profiler::ConsumeResult{std::any(true)};
+  }
+
+  absl::Status Serialize(std::any data,
+                         tensorflow::profiler::XSpace* space) override {
+    space->add_errors("plugin error");
+    space->add_warnings("plugin warning");
     return absl::OkStatus();
   }
 
@@ -116,6 +133,8 @@ TEST(PluginTracerTest, TestPluginWithPluginTracer) {
   PluginTracer tracer(&api, options);
 
   tensorflow::profiler::XSpace xspace;
+  xspace.add_errors("host error");
+  xspace.add_warnings("host warning");
   EXPECT_TRUE(tracer.Start().ok());
   EXPECT_TRUE(tracer.Stop().ok());
 
@@ -137,6 +156,29 @@ TEST(PluginTracerTest, TestPluginWithPluginTracer) {
   ASSERT_TRUE(stat.has_value());
   EXPECT_EQ(stat->Name(), "ProfileOptions");
   EXPECT_EQ(stat->StrOrRefValue(), options.SerializeAsString());
+
+  EXPECT_THAT(xspace.errors(),
+              testing::ElementsAre("host error", "plugin error"));
+  EXPECT_THAT(xspace.warnings(),
+              testing::ElementsAre("host warning", "plugin warning"));
+}
+
+TEST(PluginTracerTest, SerializeKeepsPluginErrorsAndWarnings) {
+  PLUGIN_Profiler_Api api = CreateProfilerApi();
+  PluginTracer tracer(&api, ProfileOptions());
+  ASSERT_OK(tracer.Start());
+
+  ASSERT_OK_AND_ASSIGN(tsl::profiler::ConsumeResult result, tracer.Consume());
+  tensorflow::profiler::XSpace xspace;
+  xspace.add_errors("host error");
+  xspace.add_warnings("host warning");
+  ASSERT_OK(tracer.Serialize(std::move(result.data), &xspace));
+  ASSERT_OK(tracer.Stop());
+
+  EXPECT_THAT(xspace.errors(),
+              testing::ElementsAre("host error", "plugin error"));
+  EXPECT_THAT(xspace.warnings(),
+              testing::ElementsAre("host warning", "plugin warning"));
 }
 
 TEST(PluginTracerTest, StartHoldsProfilerLockUntilStop) {
