@@ -27,13 +27,11 @@
 # single job's own sequential steps (which is how this worked before this
 # was split out), there's no "just read the file the previous step wrote"
 # option here. If the invoked skill ends up writing /tmp/claude_fix.patch
-# (plus /tmp/claude_pr_title.txt, /tmp/claude_pr_body.txt, and optionally
-# /tmp/claude_pr_target.txt if an upstream PR was explicitly requested -
-# see claude_apply_patch.yml), this uploads them as an artifact under
-# `inputs.artifact_name`, scoped to the whole calling workflow run, for a
-# later job in the caller to download and apply. Callers that never
-# produce a patch (debug-nightly-failure doesn't) simply omit
-# `artifact_name`.
+# (plus /tmp/claude_pr_title.txt and /tmp/claude_pr_body.txt), this
+# uploads them as an artifact under `inputs.artifact_name`, scoped to the
+# whole calling workflow run, for a later job in the caller to download
+# and apply. Callers that never produce a patch (debug-nightly-failure
+# doesn't) simply omit `artifact_name`.
 
 name: Claude Issue Triage
 
@@ -89,7 +87,7 @@ on:
         required: true
         type: number
       artifact_name:
-        description: 'If set, upload /tmp/claude_fix.patch (+ pr_title/pr_body/pr_target) under this name when non-empty. Leave unset for skills that never produce a patch.'
+        description: 'If set, upload /tmp/claude_fix.patch (+ pr_title/pr_body) under this name when non-empty. Leave unset for skills that never produce a patch.'
         required: false
         type: string
         default: ''
@@ -252,7 +250,6 @@ jobs:
             /tmp/claude_fix.patch
             /tmp/claude_pr_title.txt
             /tmp/claude_pr_body.txt
-            /tmp/claude_pr_target.txt
           if-no-files-found: ignore
           retention-days: 1
 
