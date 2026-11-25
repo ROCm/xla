@@ -323,7 +323,20 @@ jobs:
     # produced a patch. (Confirmed in production: a verified fix on
     # ROCm/xla#1551 reported "opening a draft PR now" and then nothing ever
     # followed - this job never ran at all.)
-    if: ${{ !cancelled() && needs.collect_mention_targets.outputs.mention_targets != '[]' }}
+    #
+    # But `!cancelled()` also opts this `if:` out of GitHub's *implicit*
+    # `success()` default for every `needs` entry, including
+    # collect_mention_targets itself - not just the two it's meant to
+    # tolerate. When collect_mention_targets is skipped (e.g. a bot's own
+    # reply comment re-triggering this workflow, correctly filtered out by
+    # its author_association check), its `mention_targets` output is an
+    # empty string, not `'[]'` - `"" != '[]'` is still true, so this job got
+    # scheduled anyway, and `fromJson('')` on the matrix below then errored
+    # at matrix-evaluation time, failing the whole run with this job absent
+    # from the Jobs API list. The explicit `result == 'success'` check below
+    # restores that guard for collect_mention_targets specifically, while
+    # still tolerating a skipped respond_to_mention/respond_to_issue_mention.
+    if: ${{ !cancelled() && needs.collect_mention_targets.result == 'success' && needs.collect_mention_targets.outputs.mention_targets != '[]' }}
     # Needs to push a branch and open a draft PR, unlike every other job in
     # this workflow (all read-mostly, aside from issue/label edits) -
     # scoped here, not at the workflow level.
