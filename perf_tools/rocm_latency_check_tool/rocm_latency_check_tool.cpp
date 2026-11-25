@@ -672,6 +672,7 @@ class Consumer {
             prep->bytesD2H, stream));
       }
 
+      const auto sync_start = std::chrono::high_resolution_clock::now();
       HIP_CHECK(hipStreamSynchronize(stream));
 
       auto wall_end = std::chrono::high_resolution_clock::now();
@@ -682,9 +683,20 @@ class Consumer {
       completed_.fetch_add(1, std::memory_order_relaxed);
 
       pool_->Return(slot.index);
+
+      // Worker-local counters; read only after the consumer threads join.
+      const auto sync_us =
+          std::chrono::duration_cast<std::chrono::microseconds>(wall_end - sync_start).count();
+      slow_requests_ += latency_us > 10000;
+      slow_sync_majority_ += (latency_us > 10000 && sync_us > latency_us / 2);
+      slow_sync_over_10ms_ += (latency_us > 10000 && sync_us > 10000);
     }
 
   }
+
+  int64_t slow_requests() const { return slow_requests_; }
+  int64_t slow_sync_majority() const { return slow_sync_majority_; }
+  int64_t slow_sync_over_10ms() const { return slow_sync_over_10ms_; }
 
   int completed() const { return completed_.load(std::memory_order_relaxed); }
 
@@ -696,6 +708,9 @@ class Consumer {
   const PinnedBuffer& hA_;
   const PinnedBuffer& hB_;
   const PinnedBuffer& hExtraH2D_;
+  int64_t slow_requests_ = 0;
+  int64_t slow_sync_majority_ = 0;
+  int64_t slow_sync_over_10ms_ = 0;
   std::atomic<int> completed_{0};
 };
 
@@ -1250,6 +1265,16 @@ int main(int argc, char** argv) {
     std::printf("[Consumer %d] completed=%d requests\n",
                 i, consumers[i]->completed());
   }
+
+  int64_t slow = 0, sync_majority = 0, sync_over_10ms = 0;
+  for (const auto& consumer : consumers) {
+    slow += consumer->slow_requests();
+    sync_majority += consumer->slow_sync_majority();
+    sync_over_10ms += consumer->slow_sync_over_10ms();
+  }
+  std::cout << "Final stream sync timing: requests_over_10ms=" << slow
+            << " sync_over_half_of_slow=" << sync_majority
+            << " sync_over_10ms_of_slow=" << sync_over_10ms << '\n';
 
   auto final_snap = global_stats.snapshot();
   BenchmarkStats::printReport("Final Benchmark Statistics", final_snap, wall_ms);
