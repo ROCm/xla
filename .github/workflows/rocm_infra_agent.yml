@@ -94,10 +94,11 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
           COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
         run: |
           if [ "${EVENT_NAME}" = "issue_comment" ]; then
             TARGETS=$(build_tools/rocm/collect_claude_mention_targets.sh \
-              --comment "${ISSUE_NUMBER}" "${COMMENT_ID}" "${COMMENT_BODY}")
+              --comment "${ISSUE_NUMBER}" "${COMMENT_ID}" "${COMMENT_BODY}" "${COMMENT_AUTHOR}")
           else
             TARGETS=$(build_tools/rocm/collect_claude_mention_targets.sh)
           fi
@@ -265,4 +266,5 @@ jobs:
       head_sha: ${{ matrix.head_sha }}
       issue_number: ${{ matrix.issue_number }}
       artifact_name: "mention-patch-${{ matrix.comment_id }}"
+      commenter_login: ${{ matrix.commenter_login }}
     secrets: inherit
