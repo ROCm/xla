@@ -150,27 +150,26 @@ jobs:
             exit 0
           fi
 
-          # Includes `artifact_name` (unique per triggering comment/job -
-          # "mention-patch-<comment_id>" or "autoverify-patch-<job_id>"),
-          # not just the commit and patch hash: two independent requests
-          # (e.g. two separate @claude comments on the same issue) can
-          # legitimately verify byte-identical patches against the same
-          # head_sha - most commonly a human re-asking after an earlier PR
-          # for that exact fix was already closed without merging. Branch
-          # names used to be derived purely from (head_sha, patch hash), so
-          # that second request computed the exact same branch name as the
-          # first, closed one; since closing a PR doesn't delete its
-          # branch, the second run's freshly-built commit (a new commit
-          # object even for an identical diff, since it's built fresh each
-          # run) couldn't fast-forward over the stale branch, and the
-          # resulting non-force `git push` was silently rejected - no PR,
-          # no comment, no error surfaced anywhere (confirmed in production
-          # on ROCm/xla#1551). Folding `artifact_name` in guarantees every
-          # request gets its own branch regardless of patch content, so one
-          # closed/stale PR can never block a later, independent one.
+          # Includes github.run_id, not just the commit and patch hash: two
+          # independent requests (e.g. two separate @claude comments, or a
+          # manual re-run of the same one) can legitimately verify
+          # byte-identical patches against the same head_sha - most
+          # commonly a human re-asking after an earlier PR for that exact
+          # fix was already closed without merging. Branch names used to be
+          # derived purely from (head_sha, patch hash), so a repeat request
+          # computed the exact same branch name as an earlier one; since
+          # closing a PR doesn't delete its branch, and this step builds a
+          # brand new commit object from scratch every run (even for an
+          # identical diff), a plain `git push` could never fast-forward
+          # onto whatever that branch name was already left at, and was
+          # silently rejected - no PR, no comment, no error surfaced
+          # anywhere (confirmed in production on ROCm/xla#1551). A unique
+          # run ID sidesteps that category of bug entirely: every run gets
+          # its own branch and its own draft PR, full stop - no retry ever
+          # needs to reconcile with a previous attempt's leftover state.
           SHA_SHORT=$(echo "${{ inputs.head_sha }}" | cut -c1-7)
           PATCH_HASH=$(sha256sum /tmp/claude_fix.patch | cut -c1-8)
-          BRANCH="claude/verify-fix/${SHA_SHORT}-${PATCH_HASH}-${{ inputs.artifact_name }}"
+          BRANCH="claude/verify-fix/${SHA_SHORT}-${PATCH_HASH}-${{ github.run_id }}"
 
           # Base the fix on the exact commit the skill that produced this
           # patch actually tested (inputs.repository@inputs.head_sha - the
