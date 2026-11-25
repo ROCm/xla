@@ -36,7 +36,12 @@
 #   Run IDs on stdout, newest first; nothing if no run finished since the
 #   cutoff. No conclusion filter is applied: a job marked continue-on-error
 #   leaves the run's own conclusion green even though it failed, so the
-#   caller has to inspect the jobs of every finished run.
+#   caller has to inspect the jobs of every finished run. Only `schedule`-
+#   triggered runs are considered - both monitored workflows also run on
+#   pull_request(_target) (to validate pipeline changes themselves, or via
+#   the "nightly-pipeline" label) and on workflow_dispatch, none of which
+#   are real nightly signal and shouldn't open issues or page the debug
+#   agent for whoever's PR/manual run happened to fail.
 #
 # Exit codes:
 #   0: Success (including "no runs found")
@@ -58,8 +63,9 @@ CREATION_BUFFER_HOURS="${CREATION_BUFFER_HOURS:-48}"
 CREATED_SINCE=$(date -u -d "$CUTOFF - ${CREATION_BUFFER_HOURS} hours" '+%Y-%m-%dT%H:%M:%SZ')
 echo "Listing runs of ${WORKFLOW} created after ${CREATED_SINCE} and finished after ${CUTOFF}" >&2
 
-# --paginate to get ALL runs, not just the first page.
+# --paginate to get ALL runs, not just the first page. event=schedule
+# restricts to scheduled runs only - see the "Output" note above.
 gh api --paginate \
     -H "Accept: application/vnd.github+json" \
-    "/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs?status=completed&created=>${CREATED_SINCE}&per_page=100" \
+    "/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs?status=completed&event=schedule&created=>${CREATED_SINCE}&per_page=100" \
     --jq ".workflow_runs[] | select(.updated_at > \"${CUTOFF}\") | .id"
