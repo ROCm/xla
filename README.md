@@ -78,19 +78,6 @@ Bazel picks the TheRock tarball from these flags, which the `main` CI jobs all p
 
 - **Keep `ROCM_PATH` empty, and don't pass `--rocm_path` to `build/build.py`.** A non-empty `ROCM_PATH` takes priority over `ROCM_DISTRO_URL`, so Bazel would use a local ROCm install instead of the tarball.
 - TheRock 10.0.0 is also XLA's default hermetic ROCm (`rocm_latest_multiarch` in [`third_party/gpus/rocm/rocm_redist.bzl`](https://github.com/openxla/xla/blob/main/third_party/gpus/rocm/rocm_redist.bzl)); the two `ROCM_DISTRO_*` flags pin it explicitly.
-- To build against a TheRock nightly, set `ROCM_DISTRO_HASH=no_hash` (which skips the checksum) and point `ROCM_DISTRO_URL` at that nightly's tarball. The nightly URL differs between release lines and is subject to change, so check the `therock_nightly` stack in [`build_tools/rocm/nightly_rocm_stacks.py`](build_tools/rocm/nightly_rocm_stacks.py) for the current one. At the time of writing:
-  - **10.1:** `https://rocm.nightlies.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-<version>.tar.gz`, with the version index at `https://rocm.nightlies.amd.com/whl-multi-arch/`.
-  - **10.2 and 10.3:** `https://nightly.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-<version>.tar.gz`, with the version index at `https://nightly.repo.amd.com/rocm/whl-next/`.
-
-  To print the latest `<version>`, pass the line's version index and number, for example for 10.2:
-
-  ```bash
-  GPU_TARGET=device-all THEROCK_INDEX_URL=https://nightly.repo.amd.com/rocm/whl-next/ ROCM_SDK_VERSION=10.2 \
-    bash build_tools/rocm/detect-therock-version.sh
-  ```
-
-- CI runs the XLA unit tests with [`build_tools/rocm/run_xla_ci_build.sh`](https://github.com/openxla/xla/blob/main/build_tools/rocm/run_xla_ci_build.sh) from `openxla/xla`, and builds and tests JAX with [`ci/run_bazel_test_rocm_rbe.sh`](https://github.com/jax-ml/jax/blob/main/ci/run_bazel_test_rocm_rbe.sh) from `jax-ml/jax`, both with these flags on top of the ROCm RBE configs. See [`rocm_xla_ci_nightly.yml`](.github/workflows/rocm_xla_ci_nightly.yml) and [`rocm_xla_ci_jax.yml`](.github/workflows/rocm_xla_ci_jax.yml) for the exact commands.
-
 
 ### Building `jax-ml/jax:main` against `openxla/xla:main`
 
@@ -134,6 +121,38 @@ Notes:
     - Multiple targets can be passed comma-separated. `--rocm_amdgpu_targets` alone does not reach Bazel's ROCm setup, because `build/rocm/rocm.bazelrc` sets `TF_ROCM_AMDGPU_TARGETS` to 27 architectures with `--repo_env`, which makes the build much slower and the wheels much larger.
 - The `--wheels=jax,jaxlib,jax-rocm-plugin,jax-rocm-pjrt` list produces all four required wheels in `dist/`; `pip install dist/*.whl` installs the matching set. Built against TheRock 10.0.0, the ROCm wheels are named `jax_rocm10_plugin` and `jax_rocm10_pjrt`.
 - The last command should print `[RocmDevice(id=0), ...]`. Without the `LD_LIBRARY_PATH` step, JAX prints a plugin error (`librocprofiler-sdk.so.1: cannot open shared object file`) and falls back to `[CpuDevice(id=0)]`. Set `LD_LIBRARY_PATH` again in every new shell, and rebuild after a `bazel clean --expunge`, which deletes the extracted libraries.
+
+### Building JAX/XLA (jaxlib+plugin+pjrt) with debug symbols
+
+To build the jaxlib, ROCm plugin, and PJRT wheels with debug symbols, add JAX's `debug_symbols` config to the `build/build.py` command above:
+
+```bash
+--bazel_options=--config=debug_symbols
+```
+
+To debug only the PJRT plugin (`xla_rocm_plugin.so`) on top of an installed regular build, pass `--wheels=jax-rocm-pjrt` instead of the full list, then reinstall that wheel with `--force-reinstall`, since its version doesn't change:
+
+```bash
+pip install --force-reinstall dist/jax_rocm10_pjrt-*.whl
+```
+
+Notes:
+
+- `debug_symbols` is defined in JAX's [`.bazelrc`](https://github.com/jax-ml/jax/blob/main/.bazelrc). It keeps the optimized `-c opt` build, compiles the files under `xla/pjrt` and `xla/python` with `-g3`, and passes `--strip=never`. Most of those files end up in jaxlib and the PJRT plugin. The ROCm plugin wheel is mostly JAX's own GPU kernels under `jaxlib/gpu`, which the pattern doesn't cover, so it gets little debug info by default. [jax-ml/jax#42612](https://github.com/jax-ml/jax/pull/42612) adds the same option to the nightly and continuous workflows, to build debug-symbol variants of the ROCm plugin and PJRT wheels.
+- Everything else, such as XLA's GPU compiler and runtime under `xla/service/gpu` and `xla/backends/gpu`, and JAX's own C++ under `jaxlib/`, still shows only function names. To get file and line numbers there too, add another `--per_file_copt` with the directories you need, quoted because of the `|`:
+
+  ```bash
+  '--bazel_options=--per_file_copt=xla/backends/gpu|xla/service/gpu|xla/stream_executor|jaxlib/@-g'
+  ```
+
+  Each directory makes the build slower and the wheels larger, so this example uses `-g`, which leaves out the macro information that `-g3` adds.
+- To check the PJRT plugin, run `file` on it. A debug build reports `with debug_info, not stripped`, while a regular build reports only `not stripped`:
+
+  ```bash
+  cd /tmp && file "$(python3 -c "import pathlib, jax_plugins.xla_rocm10 as p; print(pathlib.Path(p.__file__).with_name('xla_rocm_plugin.so'))")"
+  ```
+
+- The rocmless image has no `gdb`, but the TheRock tarball ships `rocgdb`, ROCm's GDB-based debugger, and Bazel extracts it with the rest of ROCm. Run your program under `"${ROCM_DIST}/bin/rocgdb" --args python3 ...`, with `ROCM_DIST` set as in the build commands above. Where ROCm is installed under `/opt/rocm`, use `/opt/rocm/bin/rocgdb`.
 
 
 <details>
