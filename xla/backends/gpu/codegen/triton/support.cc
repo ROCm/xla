@@ -928,20 +928,34 @@ CodegenDecision IsTritonSupportedConv(
   if (result_type == PrimitiveType::S4) {
     return CodegenDecision::Forbid("S4 is not supported.");
   }
-  // TODO: Enable explicit algorithms
-  if (conv.precision_config().algorithm() != PrecisionConfig::ALG_UNSET) {
+
+  const PrecisionConfig::Algorithm algorithm =
+      conv.precision_config().algorithm();
+
+  if (!IsSupportedDotAlgorithm(algorithm, gpu_version)) {
     return CodegenDecision::Forbid(
-        "Convolution with an explicit algorithm is not supported.");
+        absl::StrCat("Unsupported dot algorithm: ",
+                     PrecisionConfig::Algorithm_Name(algorithm)));
   }
-  if (CodegenDecision decision =
-          AreTypesSupportedByAlgUnsetDot(lhs_type, result_type, gpu_version);
-      !decision) {
-    return decision;
+
+  if (algorithm == PrecisionConfig::ALG_UNSET) {
+    if (CodegenDecision decision =
+            AreTypesSupportedByAlgUnsetDot(lhs_type, result_type, gpu_version);
+        !decision) {
+      return decision;
+    }
+    if (CodegenDecision decision =
+            AreTypesSupportedByAlgUnsetDot(rhs_type, result_type, gpu_version);
+        !decision) {
+      return decision;
+    }
   }
-  if (CodegenDecision decision =
-          AreTypesSupportedByAlgUnsetDot(rhs_type, result_type, gpu_version);
-      !decision) {
-    return decision;
+
+  if (CodegenDecision conversion_decision =
+          AreDotAlgorithmInputAndOutputConversionsSupported(
+              algorithm, lhs_type, rhs_type, result_type, gpu_version);
+      !conversion_decision) {
+    return conversion_decision;
   }
 
   return CodegenDecision::Allow();
