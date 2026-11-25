@@ -34,7 +34,6 @@ build:rocm_rbe_dev --remote_executor="grpcs://actinolite.cluster.engflow.com"
 build:rocm_rbe_dev --repo_env=REMOTE_GPU_TESTING=1
 
 # Dynamic execution config for ROCm RBE - races remote vs local with remote head start
-build:rocm_rbe_dynamic --config=rocm_rbe
 build:rocm_rbe_dynamic --jobs=50
 build:rocm_rbe_dynamic --internal_spawn_scheduler
 build:rocm_rbe_dynamic --spawn_strategy=dynamic
