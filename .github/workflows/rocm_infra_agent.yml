@@ -33,7 +33,7 @@ name: ROCm Infra Agent
 permissions:
   contents: read
   issues: write
-  id-token: write  # Required by claude-code-action (respond_to_mention job) for OIDC auth.
+  id-token: write # Required by claude-code-action (respond_to_mention job) for OIDC auth.
 
 env:
   # Branch this run itself is testing/running from, so a PR (or a manual
@@ -65,40 +65,10 @@ on:
       - ".claude/skills/respond-to-mention/SKILL.md"
       - ".claude/skills/respond-to-issue/SKILL.md"
   issue_comment:
-    # Fires on a brand-new comment on a per-failure issue - the whole
-    # comment IS the instruction now (nothing is edited into a larger,
-    # pre-existing comment). Unlike editing someone else's comment (which
-    # requires write/triage repo access), posting a new one on a public
-    # repo doesn't by itself restrict who can trigger this - the
-    # author_association check in collect_mention_targets' `if:` below is
-    # what preserves the original "trusted collaborators only" boundary.
     types: [created]
 
 jobs:
   collect_mention_targets:
-    # On a schedule/workflow_dispatch run, a human could have posted a new
-    # `@claude <instructions>` comment on any open per-failure issue days
-    # ago and had it missed, so that path rescans every open
-    # rocm-infra-error issue's comments rather than only this one event -
-    # this is the fallback path. An issue_comment event already tells us
-    # exactly which comment was posted, so that path checks only the one
-    # comment - see collect_claude_mention_targets.sh for both modes.
-    #
-    # Two cheap, best-effort pre-filters gate an issue_comment-triggered run
-    # before even the checkout - the scheduled full scan still catches
-    # anything under-matched here:
-    #   - `contains(.body, '@claude')`: only matches a literal lowercase
-    #     "@claude", unlike the script's own case-insensitive check.
-    #   - `author_association` is one of OWNER/MEMBER/COLLABORATOR: unlike
-    #     *editing* a comment (which GitHub itself already requires
-    #     write/triage access for), *posting* a new one has no such
-    #     built-in restriction - this check is what keeps that trust
-    #     boundary the same as before now that the trigger moved from
-    #     `edited` to `created`.
-    # Whether the issue actually carries the rocm-infra-error label isn't
-    # checked here - collect_claude_mention_targets.sh does that itself
-    # (and ignores the event otherwise), so it isn't duplicated in this
-    # `if:` too.
     if: >
       github.event_name != 'issue_comment' ||
       (contains(github.event.comment.body, '@claude') &&
@@ -106,18 +76,7 @@ jobs:
     name: Find @claude follow-ups to act on
     runs-on: ubuntu-latest
     outputs:
-      # A JSON array of ALL qualifying targets (both types together) - used
-      # only by apply_patch_and_open_pr below, which doesn't need to tell
-      # the two types apart. "[]" means nothing to do this run. See
-      # collect_claude_mention_targets.sh.
       mention_targets: ${{ steps.collect.outputs.mention_targets }}
-      # The same targets, split by `type` into their own outputs - a
-      # `uses:`-a-reusable-workflow job's `if:` can't reference `matrix.*`
-      # (GitHub Actions doesn't expose the matrix context there, only in a
-      # regular job's own `steps:`), so respond_to_mention/
-      # respond_to_issue_mention below each gate on, and matrix over, only
-      # their own one of these - never the combined array - instead of
-      # filtering by `matrix.type` in their `if:`.
       ci_failure_targets: ${{ steps.collect.outputs.ci_failure_targets }}
       general_targets: ${{ steps.collect.outputs.general_targets }}
     steps:
@@ -132,13 +91,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
-          # Passed via env, never interpolated directly into the script
-          # below: COMMENT_BODY is attacker-controlled free text (anyone
-          # who can comment controls it), and `${{ }}` substitution into a
-          # `run:` block is literal text splicing - embedding it directly
-          # would let a comment body break out into arbitrary shell. Env
-          # var expansion (`"$COMMENT_BODY"`) is just data, so it's safe
-          # however it's shaped.
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
           COMMENT_BODY: ${{ github.event.comment.body }}
@@ -171,11 +123,6 @@ jobs:
     with:
       repository: ${{ matrix.repository }}
       head_sha: ${{ matrix.head_sha }}
-      # Can't reference env.DEBUG_PIPELINE_REF here - the `env` context
-      # isn't available in a uses:-job's `with:` block (only github, needs,
-      # strategy, matrix, inputs, vars, secrets are), so this repeats the
-      # same computation DEBUG_PIPELINE_REF itself does at the top of this
-      # file instead of reading it back out.
       debug_pipeline_ref: ${{ github.head_ref || github.ref_name }}
       issue_number: ${{ matrix.issue_number }}
       already_handled_marker: "<!-- rocm-nightly-claude-mention:${{ matrix.job_name }} / ${{ matrix.step_name }}:${{ matrix.instructions_hash }} -->"
@@ -237,16 +184,6 @@ jobs:
     secrets: inherit
 
   respond_to_issue_mention:
-    # Only the `general`-typed entries (collect_mention_targets'
-    # general_targets output - see that job's outputs comment for why a
-    # `uses:` job matrixes over its own pre-filtered output rather than
-    # filtering the combined array via `matrix.type` in `if:`). These
-    # aren't one of the nightly monitor's own per-failure issues, so
-    # there's no specific commit to reproduce - repository/head_sha are
-    # fixed at "ROCm/xla"/"main" (see collect_claude_mention_targets.sh),
-    # just enough for claude_issue_triage.yml's checkout step and for
-    # apply_patch_and_open_pr below to apply a patch against, if this ends
-    # up producing one.
     name: "Respond: issue #${{ matrix.issue_number }}"
     needs: collect_mention_targets
     if: needs.collect_mention_targets.outputs.general_targets != '[]'
@@ -311,54 +248,15 @@ jobs:
 
   apply_patch_and_open_pr:
     name: "Apply fix: issue #${{ matrix.issue_number }}"
-    needs: [collect_mention_targets, respond_to_mention, respond_to_issue_mention]
-    # `!cancelled()` is required, not optional: a job's *default* `if:` is
-    # equivalent to `success()`, which is false whenever ANY of its `needs`
-    # was skipped - not just failed. Every matrix entry here is exactly one
-    # of `ci_failure`/`general`, so exactly one of
-    # respond_to_mention/respond_to_issue_mention is *always* skipped for
-    # it (by their own, mutually exclusive `if:` conditions) - without this
-    # override, that skip alone silently skipped this job for every single
-    # entry, every time, regardless of whether the other one actually
-    # produced a patch. (Confirmed in production: a verified fix on
-    # ROCm/xla#1551 reported "opening a draft PR now" and then nothing ever
-    # followed - this job never ran at all.)
-    #
-    # But `!cancelled()` also opts this `if:` out of GitHub's *implicit*
-    # `success()` default for every `needs` entry, including
-    # collect_mention_targets itself - not just the two it's meant to
-    # tolerate. When collect_mention_targets is skipped (e.g. a bot's own
-    # reply comment re-triggering this workflow, correctly filtered out by
-    # its author_association check), its `mention_targets` output is an
-    # empty string, not `'[]'` - `"" != '[]'` is still true, so this job got
-    # scheduled anyway, and `fromJson('')` on the matrix below then errored
-    # at matrix-evaluation time, failing the whole run with this job absent
-    # from the Jobs API list. The explicit `result == 'success'` check below
-    # restores that guard for collect_mention_targets specifically, while
-    # still tolerating a skipped respond_to_mention/respond_to_issue_mention.
+    needs:
+      [collect_mention_targets, respond_to_mention, respond_to_issue_mention]
     if: ${{ !cancelled() && needs.collect_mention_targets.result == 'success' && needs.collect_mention_targets.outputs.mention_targets != '[]' }}
-    # Needs to push a branch and open a draft PR, unlike every other job in
-    # this workflow (all read-mostly, aside from issue/label edits) -
-    # scoped here, not at the workflow level.
     permissions:
       contents: write
       pull-requests: write
       issues: write
     strategy:
       fail-fast: false
-      # Deliberately not `needs.respond_to_mention`/`needs.
-      # respond_to_issue_mention`'s own per-entry result: a
-      # reusable-workflow call's outputs collapse across matrix entries
-      # (GitHub Actions only exposes one arbitrary entry's value to a
-      # downstream job, not a map keyed by entry), so this job can't learn
-      # "did matrix entry N produce a patch" from either of those jobs
-      # directly. Instead it reuses the same source matrix (covering both
-      # `ci_failure` and `general` entries alike - whichever of the two
-      # jobs actually ran for a given entry, this one doesn't need to
-      # know or care which) - claude_apply_patch.yml's own download step
-      # tolerates "no such artifact" as the normal/expected outcome for
-      # anything that wasn't verified (not applicable, still red, or a
-      # purely investigative ask with no fix).
       matrix:
         include: ${{ fromJson(needs.collect_mention_targets.outputs.mention_targets) }}
     uses: ./.github/workflows/claude_apply_patch.yml
