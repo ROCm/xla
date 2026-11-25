@@ -94,10 +94,11 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
           COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
         run: |
           if [ "${EVENT_NAME}" = "issue_comment" ]; then
             TARGETS=$(build_tools/rocm/collect_claude_mention_targets.sh \
-              --comment "${ISSUE_NUMBER}" "${COMMENT_ID}" "${COMMENT_BODY}")
+              --comment "${ISSUE_NUMBER}" "${COMMENT_ID}" "${COMMENT_BODY}" "${COMMENT_AUTHOR}")
           else
             TARGETS=$(build_tools/rocm/collect_claude_mention_targets.sh)
           fi
@@ -159,6 +160,10 @@ jobs:
         governs what you do): ${{ matrix.instructions }}
         INSTRUCTIONS HASH (use literally in the Step 0/6 marker, don't
         recompute it): ${{ matrix.instructions_hash }}
+        REQUESTED BY (the GitHub login that posted the comment above - if,
+        and only if, INSTRUCTIONS explicitly asks for the fix to be sent
+        upstream to openxla/xla, this is who the resulting commit gets
+        attributed to; see Step 5): ${{ matrix.commenter_login }}
 
         A human added the instructions above by posting a new comment on
         the issue, asking you to act on this failure - that could mean
@@ -168,7 +173,7 @@ jobs:
         instructions actually say. Run the /respond-to-mention skill,
         using the values above as its arguments: CI repo, issue number,
         job name, step name, repository, head SHA, failure URL,
-        instructions, instructions hash, in that order. The skill
+        instructions, instructions hash, requested by, in that order. The skill
         self-caps its own non-build decision-making at 30 minutes - time
         spent on actual build+test cycles doesn't count against that,
         but the whole run still has to fit this step's own timeout. The
@@ -226,6 +231,10 @@ jobs:
         governs what you do): ${{ matrix.instructions }}
         INSTRUCTIONS HASH (use literally in the Step 0/4 marker, don't
         recompute it): ${{ matrix.instructions_hash }}
+        REQUESTED BY (the GitHub login that posted the comment above - if,
+        and only if, INSTRUCTIONS explicitly asks for the fix to be sent
+        upstream to openxla/xla, this is who the resulting commit gets
+        attributed to; see Step 3): ${{ matrix.commenter_login }}
 
         A human added the instructions above by posting a new comment on
         an ordinary issue, asking you to do something - answer a
@@ -233,8 +242,8 @@ jobs:
         build/run/debug something, or make a code change, depending on
         what the instructions actually say. Run the /respond-to-issue
         skill, using the values above as its arguments: CI repo, issue
-        number, instructions, instructions hash, in that order. The
-        skill self-caps its own non-build decision-making at 30 minutes -
+        number, instructions, instructions hash, requested by, in that
+        order. The skill self-caps its own non-build decision-making at 30 minutes -
         time spent on an actual build/test (if asked for) doesn't count
         against that, but the whole run still has to fit this step's own
         timeout. It is responsible for posting its findings as a new
@@ -265,4 +274,5 @@ jobs:
       head_sha: ${{ matrix.head_sha }}
       issue_number: ${{ matrix.issue_number }}
       artifact_name: "mention-patch-${{ matrix.comment_id }}"
+      commenter_login: ${{ matrix.commenter_login }}
     secrets: inherit

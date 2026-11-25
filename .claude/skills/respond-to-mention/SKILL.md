@@ -1,7 +1,7 @@
 ---
 name: respond-to-mention
 description: Hard-capped at 30 minutes of non-build decision-making - triggered when a human posts a new `@claude <instructions>` comment on a per-failure issue debug-nightly-failure created, asking Claude to act on that failure - verify the already-proposed fix, dig further (e.g. set a breakpoint and inspect), try a different approach, or devise a new solution, per whatever the instructions literally say. When just asked to verify, reproduces the original failure under heavy repetition (nightly GPU CI can be flaky), applies the proposed fix, confirms it goes green, reverts the fix, and confirms it goes red again - a differential check that the fix, not noise, is responsible. If it ends up with a change it's confident actually fixes the problem, writes it out as a plain patch file (plus a PR title/body) for a deterministic workflow step to apply onto ROCm/xla's own default branch (main) and open a draft "[WIP] ..." PR with a Google-style CL description - never commits, pushes, or opens the PR itself. Posts its findings (noting a verified fix is pending a PR, a plain "not applicable" statement, or whatever was actually investigated) as a new comment on the issue, and never repeats the exact same instruction once attempted. Use when invoked by the "respond_to_mention" job of rocm_infra_monitor.yml for one specific comment carrying an `@claude` instruction.
-argument-hint: "[ci-repo] [issue-number] [job-name] [step-name] [repository] [head-sha] [failure-url] [instructions] [instructions-hash]"
+argument-hint: "[ci-repo] [issue-number] [job-name] [step-name] [repository] [head-sha] [failure-url] [instructions] [instructions-hash] [requested-by]"
 context: fork
 agent: general-purpose
 allowed-tools: Bash(gh issue edit *), Bash(gh issue comment *), Bash(gh label create *), Bash(gh api *), Bash(gh run view *), Bash(git *), Bash(docker exec rocmless-debug *), Bash(build_tools/rocm/*), Bash(bazel *), Bash(gdb *), Bash(objdump *), Bash(grep *), Bash(cat *), Bash(timeout *), Read, Grep, Glob, Write, Edit
@@ -15,12 +15,12 @@ eventually branch from if you end up with a verified fix.
 
 ## Arguments
 
-The caller passes nine values, space separated: `CI_REPO ISSUE_NUMBER
+The caller passes ten values, space separated: `CI_REPO ISSUE_NUMBER
 JOB_NAME STEP_NAME REPOSITORY HEAD_SHA FAILURE_URL INSTRUCTIONS
-INSTRUCTIONS_HASH`. `JOB_NAME`, `STEP_NAME`, and especially `INSTRUCTIONS`
-can themselves contain spaces, punctuation, and quotes, so do not split
-`$ARGUMENTS` positionally by whitespace - the invoking prompt also restates
-each value on its own labeled line; read the values from there.
+INSTRUCTIONS_HASH REQUESTED_BY`. `JOB_NAME`, `STEP_NAME`, and especially
+`INSTRUCTIONS` can themselves contain spaces, punctuation, and quotes, so do
+not split `$ARGUMENTS` positionally by whitespace - the invoking prompt also
+restates each value on its own labeled line; read the values from there.
 
 - `CI_REPO`: `ROCm/xla` - the repo the issue lives in, and the only repo
   the patch you write in Step 5 is ever meant to land in (applied and
@@ -48,6 +48,10 @@ each value on its own labeled line; read the values from there.
   be useful.
 - `INSTRUCTIONS_HASH`: a short hash of `INSTRUCTIONS`, already computed for
   you - use it verbatim in the Step 0/Step 6 marker, don't recompute it.
+- `REQUESTED_BY`: the GitHub login of whoever posted the `@claude` comment.
+  Only matters if `INSTRUCTIONS` explicitly asks for the fix to be sent
+  upstream (see Step 5) - that's the identity the resulting commit gets
+  attributed to, for `openxla/xla`'s CLA bot. Otherwise ignore it.
 
 ## IMPORTANT: scope and safety
 
@@ -89,14 +93,22 @@ each value on its own labeled line; read the values from there.
   not as a shortcut, not even to "double check" something.** A
   deterministic workflow step does all three, from the patch file (plus
   PR title/body) you write in Step 5 - see that step for why (a hard
-  Claude Code permission restriction, not a style choice). That step only
-  ever applies your patch to, and opens a PR against, `ROCm/xla`'s own
-  default branch (`main`) specifically - never `openxla/xla` directly, even
-  though `REPOSITORY` almost always is `openxla/xla` (there's no push
-  access upstream at all). Nothing you do in this skill should assume
-  otherwise: never try to push anywhere yourself, never force-push, never
-  cause more than one PR to be opened, and the resulting PR is always a
-  draft, never merged by anything in this pipeline.
+  Claude Code permission restriction, not a style choice). That step
+  always applies your patch to, and pushes the resulting commit as a new
+  branch into, `ROCm/xla` specifically - never `openxla/xla` directly, even
+  though `REPOSITORY` almost always is `openxla/xla` (no credential exists
+  that can push to, or open a PR against, `openxla/xla` itself). By
+  default it then opens a draft PR against `ROCm/xla`'s own default branch
+  (`main`). If, and only if, `INSTRUCTIONS` explicitly asks for the fix to
+  go upstream (e.g. "open this upstream", "send this to openxla/xla"),
+  write `/tmp/claude_pr_target.txt` in Step 5 as well - that tells the
+  workflow step to instead attribute the commit to `REQUESTED_BY` (so
+  `openxla/xla`'s CLA bot recognizes it) and post a ready-to-finish compare
+  link against `openxla/xla` for a human to click, rather than opening the
+  PR itself. Nothing else about this changes: never try to push anywhere
+  yourself, never force-push, never cause more than one PR/branch to be
+  created, and any PR that does get opened is always a draft, never merged
+  by anything in this pipeline.
 - The only other GitHub write is one new comment on the `ISSUE_NUMBER`
   issue (Step 6, your findings) via `gh issue comment <ISSUE_NUMBER>
   --repo <CI_REPO> --body-file <file>`. **Never edit the issue body or an
@@ -315,7 +327,18 @@ write the files:
    confirm causality - see the verification writeup on
    https://github.com/<CI_REPO>/issues/<ISSUE_NUMBER>.
    ```
-3. **The workflow applies this patch directly on top of `REPOSITORY@HEAD_SHA`
+3. **Only if `INSTRUCTIONS` explicitly asked for the fix to be sent
+   upstream to `openxla/xla`** (not just implied, not "this probably
+   affects upstream too" - an actual, specific ask that the PR itself goes
+   there): write one more file, literally and only the word `upstream`,
+   nothing else:
+   ```
+   printf 'upstream' > /tmp/claude_pr_target.txt
+   ```
+   Skip this file entirely for every other case - its mere absence is what
+   keeps the default `ROCm/xla`-only behavior for every ordinary verify/fix
+   request.
+4. **The workflow applies this patch directly on top of `REPOSITORY@HEAD_SHA`
    itself** - the exact commit this very skill run just verified the fix
    against, fetched fresh rather than reused from any branch tip. Rebasing
    onto a later tip (`ROCm/xla`'s own `main`, or even `openxla/xla`'s)
@@ -323,10 +346,13 @@ write the files:
    red->green->red cycle, so the workflow deliberately doesn't do that. It
    then pushes the resulting commit as a new branch into `ROCm/xla` (the
    only repo it can push to - `ROCm/xla` being a registered GitHub fork of
-   `openxla/xla` is what makes that branch's history acceptable there) and
-   opens the PR against `ROCm/xla`'s own `main`. Not your call to make
-   here, it's baked into the workflow step itself - should essentially
-   never fail to apply, since it's the same patch against the same commit
+   `openxla/xla` is what makes that branch's history acceptable there).
+   Without the Step 5.3 file, it commits as `github-actions[bot]` and opens
+   the PR itself against `ROCm/xla`'s own `main`; with it, it instead
+   commits as `REQUESTED_BY` and posts a compare link against `openxla/xla`
+   for a human to finish. Not your call to make here, it's baked into the
+   workflow step itself - should essentially never fail to apply, since
+   it's the same patch against the same commit
    it was generated from.
 
 ## Step 6 — Report, as a new comment
@@ -352,8 +378,10 @@ it (red again)", or "set a breakpoint at <file>:<line> and inspected
 <what>", or whatever actually happened>
 
 <exactly one of:>
-- ✅ **Verified** — opening a draft PR with the fix now. A follow-up
-  comment will link to it once opened.
+- ✅ **Verified** — opening a draft PR with the fix now (or, if upstream was
+  requested, pushing it and handing off a compare link against
+  `openxla/xla` attributed to you). A follow-up comment will link to it
+  once opened.
 - ❌ **Not applicable** — <the specific reason: never reproduced red /
   still red with the fix applied / stayed green after reverting it>
 - 🔍 **Investigated, no fix proposed** — <findings from the custom
