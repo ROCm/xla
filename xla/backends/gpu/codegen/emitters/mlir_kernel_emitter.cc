@@ -668,7 +668,8 @@ void AddLoopTransformationPasses(mlir::OpPassManager& pm,
 }
 
 void AddLoweringPasses(mlir::OpPassManager& pm,
-                       const se::DeviceDescription& device) {
+                       const se::DeviceDescription& device,
+                       bool enable_recover_exp2) {
   pm.addNestedPass<FuncOp>(emitters::createConvertPureCallOpsPass());
   pm.addPass(emitters::createLowerTensorsPass(device));
   pm.addPass(emitters::createLowerPdlWaitPass());
@@ -717,7 +718,9 @@ void AddLoweringPasses(mlir::OpPassManager& pm,
     if (cc->has_fp8_support()) {
       pm.addPass(CreateConvertFloatAMDPass(*cc));
     }
-    pm.addPass(createRecoverExp2Pass());
+    if (enable_recover_exp2) {
+      pm.addPass(createRecoverExp2Pass());
+    }
   }
 
   pm.addPass(emitters::createExpandFloatOpsPass());
