@@ -183,7 +183,7 @@ that, working from a patch file you leave behind:
    [WIP] <one-line summary of the change>
    EOF
    cat > /tmp/claude_pr_body.txt <<'EOF'
-   <Google-style CL description - see shape below>
+   <openxla/xla's own PR template, filled in - see shape below>
    EOF
    ```
    The workflow treats the mere existence of a non-empty
@@ -194,16 +194,26 @@ that, working from a patch file you leave behind:
    plainly in Step 4's comment, since in that case the upload step won't
    find them and no PR will follow.
 
-   PR body shape - a Google-style CL description, **not** a Summary/Test
-   plan bullet template: a blank line after the title, then prose
-   paragraphs on what changed and why (quoting the issue's own context
-   rather than re-deriving it), ending with an honest disclosure of
-   whether (and how) it was actually verified:
+   PR body shape - fill in `openxla/xla`'s own pull request template with
+   real, specific content under every heading it asks for, never leaving
+   one of its placeholder prompts in place and never substituting a
+   different shape of your own. Read the template itself rather than
+   recalling it from memory - it can change upstream, and a stale copy in
+   this skill would silently drift from it. `CI_REPO`'s own default branch
+   (already checked out) doesn't carry this file, so fetch it directly:
    ```
-   <One or two prose paragraphs: what this change does and why, per the
-   instructions on the issue. No bullet lists, no "## Summary"/"## Test
-   plan" headings.>
-
+   gh api repos/openxla/xla/contents/.github/pull_request_template.md \
+     --jq '.content' | base64 -d
+   ```
+   Two things the template itself doesn't spell out, so apply them
+   yourself: for its "Kind of Contribution" section, pick exactly the one
+   that applies and delete the rest (its own instruction, easy to skip by
+   accident) rather than leaving all the options listed; and omit its
+   "Benchmark" section entirely unless the kind is a Performance
+   Improvement - it doesn't apply otherwise, the same way a human filling
+   this out by hand would leave it out rather than writing "N/A". After the
+   template's own sections, add one closing line:
+   ```
    <exactly one of:>
    Verified by running <the specific target/command>, which <passed /
    confirmed the fix>. Requested in https://github.com/<CI_REPO>/issues/<ISSUE_NUMBER>.

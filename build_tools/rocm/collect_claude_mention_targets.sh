@@ -22,10 +22,10 @@
 #
 # Two modes:
 #   - Single comment (`collect_claude_mention_targets.sh --comment
-#     <issue_number> <comment_id> <comment_body>`): checks only the one
-#     comment an `issue_comment: created` event already told us about - no
-#     need to page through anything else. Used by the event-triggered run
-#     for an immediate response.
+#     <issue_number> <comment_id> <comment_body> <commenter_login>`): checks
+#     only the one comment an `issue_comment: created` event already told us
+#     about - no need to page through anything else. Used by the
+#     event-triggered run for an immediate response.
 #   - Full scan (`collect_claude_mention_targets.sh`): checks every open
 #     issue's comments. Used by the scheduled run, which is the fallback
 #     that catches anything the event-triggered path missed (a run that
@@ -61,12 +61,17 @@
 # Output:
 #   A single compact JSON array on stdout (diagnostics on stderr). Each
 #   element has `type: "ci_failure"` and {issue_number, comment_id,
-#   job_name, step_name, repository, head_sha, failure_url, run_id,
-#   job_id, instructions, instructions_hash}, or `type: "general"` and
-#   {issue_number, comment_id, repository, head_sha, instructions,
-#   instructions_hash} (repository/head_sha fixed at "ROCm/xla"/"main" -
-#   there's no failing job to derive them from - included only so a patch
-#   this target's skill run produces can still be applied the same way).
+#   commenter_login, job_name, step_name, repository, head_sha, failure_url,
+#   run_id, job_id, instructions, instructions_hash}, or `type: "general"`
+#   and {issue_number, comment_id, commenter_login, repository, head_sha,
+#   instructions, instructions_hash} (repository/head_sha fixed at
+#   "ROCm/xla"/"main" - there's no failing job to derive them from -
+#   included only so a patch this target's skill run produces can still be
+#   applied the same way). commenter_login is the GitHub login of whoever
+#   posted the `@claude` comment - threaded all the way to
+#   claude_apply_patch.yml, which attributes the resulting commit to them
+#   (instead of the usual github-actions[bot] identity) and includes an
+#   upstream-PR compare link in its own completion comment.
 #   "[]" if there is nothing to act on.
 #
 # Exit codes:
@@ -90,7 +95,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ALL_COMMENTS_TEXT is every existing comment's body on the issue,
 # newline-joined, searched only for the mention-marker dedup check below.
 process_comment() {
-    local ISSUE_NUMBER="$1" COMMENT_ID="$2" COMMENT_BODY="$3" ISSUE_BODY="$4" ISSUE_HAS_LABEL="$5" ALL_COMMENTS_TEXT="$6"
+    local ISSUE_NUMBER="$1" COMMENT_ID="$2" COMMENT_BODY="$3" ISSUE_BODY="$4" ISSUE_HAS_LABEL="$5" ALL_COMMENTS_TEXT="$6" COMMENTER_LOGIN="$7"
 
     echo "Checking comment ${COMMENT_ID} on issue #${ISSUE_NUMBER}" >&2
 
@@ -156,11 +161,13 @@ process_comment() {
         jq -nc \
             --arg issue_number "$ISSUE_NUMBER" \
             --arg comment_id "$COMMENT_ID" \
+            --arg commenter_login "$COMMENTER_LOGIN" \
             --arg repository "$CI_REPO" \
             --arg head_sha "main" \
             --arg instructions "$INSTRUCTIONS" \
             --arg instructions_hash "$INSTRUCTIONS_HASH" \
             '{type: "general", issue_number: $issue_number, comment_id: $comment_id,
+              commenter_login: $commenter_login,
               repository: $repository, head_sha: $head_sha,
               instructions: $instructions, instructions_hash: $instructions_hash}'
         return
@@ -199,6 +206,7 @@ process_comment() {
     jq -nc \
         --arg issue_number "$ISSUE_NUMBER" \
         --arg comment_id "$COMMENT_ID" \
+        --arg commenter_login "$COMMENTER_LOGIN" \
         --arg job_name "$JOB_NAME" \
         --arg step_name "$STEP_NAME" \
         --arg repository "$HEAD_REPOSITORY" \
@@ -209,6 +217,7 @@ process_comment() {
         --arg instructions "$INSTRUCTIONS" \
         --arg instructions_hash "$INSTRUCTIONS_HASH" \
         '{type: "ci_failure", issue_number: $issue_number, comment_id: $comment_id,
+          commenter_login: $commenter_login,
           job_name: $job_name, step_name: $step_name, repository: $repository,
           head_sha: $head_sha, failure_url: $failure_url, run_id: $run_id,
           job_id: $job_id, instructions: $instructions,
@@ -218,19 +227,20 @@ process_comment() {
 TARGETS="[]"
 
 if [ "${1:-}" = "--comment" ]; then
-    if [ $# -ne 4 ]; then
-        echo "Usage: $0 --comment <issue_number> <comment_id> <comment_body>" >&2
+    if [ $# -ne 5 ]; then
+        echo "Usage: $0 --comment <issue_number> <comment_id> <comment_body> <commenter_login>" >&2
         exit 1
     fi
     ISSUE_NUMBER="$2"
     COMMENT_ID="$3"
     COMMENT_BODY="$4"
+    COMMENTER_LOGIN="$5"
 
     ISSUE_JSON=$(gh issue view "$ISSUE_NUMBER" --repo "$CI_REPO" --json body,labels)
     ISSUE_BODY=$(printf '%s' "$ISSUE_JSON" | jq -r '.body')
     ISSUE_HAS_LABEL=$(printf '%s' "$ISSUE_JSON" | jq --arg l "$LABEL" '[.labels[].name] | any(. == $l)')
     ALL_COMMENTS_TEXT=$(gh api --paginate "/repos/${CI_REPO}/issues/${ISSUE_NUMBER}/comments" | jq -r '[.[].body] | join("\n")')
-    TARGET=$(process_comment "$ISSUE_NUMBER" "$COMMENT_ID" "$COMMENT_BODY" "$ISSUE_BODY" "$ISSUE_HAS_LABEL" "$ALL_COMMENTS_TEXT")
+    TARGET=$(process_comment "$ISSUE_NUMBER" "$COMMENT_ID" "$COMMENT_BODY" "$ISSUE_BODY" "$ISSUE_HAS_LABEL" "$ALL_COMMENTS_TEXT" "$COMMENTER_LOGIN")
     if [ -n "$TARGET" ]; then
         TARGETS=$(printf '%s' "$TARGETS" | jq -c --argjson t "$TARGET" '. + [$t]')
     fi
@@ -253,14 +263,15 @@ elif [ $# -eq 0 ]; then
 
         for COMMENT_ID in "${COMMENT_IDS[@]}"; do
             COMMENT_BODY=$(printf '%s' "$COMMENTS" | jq -r --argjson id "$COMMENT_ID" '.[] | select(.id == $id) | .body')
-            TARGET=$(process_comment "$ISSUE_NUMBER" "$COMMENT_ID" "$COMMENT_BODY" "$ISSUE_BODY" "$ISSUE_HAS_LABEL" "$ALL_COMMENTS_TEXT")
+            COMMENTER_LOGIN=$(printf '%s' "$COMMENTS" | jq -r --argjson id "$COMMENT_ID" '.[] | select(.id == $id) | .user.login')
+            TARGET=$(process_comment "$ISSUE_NUMBER" "$COMMENT_ID" "$COMMENT_BODY" "$ISSUE_BODY" "$ISSUE_HAS_LABEL" "$ALL_COMMENTS_TEXT" "$COMMENTER_LOGIN")
             if [ -n "$TARGET" ]; then
                 TARGETS=$(printf '%s' "$TARGETS" | jq -c --argjson t "$TARGET" '. + [$t]')
             fi
         done
     done
 else
-    echo "Usage: $0 [--comment <issue_number> <comment_id> <comment_body>]" >&2
+    echo "Usage: $0 [--comment <issue_number> <comment_id> <comment_body> <commenter_login>]" >&2
     exit 1
 fi
 

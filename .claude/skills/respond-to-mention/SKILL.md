@@ -1,6 +1,6 @@
 ---
 name: respond-to-mention
-description: Hard-capped at 30 minutes of non-build decision-making - triggered when a human posts a new `@claude <instructions>` comment on a per-failure issue debug-nightly-failure created, asking Claude to act on that failure - verify the already-proposed fix, dig further (e.g. set a breakpoint and inspect), try a different approach, or devise a new solution, per whatever the instructions literally say. When just asked to verify, reproduces the original failure under heavy repetition (nightly GPU CI can be flaky), applies the proposed fix, confirms it goes green, reverts the fix, and confirms it goes red again - a differential check that the fix, not noise, is responsible. If it ends up with a change it's confident actually fixes the problem, writes it out as a plain patch file (plus a PR title/body) for a deterministic workflow step to apply onto ROCm/xla's own default branch (main) and open a draft "[WIP] ..." PR with a Google-style CL description - never commits, pushes, or opens the PR itself. Posts its findings (noting a verified fix is pending a PR, a plain "not applicable" statement, or whatever was actually investigated) as a new comment on the issue, and never repeats the exact same instruction once attempted. Use when invoked by the "respond_to_mention" job of rocm_infra_monitor.yml for one specific comment carrying an `@claude` instruction.
+description: Hard-capped at 30 minutes of non-build decision-making - triggered when a human posts a new `@claude <instructions>` comment on a per-failure issue debug-nightly-failure created, asking Claude to act on that failure - verify the already-proposed fix, dig further (e.g. set a breakpoint and inspect), try a different approach, or devise a new solution, per whatever the instructions literally say. When just asked to verify, reproduces the original failure under heavy repetition (nightly GPU CI can be flaky), applies the proposed fix, confirms it goes green, reverts the fix, and confirms it goes red again - a differential check that the fix, not noise, is responsible. If it ends up with a change it's confident actually fixes the problem, writes it out as a plain patch file (plus a PR title/body) for a deterministic workflow step to apply onto ROCm/xla's own default branch (main) and open a draft "[WIP] ..." PR with openxla/xla's own PR template filled in - never commits, pushes, or opens the PR itself. Posts its findings (noting a verified fix is pending a PR, a plain "not applicable" statement, or whatever was actually investigated) as a new comment on the issue, and never repeats the exact same instruction once attempted. Use when invoked by the "respond_to_mention" job of rocm_infra_monitor.yml for one specific comment carrying an `@claude` instruction.
 argument-hint: "[ci-repo] [issue-number] [job-name] [step-name] [repository] [head-sha] [failure-url] [instructions] [instructions-hash]"
 context: fork
 agent: general-purpose
@@ -285,7 +285,7 @@ write the files:
    [WIP] <one-line summary of the fix>
    EOF
    cat > /tmp/claude_pr_body.txt <<'EOF'
-   <Google-style CL description - see shape below>
+   <openxla/xla's own PR template, filled in - see shape below>
    EOF
    ```
    The workflow treats **the mere existence of a non-empty
@@ -298,23 +298,40 @@ write the files:
    no patch will reach `apply_patch_and_open_pr`, so mention that
    explicitly rather than letting the report imply a PR is coming.
 
-   PR body shape - a Google-style CL description, **not** a Summary/Test
-   plan bullet template: the one-line subject is already in the title
-   file, so the body is a blank line followed by prose paragraphs - what
-   was broken, the root cause (reuse the analysis already in
-   `debug-nightly-failure`'s report comment rather than re-deriving it),
-   and what this change does about it - then a closing line disclosing how
-   it was produced and verified, with a link back to the issue:
+   PR body shape - fill in `openxla/xla`'s own pull request template with
+   real, specific content under every heading it asks for, never leaving
+   one of its placeholder prompts in place and never substituting a
+   different shape of your own. Read the template itself rather than
+   recalling it from memory - it can change upstream, and a stale copy in
+   this skill would silently drift from it:
    ```
-   <One or two prose paragraphs: what broke and why, what this change
-   does differently. No bullet lists, no "## Summary"/"## Test plan"
-   headings.>
+   cat .github/pull_request_template.md
+   ```
+   (present at `REPOSITORY@HEAD_SHA`, which is almost always `openxla/xla`;
+   if it's missing - a different `REPOSITORY`, or a `HEAD_SHA` old enough to
+   predate the template - fetch it directly instead:
+   `gh api repos/openxla/xla/contents/.github/pull_request_template.md
+   --jq '.content' | base64 -d`).
 
+   Two things the template itself doesn't spell out, so apply them
+   yourself: for its "Kind of Contribution" section, pick exactly the one
+   that applies and delete the rest (its own instruction, easy to skip by
+   accident) rather than leaving all the options listed; and omit its
+   "Benchmark" section entirely unless the kind is a Performance
+   Improvement - it doesn't apply otherwise, the same way a human filling
+   this out by hand would leave it out rather than writing "N/A". After the
+   template's own sections, add one closing line disclosing how this was
+   produced and verified, with a link back to the issue:
+   ```
    Automatically verified by reproducing the original failure under heavy
    repetition, applying this fix (green), and reverting it (red again) to
    confirm causality - see the verification writeup on
    https://github.com/<CI_REPO>/issues/<ISSUE_NUMBER>.
    ```
+   Omit the template's `📊 Benchmark` section entirely unless
+   `🚀 Kind of Contribution` is `⚡️ Performance Improvement` - it doesn't
+   apply otherwise, the same way a human filling this out by hand would
+   leave it out rather than writing "N/A".
 3. **The workflow applies this patch directly on top of `REPOSITORY@HEAD_SHA`
    itself** - the exact commit this very skill run just verified the fix
    against, fetched fresh rather than reused from any branch tip. Rebasing

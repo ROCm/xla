@@ -348,5 +348,10 @@ jobs:
       head_sha: ${{ matrix.head_sha }}
       issue_number: ${{ matrix.issue_number }}
       artifact_name: "autoverify-patch-${{ matrix.job_id }}"
+      # Empty, not some placeholder bot login: this flow is fully automatic
+      # (no human asked for this specific run), so there's no legitimate
+      # identity to attribute the commit to - claude_apply_patch.yml treats
+      # an empty commenter_login as "keep the github-actions[bot] identity".
+      commenter_login: ''
     secrets: inherit
 

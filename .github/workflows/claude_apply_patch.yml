@@ -25,18 +25,24 @@
 # credential it can't verify ahead of time), so this plain-shell job does
 # all of that instead, entirely outside the agent.
 #
+# Commit identity: attributed to whoever asked for this (`commenter_login`,
+# the GitHub login that posted the triggering `@claude` comment) when there
+# is one, rather than `github-actions[bot]` - both more honest attribution,
+# and what lets openxla/xla's CLA bot recognize the commit if the compare
+# link below (or a manual cherry-pick) ever turns into a real PR there.
+# `commenter_login` is empty for the fully-automatic `auto_verify` flow (no
+# human asked for that specific run), which keeps the bot identity.
+#
 # The posted comment also includes a plain GitHub compare URL across the
 # fork boundary (ROCm/xla is a registered fork of openxla/xla), so a human
 # can open the same branch as a PR upstream too, with no new credential:
 # no App installation or token this job has reaches openxla/xla itself
 # (see the App-token step below), but the compare view works for anyone
 # with ROCm/xla read access, the same way any fork contributor opens a PR
-# against the repo they forked from. This is a convenience link only - the
-# commit is still authored as github-actions[bot] below, same as the
-# ROCm/xla PR, so whoever actually opens it upstream is responsible for
-# reauthoring/re-reviewing the commit themselves if that matters there
-# (e.g. for a CLA check) - this job makes no attempt to resolve or
-# impersonate any human identity for it.
+# against the repo they forked from. Whether that link is actually useful
+# for the CLA bot depends on whether the commit above ended up attributed
+# to a real person rather than github-actions[bot] - the posted comment
+# says which, so a human can judge for themselves.
 
 name: Claude Apply Patch
 
@@ -57,6 +63,10 @@ on:
         type: string
       artifact_name:
         description: 'Name the patch (if any) was uploaded under by claude_issue_triage.yml'
+        required: true
+        type: string
+      commenter_login:
+        description: 'GitHub login of whoever asked for this, used to attribute the commit to them. Empty for the fully-automatic auto_verify flow, which has no human requester - keeps the github-actions[bot] commit identity (the upstream compare link is still posted either way).'
         required: true
         type: string
 
@@ -196,9 +206,34 @@ jobs:
             exit 0
           fi
           git -C "$WORKDIR" apply /tmp/claude_fix.patch
+
+          COMMIT_NAME="github-actions[bot]"
+          COMMIT_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+          LOGIN="${{ inputs.commenter_login }}"
+          if [ -n "$LOGIN" ]; then
+            # Resolve the requester's own identity so the commit is theirs,
+            # not github-actions[bot]'s - both more honest attribution, and
+            # what lets openxla/xla's CLA bot recognize it if the compare
+            # link below ever becomes a real PR there: their public profile
+            # email if they have one set, else GitHub's own noreply alias
+            # for their account (always available, and is exactly how
+            # GitHub itself associates an email-less commit with an
+            # account).
+            if USER_JSON=$(gh api "users/${LOGIN}"); then
+              USER_ID=$(printf '%s' "$USER_JSON" | jq -r '.id')
+              PUBLIC_EMAIL=$(printf '%s' "$USER_JSON" | jq -r '.email // empty')
+              DISPLAY_NAME=$(printf '%s' "$USER_JSON" | jq -r '.name // empty')
+              COMMIT_NAME="${DISPLAY_NAME:-$LOGIN}"
+              COMMIT_EMAIL="${PUBLIC_EMAIL:-${USER_ID}+${LOGIN}@users.noreply.github.com}"
+            else
+              echo "::warning::Could not resolve GitHub user '${LOGIN}' - keeping the github-actions[bot] commit identity"
+              LOGIN=""
+            fi
+          fi
+
           git -C "$WORKDIR" \
-            -c user.name="github-actions[bot]" \
-            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            -c user.name="$COMMIT_NAME" \
+            -c user.email="$COMMIT_EMAIL" \
             commit -aq -F /tmp/claude_pr_title.txt
 
           git -C "$WORKDIR" remote add origin https://github.com/ROCm/xla.git
@@ -219,6 +254,7 @@ jobs:
           TITLE_ENC=$(jq -rn --arg s "$(head -1 /tmp/claude_pr_title.txt)" '$s|@uri')
           BODY_ENC=$(jq -rn --arg s "$(cat /tmp/claude_pr_body.txt)" '$s|@uri')
           echo "compare_url=https://github.com/openxla/xla/compare/main...ROCm:${BRANCH}?quick_pull=1&title=${TITLE_ENC}&body=${BODY_ENC}" >> "$GITHUB_OUTPUT"
+          echo "commit_identity=${LOGIN:-github-actions[bot]}" >> "$GITHUB_OUTPUT"
 
       - name: Post the PR link as a new comment on the issue
         if: steps.open_pr.outputs.pr_url != ''
@@ -226,7 +262,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ steps.open_pr.outputs.pr_url }}
           COMPARE_URL: ${{ steps.open_pr.outputs.compare_url }}
+          COMMIT_IDENTITY: ${{ steps.open_pr.outputs.commit_identity }}
         run: |
           set -euo pipefail
           gh issue comment "${{ inputs.issue_number }}" --repo ROCm/xla \
-            --body "[draft PR](${PR_URL}) opened with the fix. If you'd also like to send this upstream to openxla/xla, [open a PR there](${COMPARE_URL}) (title/body are pre-filled)."
+            --body "[draft PR](${PR_URL}) opened with the fix, committed as \`${COMMIT_IDENTITY}\`. If you'd also like to send this upstream to openxla/xla, [open a PR there](${COMPARE_URL}) (title/body are pre-filled)."
