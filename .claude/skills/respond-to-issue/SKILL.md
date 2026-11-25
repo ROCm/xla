@@ -205,13 +205,21 @@ that, working from a patch file you leave behind:
    gh api repos/openxla/xla/contents/.github/pull_request_template.md \
      --jq '.content' | base64 -d
    ```
+   **Keep every section short - one or two sentences, not paragraphs.**
+   This is a PR description a reviewer skims to decide whether to look
+   closer, not a lab notebook: no tables, no flag-by-flag command dumps, no
+   restating the whole investigation. That detail already lives in the
+   issue the closing line below links back to.
+
    Two things the template itself doesn't spell out, so apply them
    yourself: for its "Kind of Contribution" section, pick exactly the one
    that applies and delete the rest (its own instruction, easy to skip by
    accident) rather than leaving all the options listed; and omit its
    "Benchmark" section entirely unless the kind is a Performance
    Improvement - it doesn't apply otherwise, the same way a human filling
-   this out by hand would leave it out rather than writing "N/A". After the
+   this out by hand would leave it out rather than writing "N/A". For
+   "Unit Tests"/"Execution Tests" specifically, name the target and the
+   one-line result, not the full command or every flag used. After the
    template's own sections, add one closing line:
    ```
    <exactly one of:>
