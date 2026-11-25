@@ -3998,6 +3998,9 @@ cc_library(
         "//xla/hlo/ir:hlo",
         "//xla/hlo/ir:hlo_instruction_utils",
         "//xla/hlo/pass:hlo_pass",
+        "//xla/hlo/pass:hlo_pass_context",
+        "//xla/hlo/pass:hlo_pass_options",
+        "//xla/hlo/pass:hlo_pass_registry",
         "//xla/hlo/transforms:topk_rewriter",
         "//xla/service:decision",
         "//xla/service:hlo_proto_cc",
@@ -4013,6 +4016,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
     ],
+    alwayslink = True,
 )
 
 xla_test(
@@ -4046,12 +4050,14 @@ xla_cc_test(
     deps = [
         ":topk_specializer",
         "//xla:comparison_util",
+        "//xla:xla_data_proto_cc",
         "//xla:xla_proto_cc",
         "//xla/backends/gpu/codegen/triton:topk_config",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/ir:hlo_instruction_utils",
         "//xla/hlo/testlib:hlo_hardware_independent_test_base",
         "//xla/hlo/transforms:topk_rewriter",
+        "//xla/hlo/transforms/simplifiers:hlo_dce",
         "//xla/service/gpu:gpu_device_info_for_tests",
         "//xla/stream_executor:device_description",
         "@com_google_absl//absl/algorithm:container",

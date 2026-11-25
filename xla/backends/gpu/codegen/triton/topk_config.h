@@ -90,6 +90,12 @@ struct TopKKernelConfig {
 absl::StatusOr<TopKKernelSpec> GetTopKKernelSpec(
     const HloCustomCallInstruction& topk);
 
+// The spec of the "TopK" custom call that TopkRewriter makes of the sort that
+// TopkDecomposer makes of the TopK op `topk`: TOTAL order, rows along the last
+// dimension, all other dimensions in the batch.
+absl::StatusOr<TopKKernelSpec> GetTopKKernelSpec(
+    const HloTopKInstruction& topk);
+
 // Checks what the kernels support regardless of the device: f32 or bf16, TOTAL
 // or PARTIAL order, batch >= 1, 1 <= k <= 128, n < 2^31 and k/n < 0.85.
 absl::Status CheckTopKKernelLimits(const TopKKernelSpec& spec);

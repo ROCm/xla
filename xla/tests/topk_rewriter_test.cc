@@ -57,6 +57,9 @@ namespace op = xla::testing::opcode_matchers;
 
 class TopkRewriterTest : public HloInterpreterReferenceMixin<HloTestBase> {};
 
+// A `defer_packed_bf16` predicate of TopkDecomposer that defers every TopK.
+bool DeferAll(const HloInstruction*) { return true; }
+
 std::string getComparator() {
   return R"(
 %compare {
@@ -789,10 +792,9 @@ ENTRY TopK {
 
   // The deferring TopkDecomposer: the generic sort, marked, instead of the
   // packed sort.
-  ASSERT_OK_AND_ASSIGN(bool changed,
-                       TopkDecomposer(HloPredicateIsOp<HloOpcode::kTopK>,
-                                      /*defer_packed_bf16=*/true)
-                           .Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(
+      bool changed, TopkDecomposer(HloPredicateIsOp<HloOpcode::kTopK>, DeferAll)
+                        .Run(module.get()));
   EXPECT_TRUE(changed);
   ASSERT_OK(HloDCE().Run(module.get()).status());
   ASSERT_OK(TupleSimplifier().Run(module.get()).status());
@@ -846,10 +848,9 @@ ENTRY TopK {
   ROOT topk = (bf16[2,5,2]{2,1,0}, s32[2,5,2]{2,1,0}) topk(x), k=2,
     largest=true
 })hlo"));
-  ASSERT_OK_AND_ASSIGN(bool changed,
-                       TopkDecomposer(HloPredicateIsOp<HloOpcode::kTopK>,
-                                      /*defer_packed_bf16=*/true)
-                           .Run(module.get()));
+  ASSERT_OK_AND_ASSIGN(
+      bool changed, TopkDecomposer(HloPredicateIsOp<HloOpcode::kTopK>, DeferAll)
+                        .Run(module.get()));
   EXPECT_TRUE(changed);
   ASSERT_OK(HloDCE().Run(module.get()).status());
   ASSERT_OK_AND_ASSIGN(changed, TopkRewriter().Run(module.get()));
@@ -886,16 +887,59 @@ TEST_F(TopkRewriterTest, TopKDecompositionDeferredPackedOnlyMarksPackedCases) {
     ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                          ParseAndReturnVerifiedModule(absl::StrCat(
                              "HloModule topk\nENTRY e {\n", topk, "\n}")));
-    ASSERT_OK_AND_ASSIGN(bool changed,
-                         TopkDecomposer(HloPredicateIsOp<HloOpcode::kTopK>,
-                                        /*defer_packed_bf16=*/true)
-                             .Run(module.get()));
+    ASSERT_OK_AND_ASSIGN(
+        bool changed,
+        TopkDecomposer(HloPredicateIsOp<HloOpcode::kTopK>, DeferAll)
+            .Run(module.get()));
     EXPECT_TRUE(changed);
     const HloSortInstruction* sort = GetOnlySort(*module);
     ASSERT_NE(sort, nullptr);
     EXPECT_EQ(sort->operand_count(), 2);
     EXPECT_FALSE(IsTopKWithDeferredPackedBf16(sort));
   }
+}
+
+TEST_F(TopkRewriterTest, TopKDecompositionDefersOnlyWhereThePredicateSays) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(R"hlo(
+HloModule topk
+
+ENTRY TopK {
+  x = bf16[10,10]{1,0} parameter(0)
+  deferred = (bf16[10,2]{1,0}, s32[10,2]{1,0}) topk(x), k=2, largest=true
+  packed = (bf16[10,2]{1,0}, s32[10,2]{1,0}) topk(x), k=2, largest=true
+  ROOT t = tuple(deferred, packed)
+})hlo"));
+  ASSERT_OK_AND_ASSIGN(bool changed,
+                       TopkDecomposer(HloPredicateIsOp<HloOpcode::kTopK>,
+                                      [](const HloInstruction* topk) {
+                                        return topk->name() == "deferred";
+                                      })
+                           .Run(module.get()));
+  EXPECT_TRUE(changed);
+  ASSERT_OK(HloDCE().Run(module.get()).status());
+
+  // The deferred TopK gets the marked generic sort of (values, iota); the other
+  // one the packed BF16 sort of one S32 operand.
+  int generic_sorts = 0;
+  int packed_sorts = 0;
+  for (const HloInstruction* inst :
+       module->entry_computation()->instructions()) {
+    if (inst->opcode() != HloOpcode::kSort) {
+      EXPECT_FALSE(IsTopKWithDeferredPackedBf16(inst)) << inst->ToString();
+      continue;
+    }
+    if (inst->operand_count() == 2) {
+      ++generic_sorts;
+      EXPECT_TRUE(IsTopKWithDeferredPackedBf16(inst)) << inst->ToString();
+    } else {
+      ++packed_sorts;
+      EXPECT_EQ(inst->operand(0)->shape().element_type(), S32);
+      EXPECT_FALSE(IsTopKWithDeferredPackedBf16(inst)) << inst->ToString();
+    }
+  }
+  EXPECT_EQ(generic_sorts, 1);
+  EXPECT_EQ(packed_sorts, 1);
 }
 
 TEST_F(TopkRewriterTest, TopKCustomCallBf16WithoutMarkUsesGenericSort) {

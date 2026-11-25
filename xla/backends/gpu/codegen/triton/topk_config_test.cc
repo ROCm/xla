@@ -369,6 +369,24 @@ TEST_F(TopKCustomCallTest, ReadsTheSpecOfARankOneTopK) {
   EXPECT_EQ(spec.order, ComparisonOrder::kTotal);
 }
 
+TEST_F(TopKCustomCallTest, ReadsTheSpecOfATopKOp) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(R"hlo(
+      HloModule m
+      ENTRY e {
+        p = bf16[4,6144,64] parameter(0)
+        ROOT t = (bf16[4,6144,6], s32[4,6144,6]) topk(p), k=6, largest=true
+      })hlo"));
+  ASSERT_OK_AND_ASSIGN(TopKKernelSpec spec,
+                       GetTopKKernelSpec(*Cast<HloTopKInstruction>(
+                           module->entry_computation()->root_instruction())));
+  EXPECT_EQ(spec.input_type, BF16);
+  EXPECT_EQ(spec.order, ComparisonOrder::kTotal);
+  EXPECT_EQ(spec.batch, 24576);
+  EXPECT_EQ(spec.n, 64);
+  EXPECT_EQ(spec.k, 6);
+}
+
 TEST_F(TopKCustomCallTest, MarkerIsAppendedAndKeepsTheConfig) {
   ASSERT_OK_AND_ASSIGN(HloCustomCallInstruction * topk,
                        ParseTopK(R"({is_stable = false, order = "PARTIAL"})"));

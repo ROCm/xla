@@ -1868,6 +1868,7 @@ cc_library(
         "//xla/backends/gpu/transforms:composite_rewriter",
         "//xla/backends/gpu/transforms:cudnn_custom_call_converter",
         "//xla/backends/gpu/transforms:erase_xla_late_frontend_attributes",
+        "//xla/backends/gpu/transforms:topk_specializer",
         "//xla/core/host_offloading:hlo_host_device_type_call_wrapper",
         "//xla/hlo/transforms:call_inliner",
         "//xla/hlo/transforms:convert_memory_placement_to_internal_annotations",

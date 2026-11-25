@@ -31,6 +31,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/primitive_util.h"
 #include "xla/shape.h"
+#include "xla/shape_util.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "xla/util.h"
@@ -132,6 +133,23 @@ absl::StatusOr<TopKKernelSpec> GetTopKKernelSpec(
       has_batch ? data_shape.dimensions(0) : 1,
       data_shape.dimensions(has_batch ? 1 : 0),
       topk.shape().tuple_shapes(0).dimensions(has_batch ? 1 : 0),
+  };
+}
+
+absl::StatusOr<TopKKernelSpec> GetTopKKernelSpec(
+    const HloTopKInstruction& topk) {
+  const Shape& data_shape = topk.operand(0)->shape();
+  if (data_shape.dimensions().empty()) {
+    return InvalidArgument("TopK input must have rank 1 or more: %s",
+                           data_shape.ToString());
+  }
+  const int64_t n = data_shape.dimensions().back();
+  return TopKKernelSpec{
+      data_shape.element_type(),
+      ComparisonOrder::kTotal,
+      n > 0 ? ShapeUtil::ElementsIn(data_shape) / n : 0,
+      n,
+      topk.k(),
   };
 }
 

@@ -567,9 +567,11 @@ absl::StatusOr<bool> TopkRewriter::RunImpl(
 
 class TopkDecomposerVisitor : public DfsHloRewriteVisitor {
  public:
-  TopkDecomposerVisitor(HloPredicate should_decompose, bool defer_packed_bf16)
+  TopkDecomposerVisitor(HloPredicate should_decompose,
+                        HloPredicate defer_packed_bf16)
       : should_decompose_(should_decompose),
-        defer_packed_bf16_(defer_packed_bf16) {}
+        defer_packed_bf16_(defer_packed_bf16 ? defer_packed_bf16
+                                             : HloPredicateFalse) {}
 
   absl::Status HandleCustomCall(HloInstruction* inst) override {
     if (should_decompose_ && !should_decompose_(inst)) {
@@ -604,7 +606,7 @@ class TopkDecomposerVisitor : public DfsHloRewriteVisitor {
     // fits in 16 bits so indices can be packed.
     const bool use_packed_bf16 =
         topk->largest() && CanUsePackedBf16Sort(topk->operand(0));
-    if (use_packed_bf16 && !defer_packed_bf16_) {
+    if (use_packed_bf16 && !defer_packed_bf16_(topk)) {
       return DecomposeTopKWithSorting(topk);
     }
 
@@ -837,7 +839,7 @@ class TopkDecomposerVisitor : public DfsHloRewriteVisitor {
 
  private:
   HloPredicate should_decompose_;
-  bool defer_packed_bf16_;
+  HloPredicate defer_packed_bf16_;
 };
 
 absl::StatusOr<bool> TopkDecomposer::RunImpl(
@@ -858,8 +860,7 @@ class TopkDecomposerFactory : public HloPassFactory {
     return std::make_unique<TopkDecomposer>(
         options.Get<bool>("only_topk_op").value_or(false)
             ? HloPredicateIsOp<HloOpcode::kTopK>
-            : HloPredicate(),
-        options.Get<bool>("defer_packed_bf16").value_or(false));
+            : HloPredicate());
   }
 };
 

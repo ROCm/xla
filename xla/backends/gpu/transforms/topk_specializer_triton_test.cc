@@ -40,10 +40,12 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
+#include "xla/hlo/transforms/simplifiers/hlo_dce.h"
 #include "xla/hlo/transforms/topk_rewriter.h"
 #include "xla/service/gpu/gpu_device_info_for_tests.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/xla.pb.h"
+#include "xla/xla_data.pb.h"
 
 namespace xla::gpu {
 namespace {
@@ -84,6 +86,21 @@ class TopkSpecializerTritonTest : public HloHardwareIndependentTestBase {
         ROOT t = ($1, $2) custom-call(p), custom_call_target="TopK"$3
       })hlo",
         in, out, idx, config_attr));
+  }
+
+  // Parses a module whose root is a TopK op of the `k` largest elements.
+  absl::StatusOr<std::unique_ptr<HloModule>> ParseTopKOp(
+      absl::string_view in, absl::string_view out, absl::string_view idx,
+      int64_t k, TritonTopKFlags flags) {
+    flags_ = flags;
+    return ParseAndReturnVerifiedModule(absl::Substitute(
+        R"hlo(
+      HloModule m
+      ENTRY e {
+        p = $0 parameter(0)
+        ROOT t = ($1, $2) topk(p), k=$3, largest=true
+      })hlo",
+        in, out, idx, k));
   }
 
   static bool HasTritonTopK(const HloModule& module) {
@@ -371,6 +388,103 @@ TEST_F(TopkSpecializerTritonTest, DeferredPackedBf16IsRoutedWhenForced) {
        module->entry_computation()->instructions()) {
     EXPECT_FALSE(IsTopKWithDeferredPackedBf16(inst)) << inst->ToString();
   }
+}
+
+TEST_F(TopkSpecializerTritonTest, WillUseTritonTopKFollowsTheRoutingRule) {
+  struct Case {
+    se::DeviceDescription device;
+    TritonTopKFlags flags;
+    absl::string_view in;
+    absl::string_view out;
+    absl::string_view idx;
+    int64_t k;
+    bool expected;
+  };
+  const se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  const se::DeviceDescription mi300 = TestGpuDeviceInfo::AMDMI300DeviceInfo();
+  const se::DeviceDescription h100 = TestGpuDeviceInfo::H100SXMDeviceInfo();
+  // On MI350, BF16 [24576,64] k=6 is measured faster and [1024,8192] k=64 is
+  // not. MI300 has no measurements.
+  const Case cases[] = {
+      {mi350, TritonTopKFlags::kOn, "bf16[24576,64]", "bf16[24576,6]",
+       "s32[24576,6]", 6, true},
+      {mi350, TritonTopKFlags::kOn, "bf16[4,6144,64]", "bf16[4,6144,6]",
+       "s32[4,6144,6]", 6, true},
+      {mi350, TritonTopKFlags::kOn, "bf16[1024,8192]", "bf16[1024,64]",
+       "s32[1024,64]", 64, false},
+      {mi350, TritonTopKFlags::kForced, "bf16[1024,8192]", "bf16[1024,64]",
+       "s32[1024,64]", 64, true},
+      {mi350, TritonTopKFlags::kOff, "bf16[24576,64]", "bf16[24576,6]",
+       "s32[24576,6]", 6, false},
+      {mi300, TritonTopKFlags::kOn, "bf16[24576,64]", "bf16[24576,6]",
+       "s32[24576,6]", 6, false},
+      {mi300, TritonTopKFlags::kForced, "bf16[24576,64]", "bf16[24576,6]",
+       "s32[24576,6]", 6, true},
+      {h100, TritonTopKFlags::kForced, "bf16[24576,64]", "bf16[24576,6]",
+       "s32[24576,6]", 6, false},
+  };
+  for (const Case& c : cases) {
+    SCOPED_TRACE(absl::StrCat(c.device.name(), " ", c.in, " k=", c.k,
+                              " flags=", static_cast<int>(c.flags)));
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                         ParseTopKOp(c.in, c.out, c.idx, c.k, c.flags));
+    const HloInstruction* topk =
+        module->entry_computation()->root_instruction();
+    EXPECT_EQ(WillUseTritonTopK(topk, c.device), c.expected);
+    EXPECT_FALSE(WillUseTritonTopK(topk->operand(0), c.device));
+  }
+}
+
+TEST_F(TopkSpecializerTritonTest,
+       TopkDecomposerForTritonDefersOnlyRoutedTopKs) {
+  flags_ = TritonTopKFlags::kOn;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       ParseAndReturnVerifiedModule(R"hlo(
+    HloModule m
+    ENTRY e {
+      routed_in = bf16[24576,64] parameter(0)
+      routed = (bf16[24576,6], s32[24576,6]) topk(routed_in), k=6, largest=true
+      kept_in = bf16[1024,8192] parameter(1)
+      kept = (bf16[1024,64], s32[1024,64]) topk(kept_in), k=64, largest=true
+      ROOT t = tuple(routed, kept)
+    })hlo"));
+  const se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  ASSERT_OK_AND_ASSIGN(
+      bool changed, RunHloPass(TopkDecomposerForTriton(mi350), module.get()));
+  EXPECT_TRUE(changed);
+  ASSERT_OK_AND_ASSIGN(
+      changed, RunHloPass(TopkRewriter([](const HloSortInstruction*, int64_t) {
+                            return true;
+                          }),
+                          module.get()));
+  EXPECT_TRUE(changed);
+  ASSERT_OK_AND_ASSIGN(changed,
+                       RunHloPass(TopkSpecializer(mi350), module.get()));
+  EXPECT_TRUE(changed);
+  ASSERT_OK(RunHloPass(HloDCE(), module.get()).status());
+
+  // `routed` reaches the Triton TopK kernels; `kept` keeps the packed BF16 sort
+  // of one S32 operand.
+  int triton_topks = 0;
+  int packed_sorts = 0;
+  for (const HloInstruction* inst :
+       module->entry_computation()->instructions()) {
+    EXPECT_FALSE(inst->IsCustomCall("TopK")) << inst->ToString();
+    EXPECT_FALSE(IsTopKWithDeferredPackedBf16(inst)) << inst->ToString();
+    if (const auto* cc = DynCast<HloCustomCallInstruction>(inst);
+        cc != nullptr && IsTritonTopK(*cc)) {
+      ++triton_topks;
+      EXPECT_EQ(cc->operand(0)->name(), "routed_in");
+    }
+    if (inst->opcode() == HloOpcode::kSort) {
+      ++packed_sorts;
+      ASSERT_EQ(inst->operand_count(), 1) << inst->ToString();
+      EXPECT_EQ(inst->operand(0)->shape().element_type(), S32);
+      EXPECT_EQ(inst->shape().dimensions(1), 8192);
+    }
+  }
+  EXPECT_EQ(triton_topks, 1);
+  EXPECT_EQ(packed_sorts, 1);
 }
 
 TEST_F(TopkSpecializerTritonTest, CudaIsNotRouted) {

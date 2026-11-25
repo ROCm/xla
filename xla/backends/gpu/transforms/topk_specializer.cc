@@ -21,6 +21,7 @@ limitations under the License.
 #include <cstdint>
 #include <initializer_list>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -45,6 +46,10 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/pass/hlo_pass_context.h"
+#include "xla/hlo/pass/hlo_pass_interface.h"
+#include "xla/hlo/pass/hlo_pass_options.h"
+#include "xla/hlo/pass/hlo_pass_registry.h"
 #include "xla/hlo/transforms/topk_rewriter.h"
 #include "xla/literal.h"
 #include "xla/literal_util.h"
@@ -711,11 +716,17 @@ absl::StatusOr<HloInstruction*> SmallBufferOptimization(
   return TupleUtil::ExtractPrefix(new_topk, 2);
 }
 
-// Whether the Triton TopK kernels take `topk` on `device`. Without `force`,
-// only shapes where the kernels were measured faster on the device are taken.
-Decision ShouldUseTritonTopK(const HloCustomCallInstruction* topk,
-                             const se::DeviceDescription& device, bool force) {
-  absl::StatusOr<TopKKernelSpec> spec = GetTopKKernelSpec(*topk);
+// Whether the Triton TopK kernels take a TopK of `spec` on `device`: only on
+// ROCm with xla_gpu_experimental_enable_triton_topk, and without
+// xla_gpu_experimental_force_triton_topk only shapes where the kernels were
+// measured faster on the device.
+Decision ShouldUseTritonTopK(const absl::StatusOr<TopKKernelSpec>& spec,
+                             const se::DeviceDescription& device,
+                             const DebugOptions& debug_options) {
+  if (!device.gpu_compute_capability().IsRocm() ||
+      !debug_options.xla_gpu_experimental_enable_triton_topk()) {
+    return Decision::Forbid("the Triton TopK path is off");
+  }
   if (!spec.ok()) {
     return Decision(spec.status());
   }
@@ -727,7 +738,8 @@ Decision ShouldUseTritonTopK(const HloCustomCallInstruction* topk,
     return Decision::Forbid(absl::StrCat(
         spec->ToString(), ": no kernel config fits ", device.name()));
   }
-  if (!force && !IsTritonTopKFaster(*spec, device)) {
+  if (!debug_options.xla_gpu_experimental_force_triton_topk() &&
+      !IsTritonTopKFaster(*spec, device)) {
     return Decision::Forbid(absl::StrCat(
         spec->ToString(), ": not measured faster on ", device.name()));
   }
@@ -984,23 +996,19 @@ class SpecializeTopkVisitor : public DfsHloRewriteVisitor {
       return ReplaceInstruction(topk, new_topk);
     }
 
-    if (compute_capability_.IsRocm() &&
-        debug_options.xla_gpu_experimental_enable_triton_topk()) {
-      Decision use_triton = ShouldUseTritonTopK(
-          topk, device_description_,
-          debug_options.xla_gpu_experimental_force_triton_topk());
-      if (use_triton.IsAllowed()) {
-        VLOG(2) << "Rewriting TopK for the Triton TopK kernels";
-        // No packed BF16 sort follows, and the new TopK copies the frontend
-        // attributes.
-        topk->erase_frontend_attribute(kTopKDeferredPackedBf16Attr);
-        ABSL_ASSIGN_OR_RETURN(
-            HloInstruction * new_topk,
-            RewriteTopKForRocmTriton(topk, device_description_));
-        return ReplaceInstruction(topk, new_topk);
-      }
-      VLOG(2) << "Triton TopK not used: " << use_triton.Explain();
+    Decision use_triton = ShouldUseTritonTopK(
+        GetTopKKernelSpec(*topk), device_description_, debug_options);
+    if (use_triton.IsAllowed()) {
+      VLOG(2) << "Rewriting TopK for the Triton TopK kernels";
+      // No packed BF16 sort follows, and the new TopK copies the frontend
+      // attributes.
+      topk->erase_frontend_attribute(kTopKDeferredPackedBf16Attr);
+      ABSL_ASSIGN_OR_RETURN(
+          HloInstruction * new_topk,
+          RewriteTopKForRocmTriton(topk, device_description_));
+      return ReplaceInstruction(topk, new_topk);
     }
+    VLOG(2) << "Triton TopK not used: " << use_triton.Explain();
 
     // A BF16 TopK whose packed sort was deferred for the Triton TopK kernels
     // keeps that sort (from TopkDecomposer) when the kernels do not take it.
@@ -1050,5 +1058,46 @@ absl::StatusOr<bool> TopkSpecializer::RunImpl(
                                                 module, execution_threads));
   return changed || removed_sorts;
 }
+
+bool WillUseTritonTopK(const HloInstruction* topk,
+                       const se::DeviceDescription& device) {
+  const auto* topk_op = DynCast<HloTopKInstruction>(topk);
+  if (topk_op == nullptr) {
+    return false;
+  }
+  Decision use_triton =
+      ShouldUseTritonTopK(GetTopKKernelSpec(*topk_op), device,
+                          topk->GetModule()->config().debug_options());
+  VLOG(2) << topk->name() << ": " << use_triton.Explain();
+  return use_triton.IsAllowed();
+}
+
+TopkDecomposerForTriton::TopkDecomposerForTriton(
+    const se::DeviceDescription& device_description)
+    : TopkDecomposer(HloPredicateIsOp<HloOpcode::kTopK>,
+                     [device_description](const HloInstruction* topk) {
+                       return WillUseTritonTopK(topk, device_description);
+                     }) {}
+
+namespace {
+
+class TopkDecomposerForTritonFactory : public HloPassFactory {
+ public:
+  absl::string_view name() const override {
+    return "topk-decomposer-for-triton";
+  }
+
+  absl::StatusOr<std::unique_ptr<HloPassInterface>> Create(
+      const HloPassContext& context, const HloPassOptions&) const override {
+    ABSL_ASSIGN_OR_RETURN(const se::DeviceDescription& device_description,
+                          context.Get<const se::DeviceDescription>());
+    return std::make_unique<TopkDecomposerForTriton>(device_description);
+  }
+};
+
+const HloPassFactory* const kTopkDecomposerForTritonRegistration =
+    RegisterHloPassFactory<TopkDecomposerForTritonFactory>();
+
+}  // namespace
 
 }  // namespace xla::gpu

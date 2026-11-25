@@ -93,12 +93,13 @@ class TopkDecomposer : public HloModulePass {
  public:
   absl::string_view name() const override { return "topk-decomposer"; }
 
-  // With `defer_packed_bf16`, a BF16 TopK op that would be decomposed into the
-  // packed BF16 sort is decomposed into the generic sort instead, marked with
-  // kTopKDeferredPackedBf16Attr, so that TopkRewriter turns it into a "TopK"
-  // custom call that a backend may implement directly.
+  // A BF16 TopK op that would be decomposed into the packed BF16 sort and for
+  // which `defer_packed_bf16` returns true is decomposed into the generic sort
+  // instead, marked with kTopKDeferredPackedBf16Attr, so that TopkRewriter
+  // turns it into a "TopK" custom call that a backend may implement directly.
+  // A null `defer_packed_bf16` defers nothing.
   explicit TopkDecomposer(HloPredicate should_decompose = {},
-                          bool defer_packed_bf16 = false)
+                          HloPredicate defer_packed_bf16 = {})
       : should_decompose_(should_decompose),
         defer_packed_bf16_(defer_packed_bf16) {}
 
@@ -109,7 +110,7 @@ class TopkDecomposer : public HloModulePass {
 
  private:
   HloPredicate should_decompose_;
-  bool defer_packed_bf16_;
+  HloPredicate defer_packed_bf16_;
 };
 
 }  // namespace xla
