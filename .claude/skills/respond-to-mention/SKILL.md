@@ -313,25 +313,30 @@ write the files:
    `gh api repos/openxla/xla/contents/.github/pull_request_template.md
    --jq '.content' | base64 -d`).
 
+   **Keep every section short - one or two sentences, not paragraphs.**
+   This is a PR description a reviewer skims to decide whether to look
+   closer, not a lab notebook: no tables, no flag-by-flag command dumps, no
+   restating the whole investigation. That detail already lives in the
+   issue the closing line below links back to.
+
    Two things the template itself doesn't spell out, so apply them
    yourself: for its "Kind of Contribution" section, pick exactly the one
    that applies and delete the rest (its own instruction, easy to skip by
    accident) rather than leaving all the options listed; and omit its
    "Benchmark" section entirely unless the kind is a Performance
    Improvement - it doesn't apply otherwise, the same way a human filling
-   this out by hand would leave it out rather than writing "N/A". After the
-   template's own sections, add one closing line disclosing how this was
-   produced and verified, with a link back to the issue:
+   this out by hand would leave it out rather than writing "N/A". For
+   "Unit Tests"/"Execution Tests" specifically, name the target and the
+   one-line result (e.g. "`//xla/service:foo_test`, red before the fix,
+   green after, red again on revert") - not the full command or every flag
+   used. After the template's own sections, add one closing line
+   disclosing how this was produced and verified, with a link back to the
+   issue:
    ```
    Automatically verified by reproducing the original failure under heavy
    repetition, applying this fix (green), and reverting it (red again) to
-   confirm causality - see the verification writeup on
-   https://github.com/<CI_REPO>/issues/<ISSUE_NUMBER>.
+   confirm causality - see https://github.com/<CI_REPO>/issues/<ISSUE_NUMBER>.
    ```
-   Omit the template's `📊 Benchmark` section entirely unless
-   `🚀 Kind of Contribution` is `⚡️ Performance Improvement` - it doesn't
-   apply otherwise, the same way a human filling this out by hand would
-   leave it out rather than writing "N/A".
 3. **The workflow applies this patch directly on top of `REPOSITORY@HEAD_SHA`
    itself** - the exact commit this very skill run just verified the fix
    against, fetched fresh rather than reused from any branch tip. Rebasing
