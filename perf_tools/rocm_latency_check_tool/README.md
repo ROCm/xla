@@ -73,6 +73,34 @@ Requirements:
 
 ## Usage
 
+On GitHub Actions the tool prints the slow requests and window summaries to the
+benchmark step log after the workers finish. For local CSV output, set `HIP_LATENCY_DEBUG_DIR` to an existing writable
+directory. For example:
+
+```bash
+mkdir -p diagnostics
+HIP_LATENCY_DEBUG_DIR=diagnostics ./rocm_latency_check_tool --num-gpus 2 --duration-sec 180 --csv latency.csv
+```
+
+After all workers finish, the tool writes two files per GPU count. Use a fresh
+directory for each run; repeating a GPU count replaces its diagnostic files.
+
+- `2gpu-windows.csv` contains independent 10-second blocks, grouped by completion
+  time in the half-open interval [begin_us, end_us). QPS is completions divided
+  by the block duration. A shorter last block uses its actual nominal length.
+  The start_epoch_us column gives the UTC Unix timestamp of measurement start.
+- `2gpu-slow.csv` lists every request above 10,000 microseconds, including its
+  worker, GPU, slot, and completion offset from measurement start. A debug-only
+  clock read immediately before the final stream synchronization splits measured
+  host latency into submit_us and final_sync_us. The latter includes any host
+  wake-up delay and is rounded as the remainder of total latency. Rows are grouped by
+  worker; sort by completion_offset_us to see the time sequence.
+
+Periodic reporting and worker shutdown can extend past the requested duration.
+The final cumulative row includes those completions. The tool prints their
+count separately and includes any slow ones in the slow-request file. Diagnostic
+mode adds a steady-clock read per request and buffers samples in worker memory.
+
 Run with defaults:
 
 ```bash
@@ -111,7 +139,7 @@ Flags accept both `--flag value` and `--flag=value`.
 | --- | --- | --- |
 | `--num-gpus N` | `4` | Number of GPUs to use. Must be `<=` the number of visible devices. |
 | `--streams-per-gpu N` | `4` | Per-GPU slots/streams. Total slots = `num-gpus * streams-per-gpu`. |
-| `--duration-sec N` | `10` | Total measured run length, in seconds. |
+| `--duration-sec N` | `180` | Total measured run length, in seconds. |
 | `--report-interval-sec N` | `3` | How often a (cumulative) report is printed / written to CSV. |
 | `--target-qps N` | `0` | Paced target QPS. `0` = max throughput (no pacing). |
 | `--consumer-threads N` | `16` | Number of consumer threads competing for slots. |

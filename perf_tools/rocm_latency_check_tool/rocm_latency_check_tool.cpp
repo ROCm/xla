@@ -43,7 +43,7 @@ struct Config {
   int streams_per_gpu = 4;          // --streams-per-gpu (per-GPU slots)
   bool use_reduced_d2h = true;      // --reduced-d2h / --no-reduced-d2h
   size_t reduced_d2h_bytes = 11800; // --reduced-d2h-bytes
-  int duration_sec = 10;            // --duration-sec (total run length)
+  int duration_sec = 180;           // --duration-sec (total run length)
   int report_interval_sec = 3;      // --report-interval-sec (print/CSV cadence)
   int target_qps = 0;               // --target-qps (0 = max throughput, no pacing)
   size_t max_queue_size = 10000;    // --max-queue-size
@@ -596,6 +596,18 @@ class SlotPool {
   int next_idx_ = 0;
 };
 
+using DebugClock = std::chrono::steady_clock;
+struct Completion {
+  DebugClock::time_point time;
+  int64_t latency_us;
+};
+
+struct SlowCompletion {
+  Completion sample;
+  int64_t submit_us;
+  int gpu, slot;
+};
+
 class Consumer {
  public:
   Consumer(SlotPool* pool,
@@ -606,6 +618,9 @@ class Consumer {
       : pool_(pool), queue_(queue), ctrl_(ctrl),
         global_stats_(global_stats),
         hA_(hA), hB_(hB), hExtraH2D_(hExtraH2D) {}
+
+  const std::vector<SlowCompletion>& slowCompletions() const { return slow_; }
+  const std::vector<Completion>& completions() const { return completions_; }
 
   void Start() {
     int current_device = -1;
@@ -672,16 +687,28 @@ class Consumer {
             prep->bytesD2H, stream));
       }
 
+      decltype(wall_start) sync_start;
+      if (debug_) sync_start = std::chrono::high_resolution_clock::now();
       HIP_CHECK(hipStreamSynchronize(stream));
 
       auto wall_end = std::chrono::high_resolution_clock::now();
       const int64_t latency_us =
           std::chrono::duration_cast<std::chrono::microseconds>(wall_end - wall_start).count();
 
+      DebugClock::time_point completion;
+      if (debug_) completion = DebugClock::now();
       global_stats_->update(latency_us);
       completed_.fetch_add(1, std::memory_order_relaxed);
 
       pool_->Return(slot.index);
+      if (debug_) {
+        completions_.push_back({completion, latency_us});
+        if (latency_us > 10000) {
+          const auto submit_us = std::chrono::duration_cast<std::chrono::microseconds>(
+              sync_start - wall_start).count();
+          slow_.push_back({{completion, latency_us}, submit_us, current_device, slot.index});
+        }
+      }
     }
 
   }
@@ -692,6 +719,9 @@ class Consumer {
   SlotPool* pool_;
   RequestQueue* queue_;
   BenchControl* ctrl_;
+  const bool debug_ = std::getenv("HIP_LATENCY_DEBUG_DIR") != nullptr || std::getenv("GITHUB_ACTIONS") != nullptr;
+  std::vector<Completion> completions_;
+  std::vector<SlowCompletion> slow_;
   BenchmarkStats* global_stats_;
   const PinnedBuffer& hA_;
   const PinnedBuffer& hB_;
@@ -1200,6 +1230,9 @@ int main(int argc, char** argv) {
   consumer_threads.reserve(num_consumers);
   producer_threads.reserve(num_consumers);
 
+  const auto debug_start = DebugClock::now();
+  const auto start_epoch_us = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
   auto wall_start = std::chrono::high_resolution_clock::now();
 
   for (int i = 0; i < num_consumers; ++i) {
@@ -1234,6 +1267,59 @@ int main(int argc, char** argv) {
 
   for (auto& t : consumer_threads) t.join();
   for (auto& t : producer_threads) t.join();
+
+  const char* dir = std::getenv("HIP_LATENCY_DEBUG_DIR");
+  if (dir || std::getenv("GITHUB_ACTIONS")) {
+    std::ofstream window_file, slow_file;
+    if (dir) {
+      const std::string prefix = std::string(dir) + "/" + std::to_string(g_cfg.num_gpus) + "gpu-";
+      window_file.open(prefix + "windows.csv");
+      slow_file.open(prefix + "slow.csv");
+    } else {
+      std::cout << "Latency diagnostics for " << g_cfg.num_gpus << " GPUs\n";
+    }
+    std::ostream& windows = dir ? static_cast<std::ostream&>(window_file) : std::cout;
+    std::ostream& slow = dir ? static_cast<std::ostream&>(slow_file) : std::cout;
+    constexpr int64_t window_us = 10000000;
+    const int64_t duration_us = static_cast<int64_t>(g_cfg.duration_sec) * 1000000;
+    std::vector<std::vector<int64_t>> blocks((duration_us + window_us - 1) / window_us);
+    size_t trailing = 0;
+    slow << "worker,completion_offset_us,latency_us,gpu,slot,submit_us,final_sync_us\n";
+    for (size_t worker = 0; worker < consumers.size(); ++worker) {
+      for (const auto& sample : consumers[worker]->completions()) {
+        const auto offset = std::chrono::duration_cast<std::chrono::microseconds>(
+            sample.time - debug_start).count();
+        if (offset < duration_us) blocks[offset / window_us].push_back(sample.latency_us);
+        else ++trailing;
+      }
+      for (const auto& event : consumers[worker]->slowCompletions()) {
+        const auto offset = std::chrono::duration_cast<std::chrono::microseconds>(
+            event.sample.time - debug_start).count();
+        slow << worker << ',' << offset << ',' << event.sample.latency_us << ','
+             << event.gpu << ',' << event.slot << ',' << event.submit_us << ','
+             << event.sample.latency_us - event.submit_us << '\n';
+      }
+    }
+    windows << "start_epoch_us,num_gpus,begin_us,end_us,count,qps,p99_us,p999_us,max_us,over_10ms\n";
+    for (size_t i = 0; i < blocks.size(); ++i) {
+      const int64_t begin = i * window_us;
+      const int64_t end = std::min(begin + window_us, duration_us);
+      const auto row = BenchmarkStats::compute(blocks[i], (end - begin) / 1000.0);
+      windows << start_epoch_us << ',' << g_cfg.num_gpus << ',' << begin << ',' << end << ','
+              << row.count << ',' << row.qps << ',' << row.p99_us << ',' << row.p999_us
+              << ',' << row.max_us << ',' << std::count_if(blocks[i].begin(), blocks[i].end(),
+                    [](int64_t us) { return us > 10000; }) << '\n';
+    }
+    if (dir) {
+      window_file.close();
+      slow_file.close();
+    }
+    if (!windows || !slow) {
+      std::cerr << "Failed to write latency diagnostics in " << (dir ? dir : "Actions log") << "\n";
+      return EXIT_FAILURE;
+    }
+    std::printf("Completions after nominal duration: %zu\n", trailing);
+  }
 
   std::printf("\n-- Per-slot completion (TF sessions) --\n");
   int total_completed = 0;
