@@ -1,7 +1,7 @@
 ---
 name: respond-to-issue
 description: Triggered when an authorized ROCm/xla collaborator posts a new `@claude <instructions>` comment on an ordinary issue - not one of the nightly monitor's own per-failure issues (those go through respond-to-mention instead, with a specific commit to reproduce). Reads the issue's title, body, and every existing comment for context, then does whatever INSTRUCTIONS literally asks - answer a question, investigate something in the code/git history, build/run/debug something using the same rocmless/bazel/gdb toolchain debug-nightly-failure and respond-to-mention use, or make a code change. A code change is written out as a plain patch file (plus a PR title/body) for a deterministic workflow step to apply and open as a draft PR - the report says plainly whether it was actually built/tested or not. Posts its response as a single new comment, and never repeats the exact same instruction once attempted. Use when invoked by the "respond_to_issue_mention" job of rocm_infra_agent.yml for one specific comment carrying an `@claude` instruction on a non-CI-failure issue.
-argument-hint: "[ci-repo] [issue-number] [instructions] [instructions-hash]"
+argument-hint: "[ci-repo] [issue-number] [instructions] [instructions-hash] [requested-by]"
 context: fork
 agent: general-purpose
 allowed-tools: Bash(gh issue comment *), Bash(gh api *), Bash(gh search prs *), Bash(gh pr view *), Bash(gh pr diff *), Bash(gh run view *), Bash(git log *), Bash(git show *), Bash(git diff *), Bash(git blame *), Bash(docker exec rocmless-debug *), Bash(build_tools/rocm/*), Bash(bazel *), Bash(gdb *), Bash(objdump *), Bash(grep *), Bash(cat *), Bash(timeout *), Read, Grep, Glob, Write, Edit
@@ -19,11 +19,11 @@ generic path: read the issue, do what it asks.
 
 ## Arguments
 
-The caller passes four values, space separated: `CI_REPO ISSUE_NUMBER
-INSTRUCTIONS INSTRUCTIONS_HASH`. `INSTRUCTIONS` can itself contain spaces,
-punctuation, and quotes, so do not split `$ARGUMENTS` positionally by
-whitespace - the invoking prompt also restates each value on its own
-labeled line; read the values from there.
+The caller passes five values, space separated: `CI_REPO ISSUE_NUMBER
+INSTRUCTIONS INSTRUCTIONS_HASH REQUESTED_BY`. `INSTRUCTIONS` can itself
+contain spaces, punctuation, and quotes, so do not split `$ARGUMENTS`
+positionally by whitespace - the invoking prompt also restates each value on
+its own labeled line; read the values from there.
 
 - `CI_REPO`: `ROCm/xla` - the repo the issue lives in, and the only repo
   any patch you write in Step 3 is ever meant to land in.
@@ -37,6 +37,10 @@ labeled line; read the values from there.
   it specifically; don't substitute your own idea of what would be useful.
 - `INSTRUCTIONS_HASH`: a short hash of `INSTRUCTIONS`, already computed for
   you - use it verbatim in the Step 0/4 marker, don't recompute it.
+- `REQUESTED_BY`: the GitHub login of whoever posted the `@claude` comment.
+  Only matters if `INSTRUCTIONS` explicitly asks for the change to be sent
+  upstream (see Step 3) - that's the identity the resulting commit gets
+  attributed to, for `openxla/xla`'s CLA bot. Otherwise ignore it.
 
 ## IMPORTANT: scope and safety
 
@@ -77,7 +81,12 @@ labeled line; read the values from there.
   restriction, not a style choice). If you end up with a code change
   (Step 2), write it out as a patch file (Step 3) for a deterministic
   workflow step to apply and open as a draft PR against `ROCm/xla`'s own
-  `main` - never commit, branch, or push anything yourself.
+  `main` - never commit, branch, or push anything yourself. If, and only
+  if, `INSTRUCTIONS` explicitly asks for the change to go upstream to
+  `openxla/xla` instead (see Step 3.3), that same step instead attributes
+  the commit to `REQUESTED_BY` and posts a compare link against
+  `openxla/xla` for a human to finish - there is still no credential that
+  can push to, or open a PR against, `openxla/xla` directly.
 - **State plainly, in both the PR body (if you open one) and your comment
   (Step 4), whether a change was actually built/tested or only read
   through** - never claim something "works" or "fixes" a problem without
@@ -188,11 +197,12 @@ that, working from a patch file you leave behind:
    ```
    The workflow treats the mere existence of a non-empty
    `/tmp/claude_fix.patch` as "there is a change to apply" - if you reach
-   this step, always write all three files; if Step 2 made no change,
-   never create any of them. If `/tmp` isn't writable in this sandbox,
-   write them under `debug_tools/claude_scratch/` instead and say so
-   plainly in Step 4's comment, since in that case the upload step won't
-   find them and no PR will follow.
+   this step, always write these two plus the title/body from step 2
+   above; if Step 2 made no change, never create any of them. If `/tmp`
+   isn't writable in this sandbox, write them under
+   `debug_tools/claude_scratch/` instead and say so plainly in Step 4's
+   comment, since in that case the upload step won't find them and no PR
+   will follow.
 
    PR body shape - a Google-style CL description, **not** a Summary/Test
    plan bullet template: a blank line after the title, then prose
@@ -211,10 +221,22 @@ that, working from a patch file you leave behind:
    Not built or tested - written from a direct reading of the surrounding
    code only. Requested in https://github.com/<CI_REPO>/issues/<ISSUE_NUMBER>.
    ```
-3. **The workflow applies this patch directly on top of `CI_REPO`'s own
-   `main`**, pushes the resulting commit as a new branch, and opens a
-   draft PR against `main`. Not your call to make here, it's baked into
-   the workflow step itself.
+3. **Only if `INSTRUCTIONS` explicitly asked for the change to be sent
+   upstream to `openxla/xla`** (not just implied - an actual, specific ask
+   that the PR itself goes there): write one more file, literally and only
+   the word `upstream`, nothing else:
+   ```
+   printf 'upstream' > /tmp/claude_pr_target.txt
+   ```
+   Skip this file entirely for every other case - its mere absence is what
+   keeps the default `ROCm/xla`-only behavior for every ordinary request.
+4. **The workflow applies this patch directly on top of `CI_REPO`'s own
+   `main`**, pushes the resulting commit as a new branch into `ROCm/xla`,
+   and, without the Step 3.3 file, commits as `github-actions[bot]` and
+   opens a draft PR itself against `main`; with it, commits as
+   `REQUESTED_BY` instead and posts a compare link against `openxla/xla`
+   for a human to finish. Not your call to make here, it's baked into the
+   workflow step itself.
 
 ## Step 4 — Report, as a new comment
 
@@ -234,11 +256,12 @@ Build that comment as:
 <your actual answer/findings - for a question, investigation, or
 build/run/debug request with no code change>
 <or, if Step 3 ran:>
-✅ Opening a draft PR with this change now - verified by <what you ran>,
-see the PR description.
+✅ Opening a draft PR with this change now (or, if upstream was requested,
+pushing it and handing off a compare link against `openxla/xla` attributed
+to you) - verified by <what you ran>, see the PR description.
 <or, if Step 3 ran but you didn't build/test it:>
-✅ Opening a draft PR with this change now - **not built or tested**, see
-the PR description.
+✅ Opening a draft PR with this change now (or the upstream compare-link
+handoff, if requested) - **not built or tested**, see the PR description.
 ```
 The marker is what Step 0 (and `claude_issue_triage.yml`'s pre-dispatch
 check) scan the issue's comments for to know this exact instruction was

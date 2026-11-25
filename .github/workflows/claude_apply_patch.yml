@@ -24,6 +24,17 @@
 # Code's own Bash permission check rejects any command referencing a
 # credential it can't verify ahead of time), so this plain-shell job does
 # all of that instead, entirely outside the agent.
+#
+# Downstream (default) vs. upstream (by request): if the skill wrote
+# /tmp/claude_pr_target.txt containing "upstream" - which it only does when
+# a human explicitly asked for the fix to be sent to openxla/xla, not just
+# ROCm/xla - and `commenter_login` is non-empty, the commit is attributed to
+# that GitHub user (name/email resolved below) instead of github-actions[bot]
+# so openxla/xla's CLA bot recognizes it. The branch is still pushed to
+# ROCm/xla exactly as always (no credential exists that can push to or open
+# a PR against openxla/xla directly - see the "Apply verified patch" step),
+# but a pre-filled GitHub compare URL is posted on the issue instead of an
+# already-opened PR, for a human to finish with one click.
 
 name: Claude Apply Patch
 
@@ -44,6 +55,10 @@ on:
         type: string
       artifact_name:
         description: 'Name the patch (if any) was uploaded under by claude_issue_triage.yml'
+        required: true
+        type: string
+      commenter_login:
+        description: 'GitHub login of whoever asked for this (empty for the fully-automatic auto_verify flow, which has no human requester). Only used if the skill explicitly asked for an upstream PR (/tmp/claude_pr_target.txt says "upstream") - see the "Apply verified patch" step for why an empty value always forces a downstream PR regardless of that file.'
         required: true
         type: string
 
@@ -173,32 +188,106 @@ jobs:
             exit 0
           fi
           git -C "$WORKDIR" apply /tmp/claude_fix.patch
+
+          # Upstream only if the skill explicitly asked for it (wrote this
+          # exact file) AND there's an actual requester to attribute the
+          # commit to - an empty commenter_login (the auto_verify flow has
+          # no human requester at all) always forces downstream, even if
+          # the file is somehow present, since there'd be nobody legitimate
+          # to credit.
+          TARGET="downstream"
+          if [ -s /tmp/claude_pr_target.txt ] && [ -n "${{ inputs.commenter_login }}" ] \
+              && [ "$(tr -d '[:space:]' < /tmp/claude_pr_target.txt)" = "upstream" ]; then
+            TARGET="upstream"
+          fi
+
+          COMMIT_NAME="github-actions[bot]"
+          COMMIT_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "$TARGET" = "upstream" ]; then
+            LOGIN="${{ inputs.commenter_login }}"
+            # Resolve the requester's own identity so the commit is theirs
+            # for openxla/xla's CLA bot, not github-actions[bot]'s: their
+            # public profile email if they have one set, else GitHub's own
+            # noreply alias for their account (always available, and is
+            # exactly how GitHub itself associates an email-less commit with
+            # an account).
+            if USER_JSON=$(gh api "users/${LOGIN}"); then
+              USER_ID=$(printf '%s' "$USER_JSON" | jq -r '.id')
+              PUBLIC_EMAIL=$(printf '%s' "$USER_JSON" | jq -r '.email // empty')
+              DISPLAY_NAME=$(printf '%s' "$USER_JSON" | jq -r '.name // empty')
+              COMMIT_NAME="${DISPLAY_NAME:-$LOGIN}"
+              COMMIT_EMAIL="${PUBLIC_EMAIL:-${USER_ID}+${LOGIN}@users.noreply.github.com}"
+            else
+              echo "::warning::Could not resolve GitHub user '${LOGIN}' - falling back to a downstream PR instead of an upstream one"
+              TARGET="downstream"
+            fi
+          fi
+
           git -C "$WORKDIR" \
-            -c user.name="github-actions[bot]" \
-            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            -c user.name="$COMMIT_NAME" \
+            -c user.email="$COMMIT_EMAIL" \
             commit -aq -F /tmp/claude_pr_title.txt
 
+          # Always pushes to ROCm/xla regardless of $TARGET - there is no
+          # credential that can push to, or open a PR against, openxla/xla
+          # itself (see the App-token step above), so an "upstream" request
+          # still lands this same branch in ROCm/xla, just handed off
+          # differently below.
           git -C "$WORKDIR" remote add origin https://github.com/ROCm/xla.git
           if ! git -C "$WORKDIR" push -q origin "HEAD:refs/heads/${BRANCH}"; then
             echo "::warning::Failed to push the verified-fix branch to ROCm/xla"
             exit 0
           fi
 
-          PR_URL=$(gh pr create --repo ROCm/xla --draft \
-            --title "$(head -1 /tmp/claude_pr_title.txt)" \
-            --body-file /tmp/claude_pr_body.txt \
-            --base main --head "$BRANCH") || {
-            echo "::warning::Failed to open the draft PR"
-            exit 0
-          }
-          echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+          if [ "$TARGET" = "upstream" ]; then
+            # No credential can call `gh pr create --repo openxla/xla`
+            # (GitHub App installation tokens, and the default GITHUB_TOKEN,
+            # are both hard-scoped to ROCm/xla) - instead, hand a human a
+            # pre-filled compare URL across the fork boundary (ROCm/xla is a
+            # registered fork of openxla/xla) to finish with one click. The
+            # CLA bot checks the commit's own author/committer, set above,
+            # not who clicks "Create pull request", so this still satisfies
+            # it.
+            TITLE_ENC=$(jq -rn --arg s "$(head -1 /tmp/claude_pr_title.txt)" '$s|@uri')
+            BODY_ENC=$(jq -rn --arg s "$(cat /tmp/claude_pr_body.txt)" '$s|@uri')
+            echo "target=upstream" >> "$GITHUB_OUTPUT"
+            echo "compare_url=https://github.com/openxla/xla/compare/main...ROCm:${BRANCH}?quick_pull=1&title=${TITLE_ENC}&body=${BODY_ENC}" >> "$GITHUB_OUTPUT"
+          else
+            PR_URL=$(gh pr create --repo ROCm/xla --draft \
+              --title "$(head -1 /tmp/claude_pr_title.txt)" \
+              --body-file /tmp/claude_pr_body.txt \
+              --base main --head "$BRANCH") || {
+              echo "::warning::Failed to open the draft PR"
+              exit 0
+            }
+            echo "target=downstream" >> "$GITHUB_OUTPUT"
+            echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Post the PR link as a new comment on the issue
-        if: steps.open_pr.outputs.pr_url != ''
+      - name: Post the result as a new comment on the issue
+        if: steps.open_pr.outputs.pr_url != '' || steps.open_pr.outputs.compare_url != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ steps.open_pr.outputs.pr_url }}
+          COMPARE_URL: ${{ steps.open_pr.outputs.compare_url }}
+          COMMENTER_LOGIN: ${{ inputs.commenter_login }}
         run: |
           set -euo pipefail
-          gh issue comment "${{ inputs.issue_number }}" --repo ROCm/xla \
-            --body "[draft PR](${PR_URL}) opened with the fix."
+          if [ -n "$PR_URL" ]; then
+            gh issue comment "${{ inputs.issue_number }}" --repo ROCm/xla \
+              --body "[draft PR](${PR_URL}) opened with the fix."
+          else
+            {
+              echo "Pushed a verified fix to a branch on \`ROCm/xla\`, committed as @${COMMENTER_LOGIN} (so openxla/xla's CLA bot recognizes it) - sending this upstream was explicitly requested, and no automation credential can open a PR against \`openxla/xla\` directly, so finishing it needs one human click:"
+              echo ""
+              echo "[Open the PR against openxla/xla](${COMPARE_URL})"
+              echo ""
+              echo "Title/body are pre-filled in that link; repeated here in case the prefill doesn't carry over:"
+              echo ""
+              echo "**$(head -1 /tmp/claude_pr_title.txt)**"
+              echo ""
+              cat /tmp/claude_pr_body.txt
+            } > /tmp/claude_apply_comment.txt
+            gh issue comment "${{ inputs.issue_number }}" --repo ROCm/xla \
+              --body-file /tmp/claude_apply_comment.txt
+          fi
