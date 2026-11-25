@@ -348,11 +348,5 @@ jobs:
       head_sha: ${{ matrix.head_sha }}
       issue_number: ${{ matrix.issue_number }}
       artifact_name: "autoverify-patch-${{ matrix.job_id }}"
-      # Empty, not some placeholder bot login: this flow is fully automatic
-      # (no human asked for this specific run), so there's no legitimate
-      # identity to attribute an upstream commit to - claude_apply_patch.yml
-      # treats an empty commenter_login as "never open upstream", same as
-      # rocm_infra_agent.yml's own callers when nobody requested it either.
-      commenter_login: ''
     secrets: inherit
 
