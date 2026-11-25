@@ -416,6 +416,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_verify_triton_fusion_numerics(false);
   opts.set_xla_gpu_experimental_cost_model_gemm_tiling_default(false);
   opts.set_xla_gpu_experimental_triton_ragged_dot(false);
+  opts.set_xla_gpu_enable_recover_exp2(false);
 
   // Moving reduce-scatter out of while loops can increase memory footprint, so
   // turning it off by default.
@@ -4255,6 +4256,13 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
         "If true, lower supported kRaggedDot ops not handled by cuDNN or "
         "hipBLASLt through the experimental Triton (XTile) backend instead of "
         "expanding them to dense dots."));
+
+    flag_list->push_back(tsl::Flag(
+        "xla_gpu_enable_recover_exp2",
+        bool_setter_for(&DebugOptions::set_xla_gpu_enable_recover_exp2),
+        debug_options->xla_gpu_enable_recover_exp2(),
+        "If true, run the ROCm-only RecoverExp2 MLIR pass, which rewrites "
+        "exp(x * log(2)) back into exp2(x) during emitter lowering."));
 
     auto setter_for_xla_gpu_detect_nan =
         [debug_options, detection_mode](const std::string& value) {

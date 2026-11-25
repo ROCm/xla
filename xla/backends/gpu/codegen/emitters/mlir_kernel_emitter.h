@@ -212,9 +212,11 @@ void AddLoopTransformationPasses(mlir::OpPassManager& pm,
                                  const se::DeviceDescription& device,
                                  int max_unroll_factor = 0);
 
-// Adds passes that lower transformed loops to LLVM.
+// Adds passes that lower transformed loops to LLVM. `enable_recover_exp2`
+// controls whether the ROCm-only RecoverExp2 pass is added.
 void AddLoweringPasses(mlir::OpPassManager& pm,
-                       const se::DeviceDescription& device);
+                       const se::DeviceDescription& device,
+                       bool enable_recover_exp2 = false);
 
 // Lowers an MLIR kernel module through loop transformation and LLVM-GPU
 // lowering passes, stopping at the MLIR LLVM/NVVM/ROCDL dialect level.

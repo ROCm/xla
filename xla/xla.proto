@@ -2100,7 +2100,11 @@ message DebugOptions {
   // AOT forward-compatibility window for U64 segmented radix sort has elapsed.
   optional bool xla_gpu_experimental_enable_raft_u64_radix = 584;
 
-  // Next id: 588
+  // If true, run the ROCm-only RecoverExp2 MLIR pass, which rewrites
+  // exp(x * log(2)) back into exp2(x) during emitter lowering.
+  optional bool xla_gpu_enable_recover_exp2 = 588;
+
+  // Next id: 589
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
