@@ -54,7 +54,7 @@ OrigamiDotCostModel::EstimateRunTimes(
 absl::StatusOr<std::vector<TritonGemmConfig>>
 OrigamiDotCostModel::SelectTopConfigs(const HloDotInstruction*,
                                       absl::Span<const TritonGemmConfig>,
-                                      int64_t, bool) const {
+                                      const SelectionOptions&) const {
   return NotBuilt();
 }
 

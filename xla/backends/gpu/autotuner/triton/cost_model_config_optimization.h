@@ -98,6 +98,9 @@ struct CostModelGemmTilingOptions {
   // default: measured worth ~25% of candidates on gfx950, which does not pay
   // for permanently excluding knob values the autotuner could have measured.
   bool restrict_knobs = false;
+  // Origami path only: drop configs reading an out-of-cache operand in
+  // sub-cache-line strips, which Origami under-predicts by ~2x.
+  bool drop_narrow_reads = true;
 
   std::string ToString() const;
 };

@@ -53,13 +53,22 @@ class OrigamiDotCostModel {
   EstimateRunTimes(const HloDotInstruction* dot,
                    absl::Span<const TritonGemmConfig> configs) const;
 
+  struct SelectionOptions {
+    int64_t num_groups = 10;
+    // Drop configs whose num_warps/num_stages/TMA/warp-specialization Origami
+    // cannot model. Measured near-neutral; off by default.
+    bool restrict_knobs = false;
+    // Drop configs reading an out-of-cache operand in sub-cache-line strips.
+    // Works around an Origami ranking defect; see
+    // docs/origami-upstream-issue.md.
+    bool drop_narrow_reads = true;
+  };
+
   // Returns every config belonging to the `num_groups` best-estimated distinct
-  // Origami inputs, preserving input order. With `restrict_knobs`, configs
-  // whose num_warps/num_stages/TMA/warp-specialization Origami cannot model
-  // are dropped before ranking.
+  // Origami inputs, preserving input order.
   absl::StatusOr<std::vector<TritonGemmConfig>> SelectTopConfigs(
       const HloDotInstruction* dot, absl::Span<const TritonGemmConfig> configs,
-      int64_t num_groups, bool restrict_knobs) const;
+      const SelectionOptions& options) const;
 
  private:
   class Impl;

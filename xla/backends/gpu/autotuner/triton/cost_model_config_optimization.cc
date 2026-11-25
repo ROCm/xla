@@ -226,6 +226,7 @@ std::string CostModelGemmTilingOptions::ToString() const {
   }
   absl::StrAppend(&s, " top_configs: ", top_configs);
   absl::StrAppend(&s, " restrict_knobs: ", restrict_knobs);
+  absl::StrAppend(&s, " drop_narrow_reads: ", drop_narrow_reads);
   absl::StrAppend(&s, " }");
   return s;
 }
@@ -281,6 +282,14 @@ absl::StatusOr<CostModelGemmTilingOptions> ParseCostModelGemmTilingOptions(
       } else {
         return absl::InvalidArgumentError(
             absl::StrCat("Could not parse 'top_configs' value: ", value));
+      }
+    } else if (key == "drop_narrow_reads") {
+      int val = 0;
+      if (absl::SimpleAtoi(value, &val)) {
+        parsed_options.drop_narrow_reads = (val != 0);
+      } else {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Could not parse 'drop_narrow_reads' value: ", value));
       }
     } else if (key == "restrict_knobs") {
       int val = 0;
@@ -416,16 +425,34 @@ absl::StatusOr<std::vector<TritonGemmConfig>> OptimizeConfigsWithCostModel(
   if (std::unique_ptr<OrigamiDotCostModel> origami =
           MaybeCreateOrigamiModel(dot, device_description, debug_options)) {
     absl::StatusOr<std::vector<TritonGemmConfig>> selected =
-        origami->SelectTopConfigs(dot, all_configs, options.top_configs,
-                                  options.restrict_knobs);
+        origami->SelectTopConfigs(
+            dot, all_configs,
+            {/*num_groups=*/options.top_configs,
+             /*restrict_knobs=*/options.restrict_knobs,
+             /*drop_narrow_reads=*/options.drop_narrow_reads});
     if (selected.ok() && !selected->empty()) {
-      VLOG(1) << "Origami selected " << selected->size() << " of "
+      // Keep the default set as a floor. Origami favours large tiles, which
+      // can fail to compile or perform badly for fusions with heavy
+      // epilogues; without this the autotuner has nothing to fall back on.
+      const size_t from_origami = selected->size();
+      absl::flat_hash_set<TritonGemmConfig> present(selected->begin(),
+                                                    selected->end());
+      for (const TritonGemmConfig& config : optimized_configs) {
+        if (present.insert(config).second) selected->push_back(config);
+      }
+      VLOG(1) << "Origami selected " << from_origami << " of "
               << all_configs.size() << " configs from the top "
-              << options.top_configs << " estimated configurations";
+              << options.top_configs << " estimated configurations, plus "
+              << selected->size() - from_origami << " from the default set";
       return *std::move(selected);
     }
-    LOG(WARNING) << "Origami selection failed, falling back: "
-                 << selected.status();
+    if (!selected.ok()) {
+      LOG(WARNING) << "Origami selection failed, falling back: "
+                   << selected.status();
+    } else {
+      LOG(WARNING) << "Origami priced no config for this dot out of "
+                   << all_configs.size() << " candidates, falling back";
+    }
   }
 
   std::optional<absl::StatusOr<detail::OrderedEstimatesAndConfigs>>

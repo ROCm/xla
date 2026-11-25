@@ -125,15 +125,28 @@ TEST_F(OrigamiDotCostModelTest, EstimatesAreFiniteAndOrdered) {
   }
 }
 
-TEST_F(OrigamiDotCostModelTest, ConfigsSharingATileShapeTie) {
+TEST_F(OrigamiDotCostModelTest, NumWarpsDoesNotChangeTheEstimate) {
   TF_ASSERT_OK_AND_ASSIGN(auto model, OrigamiDotCostModel::Create(MI300X()));
   std::vector<TritonGemmConfig> configs = {
       Config(128, 128, 64, /*stages=*/2, /*warps=*/4),
-      Config(128, 128, 64, /*stages=*/3, /*warps=*/8)};
+      Config(128, 128, 64, /*stages=*/2, /*warps=*/8)};
   TF_ASSERT_OK_AND_ASSIGN(
       auto estimates, model->EstimateRunTimes(ParseDot(kBf16Gemm), configs));
   ASSERT_EQ(estimates.size(), 2);
   EXPECT_EQ(estimates.at(configs[0]), estimates.at(configs[1]));
+}
+
+TEST_F(OrigamiDotCostModelTest, NumStagesReachesOrigamiThroughOccupancy) {
+  // 32KB at 2 stages, 64KB at 3: on MI300's 64KB LDS that is 2 resident
+  // workgroups per CU versus 1. Origami sees only the derived occupancy.
+  TF_ASSERT_OK_AND_ASSIGN(auto model, OrigamiDotCostModel::Create(MI300X()));
+  std::vector<TritonGemmConfig> configs = {
+      Config(128, 128, 64, /*stages=*/2, /*warps=*/4),
+      Config(128, 128, 64, /*stages=*/3, /*warps=*/4)};
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto estimates, model->EstimateRunTimes(ParseDot(kBf16Gemm), configs));
+  ASSERT_EQ(estimates.size(), 2);
+  EXPECT_LT(estimates.at(configs[0]), estimates.at(configs[1]));
 }
 
 TEST_F(OrigamiDotCostModelTest, SelectTopConfigsKeepsAllVariants) {
@@ -143,9 +156,9 @@ TEST_F(OrigamiDotCostModelTest, SelectTopConfigsKeepsAllVariants) {
       Config(64, 64, 64, 2, 4),   Config(64, 64, 64, 3, 8),
       Config(32, 32, 32, 2, 4),   Config(32, 32, 32, 3, 8),
   };
-  TF_ASSERT_OK_AND_ASSIGN(
-      auto kept, model->SelectTopConfigs(ParseDot(kBf16Gemm), configs, 2,
-                                         /*restrict_knobs=*/false));
+  TF_ASSERT_OK_AND_ASSIGN(auto kept,
+                          model->SelectTopConfigs(ParseDot(kBf16Gemm), configs,
+                                                  {/*num_groups=*/2}));
 
   EXPECT_EQ(kept.size(), 4);
   for (const TritonGemmConfig& c : kept) {
@@ -164,8 +177,10 @@ TEST_F(OrigamiDotCostModelTest, SelectTopConfigsPreservesInputOrder) {
   std::vector<TritonGemmConfig> configs = {
       Config(32, 32, 32), Config(256, 256, 64), Config(128, 128, 64)};
   TF_ASSERT_OK_AND_ASSIGN(
-      auto kept, model->SelectTopConfigs(ParseDot(kBf16Gemm), configs, 3,
-                                         /*restrict_knobs=*/false));
+      auto kept,
+      model->SelectTopConfigs(ParseDot(kBf16Gemm), configs,
+                              {/*num_groups=*/3, /*restrict_knobs=*/false,
+                               /*drop_narrow_reads=*/false}));
   ASSERT_EQ(kept.size(), 3);
   EXPECT_EQ(kept[0].block_m, 32);
   EXPECT_EQ(kept[1].block_m, 256);
@@ -239,6 +254,28 @@ ENTRY e {
   TF_ASSERT_OK_AND_ASSIGN(auto estimates,
                           model->EstimateRunTimes(ParseDot(kHlo), configs));
   EXPECT_THAT(estimates, Not(IsEmpty()));
+}
+
+TEST_F(OrigamiDotCostModelTest, DropsSubCacheLineReadsOfLargeOperands) {
+  TF_ASSERT_OK_AND_ASSIGN(auto model, OrigamiDotCostModel::Create(MI350X()));
+  const HloDotInstruction* dot = ParseDot(kBf16Gemm);
+  // block_n=32 reads the 32MB rhs in 64-byte strips; block_n=64 fills a line.
+  std::vector<TritonGemmConfig> configs = {Config(16, 32, 256, 4, 4),
+                                           Config(32, 64, 32, 4, 4)};
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto kept,
+      model->SelectTopConfigs(dot, configs,
+                              {/*num_groups=*/10, /*restrict_knobs=*/false,
+                               /*drop_narrow_reads=*/true}));
+  for (const TritonGemmConfig& c : kept) EXPECT_NE(c.block_n, 32);
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto all,
+      model->SelectTopConfigs(dot, configs,
+                              {/*num_groups=*/10, /*restrict_knobs=*/false,
+                               /*drop_narrow_reads=*/false}));
+  EXPECT_GT(all.size(), kept.size());
 }
 
 }  // namespace

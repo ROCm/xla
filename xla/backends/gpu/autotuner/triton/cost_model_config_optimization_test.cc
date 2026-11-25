@@ -47,6 +47,7 @@ namespace xla::gpu {
 namespace {
 
 using ::absl_testing::IsOkAndHolds;
+using ::testing::Contains;
 using ::testing::ElementsAre;
 using ::testing::Gt;
 using ::testing::Pair;
@@ -461,8 +462,8 @@ TEST_F(CostModelConfigOptimizationHloTest, OrigamiSelectsWholeTileShapes) {
 
   ASSERT_OK_AND_ASSIGN(
       std::vector<TritonGemmConfig> optimized,
-      OptimizeConfigsWithCostModel(dot, all_configs, all_configs, mi300,
-                                   debug_options, &mlir_context_));
+      OptimizeConfigsWithCostModel(dot, all_configs, /*optimized_configs=*/{},
+                                   mi300, debug_options, &mlir_context_));
 
   EXPECT_EQ(optimized.size(), 4);
   absl::flat_hash_map<std::tuple<int, int, int>, int> per_shape;
@@ -506,6 +507,35 @@ TEST_F(CostModelConfigOptimizationHloTest, ParsesTopConfigsOption) {
 
   options["top_configs"] = "nonsense";
   EXPECT_FALSE(detail::ParseCostModelGemmTilingOptions(options).ok());
+}
+
+TEST_F(CostModelConfigOptimizationHloTest, OrigamiKeepsDefaultSetAsFloor) {
+  const se::DeviceDescription mi300 = TestGpuDeviceInfo::AMDMI300DeviceInfo();
+  auto [module, dot] = GetHloModuleAndDot_F32_1024_1024_1024();
+
+  std::vector<TritonGemmConfig> all_configs = {
+      TritonGemmConfig(128, 128, 32, 2, 4, 1, false),
+      TritonGemmConfig(64, 64, 32, 2, 4, 1, false),
+      TritonGemmConfig(32, 32, 32, 2, 4, 1, false),
+  };
+  // Not in all_configs, so it can only appear via the default-set floor.
+  std::vector<TritonGemmConfig> default_configs = {
+      TritonGemmConfig(16, 16, 64, 2, 4, 1, false),
+  };
+
+  DebugOptions debug_options = module->config().debug_options();
+  debug_options.set_xla_gpu_experimental_use_origami_cost_model(true);
+  (*debug_options.mutable_xla_gpu_experimental_cost_model_gemm_tiling_options())
+      ["top_configs"] = "1";
+
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<TritonGemmConfig> optimized,
+      OptimizeConfigsWithCostModel(dot, all_configs, default_configs, mi300,
+                                   debug_options, &mlir_context_));
+
+  EXPECT_THAT(optimized,
+              Contains(TritonGemmConfig(16, 16, 64, 2, 4, 1, false)));
+  EXPECT_GE(optimized.size(), 2);
 }
 
 }  // namespace
