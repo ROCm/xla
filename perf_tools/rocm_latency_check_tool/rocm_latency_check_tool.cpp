@@ -43,7 +43,7 @@ struct Config {
   int streams_per_gpu = 4;          // --streams-per-gpu (per-GPU slots)
   bool use_reduced_d2h = true;      // --reduced-d2h / --no-reduced-d2h
   size_t reduced_d2h_bytes = 11800; // --reduced-d2h-bytes
-  int duration_sec = 10;            // --duration-sec (total run length)
+  int duration_sec = 180;            // --duration-sec (total run length)
   int report_interval_sec = 3;      // --report-interval-sec (print/CSV cadence)
   int target_qps = 0;               // --target-qps (0 = max throughput, no pacing)
   size_t max_queue_size = 10000;    // --max-queue-size
