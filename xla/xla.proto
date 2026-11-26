@@ -2180,7 +2180,13 @@ message DebugOptions {
   // hipBLASLt library. Expect thousands of candidates per GEMM shape.
   optional bool xla_gpu_hipblaslt_autotune_all_solutions = 600;
 
-  // Next id: 601
+  // With xla_gpu_enable_dus_accumulator_zero_init_elimination, also elide the
+  // zero-init of a scan accumulator whose init has other users (CSE leaves one
+  // broadcast per stack shape for every scan over it): the init is replaced in
+  // this while's init tuple only, which must feed this while alone.
+  optional bool xla_gpu_dus_accumulator_zero_init_shared_init = 601;
+
+  // Next id: 602
 
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.

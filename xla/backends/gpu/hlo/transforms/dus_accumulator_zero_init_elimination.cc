@@ -506,6 +506,10 @@ absl::StatusOr<bool> DusAccumulatorZeroInitElimination::RunImpl(
            .xla_gpu_enable_dus_accumulator_zero_init_elimination()) {
     return false;
   }
+  const bool allow_shared_init =
+      module->config()
+          .debug_options()
+          .xla_gpu_dus_accumulator_zero_init_shared_init();
 
   std::vector<CandidateLoop> candidates;
   for (HloComputation* comp :
@@ -531,17 +535,27 @@ absl::StatusOr<bool> DusAccumulatorZeroInitElimination::RunImpl(
       }
 
       HloInstruction* init = init_tuple->mutable_operand(slot);
-      // Init must feed only this while and not carry its own sharding.
-      if (init->has_sharding() || init->user_count() != 1) {
+      if (init->has_sharding()) {
         continue;
       }
       const Shape& alloc_shape = init->shape();
       if (!alloc_shape.IsArray() || alloc_shape.dimensions().empty()) {
         continue;
       }
+      // With xla_gpu_dus_accumulator_zero_init_shared_init, a shared init (CSE
+      // gives every scan over the same stack shape one broadcast) is replaced
+      // in this while's init tuple only: the other users keep it. That needs
+      // the tuple to feed this while alone. The peeled form rewrites the init
+      // itself, so it needs a single user. Without the flag, the init must
+      // feed only this while.
+      const bool shared_init = init->user_count() != 1;
+      if (shared_init &&
+          (!allow_shared_init || init_tuple->user_count() != 1)) {
+        continue;
+      }
 
       // Peeled form: the init is a pad of the first iteration's slice.
-      if (HloInstruction* pad = PeeledInitPad(init)) {
+      if (HloInstruction* pad = shared_init ? nullptr : PeeledInitPad(init)) {
         std::optional<PeeledSlice> peeled = MatchPeeledSlice(pad);
         if (!peeled.has_value()) {
           continue;

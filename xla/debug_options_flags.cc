@@ -352,6 +352,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
 
   opts.set_xla_gpu_enable_dynamic_slice_fusion(true);
   opts.set_xla_gpu_enable_dus_accumulator_zero_init_elimination(false);
+  opts.set_xla_gpu_dus_accumulator_zero_init_shared_init(false);
   opts.set_xla_gpu_experimental_dynamic_slice_fusion_verify_offsets(false);
   opts.set_xla_gpu_experimental_enable_dynamic_slice_table_offsets(false);
   opts.set_xla_gpu_experimental_enable_dynamic_slice_extended_offsets(false);
@@ -2456,6 +2457,14 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
         debug_options->xla_gpu_enable_dus_accumulator_zero_init_elimination(),
         "Replaces broadcast(0) scan-accumulator init with AllocateBuffer when "
         "the body's DUS covers every slot."));
+    flag_list->push_back(tsl::Flag(
+        "xla_gpu_dus_accumulator_zero_init_shared_init",
+        bool_setter_for(
+            &DebugOptions::set_xla_gpu_dus_accumulator_zero_init_shared_init),
+        debug_options->xla_gpu_dus_accumulator_zero_init_shared_init(),
+        "With xla_gpu_enable_dus_accumulator_zero_init_elimination, also "
+        "elide the zero-init of a scan accumulator whose init has other users, "
+        "replacing it in that while's init tuple only."));
     flag_list->push_back(tsl::Flag(
         "xla_gpu_experimental_dynamic_slice_fusion_verify_offsets",
         bool_setter_for(
