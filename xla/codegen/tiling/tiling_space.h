@@ -286,6 +286,7 @@ class TilingSpace {
       absl::Span<const HloInstructionAdaptor> roots);
 
   void ProcessDotLike(const HloInstruction& hlo);
+  void ProcessConvolution(const HloInstruction& hlo);
   void ProcessReduce(const HloInstruction& hlo);
   // Registers a `kReplica` dimension per output and links it to `peer_dim`.
   absl::Status AddReplicaDimensions(const HloInstruction& hlo, int64_t peer_dim,
