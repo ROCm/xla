@@ -234,6 +234,29 @@ jobs:
               --label "$MODE"
           done
 
+      - name: Compare copy stages on 1, 2, and 4 GPUs
+        if: github.event_name == 'pull_request' && github.head_ref == 'linchen1/hip-copy-isolation' && matrix.mode.name == 'therock_release_10.1'
+        working-directory: perf-tools-src/perf_tools/rocm_latency_check_tool
+        shell: bash
+        run: |
+          set -euo pipefail
+          for n in 1 2 4; do
+            for label in full_before skip_h2d skip_d2d skip_d2h skip_all full_after; do
+              flags=()
+              case "$label" in
+                skip_h2d) flags=(--skip-h2d) ;;
+                skip_d2d) flags=(--skip-d2d) ;;
+                skip_d2h) flags=(--skip-d2h) ;;
+                skip_all) flags=(--skip-h2d --skip-d2d --skip-d2h) ;;
+              esac
+              echo "::group::${n}gpu/$label"
+              echo "num_gpus=$n case=$label flags=${flags[*]:-none}"
+              ./rocm_latency_check_tool --num-gpus "$n" --duration-sec 180 \
+                --report-interval-sec 3 --label "${n}gpu-$label" "${flags[@]}"
+              echo "::endgroup::"
+            done
+          done
+
       - name: Stamp results with the run date and XLA commit [${{ matrix.mode.name }}]
         # Runs even if a perf step failed, so a partial pass still publishes the
         # modules that did complete.
