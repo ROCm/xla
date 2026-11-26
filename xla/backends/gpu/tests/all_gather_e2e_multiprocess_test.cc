@@ -142,6 +142,14 @@ absl::Status AllGatherMultiProcessTestBody(int node_id, int port) {
                  "CUDA.";
     return absl::OkStatus();
   }
+  if (!desc.gpu_compute_capability().IsCuda()) {
+    // Cross-host one-shot collectives read peer pointers out of an
+    // NCCL load/store-accessible window, which only exists on CUDA.
+    LOG(INFO) << log_prefix
+              << ": skipping one-shot all-gather test, cross-host one-shot "
+                 "collectives require CUDA.";
+    return absl::OkStatus();
+  }
 
   ABSL_ASSIGN_OR_RETURN(
       MultiProcessGpuClientSetup setup,

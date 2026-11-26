@@ -1264,6 +1264,13 @@ TEST_F(AllReduceCollectiveKernelTest,
   if (!CheckDeviceCount(kNumReplicas)) {
     return;
   }
+  // ROCm has no equivalent of CUDA's conditional graph nodes, so
+  // CommandBufferConversionPass drops the WHILE command there and the while
+  // thunk stays outside of command buffers.
+  if (Capability().IsRocm()) {
+    GTEST_SKIP() << "Command buffers on ROCm do not support on-device control "
+                    "flow (while loops).";
+  }
 
   // Each step k in the loop body computes ar_k = all-reduce(0.5 * prev + p0),
   // where p0 is 1.0 on replica 0 and 2.0 on replica 1. When prev == v on both
@@ -1350,10 +1357,17 @@ TEST_F(AllReduceCollectiveKernelTest,
 
   // Both the while thunk and all 20 one-shot all-reduces in its body must be
   // recorded into command buffers, and none may fall back to NCCL.
-  ASSERT_OK_AND_ASSIGN(CommandBufferThunkCounts while_counts,
-                       CountThunksInDump(dump_dir.path(), "kWhile"));
-  EXPECT_EQ(while_counts.in_command_buffer, 1);
-  EXPECT_EQ(while_counts.outside_command_buffer, 0);
+  // Capturing the while thunk itself requires on-device control flow
+  // (conditional graph nodes), which ROCm does not support, so the command
+  // buffer conversion pass drops WHILE there and instead captures the loop
+  // body into a command buffer nested inside the while thunk. The all-reduce
+  // expectations below hold either way.
+  if (Capability().IsCuda()) {
+    ASSERT_OK_AND_ASSIGN(CommandBufferThunkCounts while_counts,
+                         CountThunksInDump(dump_dir.path(), "kWhile"));
+    EXPECT_EQ(while_counts.in_command_buffer, 1);
+    EXPECT_EQ(while_counts.outside_command_buffer, 0);
+  }
   ASSERT_OK_AND_ASSIGN(CommandBufferThunkCounts one_shot,
                        CountThunksInDump(dump_dir.path(), "kCollectiveKernel"));
   EXPECT_EQ(one_shot.in_command_buffer, kNumAllReduces);
