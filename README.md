@@ -12,6 +12,7 @@ contain fork-specific commits. This separation ensures the `merge-upstream` API
 - [Recommended Docker Image && Build Instructions](#recommended-docker-image--build-instructions)
 - [OpenXLA Upstream PR Status](#openxla-upstream-pr-status)
 - [OpenXLA Upstream CI Checks](#openxla-upstream-ci-checks)
+- [Dev Tools](#dev-tools)
 - [Debug Tools](#debug-tools)
 - [Performance Tools](#performance-tools)
 - [Scaling Book](#scaling-book)
@@ -188,6 +189,15 @@ Every `openxla/xla` PR runs the upstream [`rocm_ci.yml`](https://github.com/open
 | `jax` | [`ci/run_bazel_test_rocm_rbe.sh`](https://github.com/jax-ml/jax/blob/main/ci/run_bazel_test_rocm_rbe.sh) (in `jax-ml/jax`) | **JAX test sweep against XLA-from-source.** Builds jaxlib and JAX with Bazel against the PR's XLA and runs the JAX GPU tests. Runs only for PRs targeting `main`. |
 
 Both jobs use the EngFlow `internal.actinolite.cluster.engflow.com` RBE cluster through the `rocm_rbe` / `rocm_rbe_dynamic` configs in XLA's `build_tools/rocm/rocm_xla.bazelrc` and JAX's `build/rocm/rocm.bazelrc`.
+
+## Dev Tools
+
+Day-to-day developer scripts for working on XLA with ROCm. See [`dev_tools/`](dev_tools/) for full details.
+
+| Tool | Purpose |
+|------|---------|
+| [`dev_tools/run_test.sh`](dev_tools/run_test.sh) | Runs XLA tests the way ROCm CI does, locally or on the ROCm RBE pools, for any XLA checkout, worktree or git ref. |
+| [`dev_tools/xla_checkout.sh`](dev_tools/xla_checkout.sh) | Creates or reuses a worktree of this repo for an XLA ref and prints its path. |
 
 ## Debug Tools
 
