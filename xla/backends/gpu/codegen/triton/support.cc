@@ -727,12 +727,9 @@ CodegenDecision AreDotAlgorithmInputAndOutputConversionsSupported(
   return CodegenDecision::Allow();
 }
 
-CodegenDecision IsTritonSupportedDot(
-    const HloDotInstruction& dot, const se::GpuComputeCapability& gpu_version) {
-  PrimitiveType result_type = dot.shape().element_type();
-  PrimitiveType lhs_type = dot.operand(0)->shape().element_type();
-  PrimitiveType rhs_type = dot.operand(1)->shape().element_type();
-
+CodegenDecision AreDotLikeTypesSupported(
+    PrimitiveType lhs_type, PrimitiveType rhs_type, PrimitiveType result_type,
+    const se::GpuComputeCapability& gpu_version) {
   auto types_are = [&](PrimitiveType compare1, PrimitiveType compare2) {
     return (lhs_type == compare1 && rhs_type == compare2) ||
            (lhs_type == compare2 && rhs_type == compare1);
@@ -750,14 +747,13 @@ CodegenDecision IsTritonSupportedDot(
     return CodegenDecision::Forbid("4-bit integer is not supported.");
   }
 
-  absl::Status status = CheckSupportedCheckDotDimensions(dot);
-  if (!status.ok()) {
-    return CodegenDecision::Forbid(status.message());
-  }
+  return CodegenDecision::Allow();
+}
 
-  const PrecisionConfig& precision_config = dot.precision_config();
-  const PrecisionConfig::Algorithm algorithm = precision_config.algorithm();
-
+CodegenDecision AreDotLikeAlgorithmRulesSupported(
+    PrimitiveType lhs_type, PrimitiveType rhs_type, PrimitiveType result_type,
+    PrecisionConfig::Algorithm algorithm,
+    const se::GpuComputeCapability& gpu_version) {
   if (!IsSupportedDotAlgorithm(algorithm, gpu_version)) {
     return CodegenDecision::Forbid(
         absl::StrCat("Unsupported dot algorithm: ",
@@ -785,6 +781,30 @@ CodegenDecision IsTritonSupportedDot(
   }
 
   return CodegenDecision::Allow();
+}
+
+CodegenDecision IsTritonSupportedDot(
+    const HloDotInstruction& dot, const se::GpuComputeCapability& gpu_version) {
+  PrimitiveType result_type = dot.shape().element_type();
+  PrimitiveType lhs_type = dot.operand(0)->shape().element_type();
+  PrimitiveType rhs_type = dot.operand(1)->shape().element_type();
+
+  if (CodegenDecision decision = AreDotLikeTypesSupported(
+          lhs_type, rhs_type, result_type, gpu_version);
+      !decision) {
+    return decision;
+  }
+
+  absl::Status status = CheckSupportedCheckDotDimensions(dot);
+  if (!status.ok()) {
+    return CodegenDecision::Forbid(status.message());
+  }
+
+  const PrecisionConfig& precision_config = dot.precision_config();
+  const PrecisionConfig::Algorithm algorithm = precision_config.algorithm();
+
+  return AreDotLikeAlgorithmRulesSupported(lhs_type, rhs_type, result_type,
+                                           algorithm, gpu_version);
 }
 
 bool IsBlock16ScaledOperand(const Shape& operand, const Shape& scale,
@@ -911,25 +931,18 @@ CodegenDecision IsTritonSupportedConv(
   const PrimitiveType lhs_type = conv.operand(0)->shape().element_type();
   const PrimitiveType rhs_type = conv.operand(1)->shape().element_type();
   const PrimitiveType result_type = conv.shape().element_type();
-  if (lhs_type != rhs_type) {
-    return CodegenDecision::Forbid(
-        "Convolution only supports same types for lhs and rhs.");
-  }
-  if (result_type == PrimitiveType::S4) {
-    return CodegenDecision::Forbid("S4 is not supported.");
-  }
-  // TODO: Enable explicit algorithms
-  if (conv.precision_config().algorithm() != PrecisionConfig::ALG_UNSET) {
-    return CodegenDecision::Forbid(
-        "Convolution with an explicit algorithm is not supported.");
-  }
-  if (CodegenDecision decision =
-          AreTypesSupportedByAlgUnsetDot(lhs_type, result_type, gpu_version);
+
+  if (CodegenDecision decision = AreDotLikeTypesSupported(
+          lhs_type, rhs_type, result_type, gpu_version);
       !decision) {
     return decision;
   }
 
-  return CodegenDecision::Allow();
+  const PrecisionConfig::Algorithm algorithm =
+      conv.precision_config().algorithm();
+
+  return AreDotLikeAlgorithmRulesSupported(lhs_type, rhs_type, result_type,
+                                           algorithm, gpu_version);
 }
 
 CodegenDecision IsTritonSupportedConcatenate(

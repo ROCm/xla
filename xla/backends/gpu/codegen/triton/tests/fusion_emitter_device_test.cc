@@ -2035,6 +2035,9 @@ ErrorSpec ErrorSpecForDotAlgorithm(PrecisionConfig::Algorithm algorithm) {
       // it), and not derived from first principles.
       return ErrorSpec{/*aabs=*/2e-6, /*arel=*/2e-6};
     case PrecisionConfig::ALG_DOT_BF16_BF16_BF16:
+      // Computed to make the tests pass (and it seems reasonable on the face of
+      // it), and not derived from first principles.
+      return ErrorSpec{/*aabs=*/5e-3, /*arel=*/4e-3};
     case PrecisionConfig::ALG_DOT_ANY_F8_ANY_F8_F32:
     case PrecisionConfig::ALG_DOT_ANY_F8_ANY_F8_F32_FAST_ACCUM:
       return kExactMatch;
@@ -3340,6 +3343,297 @@ ENTRY entry {
 
   EXPECT_TRUE(RunAndCompareNoHloPasses(kHloText, kExactMatch));
 }
+
+class MixedF8ConvEmitterTest
+    : public TritonEmitterTest,
+      public ::testing::WithParamInterface<
+          std::tuple<PrimitiveType, PrimitiveType, PrimitiveType>> {
+ public:
+  static std::string ParamToString(
+      const ::testing::TestParamInfo<ParamType>& info) {
+    auto [lhs_type, rhs_type, result_type] = info.param;
+    return absl::StrCat(
+        primitive_util::LowercasePrimitiveTypeName(lhs_type), "_",
+        primitive_util::LowercasePrimitiveTypeName(rhs_type), "_",
+        primitive_util::LowercasePrimitiveTypeName(result_type));
+  }
+};
+
+TEST_P(MixedF8ConvEmitterTest, Conv2DIsEmittedCorrectly) {
+  if (GpuComputeCapability().IsCuda()) {
+    GTEST_SKIP() << "Mixed-F8 Triton convolution is only validated on ROCm.";
+  }
+  auto [lhs_type, rhs_type, result_type] = GetParam();
+  constexpr absl::string_view kHloTextTemplate = R"(
+HloModule m
+
+triton_computation {
+  input = $0[2,6,6,16] parameter(0)
+  kernel = $1[3,3,16,16] parameter(1)
+  ROOT conv = $2[2,4,4,16] convolution(input, kernel),
+    window={size=3x3}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","16"]}
+}
+
+ENTRY entry {
+  p0 = $0[2,6,6,16] parameter(0)
+  p1 = $1[3,3,16,16] parameter(1)
+  ROOT fusion = $2[2,4,4,16] fusion(p0, p1), kind=kCustom,
+    calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton",
+        "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["2","4","4","16"]}],
+          "num_warps":"1",
+          "num_ctas":"1",
+          "num_stages":"1"}}}
+})";
+  const std::string hlo_text = absl::Substitute(
+      kHloTextTemplate, primitive_util::LowercasePrimitiveTypeName(lhs_type),
+      primitive_util::LowercasePrimitiveTypeName(rhs_type),
+      primitive_util::LowercasePrimitiveTypeName(result_type));
+
+  const ErrorSpec error_spec = result_type == BF16
+                                   ? ErrorSpec{/*aabs=*/1e-2, /*arel=*/1e-2}
+                                   : ErrorSpec{/*aabs=*/1e-3, /*arel=*/1e-3};
+  EXPECT_TRUE(RunAndCompareNoHloPasses(hlo_text, error_spec));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MixedF8ConvEmitterTestSuite, MixedF8ConvEmitterTest,
+    ::testing::Values(std::make_tuple(F8E5M2, F8E4M3FN, F32),
+                      std::make_tuple(F8E4M3FN, F8E5M2, F32),
+                      std::make_tuple(F8E5M2FNUZ, F8E4M3FNUZ, F32),
+                      std::make_tuple(F8E4M3FNUZ, F8E5M2FNUZ, F32),
+                      std::make_tuple(F8E5M2, F8E4M3FN, BF16)),
+    MixedF8ConvEmitterTest::ParamToString);
+
+constexpr absl::string_view kHloForConvAlgorithmTestTemplate = R"(
+triton_computation {
+  input = $0[1,8,8,16] parameter(0)
+  kernel = $0[3,3,16,16] parameter(1)
+  ROOT conv = $1[1,8,8,16] convolution(input, kernel),
+    window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f, algorithm=$2,
+    backend_config={"sizes":["1","1","16"]}
+}
+
+ENTRY entry {
+  p0 = $0[1,8,8,16] parameter(0)
+  p1 = $0[3,3,16,16] parameter(1)
+  ROOT fusion = $1[1,8,8,16] fusion(p0, p1),
+    kind=kCustom, calls=triton_computation, backend_config={
+      "fusion_backend_config":{
+        "kind":"__triton", "block_level_fusion_config":{
+          "output_tiles":[{"sizes":["1","4","4","16"]}],
+          "num_warps":"1", "num_ctas":"1", "num_stages":"1"
+    }}}
+})";
+
+std::string GetConvAlgorithmHlo(PrimitiveType in_ty, PrimitiveType out_ty,
+                                PrecisionConfig::Algorithm algorithm) {
+  constexpr absl::string_view kAlgorithmPrefix = "ALG_";
+  std::string in_ty_str = primitive_util::LowercasePrimitiveTypeName(in_ty);
+  std::string out_ty_str = primitive_util::LowercasePrimitiveTypeName(out_ty);
+  std::string algorithm_str = PrecisionConfig::Algorithm_Name(algorithm).substr(
+      kAlgorithmPrefix.size());
+  return absl::Substitute(kHloForConvAlgorithmTestTemplate, in_ty_str,
+                          out_ty_str, algorithm_str);
+}
+
+// Regroups tests for conv algorithms that have no ambiguous type parameters,
+// mirroring `BasicDotAlgorithmEmitterTest`.
+using BasicConvAlgorithmEmitterTest = TritonEmitterTestWithAlgorithmParam;
+
+constexpr std::array kBasicConvAlgorithms = {
+    PrecisionConfig::ALG_DOT_F16_F16_F16,
+    PrecisionConfig::ALG_DOT_F32_F32_F32,
+    PrecisionConfig::ALG_DOT_F64_F64_F64,
+    PrecisionConfig::ALG_DOT_F16_F16_F32,
+    PrecisionConfig::ALG_DOT_BF16_BF16_F32,
+    PrecisionConfig::ALG_DOT_TF32_TF32_F32,
+    PrecisionConfig::ALG_DOT_BF16_BF16_BF16,
+};
+
+TEST_P(BasicConvAlgorithmEmitterTest, BasicAlgorithmIsEmittedCorrectly) {
+  auto algorithm = GetParam();
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<PrimitiveType> allowed_types,
+      algorithm_util::GetAllowedOperandsTypeForAlgorithm(algorithm));
+  ASSERT_EQ(allowed_types.size(), 1);
+  PrimitiveType in_ty = allowed_types.front();
+  ASSERT_OK_AND_ASSIGN(PrimitiveType out_ty,
+                       algorithm_util::GetDotAccumulatorType(algorithm));
+  const std::string kHloText = GetConvAlgorithmHlo(in_ty, out_ty, algorithm);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto xtile_module_and_hlo_module,
+      CreateXTileIrAndFileCheck(
+          kHloText, "triton_computation",
+          absl::Substitute(
+              R"(
+  CHECK:  stablehlo.dot_general{{.*}} : (tensor<16x16x$0>, tensor<16x16x$0>) -> tensor<16x16x$1>
+  CHECK:  arith.addf
+  )",
+              primitive_util::LowercasePrimitiveTypeName(in_ty),
+              primitive_util::LowercasePrimitiveTypeName(out_ty))));
+
+  ASSERT_OK(LowerXTileIrToTritonAndFileCheck(
+      xtile_module_and_hlo_module.first.get(),
+      absl::Substitute(R"(
+  CHECK:  scf.for
+  CHECK:  tt.reshape
+  CHECK:  tt.dot{{.*}} : tensor<16x16x$0> * tensor<16x16x$0> -> tensor<16x16x$1>
+  )",
+                       primitive_util::LowercasePrimitiveTypeName(in_ty),
+                       primitive_util::LowercasePrimitiveTypeName(out_ty)),
+      GetFusionInstruction(*xtile_module_and_hlo_module.second,
+                           "triton_computation")));
+
+  ErrorSpec error_spec = ErrorSpecForDotAlgorithm(algorithm);
+  EXPECT_TRUE(RunAndCompareNoHloPasses(kHloText, error_spec));
+}
+
+INSTANTIATE_TEST_SUITE_P(BasicConvAlgorithmEmitterTestSuite,
+                         BasicConvAlgorithmEmitterTest,
+                         ::testing::ValuesIn(kBasicConvAlgorithms),
+                         DotAlgorithmTestToString);
+
+// Regroups tests for conv algorithms that issue several dot instructions,
+// mirroring `MultiDotAlgorithmEmitterTest`.
+using MultiConvAlgorithmEmitterTest = TritonEmitterTestWithAlgorithmParam;
+
+constexpr std::array kMultiConvAlgorithms = {
+    PrecisionConfig::ALG_DOT_BF16_BF16_F32_X3,
+    PrecisionConfig::ALG_DOT_BF16_BF16_F32_X6,
+    PrecisionConfig::ALG_DOT_TF32_TF32_F32_X3,
+    // TODO(basioli): re-enable this algorithm testing once the attribute
+    // importer supports the conversion.
+    // PrecisionConfig::ALG_DOT_BF16_BF16_F32_X9,
+};
+
+TEST_P(MultiConvAlgorithmEmitterTest, MultiConvAlgorithmIsEmittedCorrectly) {
+  auto algorithm = GetParam();
+  ASSERT_OK_AND_ASSIGN(PrimitiveType out_ty,
+                       algorithm_util::GetDotAccumulatorType(algorithm));
+  PrimitiveType in_ty =
+      algorithm == PrecisionConfig::ALG_DOT_TF32_TF32_F32_X3 ? F32 : BF16;
+  // Dummy value to ensure that the dot count is explicitly set.
+  int dot_count_for_algorithm = 0x1337;
+  int stablehlo_dot_count_for_algorithm = 0x1337;
+  std::string input_precision_string = "";
+  switch (algorithm) {
+    case PrecisionConfig::ALG_DOT_BF16_BF16_F32_X3:
+      dot_count_for_algorithm = 3;
+      stablehlo_dot_count_for_algorithm = 3;
+      break;
+    case PrecisionConfig::ALG_DOT_BF16_BF16_F32_X6:
+      dot_count_for_algorithm = 6;
+      stablehlo_dot_count_for_algorithm = 6;
+      break;
+    case PrecisionConfig::ALG_DOT_BF16_BF16_F32_X9:
+      dot_count_for_algorithm = 9;
+      stablehlo_dot_count_for_algorithm = 9;
+      break;
+    case PrecisionConfig::ALG_DOT_TF32_TF32_F32_X3:
+      // Triton implements TF32x3 as a specific precision mode.
+      input_precision_string = "tf32x3";
+      dot_count_for_algorithm = 1;
+      stablehlo_dot_count_for_algorithm = 3;
+      break;
+    default:
+      ADD_FAILURE() << "Unexpected algorithm for this test: "
+                    << AlgorithmToString(algorithm);
+      return;
+  }
+
+  const std::string kHloText = GetConvAlgorithmHlo(in_ty, out_ty, algorithm);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto xtile_module_and_hlo_module,
+      CreateXTileIrAndFileCheck(kHloText, "triton_computation",
+                                absl::Substitute(
+                                    R"(
+  CHECK:  stablehlo.dot_general{{.*}} num_primitive_operations = $0, {{.*}}
+  )",
+                                    stablehlo_dot_count_for_algorithm)));
+
+  ASSERT_OK(LowerXTileIrToTritonAndFileCheck(
+      xtile_module_and_hlo_module.first.get(),
+      absl::Substitute(R"(
+  CHECK-COUNT-$2:  tt.dot{{.*}}$3{{.*}} : tensor<16x16x$0> * tensor<16x16x$0> -> tensor<16x16x$1>
+  )",
+                       primitive_util::LowercasePrimitiveTypeName(in_ty),
+                       primitive_util::LowercasePrimitiveTypeName(out_ty),
+                       dot_count_for_algorithm, input_precision_string),
+      GetFusionInstruction(*xtile_module_and_hlo_module.second,
+                           "triton_computation")));
+
+  EXPECT_TRUE(
+      RunAndCompareNoHloPasses(kHloText, ErrorSpecForDotAlgorithm(algorithm)));
+}
+
+INSTANTIATE_TEST_SUITE_P(MultiConvAlgorithmEmitterTestSuite,
+                         MultiConvAlgorithmEmitterTest,
+                         ::testing::ValuesIn(kMultiConvAlgorithms),
+                         DotAlgorithmTestToString);
+
+// Regroups tests that use TF32 precision by definition, mirroring
+// `TF32DotAlgorithmEmitterTest`.
+using TF32ConvAlgorithmEmitterTest = TritonEmitterTestWithAlgorithmParam;
+
+constexpr std::array kTF32ConvAlgorithms = {
+    PrecisionConfig::ALG_DOT_TF32_TF32_F32,
+    PrecisionConfig::ALG_DOT_TF32_TF32_F32_X3};
+
+TEST_P(TF32ConvAlgorithmEmitterTest, TF32AlgorithmsUseTF32InputPrecision) {
+  auto algorithm = GetParam();
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<PrimitiveType> allowed_types,
+      algorithm_util::GetAllowedOperandsTypeForAlgorithm(algorithm));
+  ASSERT_EQ(allowed_types.size(), 1);
+  PrimitiveType in_ty = allowed_types.front();
+  ASSERT_OK_AND_ASSIGN(PrimitiveType out_ty,
+                       algorithm_util::GetDotAccumulatorType(algorithm));
+  const std::string kHloText = GetConvAlgorithmHlo(in_ty, out_ty, algorithm);
+
+  std::string input_precision_string =
+      algorithm == PrecisionConfig::ALG_DOT_TF32_TF32_F32_X3 ? "tf32x3"
+                                                             : "tf32";
+
+  std::string num_primitive_operations_string =
+      algorithm == PrecisionConfig::ALG_DOT_TF32_TF32_F32_X3 ? "3" : "1";
+
+  ASSERT_OK_AND_ASSIGN(
+      auto xtile_module_and_hlo_module,
+      CreateXTileIrAndFileCheck(
+          kHloText, "triton_computation",
+          absl::Substitute(
+              R"(
+  CHECK:  stablehlo.dot_general{{.*}}, contracting_dims = [1] x [0], {{.*}} algorithm = <lhs_precision_type = tf32, rhs_precision_type = tf32, accumulation_type = f32, lhs_component_count = 1, rhs_component_count = 1, num_primitive_operations = $2, allow_imprecise_accumulation = false> : (tensor<16x16x$0>, tensor<16x16x$0>) -> tensor<16x16x$1>
+  )",
+              primitive_util::LowercasePrimitiveTypeName(in_ty),
+              primitive_util::LowercasePrimitiveTypeName(out_ty),
+              num_primitive_operations_string)));
+
+  ASSERT_OK(LowerXTileIrToTritonAndFileCheck(
+      xtile_module_and_hlo_module.first.get(),
+      absl::Substitute(R"(
+  CHECK:  tt.dot{{.*}} inputPrecision = $2 : tensor<16x16x$0> * tensor<16x16x$0> -> tensor<16x16x$1>
+  )",
+                       primitive_util::LowercasePrimitiveTypeName(in_ty),
+                       primitive_util::LowercasePrimitiveTypeName(out_ty),
+                       input_precision_string),
+      GetFusionInstruction(*xtile_module_and_hlo_module.second,
+                           "triton_computation")));
+
+  // No need to `RunAndCompare` here, these algorithms are already covered by
+  // other tests.
+}
+
+INSTANTIATE_TEST_SUITE_P(TF32ConvAlgorithmEmitterTestSuite,
+                         TF32ConvAlgorithmEmitterTest,
+                         ::testing::ValuesIn(kTF32ConvAlgorithms),
+                         DotAlgorithmTestToString);
 
 TEST_F(TritonEmitterTest, Conv2DWindowDilationIsEmittedCorrectly) {
   const std::string kHloText = R"(

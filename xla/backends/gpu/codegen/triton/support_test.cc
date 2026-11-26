@@ -3716,6 +3716,160 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::ValuesIn(AllDevicesToTest())),
     OperandPrecisionTestName);
 
+class MixedF8ConvTest
+    : public SupportTest,
+      public ::testing::WithParamInterface<
+          std::tuple<PrimitiveType, PrimitiveType, se::GpuComputeCapability>> {
+ public:
+  static std::string ParamToString(
+      const ::testing::TestParamInfo<ParamType>& info) {
+    auto [lhs_type, rhs_type, cc] = info.param;
+    return absl::StrCat(primitive_util::LowercasePrimitiveTypeName(lhs_type),
+                        "_",
+                        primitive_util::LowercasePrimitiveTypeName(rhs_type),
+                        "_", ComputeCapabilityToString(cc));
+  }
+};
+
+TEST_P(MixedF8ConvTest, MixedF8Conv) {
+  auto [lhs_type, rhs_type, cc] = GetParam();
+  if (lhs_type == rhs_type) {
+    GTEST_SKIP() << "Skipping same-type tests, covered by "
+                    "ConvolutionTestFullParametrization";
+  }
+
+  if (auto* cuda_cc = cc.cuda_compute_capability();
+      cuda_cc && !cuda_cc->IsAtLeastHopper()) {
+    GTEST_SKIP() << "F8 requires Hopper+ GPUs";
+  }
+
+  const std::string kHloTestTemplate = R"(
+ENTRY triton_computation {
+  input = $0[1,8,8,16] parameter(0)   // N=1, H=8, W=8, C_in=16
+  kernel = $1[3,3,16,16] parameter(1) // H=3, W=3, C_in=16, C_out=16
+  ROOT conv = f32[1,8,8,16] convolution(input, kernel),
+    window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","16"]}
+})";
+  std::string hlo_text = absl::Substitute(
+      kHloTestTemplate, primitive_util::LowercasePrimitiveTypeName(lhs_type),
+      primitive_util::LowercasePrimitiveTypeName(rhs_type));
+
+  ASSERT_OK_AND_ASSIGN(
+      TestedInstruction ti,
+      ParseTemplateAndGetInstruction(hlo_text, PRIMITIVE_TYPE_INVALID,
+                                     HloOpcode::kConvolution));
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 4, 4, 16}, cc);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MixedF8ConvTestSuite, MixedF8ConvTest,
+    ::testing::Combine(::testing::Values(F8E5M2, F8E4M3FN),
+                       ::testing::Values(F8E5M2, F8E4M3FN),
+                       ::testing::ValuesIn(AllDevicesToTest())),
+    MixedF8ConvTest::ParamToString);
+
+class ConvPrecisionAlgorithmTest
+    : public SupportTest,
+      public ::testing::WithParamInterface<
+          std::tuple<PrimitiveType, PrecisionConfig::Algorithm,
+                     se::GpuComputeCapability>> {};
+
+TEST_P(ConvPrecisionAlgorithmTest, Algorithm) {
+  auto [data_type, algorithm, cc] = GetParam();
+  const std::string kHloTestTemplate = absl::Substitute(
+      R"(
+ENTRY triton_computation {
+  input = $0[1,8,8,16] parameter(0)   // N=1, H=8, W=8, C_in=16
+  kernel = $0[3,3,16,16] parameter(1) // H=3, W=3, C_in=16, C_out=16
+  ROOT conv = $0[1,8,8,16] convolution(input, kernel),
+    window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f,
+    algorithm=$1,
+    backend_config={"sizes":["1","1","16"]}
+})",
+      primitive_util::LowercasePrimitiveTypeName(data_type),
+      AlgorithmToString(algorithm));
+  // TODO(b/433240828): triton fails on this combinations but only in debug
+  // mode. Also, maybe update the test to fail gracefully in case of crashes.
+  if (algorithm == PrecisionConfig::ALG_DOT_F64_F64_F64 &&
+      primitive_util::BitWidth(data_type) < 32) {
+    GTEST_SKIP()
+        << "b/433240828: Triton fails on this combination in debug mode.";
+  }
+  // On ROCm, Triton compiles these f64-related cases even though the support
+  // gate forbids them, the same way it does for the equivalent dot cases.
+  // TODO: Remove once https://github.com/openxla/xla/pull/53375 is in
+  if (cc.IsRocm() && data_type == F64 &&
+      algorithm == PrecisionConfig::ALG_UNSET) {
+    GTEST_SKIP() << "f64 dot algorithms and f64 types compile on ROCm "
+                    "although the gate forbids them; same as "
+                    "DotPrecisionTestSuite/"
+                    "DotPrecisionAlgorithmTest.Algorithm/f64_unset_rocm";
+  }
+  if (cc.IsRocm() && algorithm == PrecisionConfig::ALG_DOT_F64_F64_F64 &&
+      absl::c_linear_search(std::vector{F32, F64, S32, S64, U32, U64},
+                            data_type)) {
+    GTEST_SKIP() << absl::StrCat(
+        "f64 dot algorithms and f64 types compile on ROCm although the gate "
+        "forbids them; same as "
+        "DotPrecisionTestSuite/DotPrecisionAlgorithmTest.Algorithm/",
+        primitive_util::LowercasePrimitiveTypeName(data_type),
+        "_dot_f64_f64_f64_rocm");
+  }
+
+  ASSERT_OK_AND_ASSIGN(TestedInstruction ti,
+                       ParseTemplateAndGetInstruction(kHloTestTemplate, F32,
+                                                      HloOpcode::kConvolution));
+  ExpectedFailMode fail_mode = ExpectedFailMode::kFail;
+  if (absl::c_linear_search(
+          std::vector{F8E5M2, F8E4M3FN, F8E4M3, S8, F8E5M2FNUZ, F8E4M3FNUZ},
+          data_type)) {
+    fail_mode = ExpectedFailMode::kFailOrCrash;
+  }
+  RunSupportTest(std::move(ti), /*output_tile_sizes=*/{1, 4, 4, 16}, cc,
+                 fail_mode);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ConvPrecisionTestSuite, ConvPrecisionAlgorithmTest,
+    ::testing::Combine(
+        ::testing::ValuesIn(AllOpSupportedTypes(HloOpcode::kConvolution)),
+        ::testing::ValuesIn(AllPrecisionAlgorithms()),
+        ::testing::ValuesIn(AllDevicesToTest())),
+    DotPrecisionAlgorithmTestName);
+
+using ConvolutionTestSimple = SupportTest;
+
+TEST_F(ConvolutionTestSimple,
+       MixedFnuzF8ConvIsSupportedOnRocmAndRejectedOnCuda) {
+  const std::string kHloTestTemplate = R"(
+ENTRY triton_computation {
+  input = f8e4m3fnuz[1,8,8,16] parameter(0)   // N=1, H=8, W=8, C_in=16
+  kernel = f8e5m2fnuz[3,3,16,16] parameter(1) // H=3, W=3, C_in=16, C_out=16
+  ROOT conv = f32[1,8,8,16] convolution(input, kernel),
+    window={size=3x3 pad=1_1x1_1}, dim_labels=b01f_01io->b01f,
+    backend_config={"sizes":["1","1","16"]}
+})";
+
+  se::GpuComputeCapability rocm_cc(se::RocmComputeCapability("gfx942"));
+  ASSERT_OK_AND_ASSIGN(
+      TestedInstruction ti_rocm,
+      ParseTemplateAndGetInstruction(kHloTestTemplate, PRIMITIVE_TYPE_INVALID,
+                                     HloOpcode::kConvolution));
+  EXPECT_TRUE(IsTritonSupportedInstruction(ti_rocm.Instruction(), rocm_cc));
+  RunSupportTest(std::move(ti_rocm), /*output_tile_sizes=*/{1, 4, 4, 16},
+                 rocm_cc);
+
+  se::GpuComputeCapability cuda_cc(se::CudaComputeCapability::Hopper());
+  ASSERT_OK_AND_ASSIGN(
+      TestedInstruction ti_cuda,
+      ParseTemplateAndGetInstruction(kHloTestTemplate, PRIMITIVE_TYPE_INVALID,
+                                     HloOpcode::kConvolution));
+  EXPECT_FALSE(IsTritonSupportedInstruction(ti_cuda.Instruction(), cuda_cc));
+  RunSupportTest(std::move(ti_cuda), /*output_tile_sizes=*/{1, 4, 4, 16},
+                 cuda_cc);
+}
+
 using ConvolutionTestCcOnly = SupportTestWithDeviceParam;
 
 // Test a convolution with stride > 1

@@ -33,7 +33,6 @@ limitations under the License.
 #include "xla/codegen/xtile/codegen/dot_algorithms.h"
 #include "xla/codegen/xtile/codegen/emitter_helpers.h"
 #include "xla/hlo/ir/hlo_instructions.h"
-#include "xla/primitive_util.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -126,16 +125,6 @@ TensorValue EmitReshape(mlir::ImplicitLocOpBuilder& b, TensorValue input,
 
 absl::StatusOr<Type> GetConvAccumulatorType(
     mlir::ImplicitLocOpBuilder& b, const HloConvolutionInstruction& conv) {
-  PrimitiveType lhs_et = conv.operand(0)->shape().element_type();
-  PrimitiveType rhs_et = conv.operand(1)->shape().element_type();
-
-  if (lhs_et != rhs_et) {
-    return absl::UnimplementedError(absl::StrCat(
-        "Convolution requires matching operand element types, got ",
-        primitive_util::LowercasePrimitiveTypeName(lhs_et), " and ",
-        primitive_util::LowercasePrimitiveTypeName(rhs_et), "."));
-  }
-
   return GetDotAccumulatorType(b, conv);
 }
 
