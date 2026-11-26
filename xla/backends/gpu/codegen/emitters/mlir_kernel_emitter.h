@@ -219,8 +219,14 @@ void AddLoopTransformationPasses(mlir::OpPassManager& pm,
                                  int max_unroll_factor = 0);
 
 // Adds passes that lower transformed loops to LLVM.
+//
+// `enable_recover_exp2` controls whether RecoverExp2Pass (ROCm only) is added
+// to the pipeline. It is disabled by default because the pass lazily
+// initializes shared static state without synchronization, which is a data
+// race when kernels are compiled in parallel (reported by ThreadSanitizer).
 void AddLoweringPasses(mlir::OpPassManager& pm,
-                       const se::DeviceDescription& device);
+                       const se::DeviceDescription& device,
+                       bool enable_recover_exp2 = false);
 
 // Lowers an MLIR kernel module through loop transformation and LLVM-GPU
 // lowering passes, stopping at the MLIR LLVM/NVVM/ROCDL dialect level.
