@@ -37,11 +37,13 @@ limitations under the License.
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/IntrinsicsNVPTX.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
+#include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/TargetParser/Triple.h"
 #include "xla/primitive_util.h"
@@ -189,7 +191,21 @@ struct TargetIntrinsics GetIntrinsic(TargetIntrinsicID intrin) {
                 module, llvm::Intrinsic::nvvm_barrier_cta_sync_aligned_all, {});
             return b_->CreateCall(intrinsic, {b_->getInt32(0)});
           },
-          llvm::Intrinsic::amdgcn_s_barrier,
+          [](llvm::IRBuilderBase* b_) -> llvm::CallInst* {
+            // s_barrier synchronizes execution only, not memory: without
+            // fences a wave can pass it with its LDS stores still in
+            // flight. Fence the work-group around it, as HIP's
+            // __syncthreads() and MLIR's gpu.barrier lowering do.
+            llvm::SyncScope::ID workgroup =
+                b_->getContext().getOrInsertSyncScopeID("workgroup");
+            b_->CreateFence(llvm::AtomicOrdering::Release, workgroup);
+            llvm::Function* intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+                b_->GetInsertBlock()->getModule(),
+                llvm::Intrinsic::amdgcn_s_barrier, {});
+            llvm::CallInst* barrier = b_->CreateCall(intrinsic);
+            b_->CreateFence(llvm::AtomicOrdering::Acquire, workgroup);
+            return barrier;
+          },
           [](llvm::IRBuilderBase* b_) -> llvm::CallInst* {
             // OpenCL barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE);
             // matches the MLIR emitter pipeline.
