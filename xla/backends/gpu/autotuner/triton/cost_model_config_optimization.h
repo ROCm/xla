@@ -91,16 +91,17 @@ struct CostModelGemmTilingOptions {
   std::optional<int> mixin_max_same_mnk;
   // If true, mixin configs must be faster than all configs in the base set.
   bool mixin_only_faster = false;
-  // Origami path only: number of best-estimated distinct Origami inputs to
-  // keep. Every config belonging to them is returned.
-  int top_configs = 10;
-  // Origami path only: drop configs whose knobs Origami cannot model. Off by
+  // Origami only: drop configs whose knobs Origami cannot model. Off by
   // default: measured worth ~25% of candidates on gfx950, which does not pay
   // for permanently excluding knob values the autotuner could have measured.
   bool restrict_knobs = false;
-  // Origami path only: drop configs reading an out-of-cache operand in
-  // sub-cache-line strips, which Origami under-predicts by ~2x.
-  bool drop_narrow_reads = true;
+  // Origami only: drop configs reading an out-of-cache operand in
+  // sub-cache-line strips, which Origami under-predicts by ~2x. Also catches
+  // every block_n=8 config, so off by default.
+  bool drop_narrow_reads = false;
+  // Origami only: relative latency band within which it applies its own
+  // tie-breaks. Its default of 0 admits exact ties only.
+  double heuristics_variance = 0.0;
 
   std::string ToString() const;
 };

@@ -31,6 +31,21 @@ limitations under the License.
 
 namespace xla::gpu {
 
+struct OrigamiEstimateOptions {
+  // Drop configs whose num_warps/num_stages/TMA/warp-specialization Origami
+  // cannot model. Measured near-neutral; off by default.
+  bool restrict_knobs = false;
+  // Drop configs reading an out-of-cache operand in sub-cache-line strips.
+  // Targets an Origami ranking defect (docs/origami-upstream-issue.md), but
+  // also catches every block_n=8 config, which measurement says are winners
+  // on skinny-N GEMMs. Off until a campaign says otherwise.
+  bool drop_narrow_reads = false;
+  // Relative latency band within which Origami applies its own tie-breaks
+  // (arithmetic intensity, then problem-dimension affinity, tile size and
+  // occupancy fit). Origami's default of 0 admits exact ties only.
+  double heuristics_variance = 0.0;
+};
+
 // Analytic GEMM cost model backed by AMD's Origami, for pre-selecting Triton
 // GEMM configs for the autotuner on ROCm. See docs/origami-xla-cost-model-plan.
 class OrigamiDotCostModel {
@@ -45,30 +60,14 @@ class OrigamiDotCostModel {
 
   // Configs Origami cannot price are absent from the map, not infinite.
   //
-  // Triton's num_warps and num_stages are deliberately not forwarded, so
-  // configs sharing a (block_m, block_n, block_k, mfma_size, waves_per_eu)
-  // get the same estimate.
-  // Prefer SelectTopConfigs over ranking this directly.
+  // Triton's num_warps and num_stages are not forwarded, so configs sharing a
+  // tile shape, MFMA size and occupancy get the same latency. Origami's own
+  // ranking breaks those ties, encoded as a nanosecond-scale offset so that
+  // ordering by duration reproduces it.
   absl::StatusOr<absl::flat_hash_map<TritonGemmConfig, absl::Duration>>
   EstimateRunTimes(const HloDotInstruction* dot,
-                   absl::Span<const TritonGemmConfig> configs) const;
-
-  struct SelectionOptions {
-    int64_t num_groups = 10;
-    // Drop configs whose num_warps/num_stages/TMA/warp-specialization Origami
-    // cannot model. Measured near-neutral; off by default.
-    bool restrict_knobs = false;
-    // Drop configs reading an out-of-cache operand in sub-cache-line strips.
-    // Works around an Origami ranking defect; see
-    // docs/origami-upstream-issue.md.
-    bool drop_narrow_reads = true;
-  };
-
-  // Returns every config belonging to the `num_groups` best-estimated distinct
-  // Origami inputs, preserving input order.
-  absl::StatusOr<std::vector<TritonGemmConfig>> SelectTopConfigs(
-      const HloDotInstruction* dot, absl::Span<const TritonGemmConfig> configs,
-      const SelectionOptions& options) const;
+                   absl::Span<const TritonGemmConfig> configs,
+                   const OrigamiEstimateOptions& options = {}) const;
 
  private:
   class Impl;

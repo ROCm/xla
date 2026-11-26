@@ -15,6 +15,7 @@ limitations under the License.
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -24,9 +25,7 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
-#include "absl/container/flat_hash_set.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -58,17 +57,16 @@ using ::origami::hardware_t;
 using ::origami::problem_t;
 using ::origami::transpose_t;
 
-using TileShape = std::tuple<int, int, int>;
 // What Origami actually consumes: tile shape, MFMA size, occupancy.
 using OrigamiKey = std::tuple<int, int, int, int, int>;
-// What SelectTopConfigs budgets over. Occupancy is excluded: it is derived
-// from num_stages, so including it would spend the budget on knob variants of
-// one tile instead of on distinct tiles.
-using GroupKey = std::tuple<int, int, int, int>;
 
-GroupKey KeyOf(const TritonGemmConfig& c) {
-  return {c.block_m, c.block_n, c.block_k, c.mfma_size > 0 ? c.mfma_size : 16};
+OrigamiKey KeyOfOrigamiConfig(const config_t& c) {
+  return {static_cast<int>(c.mt.m), static_cast<int>(c.mt.n),
+          static_cast<int>(c.mt.k), static_cast<int>(c.mi.m), c.occupancy};
 }
+
+// Separates Origami's rank within a tie; well below any real estimate.
+constexpr absl::Duration kRankEpsilon = absl::Nanoseconds(1);
 
 // Origami has no counterpart for these, so sweeping them multiplies the
 // candidate set without the model being able to discriminate. Values follow
@@ -234,59 +232,83 @@ class OrigamiDotCostModel::Impl {
         clock_ghz_(clock_ghz),
         async_copy_(gfx_ == "gfx950") {}
 
-  absl::StatusOr<std::vector<TritonGemmConfig>> FilterNarrowReads(
-      const HloDotInstruction* dot,
-      absl::Span<const TritonGemmConfig> configs) const {
-    ABSL_ASSIGN_OR_RETURN(DotShape shape, GetDotShape(dot));
-    const transpose_t a_trans =
-        ContractingIsMinor(dot->operand(0)->shape(), shape.lhs_contracting);
-    const transpose_t b_trans =
-        ContractingIsMinor(dot->operand(1)->shape(), shape.rhs_contracting);
-    std::vector<TritonGemmConfig> kept;
-    kept.reserve(configs.size());
-    for (const TritonGemmConfig& c : configs) {
-      if (!HasNarrowDramRead(c, shape, a_trans, b_trans)) kept.push_back(c);
-    }
-    return kept;
-  }
-
+  // Downstream keys on absl::Duration alone, so rank_configs' tie-break order
+  // is folded in as a nanosecond offset. Ties are the normal case: num_warps
+  // and num_stages never reach the model.
   absl::StatusOr<absl::flat_hash_map<TritonGemmConfig, absl::Duration>>
   EstimateRunTimes(const HloDotInstruction* dot,
-                   absl::Span<const TritonGemmConfig> configs) const {
+                   absl::Span<const TritonGemmConfig> configs,
+                   const OrigamiEstimateOptions& options) const {
     ABSL_ASSIGN_OR_RETURN(DotShape shape, GetDotShape(dot));
     ABSL_ASSIGN_OR_RETURN(problem_t problem, MakeProblem(dot, shape));
 
     const int64_t lhs_bits = primitive_util::BitWidth(shape.lhs_type);
     const int64_t rhs_bits = primitive_util::BitWidth(shape.rhs_type);
     const int64_t operand_bits = std::max(lhs_bits, rhs_bits);
+    const transpose_t a_trans =
+        ContractingIsMinor(dot->operand(0)->shape(), shape.lhs_contracting);
+    const transpose_t b_trans =
+        ContractingIsMinor(dot->operand(1)->shape(), shape.rhs_contracting);
 
-    // num_warps and num_stages are not forwarded to Origami, so the distinct
-    // inputs are far fewer than the configs. Shared-memory capacity does
-    // depend on num_stages, so that check stays per config.
-    absl::flat_hash_map<OrigamiKey, std::optional<absl::Duration>> priced;
-    absl::flat_hash_map<TritonGemmConfig, absl::Duration> estimates;
-    estimates.reserve(configs.size());
+    absl::flat_hash_map<OrigamiKey, config_t> by_key;
+    std::vector<std::pair<TritonGemmConfig, OrigamiKey>> runnable;
+    runnable.reserve(configs.size());
     for (const TritonGemmConfig& config : configs) {
-      if (estimates.contains(config)) continue;
-      if (config.block_m <= 0 || config.block_n <= 0 || config.block_k <= 0) {
+      if (options.drop_narrow_reads &&
+          HasNarrowDramRead(config, shape, a_trans, b_trans)) {
         continue;
       }
-      const int64_t lds_bytes =
-          TritonSharedMemoryBytes(config, lhs_bits, rhs_bits, async_copy_);
-      if (lds_bytes > shared_memory_limit_) continue;
-      const int mfma_size = config.mfma_size > 0 ? config.mfma_size : 16;
-      const int occupancy = LdsOccupancy(lds_bytes, shared_memory_limit_);
-      auto [it, inserted] =
-          priced.try_emplace(OrigamiKey{config.block_m, config.block_n,
-                                        config.block_k, mfma_size, occupancy});
-      if (inserted) {
-        it->second =
-            Estimate(problem, config, operand_bits, mfma_size, occupancy);
-      }
-      if (it->second.has_value()) estimates.emplace(config, *it->second);
+      std::optional<config_t> c =
+          MakeOrigamiConfig(config, lhs_bits, rhs_bits, operand_bits);
+      if (!c.has_value()) continue;
+      OrigamiKey key = KeyOfOrigamiConfig(*c);
+      by_key.try_emplace(key, *c);
+      runnable.push_back({config, key});
     }
-    VLOG(2) << "Origami priced " << priced.size() << " distinct inputs for "
-            << configs.size() << " configs";
+    absl::flat_hash_map<TritonGemmConfig, absl::Duration> estimates;
+    if (runnable.empty()) return estimates;
+
+    // Process-global; every call in a compilation passes the same value.
+    origami::runtime_options::get().heuristics_variance =
+        options.heuristics_variance;
+
+    std::vector<config_t> unique;
+    unique.reserve(by_key.size());
+    for (const auto& [key, c] : by_key) unique.push_back(c);
+    std::vector<origami::prediction_result_t> ranked =
+        origami::rank_configs(problem, hardware_, unique);
+
+    absl::flat_hash_map<OrigamiKey, absl::Duration> priced;
+    priced.reserve(by_key.size());
+    int64_t rank = 0;
+    for (const origami::prediction_result_t& r : ranked) {
+      if (!std::isfinite(r.latency) || r.latency <= 0.0 || r.latency > 1e300) {
+        continue;
+      }
+      priced.emplace(
+          KeyOfOrigamiConfig(r.config),
+          absl::Nanoseconds(r.latency / clock_ghz_) + rank++ * kRankEpsilon);
+    }
+
+    // Origami's LDS check assumes single buffering, so it rejects large tiles
+    // at num_stages=1 that Triton allocates as max(A, B) and can really run.
+    int64_t recovered = 0;
+    for (const auto& [key, c] : by_key) {
+      if (priced.contains(key)) continue;
+      const double cycles =
+          origami::gemm::compute_total_latency(problem, hardware_, c);
+      if (!std::isfinite(cycles) || cycles <= 0.0 || cycles > 1e300) continue;
+      priced.emplace(key, absl::Nanoseconds(cycles / clock_ghz_) +
+                              (rank + recovered++) * kRankEpsilon);
+    }
+
+    estimates.reserve(runnable.size());
+    for (const auto& [config, key] : runnable) {
+      auto it = priced.find(key);
+      if (it != priced.end()) estimates.emplace(config, it->second);
+    }
+    VLOG(2) << "Origami priced " << priced.size() << " distinct inputs ("
+            << recovered << " recovered) for " << configs.size() << " configs";
     return estimates;
   }
 
@@ -352,28 +374,32 @@ class OrigamiDotCostModel::Impl {
                   batch * shape.k * shape.n);
   }
 
-  std::optional<absl::Duration> Estimate(const problem_t& problem,
-                                         const TritonGemmConfig& config,
-                                         int64_t operand_bits, int mfma_size,
-                                         int occupancy) const {
+  std::optional<config_t> MakeOrigamiConfig(const TritonGemmConfig& config,
+                                            int64_t lhs_bits, int64_t rhs_bits,
+                                            int64_t operand_bits) const {
+    if (config.block_m <= 0 || config.block_n <= 0 || config.block_k <= 0) {
+      return std::nullopt;
+    }
+    const int64_t lds_bytes =
+        TritonSharedMemoryBytes(config, lhs_bits, rhs_bits, async_copy_);
+    if (lds_bytes > shared_memory_limit_) return std::nullopt;
+    const int mfma_size = config.mfma_size > 0 ? config.mfma_size : 16;
     std::optional<MatrixInstruction> mi =
         GetMatrixInstruction(gfx_, operand_bits, mfma_size);
     if (!mi.has_value()) return std::nullopt;
-    if (config.block_m < mi->m || config.block_n < mi->n) return std::nullopt;
 
     config_t c;
-    c.mt = dim3_t(config.block_m, config.block_n, config.block_k);
+    // A tile narrower than the MFMA still issues whole instructions, with the
+    // remainder masked off, so price it at that footprint. Dropping these
+    // instead costs us the measured winners on skinny-N GEMMs, where block_n
+    // is routinely 8.
+    c.mt = dim3_t(std::max<int64_t>(config.block_m, mi->m),
+                  std::max<int64_t>(config.block_n, mi->n), config.block_k);
     c.mi = dim3_t(mi->m, mi->n, mi->k);
-    c.occupancy = occupancy;
+    c.occupancy = LdsOccupancy(lds_bytes, shared_memory_limit_);
     c.stream_k = 0;
     c.grid_selection = origami::grid_selection_t::data_parallel;
-
-    const double cycles =
-        origami::gemm::compute_total_latency(problem, hardware_, c);
-    if (!std::isfinite(cycles) || cycles <= 0.0 || cycles > 1e300) {
-      return std::nullopt;
-    }
-    return absl::Nanoseconds(cycles / clock_ghz_);
+    return c;
   }
 
   hardware_t hardware_;
@@ -425,15 +451,8 @@ OrigamiDotCostModel::Create(const se::DeviceDescription& device_description) {
 
 absl::StatusOr<absl::flat_hash_map<TritonGemmConfig, absl::Duration>>
 OrigamiDotCostModel::EstimateRunTimes(
-    const HloDotInstruction* dot,
-    absl::Span<const TritonGemmConfig> configs) const {
-  return impl_->EstimateRunTimes(dot, configs);
-}
-
-absl::StatusOr<std::vector<TritonGemmConfig>>
-OrigamiDotCostModel::SelectTopConfigs(
     const HloDotInstruction* dot, absl::Span<const TritonGemmConfig> configs,
-    const SelectionOptions& options) const {
+    const OrigamiEstimateOptions& options) const {
   std::vector<TritonGemmConfig> candidates;
   candidates.reserve(configs.size());
   for (const TritonGemmConfig& config : configs) {
@@ -441,56 +460,7 @@ OrigamiDotCostModel::SelectTopConfigs(
       candidates.push_back(config);
   }
   if (candidates.empty()) candidates.assign(configs.begin(), configs.end());
-
-  if (options.drop_narrow_reads) {
-    absl::StatusOr<std::vector<TritonGemmConfig>> narrowed =
-        impl_->FilterNarrowReads(dot, candidates);
-    if (narrowed.ok() && !narrowed->empty()) {
-      VLOG(2) << "Origami dropped " << candidates.size() - narrowed->size()
-              << " configs reading an out-of-cache operand narrower than a "
-                 "cache line";
-      candidates = *std::move(narrowed);
-    }
-  }
-
-  ABSL_ASSIGN_OR_RETURN(auto estimates, EstimateRunTimes(dot, candidates));
-
-  absl::flat_hash_map<GroupKey, absl::Duration> best_per_key;
-  for (const auto& [config, duration] : estimates) {
-    auto [it, inserted] = best_per_key.try_emplace(KeyOf(config), duration);
-    if (!inserted && duration < it->second) it->second = duration;
-  }
-
-  std::vector<std::pair<absl::Duration, GroupKey>> ranked;
-  ranked.reserve(best_per_key.size());
-  for (const auto& [key, duration] : best_per_key) {
-    ranked.push_back({duration, key});
-  }
-  absl::c_sort(ranked);
-  if (options.num_groups > 0 &&
-      static_cast<int64_t>(ranked.size()) > options.num_groups) {
-    ranked.resize(options.num_groups);
-  }
-
-  absl::flat_hash_set<GroupKey> keep;
-  keep.reserve(ranked.size());
-  for (const auto& [duration, key] : ranked) keep.insert(key);
-
-  absl::flat_hash_set<TileShape> shapes;
-  std::vector<TritonGemmConfig> result;
-  result.reserve(candidates.size());
-  for (const TritonGemmConfig& config : candidates) {
-    if (!estimates.contains(config)) continue;
-    if (keep.contains(KeyOf(config))) {
-      result.push_back(config);
-      shapes.insert({config.block_m, config.block_n, config.block_k});
-    }
-  }
-
-  VLOG(2) << "Origami kept " << result.size() << " of " << configs.size()
-          << " configs: " << keep.size() << " of " << best_per_key.size()
-          << " estimated configurations, " << shapes.size() << " tile shapes";
-  return result;
+  return impl_->EstimateRunTimes(dot, candidates, options);
 }
 
 absl::Status IsSupportedByOrigami(

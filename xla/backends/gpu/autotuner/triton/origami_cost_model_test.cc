@@ -15,12 +15,14 @@ limitations under the License.
 
 #include "xla/backends/gpu/autotuner/triton/origami_cost_model.h"
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"
+#include "absl/time/time.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
@@ -149,42 +151,42 @@ TEST_F(OrigamiDotCostModelTest, NumStagesReachesOrigamiThroughOccupancy) {
   EXPECT_LT(estimates.at(configs[0]), estimates.at(configs[1]));
 }
 
-TEST_F(OrigamiDotCostModelTest, SelectTopConfigsKeepsAllVariants) {
-  TF_ASSERT_OK_AND_ASSIGN(auto model, OrigamiDotCostModel::Create(MI300X()));
+TEST_F(OrigamiDotCostModelTest, HeuristicsVarianceWidensTheTieBreakBand) {
+  // Within the band Origami orders tied tiles by arithmetic intensity, so a
+  // wider band can change which shapes make the cut. Outside it, ranking is
+  // by latency alone and the band is inert.
+  TF_ASSERT_OK_AND_ASSIGN(auto model, OrigamiDotCostModel::Create(MI350X()));
+  const HloDotInstruction* dot = ParseDot(kBf16Gemm);
   std::vector<TritonGemmConfig> configs = {
-      Config(128, 128, 64, 2, 4), Config(128, 128, 64, 3, 8),
-      Config(64, 64, 64, 2, 4),   Config(64, 64, 64, 3, 8),
-      Config(32, 32, 32, 2, 4),   Config(32, 32, 32, 3, 8),
+      Config(16, 32, 256, 4, 4), Config(32, 64, 32, 4, 4),
+      Config(64, 64, 64, 4, 4), Config(128, 128, 64, 2, 4),
+      Config(256, 256, 64, 2, 8)};
+  auto best = [&](double variance) {
+    auto estimates = model
+                         ->EstimateRunTimes(dot, configs,
+                                            {/*restrict_knobs=*/false,
+                                             /*drop_narrow_reads=*/false,
+                                             /*heuristics_variance=*/variance})
+                         .value();
+    return std::min_element(
+               estimates.begin(), estimates.end(),
+               [](const auto& a, const auto& b) { return a.second < b.second; })
+        ->first;
   };
-  TF_ASSERT_OK_AND_ASSIGN(auto kept,
-                          model->SelectTopConfigs(ParseDot(kBf16Gemm), configs,
-                                                  {/*num_groups=*/2}));
 
-  EXPECT_EQ(kept.size(), 4);
-  for (const TritonGemmConfig& c : kept) {
-    EXPECT_EQ(c.block_m, c.block_n);
-  }
-  // Both variants of each surviving tile shape must be present.
-  for (int i = 0; i + 1 < static_cast<int>(kept.size()); i += 2) {
-    EXPECT_EQ(kept[i].block_m, kept[i + 1].block_m);
-    EXPECT_EQ(kept[i].block_k, kept[i + 1].block_k);
-    EXPECT_NE(kept[i].num_stages, kept[i + 1].num_stages);
-  }
+  // Deterministic, and not sensitive to leftover global state.
+  EXPECT_EQ(best(0.0), best(0.0));
+  EXPECT_EQ(best(0.5), best(0.5));
 }
 
-TEST_F(OrigamiDotCostModelTest, SelectTopConfigsPreservesInputOrder) {
+TEST_F(OrigamiDotCostModelTest, PricesTilesNarrowerThanTheMfmaInstruction) {
+  // block_n=8 is below every MFMA's N. Such configs win on skinny-N GEMMs, so
+  // they must be priced at the instruction footprint, not dropped.
   TF_ASSERT_OK_AND_ASSIGN(auto model, OrigamiDotCostModel::Create(MI300X()));
-  std::vector<TritonGemmConfig> configs = {
-      Config(32, 32, 32), Config(256, 256, 64), Config(128, 128, 64)};
+  std::vector<TritonGemmConfig> configs = {Config(32, 8, 256, /*stages=*/2)};
   TF_ASSERT_OK_AND_ASSIGN(
-      auto kept,
-      model->SelectTopConfigs(ParseDot(kBf16Gemm), configs,
-                              {/*num_groups=*/3, /*restrict_knobs=*/false,
-                               /*drop_narrow_reads=*/false}));
-  ASSERT_EQ(kept.size(), 3);
-  EXPECT_EQ(kept[0].block_m, 32);
-  EXPECT_EQ(kept[1].block_m, 256);
-  EXPECT_EQ(kept[2].block_m, 128);
+      auto estimates, model->EstimateRunTimes(ParseDot(kBf16Gemm), configs));
+  EXPECT_THAT(estimates, Not(IsEmpty()));
 }
 
 TEST_F(OrigamiDotCostModelTest, DropsConfigsExceedingTritonSharedMemory) {
@@ -264,17 +266,16 @@ TEST_F(OrigamiDotCostModelTest, DropsSubCacheLineReadsOfLargeOperands) {
                                            Config(32, 64, 32, 4, 4)};
 
   TF_ASSERT_OK_AND_ASSIGN(
-      auto kept,
-      model->SelectTopConfigs(dot, configs,
-                              {/*num_groups=*/10, /*restrict_knobs=*/false,
-                               /*drop_narrow_reads=*/true}));
-  for (const TritonGemmConfig& c : kept) EXPECT_NE(c.block_n, 32);
+      auto kept, model->EstimateRunTimes(dot, configs,
+                                         {/*restrict_knobs=*/false,
+                                          /*drop_narrow_reads=*/true}));
+  EXPECT_THAT(kept, Not(IsEmpty()));
+  for (const auto& [c, duration] : kept) EXPECT_NE(c.block_n, 32);
 
   TF_ASSERT_OK_AND_ASSIGN(
-      auto all,
-      model->SelectTopConfigs(dot, configs,
-                              {/*num_groups=*/10, /*restrict_knobs=*/false,
-                               /*drop_narrow_reads=*/false}));
+      auto all, model->EstimateRunTimes(dot, configs,
+                                        {/*restrict_knobs=*/false,
+                                         /*drop_narrow_reads=*/false}));
   EXPECT_GT(all.size(), kept.size());
 }
 

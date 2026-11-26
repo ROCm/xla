@@ -46,15 +46,9 @@ OrigamiDotCostModel::Create(const se::DeviceDescription&) {
 }
 
 absl::StatusOr<absl::flat_hash_map<TritonGemmConfig, absl::Duration>>
-OrigamiDotCostModel::EstimateRunTimes(
-    const HloDotInstruction*, absl::Span<const TritonGemmConfig>) const {
-  return NotBuilt();
-}
-
-absl::StatusOr<std::vector<TritonGemmConfig>>
-OrigamiDotCostModel::SelectTopConfigs(const HloDotInstruction*,
+OrigamiDotCostModel::EstimateRunTimes(const HloDotInstruction*,
                                       absl::Span<const TritonGemmConfig>,
-                                      const SelectionOptions&) const {
+                                      const OrigamiEstimateOptions&) const {
   return NotBuilt();
 }
 

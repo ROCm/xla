@@ -72,6 +72,9 @@ struct EstimationContext {
   HloFusionInstruction* fusion = nullptr;
   HloDotInstruction* dot = nullptr;
   const se::DeviceDescription& device_description;
+  // When set, replaces the XLA cost model for this dot.
+  const OrigamiDotCostModel* origami = nullptr;
+  OrigamiEstimateOptions origami_options;
 };
 
 absl::StatusOr<absl::Duration> EstimateRunTimeWithConfig(
@@ -108,6 +111,21 @@ absl::StatusOr<OrderedEstimatesAndConfigs> EstimateConfigs(
     const EstimationContext& context,
     absl::Span<const TritonGemmConfig> configs, mlir::MLIRContext* mlir_context,
     bool enable_same_shape_multi_output_fusion) {
+  if (context.origami != nullptr) {
+    absl::StatusOr<absl::flat_hash_map<TritonGemmConfig, absl::Duration>>
+        estimates = context.origami->EstimateRunTimes(context.dot, configs,
+                                                      context.origami_options);
+    if (estimates.ok()) {
+      OrderedEstimatesAndConfigs ordered;
+      for (const auto& [config, duration] : *estimates) {
+        ordered.insert({duration, config});
+      }
+      return ordered;
+    }
+    LOG(WARNING) << "Origami estimation failed, falling back: "
+                 << estimates.status();
+  }
+
   HloFusionAnalysisCache fusion_analysis_cache{context.device_description};
   GpuPerformanceModelWithIndexingAnalysis cost_model{
       &context.device_description, &fusion_analysis_cache,
@@ -224,9 +242,9 @@ std::string CostModelGemmTilingOptions::ToString() const {
   if (filter.has_value()) {
     absl::StrAppend(&s, " filter: ", *filter);
   }
-  absl::StrAppend(&s, " top_configs: ", top_configs);
   absl::StrAppend(&s, " restrict_knobs: ", restrict_knobs);
   absl::StrAppend(&s, " drop_narrow_reads: ", drop_narrow_reads);
+  absl::StrAppend(&s, " heuristics_variance: ", heuristics_variance);
   absl::StrAppend(&s, " }");
   return s;
 }
@@ -275,13 +293,13 @@ absl::StatusOr<CostModelGemmTilingOptions> ParseCostModelGemmTilingOptions(
         return absl::InvalidArgumentError(
             absl::StrCat("Could not parse 'mixin_only_faster' value: ", value));
       }
-    } else if (key == "top_configs") {
-      int val = 0;
-      if (absl::SimpleAtoi(value, &val) && val > 0) {
-        parsed_options.top_configs = val;
+    } else if (key == "heuristics_variance") {
+      double val = 0.0;
+      if (absl::SimpleAtod(value, &val) && val >= 0.0) {
+        parsed_options.heuristics_variance = val;
       } else {
-        return absl::InvalidArgumentError(
-            absl::StrCat("Could not parse 'top_configs' value: ", value));
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Could not parse 'heuristics_variance' value: ", value));
       }
     } else if (key == "drop_narrow_reads") {
       int val = 0;
@@ -312,11 +330,37 @@ absl::StatusOr<CostModelGemmTilingOptions> ParseCostModelGemmTilingOptions(
   return parsed_options;
 }
 
+// Returns a model when the flag is on and Origami can handle this dot on this
+// device; nullptr otherwise. Any failure here falls back to the default
+// estimator rather than aborting compilation.
+std::unique_ptr<OrigamiDotCostModel> MaybeCreateOrigamiModel(
+    const HloDotInstruction* dot,
+    const se::DeviceDescription& device_description,
+    const DebugOptions& debug_options) {
+  if (!debug_options.xla_gpu_experimental_use_origami_cost_model()) {
+    return nullptr;
+  }
+  if (absl::Status supported = IsSupportedByOrigami(dot, device_description);
+      !supported.ok()) {
+    VLOG(1) << "Origami cannot model this dot: " << supported;
+    return nullptr;
+  }
+  absl::StatusOr<std::unique_ptr<OrigamiDotCostModel>> model =
+      OrigamiDotCostModel::Create(device_description);
+  if (!model.ok()) {
+    LOG(WARNING) << "Origami cost model requested but unavailable: "
+                 << model.status();
+    return nullptr;
+  }
+  return *std::move(model);
+}
+
 // Bundles an extracted HloModule with its corresponding EstimationContext.
 // The module must be kept alive for the lifetime of EstimationContext since
 // the context holds non-owning pointers to instructions within the module.
 struct ExtractedModuleAndContext {
   std::unique_ptr<HloModule> module;
+  std::unique_ptr<OrigamiDotCostModel> origami;
   EstimationContext context;
 };
 
@@ -338,8 +382,11 @@ ExtractedModuleAndContext CreateEstimationContext(
       Cast<HloDotInstruction>(hlo_query::FindInstruction(
           extracted_fusion->fused_instructions_computation(), HloOpcode::kDot));
 
-  return {std::move(module), EstimationContext{extracted_fusion, extracted_dot,
-                                               device_description}};
+  std::unique_ptr<OrigamiDotCostModel> origami =
+      MaybeCreateOrigamiModel(extracted_dot, device_description, debug_options);
+  EstimationContext context{extracted_fusion, extracted_dot, device_description,
+                            origami.get()};
+  return {std::move(module), std::move(origami), std::move(context)};
 }
 
 // Extracts a vector of TritonGemmConfig from the ordered estimates set.
@@ -371,31 +418,6 @@ std::vector<TritonGemmConfig> FillConfigListFromEstimates(
 
 namespace {
 
-// Returns a model when the flag is on and Origami can handle this dot on this
-// device; nullptr otherwise. Any failure here falls back to the default
-// estimator rather than aborting compilation.
-std::unique_ptr<OrigamiDotCostModel> MaybeCreateOrigamiModel(
-    const HloDotInstruction* dot,
-    const se::DeviceDescription& device_description,
-    const DebugOptions& debug_options) {
-  if (!debug_options.xla_gpu_experimental_use_origami_cost_model()) {
-    return nullptr;
-  }
-  if (absl::Status supported = IsSupportedByOrigami(dot, device_description);
-      !supported.ok()) {
-    VLOG(1) << "Origami cannot model this dot: " << supported;
-    return nullptr;
-  }
-  absl::StatusOr<std::unique_ptr<OrigamiDotCostModel>> model =
-      OrigamiDotCostModel::Create(device_description);
-  if (!model.ok()) {
-    LOG(WARNING) << "Origami cost model requested but unavailable: "
-                 << model.status();
-    return nullptr;
-  }
-  return *std::move(model);
-}
-
 }  // namespace
 
 absl::StatusOr<std::vector<TritonGemmConfig>> OptimizeConfigsWithCostModel(
@@ -410,50 +432,20 @@ absl::StatusOr<std::vector<TritonGemmConfig>> OptimizeConfigsWithCostModel(
       debug_options
           .xla_gpu_experimental_enable_same_shape_multi_output_fusion();
 
-  detail::ExtractedModuleAndContext extracted =
-      detail::CreateEstimationContext(dot, device_description, debug_options);
-  const detail::EstimationContext& context = extracted.context;
-
   ABSL_ASSIGN_OR_RETURN(
       detail::CostModelGemmTilingOptions options,
       detail::ParseCostModelGemmTilingOptions(
           debug_options.xla_gpu_experimental_cost_model_gemm_tiling_options()));
 
+  detail::ExtractedModuleAndContext extracted =
+      detail::CreateEstimationContext(dot, device_description, debug_options);
+  extracted.context.origami_options = {options.restrict_knobs,
+                                       options.drop_narrow_reads,
+                                       options.heuristics_variance};
+  const detail::EstimationContext& context = extracted.context;
+
   VLOG(1) << "Performing Cost Model config optimizations with "
           << options.ToString();
-
-  if (std::unique_ptr<OrigamiDotCostModel> origami =
-          MaybeCreateOrigamiModel(dot, device_description, debug_options)) {
-    absl::StatusOr<std::vector<TritonGemmConfig>> selected =
-        origami->SelectTopConfigs(
-            dot, all_configs,
-            {/*num_groups=*/options.top_configs,
-             /*restrict_knobs=*/options.restrict_knobs,
-             /*drop_narrow_reads=*/options.drop_narrow_reads});
-    if (selected.ok() && !selected->empty()) {
-      // Keep the default set as a floor. Origami favours large tiles, which
-      // can fail to compile or perform badly for fusions with heavy
-      // epilogues; without this the autotuner has nothing to fall back on.
-      const size_t from_origami = selected->size();
-      absl::flat_hash_set<TritonGemmConfig> present(selected->begin(),
-                                                    selected->end());
-      for (const TritonGemmConfig& config : optimized_configs) {
-        if (present.insert(config).second) selected->push_back(config);
-      }
-      VLOG(1) << "Origami selected " << from_origami << " of "
-              << all_configs.size() << " configs from the top "
-              << options.top_configs << " estimated configurations, plus "
-              << selected->size() - from_origami << " from the default set";
-      return *std::move(selected);
-    }
-    if (!selected.ok()) {
-      LOG(WARNING) << "Origami selection failed, falling back: "
-                   << selected.status();
-    } else {
-      LOG(WARNING) << "Origami priced no config for this dot out of "
-                   << all_configs.size() << " candidates, falling back";
-    }
-  }
 
   std::optional<absl::StatusOr<detail::OrderedEstimatesAndConfigs>>
       estimated_all_configs;
@@ -549,15 +541,6 @@ EstimateConfigsWithCostModel(const HloDotInstruction* dot,
                              const DebugOptions& debug_options,
                              mlir::MLIRContext* mlir_context) {
   namespace detail = cost_model_config_optimization_detail;
-
-  if (std::unique_ptr<OrigamiDotCostModel> origami =
-          MaybeCreateOrigamiModel(dot, device_description, debug_options)) {
-    absl::StatusOr<absl::flat_hash_map<TritonGemmConfig, absl::Duration>>
-        estimates = origami->EstimateRunTimes(dot, configs);
-    if (estimates.ok()) return *std::move(estimates);
-    LOG(WARNING) << "Origami estimation failed, falling back: "
-                 << estimates.status();
-  }
 
   detail::ExtractedModuleAndContext extracted =
       detail::CreateEstimationContext(dot, device_description, debug_options);

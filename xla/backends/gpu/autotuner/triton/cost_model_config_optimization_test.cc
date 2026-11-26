@@ -440,12 +440,12 @@ TEST_F(CostModelConfigOptimizationHloTest, OrigamiFlagOffUsesDefaultEstimator) {
   EXPECT_EQ(optimized.size(), 2);
 }
 
-TEST_F(CostModelConfigOptimizationHloTest, OrigamiSelectsWholeTileShapes) {
+TEST_F(CostModelConfigOptimizationHloTest, OrigamiRespectsMaxSameMnk) {
   const se::DeviceDescription mi300 = TestGpuDeviceInfo::AMDMI300DeviceInfo();
   auto [module, dot] = GetHloModuleAndDot_F32_1024_1024_1024();
 
-  // Two variants per tile shape; Origami cannot tell them apart, so a selected
-  // shape must contribute both.
+  // Two variants per tile shape. Origami cannot tell them apart, so without a
+  // cap the budget would go to variants of one shape instead of to shapes.
   std::vector<TritonGemmConfig> all_configs = {
       TritonGemmConfig(128, 128, 32, 2, 4, 1, false),
       TritonGemmConfig(128, 128, 32, 3, 8, 1, false),
@@ -457,22 +457,24 @@ TEST_F(CostModelConfigOptimizationHloTest, OrigamiSelectsWholeTileShapes) {
 
   DebugOptions debug_options = module->config().debug_options();
   debug_options.set_xla_gpu_experimental_use_origami_cost_model(true);
-  (*debug_options.mutable_xla_gpu_experimental_cost_model_gemm_tiling_options())
-      ["top_configs"] = "2";
+  auto& opts =
+      *debug_options
+           .mutable_xla_gpu_experimental_cost_model_gemm_tiling_options();
+  opts["mixin"] = "4";
+  opts["mixin_max_same_mnk"] = "1";
 
   ASSERT_OK_AND_ASSIGN(
       std::vector<TritonGemmConfig> optimized,
       OptimizeConfigsWithCostModel(dot, all_configs, /*optimized_configs=*/{},
                                    mi300, debug_options, &mlir_context_));
 
-  EXPECT_EQ(optimized.size(), 4);
   absl::flat_hash_map<std::tuple<int, int, int>, int> per_shape;
   for (const TritonGemmConfig& c : optimized) {
     ++per_shape[{c.block_m, c.block_n, c.block_k}];
   }
-  EXPECT_EQ(per_shape.size(), 2);
+  EXPECT_EQ(per_shape.size(), 3);
   for (const auto& [shape, count] : per_shape) {
-    EXPECT_EQ(count, 2);
+    EXPECT_EQ(count, 1);
   }
 }
 
@@ -500,12 +502,12 @@ TEST_F(CostModelConfigOptimizationHloTest, OrigamiFallsBackOnCudaTarget) {
 
 TEST_F(CostModelConfigOptimizationHloTest, ParsesTopConfigsOption) {
   google::protobuf::Map<std::string, std::string> options;
-  options["top_configs"] = "7";
+  options["drop_narrow_reads"] = "0";
   ASSERT_OK_AND_ASSIGN(detail::CostModelGemmTilingOptions parsed,
                        detail::ParseCostModelGemmTilingOptions(options));
-  EXPECT_EQ(parsed.top_configs, 7);
+  EXPECT_EQ(parsed.drop_narrow_reads, false);
 
-  options["top_configs"] = "nonsense";
+  options["drop_narrow_reads"] = "nonsense";
   EXPECT_FALSE(detail::ParseCostModelGemmTilingOptions(options).ok());
 }
 
@@ -523,10 +525,12 @@ TEST_F(CostModelConfigOptimizationHloTest, OrigamiKeepsDefaultSetAsFloor) {
       TritonGemmConfig(16, 16, 64, 2, 4, 1, false),
   };
 
+  // mixin adds to the default set rather than replacing it, so the floor
+  // survives; `top` would legitimately drop it.
   DebugOptions debug_options = module->config().debug_options();
   debug_options.set_xla_gpu_experimental_use_origami_cost_model(true);
   (*debug_options.mutable_xla_gpu_experimental_cost_model_gemm_tiling_options())
-      ["top_configs"] = "1";
+      ["mixin"] = "1";
 
   ASSERT_OK_AND_ASSIGN(
       std::vector<TritonGemmConfig> optimized,
