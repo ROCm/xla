@@ -219,17 +219,22 @@ struct BenchControl {
 };
 
 struct BenchmarkStats {
-  std::vector<int64_t> latencies_us;
+  struct Samples {
+    std::vector<int64_t> request_us;
+    std::vector<int64_t> sync_us;
+  };
+  Samples samples;
   mutable std::mutex mu;
 
-  void update(int64_t latency_us) {
+  void update(int64_t latency_us, int64_t sync_us) {
     std::lock_guard<std::mutex> guard(mu);
-    latencies_us.push_back(latency_us);
+    samples.request_us.push_back(latency_us);
+    samples.sync_us.push_back(sync_us);
   }
 
-  std::vector<int64_t> snapshot() const {
+  Samples snapshot() const {
     std::lock_guard<std::mutex> guard(mu);
-    return latencies_us;
+    return samples;
   }
 
   // Single computed summary shared by the console report and the CSV writer so
@@ -240,6 +245,7 @@ struct BenchmarkStats {
     double qps = 0.0;
     int64_t min_us = 0, max_us = 0;
     double mean_us = 0.0, stddev_us = 0.0;
+    double sync_p99_us = 0.0;
     double p50_us = 0.0, p75_us = 0.0, p95_us = 0.0;
     double p98_us = 0.0, p99_us = 0.0, p999_us = 0.0;
   };
@@ -255,10 +261,12 @@ struct BenchmarkStats {
     return lower + (pos - std::floor(pos)) * (upper - lower);
   }
 
-  static StatRow compute(const std::vector<int64_t>& data, double wall_elapsed_ms) {
-    std::vector<int64_t> sorted(data);
+  static StatRow compute(Samples samples, double wall_elapsed_ms) {
+    auto& sorted = samples.request_us;
     std::sort(sorted.begin(), sorted.end());
     StatRow r;
+    std::sort(samples.sync_us.begin(), samples.sync_us.end());
+    r.sync_p99_us = getValue(samples.sync_us, 0.99);
     r.count = sorted.size();
     if (!sorted.empty()) {
       r.min_us = sorted.front();
@@ -286,9 +294,7 @@ struct BenchmarkStats {
     return r;
   }
 
-  static void printReport(const char* title, const std::vector<int64_t>& data,
-                           double wall_elapsed_ms) {
-    const StatRow r = compute(data, wall_elapsed_ms);
+  static void printReport(const char* title, const StatRow& r) {
 
     std::printf("\n");
     std::printf("%.64s ", title);
@@ -306,6 +312,7 @@ struct BenchmarkStats {
     std::printf("              98%% <= %.2f\n", r.p98_us);
     std::printf("              99%% <= %.2f\n", r.p99_us);
     std::printf("            99.9%% <= %.2f\n", r.p999_us);
+    std::printf("      sync_p99_us = %.2f\n", r.sync_p99_us);
     std::printf("-- Throughput\n");
     std::printf("       wall_time_s = %.4f\n", r.wall_sec);
     std::printf("       total_iters = %zu\n", r.count);
@@ -679,14 +686,14 @@ class Consumer {
       const int64_t latency_us =
           std::chrono::duration_cast<std::chrono::microseconds>(wall_end - wall_start).count();
 
-      global_stats_->update(latency_us);
+      const auto sync_us =
+          std::chrono::duration_cast<std::chrono::microseconds>(wall_end - sync_start).count();
+      global_stats_->update(latency_us, sync_us);
       completed_.fetch_add(1, std::memory_order_relaxed);
 
       pool_->Return(slot.index);
 
       // Worker-local counters; read only after the consumer threads join.
-      const auto sync_us =
-          std::chrono::duration_cast<std::chrono::microseconds>(wall_end - sync_start).count();
       slow_requests_ += latency_us > 10000;
       slow_sync_majority_ += (latency_us > 10000 && sync_us > latency_us / 2);
       slow_sync_over_10ms_ += (latency_us > 10000 && sync_us > 10000);
@@ -1234,13 +1241,13 @@ int main(int argc, char** argv) {
 
     auto now = std::chrono::high_resolution_clock::now();
     const double wall_ms = std::chrono::duration<double, std::milli>(now - wall_start).count();
-    auto snap = global_stats.snapshot();
+    const auto stats = BenchmarkStats::compute(global_stats.snapshot(), wall_ms);
 
     char title[128];
     std::snprintf(title, sizeof(title), "[%ds / %ds] Benchmark Statistics",
                   elapsed_sec, g_cfg.duration_sec);
-    BenchmarkStats::printReport(title, snap, wall_ms);
-    csv_writer.writeRow("interval", elapsed_sec, BenchmarkStats::compute(snap, wall_ms));
+    BenchmarkStats::printReport(title, stats);
+    csv_writer.writeRow("interval", elapsed_sec, stats);
   }
 
   bench_ctrl.stop();
@@ -1276,9 +1283,9 @@ int main(int argc, char** argv) {
             << " sync_over_half_of_slow=" << sync_majority
             << " sync_over_10ms_of_slow=" << sync_over_10ms << '\n';
 
-  auto final_snap = global_stats.snapshot();
-  BenchmarkStats::printReport("Final Benchmark Statistics", final_snap, wall_ms);
-  csv_writer.writeRow("final", g_cfg.duration_sec, BenchmarkStats::compute(final_snap, wall_ms));
+  const auto final_stats = BenchmarkStats::compute(global_stats.snapshot(), wall_ms);
+  BenchmarkStats::printReport("Final Benchmark Statistics", final_stats);
+  csv_writer.writeRow("final", g_cfg.duration_sec, final_stats);
 
   for (auto* prep : prep_cache) {
     cleanup_slot(prep);
