@@ -36,50 +36,56 @@ on:
         required: false
         type: boolean
         default: true
+      stacks:
+        description: 'ROCm stacks to test: the `stacks` output of build_tools/rocm/nightly_rocm_stacks.py. Resolved here when empty.'
+        required: false
+        type: string
+        default: ''
   pull_request_target:
     types: [labeled]
 
 jobs:
+  # Same trigger gate as rocm_xla_ci_nightly.yml, which is the usual caller:
+  # scheduled runs, manual dispatch, the "nightly-pipeline" label, or a PR to
+  # rocm-dev-infra. On a `workflow_call` the github context is the caller's,
+  # so this sees the event that started the nightly pipeline. Stated here once
+  # and read back by the job below as the `enabled` output.
   rocm-config:
+    if: >-
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || github.event.label.name == 'nightly-pipeline'
+      || (github.event_name == 'pull_request'
+          && github.event.pull_request.base.ref == 'rocm-dev-infra')
     runs-on: ubuntu-latest
     outputs:
+      # Constant: this job only runs when the gate above passed.
+      enabled: "true"
       docker-image: ${{ steps.out.outputs.docker-image }}
-      therock-version: ${{ steps.therock.outputs.therock_version }}
-      therock-index-url: ${{ steps.therock.outputs.therock_index_url }}
+      stacks: ${{ inputs.stacks || steps.stacks.outputs.stacks }}
     steps:
       - id: out
         shell: bash
         run: |
           echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - if: ${{ !inputs.stacks }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: openxla/xla
-          ref: main
           sparse-checkout: |
             build_tools/rocm
           persist-credentials: false
 
-      - name: Fetch theRock version detection from ROCm/xla
-        run: |
-          wget -O build_tools/rocm/detect-therock-version.sh "https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/detect-therock-version.sh"
-          chmod +x build_tools/rocm/detect-therock-version.sh
-
-      - name: Detect latest TheRock version
-        id: therock
-        env:
-          ROCM_PIP_SOURCE: nightlies
-          GPU_TARGET: device-all
-          ROCM_SDK_VERSION: ''
-          PIP_INDEX_PATH: ''
-          # whl-multi-arch is frozen; the live nightly index is whl-next, which
-          # is also the one infra mirrors.
-          THEROCK_INDEX_URL: 'https://nightly.repo.amd.com/rocm/whl-next/'
-        run: bash build_tools/rocm/detect-therock-version.sh
+      - name: Resolve the ROCm stacks to test
+        if: ${{ !inputs.stacks }}
+        id: stacks
+        run: python3 build_tools/rocm/nightly_rocm_stacks.py
 
   jax-upstream:
     needs: rocm-config
     name: JAX Upstream Linux x86 AMD Instinct GPU
+    # See the gate on rocm-config above.
+    if: needs.rocm-config.outputs.enabled == 'true'
     runs-on: amd-do-linux-xla-gpu-gfx950-dpx-4
     timeout-minutes: 220
     # Remove this once the JAX CI is stable.
@@ -97,13 +103,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode:
-          - name: "therock_release"
-            index_url: "https://stable.repo.amd.com/rocm/whl-next/"
-            version: "10.0.0"
-          - name: "therock_nightly"
-            index_url: ${{ needs.rocm-config.outputs.therock-index-url }}
-            version: ${{ needs.rocm-config.outputs.therock-version }}
+        mode: ${{ fromJSON(needs.rocm-config.outputs.stacks) }}
     container:
       image: ${{ needs.rocm-config.outputs.docker-image }}
 

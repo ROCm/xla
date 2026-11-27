@@ -340,6 +340,93 @@ Behavior is tunable with environment variables:
 | `INPUT_FORMAT` | `hlo` | `hlo` profiles the `*.txt`/`*.hlo` modules; `stablehlo` profiles the `*.mlirbc` artifacts written by `convert_hlo_to_stablehlo.py` (see below). |
 | `XLA_TRANSLATE`, `STABLEHLO_TRANSLATE` | next to the runner in the same `bazel-bin` | Tools used to lower `*.mlirbc` to HLO when the runner lacks `--input_format=stablehlo`. Build them at the runner's revision. |
 
+### On ROCm RBE: `rbe_hlo_eval.sh`
+
+`rbe_hlo_eval.sh` runs `run_hlo_eval.sh` on the ROCm RBE GPU pools (Buildbarn,
+`--config=rocm_rbe_dev`) with a hermetic ROCm, so no local GPU or ROCm install
+is needed, only the Buildbarn client certificates in `/data/bb-rbe-*`.
+`hlo_runner_main` is built from the XLA checkout given by `--xla`: a directory,
+or a git ref that the script checks out detached into `worktrees/<ref>` of this
+repository (fetching first for `<remote>/<branch>`, reused on later runs,
+refused if it has local changes). Without `--xla`, the current directory must be
+an XLA checkout.
+
+```bash
+git clone git@github.com:ROCm/xla.git ~/xla-dev-infra   # default branch: rocm-dev-infra
+cd ~/xla-dev-infra
+./perf_tools/hlo_eval_tools/rbe_hlo_eval.sh --xla rocm/main all -- --jobs=200   # 40 1-GPU leaves
+./perf_tools/hlo_eval_tools/rbe_hlo_eval.sh --xla my-branch sdxl,vit inference/1gpu
+./perf_tools/hlo_eval_tools/rbe_hlo_eval.sh --xla ~/xla all       # an existing checkout
+```
+
+The XLA worktrees share this clone's objects. To hide the generated
+`_hlo_eval_rbe/` in them, run once:
+`echo _hlo_eval_rbe/ >> "$(git rev-parse --git-common-dir)/info/exclude"`.
+
+It generates a throwaway Bazel package per model in `<xla>/_hlo_eval_rbe/` with
+one `sh_test` per leaf (depending on `hlo_runner_main` and the leaf's modules)
+and runs all of them in one uncached `bazel test`, so they run concurrently as
+pool capacity allows. The ROCm tarball, RBE container image, GPU target and
+single-GPU pool are the ones the checkout's ROCm CI pins in
+`.github/workflows/rocm_ci.yml`; the tarball falls back to the `rocm_redist.bzl`
+default. Runs with the same ROCm tarball share one Bazel output base, even from
+different checkouts, so the script allows one run at a time per output base and
+per XLA checkout and refuses a second one. To run in parallel, use another
+checkout and set `XLA_OUTPUT_BASE`.
+
+Results go to `hlo_eval_results/<xla commit>-<models>-<timestamp>/` in the
+current directory: `run_info.txt` (XLA checkout and commit, ROCm tarball,
+settings), per leaf `<model>/<leaf>/` with the kept `test.log` and CSV and every
+attempt under `attempts/<k>/`, and `summary.tsv` with, per module, `n` timed samples, median, min, max, the IQR
+sigma ((q75 - q25) / 1.349, % of median), the kept attempt, worker host and
+status (`OK`, `NOISY`, `NO_DATA`). A leaf whose worst module exceeds `NOISY_PCT`
+is rerun up to `RETRY_NOISY` times and the attempt with the smallest spread is
+kept. Unlike stdev, the IQR sigma ignores single spikes and grows once more than
+about a quarter of the samples are disturbed, before the median moves.
+`hlo_eval_summarize.py <results dir> <results dir>...` compares runs.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `REPEATS`, `STAT` | `20`, `median` | Executions per module (the first is the warmup) and the CSV statistic. |
+| `NOISY_PCT`, `RETRY_NOISY` | `2`, `1` | Noise threshold (% of median) and reruns of noisy leaves. |
+| `MAX_GPUS`, `MULTI_GPU_POOL` | `1`, `linux_x64_multi4` | Leaves needing more GPUs are skipped; 2+ GPU leaves use that pool (unverified). |
+| `ROCM_DISTRO_URL`, `ROCM_DISTRO_HASH` | from the checkout | Hermetic ROCm tarball and sha256 (set both); `file://` works. |
+| `ROCM_DOCKER_IMAGE`, `ROCM_GPU_TARGET` | from the checkout | RBE container image and offload arch. |
+| `XLA_OUTPUT_BASE` | `~/.cache/bazel/xla-rocm-<hash>` | One output base per tarball; set it if `$HOME` is on NFS. |
+| `XLA_DIR` | `.` | Same as `--xla <dir>`. |
+| `RESULTS_DIR`, `RBE` | see above, `rocm_rbe_dev` | Results directory and RBE config. |
+| `CMD_BUFFER`, `ARG_MODE`, `SETTLE_SEC`, `XLA_FLAGS` | `run_hlo_eval.sh`'s | Forwarded when set. |
+| `REQUIRE_PARTITION` | (unset) | e.g. `DPX`: fail on a worker whose compute partition differs, before running. |
+
+Measured on the Buildbarn single-GPU pool (MI350, DPX partitions; 4 runs of the
+40 single-GPU leaves, about 5-6 minutes each with a warm cache):
+
+- Suite geomean: every pair of runs agrees within 0.25% (most within 0.05%)
+  once the pair's 3 largest per-module differences are dropped.
+- Per module: median run-to-run range 1.1%, 90th percentile 4.4%. Some modules
+  (`stable_diffusion_1_5` and `dit` inference, `clip`, `colabfold`) settle at a
+  different level per run while each run is tight: autotuning or host
+  differences, which the within-run spread cannot see.
+- Some large-model leaves can run out of device memory on these partitions;
+  they show up as `NO_DATA` on every run.
+- All workers so far were `mi350x-gpu-dpx-*` hosts with "AMD Instinct MI350X
+  VF" devices (DPX partitions). SPX and CPX have not been measured: absolute
+  times, memory limits and noise differ between partition modes, so compare
+  runs only within one mode. Each test logs the worker's partitioning from
+  amdgpu/KFD sysfs (`device: compute_partition=... memory_partition=... cus=...
+  xcc=... vram_gib=...`, `?` where not exposed); `hlo_eval_summarize.py`
+  prints it and warns when compared runs differ, and `REQUIRE_PARTITION=DPX`
+  makes a worker in another mode fail before running.
+
+If a build fails with `lost inputs with digests`, Buildbarn evicted cached
+outputs Bazel still referenced; rerun, or try one build with
+`-- --noremote_accept_cached`.
+
+Claude Code: the `run-hlo-perf-rbe` skill in `.claude/skills/` covers running and
+interpreting this; it loads automatically when Claude runs in this repository.
+To use it elsewhere, link it once:
+`ln -s ~/xla-dev-infra/.claude/skills/run-hlo-perf-rbe ~/.claude/skills/`.
+
 ### StableHLO portable artifacts (`INPUT_FORMAT=stablehlo`)
 
 HLO text has no cross-version compatibility guarantee, so a module dumped by one
@@ -673,6 +760,58 @@ ROCm/XLA version under test) to spot per-module regressions over time.
 3. Run the suite with identical flags, appending into the **same** per-model CSVs.
 4. Compare rows across timestamps (or versions) to see which HLO modules got
    faster or slower.
+5. For an XLA-side regression, bisect the module that moved down to the commit
+   that caused it — see below.
+
+### Bisecting to a commit: `bisect_run.sh`
+
+The suite tells you *which* module regressed between two revisions;
+`bisect_run.sh` tells you *which commit* did it. It is a
+[`git bisect run`](https://git-scm.com/docs/git-bisect) script: for every
+revision git picks, it builds `hlo_runner_main`, replays the module(s) named,
+and reports one verdict, converging on the first bad commit in `log2(range)`
+steps.
+
+```bash
+cd /path/to/your/xla-checkout          # the tree to bisect, never this repo
+git bisect start <bad-rev> <good-rev>
+git bisect run /path/to/perf_tools/hlo_eval_tools/bisect_run.sh \
+    --module /path/to/perf_tools/hlo_eval_tools/large_language_models/flan_t5_large/inference/1gpu/module_0199.jit_predict_step.before_optimizations.mlirbc \
+    --threshold 12 --trials 3 \
+    --autotune-cache /path/to/merged-autotune.textproto \
+    --disk-cache "$BAZEL_DISK_CACHE" \
+    --tsv bisect-log.tsv --keep-logs bisect-logs
+```
+
+`--help` documents every flag and exit code. `--dry-run` prints the exact bazel
+and runner command lines and exits without touching anything — worth doing
+first, not least to check that the ROCm source matches how that checkout was
+last built, since a mismatch re-fetches `local_config_rocm` and rebuilds
+everything ROCm-dependent at the first revision.
+
+| `--mode` | A revision is BAD when | Typical use |
+|---|---|---|
+| `time` (default) | the metric is `>= --threshold` ms | perf regression |
+| `status` | the runner exits non-zero | crash, compile error, CHECK failure |
+| `grep` | the output matches `--pattern` | one specific error, ignoring others |
+
+`--invert` flips which side is bisect's "bad", so the same script finds the
+commit that *fixed* or *sped up* something; start the bisect the other way round
+in that case. Revisions that cannot answer the question — failed to build,
+missing or partial timings, a runner too old for `--input_format=stablehlo` —
+are skipped rather than blamed.
+
+The metric is the sum of the per-module medians, so several modules run in one
+process under a single `--input_format` and must share one. `--num-repeats` and
+`--warmup` set the median within a process, `--trials` with `--trial-agg`
+aggregates across processes, and `--autotune-cache` is what keeps the number
+comparable between revisions. Pick the threshold by measuring both endpoints
+first (`--threshold 0` prints the metric and calls everything BAD), then set it
+midway between the two medians; if that gap is not clearly larger than the
+run-to-run spread, the bisect cannot resolve it.
+
+`--tsv` appends one row per revision — `rev metric_ms samples trials build_s
+verdict detail` — so the measurement behind every verdict stays auditable.
 
 ## Collected results
 

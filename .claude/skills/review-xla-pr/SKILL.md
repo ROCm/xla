@@ -1,7 +1,7 @@
 ---
 name: review-xla-pr
 description: Review an XLA pull request with deep expertise in HLO optimizations, GPU backend, Triton codegen, autotuner, and AMD/ROCm parity. Use when asked to review an XLA PR or check an XLA change.
-argument-hint: [PR-number]
+argument-hint: "[PR-number]"
 context: fork
 agent: general-purpose
 allowed-tools: Bash(gh pr view *), Bash(gh pr diff *), Bash(git log *), Bash(git show *), Bash(git diff *), Bash(git blame *), Bash(head *), Bash(grep *), Read, Grep, Glob

@@ -51,44 +51,23 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docker-image: ${{ steps.out.outputs.docker-image }}
-      therock-version: ${{ steps.therock.outputs.therock_version }}
     steps:
       - id: out
         shell: bash
         run: |
           echo "docker-image=ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:68854ed30b800d3e8c390f6e651721e2bead58830da1c59e1b828354eb8f077f" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: openxla/xla
-          ref: main
-          sparse-checkout: |
-            build_tools/rocm
-          persist-credentials: false
-
-      - name: Fetch theRock version detection from ROCm/xla
-        run: |
-          wget -O build_tools/rocm/detect-therock-version.sh "https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/detect-therock-version.sh"
-          chmod +x build_tools/rocm/detect-therock-version.sh
-
-      - name: Detect latest TheRock version
-        id: therock
-        env:
-          ROCM_PIP_SOURCE: nightlies
-          GPU_TARGET: device-all
-          ROCM_SDK_VERSION: ""
-          PIP_INDEX_PATH: ""
-          THEROCK_INDEX_URL: ""
-        run: bash build_tools/rocm/detect-therock-version.sh
-
   execute-xla-ut-sanitizers:
     needs: rocm-config
     if: github.event_name != 'pull_request_target' || github.event.label.name == 'sanitizers'
     runs-on: amd-do-linux-xla-gpu-gfx950-dpx-8
+    timeout-minutes: 960
     env:
       COMMON_ARGS: >-
         --config=rocm_ci_hermetic
-        --config=rocm_rbe
+        --config=rocm_rbe_dev
+        --remote_upload_local_results=false
+        --@rules_ml_toolchain//common:enable_xla_test_global_symbol_version=False
         --repo_env=GLOBAL_SYMBOLS_TO_VERSION='*llvm::*,LLVM*,FatArchTraits*::*'
         --local_test_jobs=8
         --strategy=TestRunner=local
@@ -127,6 +106,7 @@ jobs:
         run: lscpu
 
       - name: Test XLA [${{ matrix.mode.name }}] [single_gpu]
+        timeout-minutes: 600
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
@@ -140,6 +120,7 @@ jobs:
 
       - name: Test XLA [${{ matrix.mode.name }}] [multi_gpu]
         if: always() && !cancelled()
+        timeout-minutes: 160
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             ${{ join(matrix.mode.configs, ' ') }} \
@@ -151,6 +132,7 @@ jobs:
             //xla/...
 
       - name: Test XLA [${{ matrix.mode.name }}] [rocm_cpu]
+        timeout-minutes: 160
         if: always() && !cancelled()
         run: |
           build_tools/rocm/run_xla_ci_build.sh \

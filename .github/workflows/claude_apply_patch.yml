@@ -1,0 +1,269 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+#
+# Shared by every caller of claude_issue_triage.yml that passes an
+# `artifact_name` (today: rocm_infra_agent.yml's `respond_to_mention` and
+# rocm_infra_monitor.yml's `auto_verify`): downloads whatever patch that
+# call produced (if any - most runs produce nothing, since most reports
+# are "not applicable" or purely investigative) and, only if one exists,
+# applies it to the exact commit it was generated against, pushes it to
+# ROCm/xla, and opens a draft PR. Deterministic, not agent-run: the skill
+# that produced the patch never commits/pushes/opens a PR itself (Claude
+# Code's own Bash permission check rejects any command referencing a
+# credential it can't verify ahead of time), so this plain-shell job does
+# all of that instead, entirely outside the agent.
+#
+# Commit identity: attributed to whoever asked for this (`commenter_login`,
+# the GitHub login that posted the triggering `@claude` comment) when there
+# is one, rather than `github-actions[bot]` - both more honest attribution,
+# and what lets openxla/xla's CLA bot recognize the commit if the compare
+# link below (or a manual cherry-pick) ever turns into a real PR there.
+# `commenter_login` is empty for the fully-automatic `auto_verify` flow (no
+# human asked for that specific run), which keeps the bot identity.
+#
+# The posted comment also includes a plain GitHub compare URL across the
+# fork boundary (ROCm/xla is a registered fork of openxla/xla), so a human
+# can open the same branch as a PR upstream too, with no new credential:
+# no App installation or token this job has reaches openxla/xla itself
+# (see the App-token step below), but the compare view works for anyone
+# with ROCm/xla read access, the same way any fork contributor opens a PR
+# against the repo they forked from. Whether that link is actually useful
+# for the CLA bot depends on whether the commit above ended up attributed
+# to a real person rather than github-actions[bot] - the posted comment
+# says which, so a human can judge for themselves.
+
+name: Claude Apply Patch
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: 'Repo the verified commit lives in (almost always openxla/xla)'
+        required: true
+        type: string
+      head_sha:
+        description: 'The exact commit the patch was generated against'
+        required: true
+        type: string
+      issue_number:
+        description: 'Per-failure issue to post the draft PR link back into, once opened'
+        required: true
+        type: string
+      artifact_name:
+        description: 'Name the patch (if any) was uploaded under by claude_issue_triage.yml'
+        required: true
+        type: string
+      commenter_login:
+        description: 'GitHub login of whoever asked for this, used to attribute the commit to them. Empty for the fully-automatic auto_verify flow, which has no human requester - keeps the github-actions[bot] commit identity (the upstream compare link is still posted either way).'
+        required: true
+        type: string
+
+jobs:
+  apply:
+    name: "Apply fix: ${{ inputs.artifact_name }}"
+    runs-on: ubuntu-latest
+    # Needs to push a branch and open a draft PR - scoped here (the
+    # calling job's own `permissions:` block), not at the workflow level,
+    # same as every other elevated-permission job in this pipeline.
+    timeout-minutes: 15
+    steps:
+      # continue-on-error, not an `if-no-files-found`-style flag: there's
+      # no download-side equivalent, so a missing artifact just fails this
+      # one step, which is exactly what "nothing to apply" looks like -
+      # most runs of the skill that might have produced this artifact
+      # report "not applicable" or a purely investigative finding, with no
+      # patch at all. The file-existence check right below treats a failed
+      # download identically to the artifact having been found empty.
+      - name: Download patch artifact, if one was produced
+        continue-on-error: true
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: /tmp
+
+      # The default GITHUB_TOKEN cannot push a brand-new branch into
+      # ROCm/xla: creating a ref requires GitHub to validate whether it
+      # introduces/changes anything under .github/workflows/* - a check
+      # that needs a "workflows" permission scope the standard Actions
+      # token can never carry, regardless of what this job's own
+      # `permissions:` block grants (there is no such scope available to
+      # it). This bit us for real: the first live verify run got
+      # everything right (red->green->red) but failed to push with `POST
+      # /git/refs` -> 403 "Resource not accessible by integration" /
+      # "workflows scope may be required" - even though the fix itself
+      # never touched a workflow file, because that check applies to any
+      # brand-new ref, not just to the commit's own diff. Same root cause
+      # sync_main_mirror.yml already works around with a scoped GitHub App
+      # token - request only `contents`+`workflows` here, the exact same
+      # pair that token already works with there. Asking this App token
+      # for anything more (pull-requests, issues) fails outright: the
+      # installation itself was only ever granted a specific, narrower
+      # permission set, and GitHub validates a token request's scopes
+      # against that atomically - if even one requested scope exceeds what
+      # the installation has, the whole request is rejected with a 422
+      # ("level of access... not granted to this installation"), which is
+      # exactly what requesting pull-requests/issues on top of this hit.
+      # `gh pr create` doesn't need this token anyway: opening a PR against
+      # an already-pushed branch is a plain pull-requests:write operation
+      # with no workflows-scope involved, and the calling job's own
+      # `permissions:` block already grants that to the default
+      # GITHUB_TOKEN - so only the one `git push` below uses this App
+      # token, everything else (comment edits, the PR itself) keeps using
+      # the default one.
+      - name: Create GitHub App token for the branch push only
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.ROCM_REPO_MANAGEMENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ROCM_REPO_MANAGEMENT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
+
+      # Configuring this here (a plain workflow step, not an agent Bash
+      # tool call) rather than inside the skill matters: Claude Code's own
+      # Bash tool refuses to run any command referencing a credential it
+      # can't verify is safe before running it, even one injected via
+      # `env:` - confirmed in production, embedding a token directly in a
+      # skill's own `git remote add ...` command got rejected outright ("A
+      # variable in braces in this command can't be checked before it
+      # runs"). That's exactly why no skill in this pipeline pushes or
+      # opens a PR itself - it only ever writes a patch file for this job
+      # to use. Any `git push`/`git remote add .../ROCm/xla.git` from here
+      # on in this job is transparently authenticated without any token,
+      # or any variable at all, appearing in anyone's command text.
+      - name: Configure git to authenticate pushes to ROCm/xla
+        run: |
+          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/ROCm/xla.git".insteadOf "https://github.com/ROCm/xla.git"
+
+      - name: Apply verified patch and open PR
+        id: open_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ ! -s /tmp/claude_fix.patch ]; then
+            echo "No verified fix to apply - skipping."
+            exit 0
+          fi
+
+          # Includes github.run_id, not just the commit and patch hash: two
+          # independent requests (e.g. two separate @claude comments, or a
+          # manual re-run of the same one) can legitimately verify
+          # byte-identical patches against the same head_sha - most
+          # commonly a human re-asking after an earlier PR for that exact
+          # fix was already closed without merging. Branch names used to be
+          # derived purely from (head_sha, patch hash), so a repeat request
+          # computed the exact same branch name as an earlier one; since
+          # closing a PR doesn't delete its branch, and this step builds a
+          # brand new commit object from scratch every run (even for an
+          # identical diff), a plain `git push` could never fast-forward
+          # onto whatever that branch name was already left at, and was
+          # silently rejected - no PR, no comment, no error surfaced
+          # anywhere (confirmed in production on ROCm/xla#1551). A unique
+          # run ID sidesteps that category of bug entirely: every run gets
+          # its own branch and its own draft PR, full stop - no retry ever
+          # needs to reconcile with a previous attempt's leftover state.
+          SHA_SHORT=$(echo "${{ inputs.head_sha }}" | cut -c1-7)
+          PATCH_HASH=$(sha256sum /tmp/claude_fix.patch | cut -c1-8)
+          BRANCH="claude/verify-fix/${SHA_SHORT}-${PATCH_HASH}-${{ github.run_id }}"
+
+          # Base the fix on the exact commit the skill that produced this
+          # patch actually tested (inputs.repository@inputs.head_sha - the
+          # same commit claude_issue_triage.yml's "Checkout the commit
+          # that failed" step checked out), not on any branch tip. The
+          # red->green->red cycle that produced it only proves the fix
+          # works against that one commit - rebasing onto a later tip
+          # (ROCm/xla's or even openxla/xla's own main) would ship
+          # something that was never actually verified. GitHub allows
+          # fetching an arbitrary commit SHA directly (no need to walk
+          # main's history to find it), and since head_sha only gets older
+          # relative to ROCm/xla's main (kept in sync by sync_upstream.yml)
+          # the push below is normally pushing a commit the remote already
+          # has as an ancestor, not a fresh tip it might not have caught
+          # up to yet.
+          WORKDIR=$(mktemp -d)
+          git -C "$WORKDIR" init -q
+          git -C "$WORKDIR" remote add upstream "https://github.com/${{ inputs.repository }}.git"
+          git -C "$WORKDIR" fetch -q --depth=1 upstream "${{ inputs.head_sha }}"
+          git -C "$WORKDIR" checkout -q -b "$BRANCH" FETCH_HEAD
+
+          if ! git -C "$WORKDIR" apply --check /tmp/claude_fix.patch; then
+            echo "::warning::Verified patch no longer applies cleanly to ${{ inputs.head_sha }} - needs a manual rebase"
+            exit 0
+          fi
+          git -C "$WORKDIR" apply /tmp/claude_fix.patch
+
+          COMMIT_NAME="github-actions[bot]"
+          COMMIT_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+          LOGIN="${{ inputs.commenter_login }}"
+          if [ -n "$LOGIN" ]; then
+            # Resolve the requester's own identity so the commit is theirs,
+            # not github-actions[bot]'s - both more honest attribution, and
+            # what lets openxla/xla's CLA bot recognize it if the compare
+            # link below ever becomes a real PR there: their public profile
+            # email if they have one set, else GitHub's own noreply alias
+            # for their account (always available, and is exactly how
+            # GitHub itself associates an email-less commit with an
+            # account).
+            if USER_JSON=$(gh api "users/${LOGIN}"); then
+              USER_ID=$(printf '%s' "$USER_JSON" | jq -r '.id')
+              PUBLIC_EMAIL=$(printf '%s' "$USER_JSON" | jq -r '.email // empty')
+              DISPLAY_NAME=$(printf '%s' "$USER_JSON" | jq -r '.name // empty')
+              COMMIT_NAME="${DISPLAY_NAME:-$LOGIN}"
+              COMMIT_EMAIL="${PUBLIC_EMAIL:-${USER_ID}+${LOGIN}@users.noreply.github.com}"
+            else
+              echo "::warning::Could not resolve GitHub user '${LOGIN}' - keeping the github-actions[bot] commit identity"
+              LOGIN=""
+            fi
+          fi
+
+          git -C "$WORKDIR" \
+            -c user.name="$COMMIT_NAME" \
+            -c user.email="$COMMIT_EMAIL" \
+            commit -aq -F /tmp/claude_pr_title.txt
+
+          git -C "$WORKDIR" remote add origin https://github.com/ROCm/xla.git
+          if ! git -C "$WORKDIR" push -q origin "HEAD:refs/heads/${BRANCH}"; then
+            echo "::warning::Failed to push the verified-fix branch to ROCm/xla"
+            exit 0
+          fi
+
+          PR_URL=$(gh pr create --repo ROCm/xla --draft \
+            --title "$(head -1 /tmp/claude_pr_title.txt)" \
+            --body-file /tmp/claude_pr_body.txt \
+            --base main --head "$BRANCH") || {
+            echo "::warning::Failed to open the draft PR"
+            exit 0
+          }
+          echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+
+          TITLE_ENC=$(jq -rn --arg s "$(head -1 /tmp/claude_pr_title.txt)" '$s|@uri')
+          BODY_ENC=$(jq -rn --arg s "$(cat /tmp/claude_pr_body.txt)" '$s|@uri')
+          echo "compare_url=https://github.com/openxla/xla/compare/main...ROCm:${BRANCH}?quick_pull=1&title=${TITLE_ENC}&body=${BODY_ENC}" >> "$GITHUB_OUTPUT"
+          echo "commit_identity=${LOGIN:-github-actions[bot]}" >> "$GITHUB_OUTPUT"
+
+      - name: Post the PR link as a new comment on the issue
+        if: steps.open_pr.outputs.pr_url != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ steps.open_pr.outputs.pr_url }}
+          COMPARE_URL: ${{ steps.open_pr.outputs.compare_url }}
+          COMMIT_IDENTITY: ${{ steps.open_pr.outputs.commit_identity }}
+        run: |
+          set -euo pipefail
+          gh issue comment "${{ inputs.issue_number }}" --repo ROCm/xla \
+            --body "[draft PR](${PR_URL}) opened with the fix, committed as \`${COMMIT_IDENTITY}\`. If you'd also like to send this upstream to openxla/xla, [open a PR there](${COMPARE_URL}) (title/body are pre-filled)."

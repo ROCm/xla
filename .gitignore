@@ -36,3 +36,7 @@ external
 
 # Ignore python cache files.
 __pycache__/
+
+# rbe_hlo_eval.sh: XLA worktrees and results
+/worktrees/
+/hlo_eval_results/

@@ -34,17 +34,35 @@ on:
     paths:
       - ".github/workflows/rocm_xla_ci_nightly.yml"
       - ".github/workflows/rocm_xla_ci_jax.yml"
+      - "build_tools/rocm/nightly_rocm_stacks.py"
+      - "build_tools/rocm/detect-therock-version.sh"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
+  # Trigger gate for the whole pipeline: scheduled runs, manual dispatch, the
+  # "nightly-pipeline" label, or a PR to rocm-dev-infra that touches it. Every
+  # other job hangs off this one, so the condition is spelled out here once and
+  # the rest re-state it by reading the `enabled` output back. Gating here
+  # rather than only on the jobs below also means an unrelated label no longer
+  # spins up a runner at all.
   rocm-config:
+    if: >-
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || github.event.label.name == 'nightly-pipeline'
+      || (github.event_name == 'pull_request'
+          && github.event.pull_request.base.ref == 'rocm-dev-infra')
     runs-on: ubuntu-latest
     outputs:
+      # Constant: this job only runs when the gate above passed, so downstream
+      # jobs can read it as "the nightly pipeline is enabled for this event".
+      enabled: "true"
       docker-image: ${{ steps.out.outputs.docker-image }}
-      therock-version: ${{ steps.therock.outputs.therock_version }}
+      stacks: ${{ steps.stacks.outputs.stacks }}
+      xla-modes: ${{ steps.stacks.outputs.xla_modes }}
     steps:
       - id: out
         shell: bash
@@ -53,31 +71,18 @@ jobs:
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: openxla/xla
-          ref: main
           sparse-checkout: |
             build_tools/rocm
           persist-credentials: false
 
-      - name: Fetch theRock version detection from ROCm/xla
-        run: |
-          wget -O build_tools/rocm/detect-therock-version.sh "https://raw.githubusercontent.com/ROCm/xla/refs/heads/rocm-dev-infra/build_tools/rocm/detect-therock-version.sh"
-          chmod +x build_tools/rocm/detect-therock-version.sh
-
-      - name: Detect latest TheRock version
-        id: therock
-        env:
-          ROCM_PIP_SOURCE: prerelease
-          GPU_TARGET: device-all
-          ROCM_SDK_VERSION: "10.2"
-          PIP_INDEX_PATH: ""
-          THEROCK_INDEX_URL: "https://rc.repo.amd.com/rocm/whl-next/"
-        run: bash build_tools/rocm/detect-therock-version.sh
+      - name: Resolve the ROCm stacks to test
+        id: stacks
+        run: python3 build_tools/rocm/nightly_rocm_stacks.py
 
   execute-xla-ut-nightly:
     needs: rocm-config
-    # Run on schedule, workflow_dispatch, "nightly-pipeline" label, or PR to rocm-dev-infra with workflow changes
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'nightly-pipeline' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'rocm-dev-infra')
+    # See the gate on rocm-config above.
+    if: needs.rocm-config.outputs.enabled == 'true'
     runs-on: ${{ matrix.mode.runner }}
     env:
       COMMON_ARGS: >-
@@ -92,25 +97,18 @@ jobs:
         --bes_keywords=nightly
         --keep_going
         --nocache_test_results
+      # Selects the ROCm stack each matrix mode is named after. Without these,
+      # rocm_configure.bzl falls back to its default hermetic redistributable
+      # and every mode would silently build the same ROCm. ROCM_PATH is blanked
+      # because a non-empty one takes priority over ROCM_DISTRO_URL.
+      ROCM_DISTRO_ARGS: >-
+        --repo_env=ROCM_PATH=
+        --repo_env=ROCM_DISTRO_URL=${{ matrix.mode.distro_url }}
+        --repo_env=ROCM_DISTRO_HASH=${{ matrix.mode.distro_hash }}
     strategy:
       fail-fast: false
       matrix:
-        mode:
-          - name: "therock_release"
-            distro_url: "https://dev.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.1.0.dev0%2Be54d902c2bc89baf912f69149e47d9ddc5102c4d.tar.gz"
-            distro_hash: "682075648697e4aa8fe7cc9ec2a56e9207a1fc47f74c4f10440f8dadad89f5e6"
-            runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
-            rbe_config: "rocm_rbe"
-          - name: "therock_nightly"
-            distro_url: "https://rc.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-${{ needs.rocm-config.outputs.therock-version }}.tar.gz"
-            distro_hash: "no_hash"
-            runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
-            rbe_config: "rocm_rbe"
-          - name: "therock_release_bb"
-            distro_url: "https://dev.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.1.0.dev0%2Be54d902c2bc89baf912f69149e47d9ddc5102c4d.tar.gz"
-            distro_hash: "682075648697e4aa8fe7cc9ec2a56e9207a1fc47f74c4f10440f8dadad89f5e6"
-            runner: "amd-do-linux-xla-gpu-gfx950-dpx-4"
-            rbe_config: "rocm_rbe_dev"
+        mode: ${{ fromJSON(needs.rocm-config.outputs.xla-modes) }}
     container:
       image: ${{ needs.rocm-config.outputs.docker-image }}
 
@@ -154,6 +152,7 @@ jobs:
             --bes_keywords=single_gpu \
             --build_event_json_file=xla_${{ matrix.mode.name }}_single_gpu_build_events.json \
             ${COMMON_ARGS} \
+            ${ROCM_DISTRO_ARGS} \
             -- \
             //xla/...
 
@@ -167,6 +166,7 @@ jobs:
             --bes_keywords=multi_gpu \
             --build_event_json_file=xla_${{ matrix.mode.name }}_multi_gpu_build_events.json \
             ${COMMON_ARGS} \
+            ${ROCM_DISTRO_ARGS} \
             --spawn_strategy=local \
             --strategy=TestRunner=local \
             -- \
@@ -182,6 +182,7 @@ jobs:
             --bes_keywords=cpu \
             --build_event_json_file=xla_${{ matrix.mode.name }}_rocm_cpu_build_events.json \
             ${COMMON_ARGS} \
+            ${ROCM_DISTRO_ARGS} \
             --spawn_strategy=local \
             -- \
             //xla/...
@@ -198,8 +199,12 @@ jobs:
 
   # Call JAX upstream workflow as a separate job (runs on every trigger, i.e. every 2 hours)
   jax-upstream:
+    needs: rocm-config
+    # See the gate on rocm-config above.
+    if: needs.rocm-config.outputs.enabled == 'true'
     uses: ./.github/workflows/rocm_xla_ci_jax.yml
     with:
       repository: openxla/xla
       ref: main
       run_jax: true
+      stacks: ${{ needs.rocm-config.outputs.stacks }}

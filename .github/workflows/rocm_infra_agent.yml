@@ -1,0 +1,270 @@
+# Copyright 2026 The OpenXLA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+#
+# Split out of rocm_infra_monitor.yml: that pipeline detects/debugs nightly
+# CI failures on a schedule and shares no job dependency with this one at
+# all. This one instead reacts to an authorized collaborator posting a new
+# `@claude <instructions>` comment on ANY issue in ROCm/xla - not just the
+# nightly monitor's own per-failure issues. A target is classified
+# (collect_claude_mention_targets.sh) as `ci_failure` (one of those
+# per-failure issues - verify an already-proposed fix, dig further, try a
+# different approach, devise a new solution) or `general` (an ordinary
+# issue - answer a question, investigate something, build/test/debug
+# something, or make a code change), and dispatched to the matching skill:
+# respond-to-mention or respond-to-issue respectively. Keeping this
+# separate from rocm_infra_monitor.yml meant cross-cutting
+# `if: github.event_name != 'issue_comment'` gates on the unrelated jobs
+# just to keep a skipped job's outputs from reaching `fromJson` - a sign
+# they were really two pipelines sharing a file.
+
+name: ROCm Infra Agent
+permissions:
+  contents: read
+  issues: write
+  id-token: write # Required by claude-code-action (respond_to_mention job) for OIDC auth.
+
+env:
+  # Branch this run itself is testing/running from, so a PR (or a manual
+  # workflow_dispatch against --ref <branch>) exercises its own changes
+  # instead of silently falling back to the default branch. github.head_ref
+  # is the PR's own branch name on a pull_request event but is empty
+  # otherwise; github.ref_name is the branch/tag a workflow_dispatch,
+  # schedule, or issue_comment run is actually executing from (always the
+  # default branch for those, so no further fallback is needed). Used
+  # below both to check out this workflow's own code and, in
+  # respond_to_mention, to fetch the matching version of the skill.
+  DEBUG_PIPELINE_REF: ${{ github.head_ref || github.ref_name }}
+
+on:
+  schedule:
+    # Fallback safety net for the issue_comment trigger below: catches an
+    # `@claude` line that landed while this never fired (a run that failed
+    # to dispatch, GitHub Actions degraded, etc). Offset from
+    # rocm_infra_monitor.yml's own ":00" schedule to spread API load rather
+    # than both pipelines hitting GitHub at the same wall-clock minute.
+    - cron: "15 * * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/rocm_infra_agent.yml"
+      - ".github/workflows/claude_issue_triage.yml"
+      - ".github/workflows/claude_apply_patch.yml"
+      - "build_tools/rocm/collect_claude_mention_targets.sh"
+      - ".claude/skills/respond-to-mention/SKILL.md"
+      - ".claude/skills/respond-to-issue/SKILL.md"
+  issue_comment:
+    types: [created]
+
+jobs:
+  collect_mention_targets:
+    if: >
+      github.event_name != 'issue_comment' ||
+      (contains(github.event.comment.body, '@claude') &&
+       contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    name: Find @claude follow-ups to act on
+    runs-on: ubuntu-latest
+    outputs:
+      mention_targets: ${{ steps.collect.outputs.mention_targets }}
+      ci_failure_targets: ${{ steps.collect.outputs.ci_failure_targets }}
+      general_targets: ${{ steps.collect.outputs.general_targets }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.DEBUG_PIPELINE_REF }}
+          persist-credentials: false
+
+      - name: Collect @claude follow-ups to act on
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+        run: |
+          if [ "${EVENT_NAME}" = "issue_comment" ]; then
+            TARGETS=$(build_tools/rocm/collect_claude_mention_targets.sh \
+              --comment "${ISSUE_NUMBER}" "${COMMENT_ID}" "${COMMENT_BODY}" "${COMMENT_AUTHOR}")
+          else
+            TARGETS=$(build_tools/rocm/collect_claude_mention_targets.sh)
+          fi
+          echo "mention_targets=${TARGETS}" >> "$GITHUB_OUTPUT"
+          echo "ci_failure_targets=$(printf '%s' "$TARGETS" | jq -c '[.[] | select(.type == "ci_failure")]')" >> "$GITHUB_OUTPUT"
+          echo "general_targets=$(printf '%s' "$TARGETS" | jq -c '[.[] | select(.type == "general")]')" >> "$GITHUB_OUTPUT"
+
+  respond_to_mention:
+    # Only the `ci_failure`-typed entries - see collect_mention_targets'
+    # ci_failure_targets output above and collect_claude_mention_targets.sh
+    # for the classification. Matrixes over ci_failure_targets specifically
+    # (not the combined mention_targets) precisely because a `uses:` job's
+    # `if:`/`strategy.matrix` can't reference `matrix.*` to filter a
+    # combined array itself - see collect_mention_targets' outputs comment.
+    name: "Respond: ${{ matrix.job_name }} / ${{ matrix.step_name }}"
+    needs: collect_mention_targets
+    if: needs.collect_mention_targets.outputs.ci_failure_targets != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.collect_mention_targets.outputs.ci_failure_targets) }}
+    uses: ./.github/workflows/claude_issue_triage.yml
+    with:
+      repository: ${{ matrix.repository }}
+      head_sha: ${{ matrix.head_sha }}
+      debug_pipeline_ref: ${{ github.head_ref || github.ref_name }}
+      issue_number: ${{ matrix.issue_number }}
+      already_handled_marker: "<!-- rocm-nightly-claude-mention:${{ matrix.job_name }} / ${{ matrix.step_name }}:${{ matrix.instructions_hash }} -->"
+      claude_step_name: Respond to @claude Mention
+      # The skill self-caps its own non-build decision-making at 30 minutes
+      # (see SKILL.md) - job_timeout_minutes instead bounds the whole run,
+      # including whatever build+test cycles the instruction ends up
+      # requiring, which can legitimately take a long while.
+      job_timeout_minutes: 180
+      claude_timeout_minutes: 175
+      max_turns: 100
+      allowed_tools: "Skill,Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh label create *),Bash(gh api *),Bash(gh run view *),Bash(git *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
+      # Keyed by comment_id (not job/step/instructions_hash): one comment
+      # only ever has one instruction in flight at a time, and
+      # apply_patch_and_open_pr below computes this exact same name
+      # independently (from the same collect_mention_targets output) to
+      # find it - they don't need to agree on anything else.
+      artifact_name: "mention-patch-${{ matrix.comment_id }}"
+      prompt: |
+        CI REPO (for job logs / the issue / where the PR goes): ROCm/xla
+        SOURCE REPO (already checked out in the working directory): ${{ matrix.repository }}
+        HEAD SHA (already checked out): ${{ matrix.head_sha }}
+        NIGHTLY RUN ID: ${{ matrix.run_id }}
+        FAILING JOB ID: ${{ matrix.job_id }}
+        FAILING JOB NAME: ${{ matrix.job_name }}
+        FAILED STEP: ${{ matrix.step_name }}
+        FAILING JOB URL: ${{ matrix.failure_url }}
+        ISSUE NUMBER (in ROCm/xla, dedicated to this one failure signature;
+        a proposed fix usually lives in one of debug-nightly-failure's own
+        comments on it; post a new comment with your findings - never edit
+        the issue body or an existing comment): ${{ matrix.issue_number }}
+        INSTRUCTIONS (a human wrote this verbatim in a new comment
+        starting with "@claude" on that issue - follow it literally, it
+        governs what you do): ${{ matrix.instructions }}
+        INSTRUCTIONS HASH (use literally in the Step 0/6 marker, don't
+        recompute it): ${{ matrix.instructions_hash }}
+
+        A human added the instructions above by posting a new comment on
+        the issue, asking you to act on this failure - that could mean
+        verifying the already-proposed fix, digging further (e.g. setting
+        a breakpoint and inspecting specific state), trying a different
+        approach, or devising a new solution, depending on what the
+        instructions actually say. Run the /respond-to-mention skill,
+        using the values above as its arguments: CI repo, issue number,
+        job name, step name, repository, head SHA, failure URL,
+        instructions, instructions hash, in that order. The skill
+        self-caps its own non-build decision-making at 30 minutes - time
+        spent on actual build+test cycles doesn't count against that,
+        but the whole run still has to fit this step's own timeout. The
+        skill decides how much of the reproduce/apply/revert protocol
+        applies based on what was actually asked, and is responsible for
+        posting its findings as a new comment on the issue via
+        `gh issue comment`. It never commits, pushes, or opens a PR itself
+        - if it ends up with a verified fix, it only writes out a patch
+        file plus a PR title/body for a later, deterministic workflow
+        step to apply and turn into a draft PR. Never edit the issue body,
+        and do not post anything to GitHub yourself outside of what the
+        skill does.
+    secrets: inherit
+
+  respond_to_issue_mention:
+    name: "Respond: issue #${{ matrix.issue_number }}"
+    needs: collect_mention_targets
+    if: needs.collect_mention_targets.outputs.general_targets != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.collect_mention_targets.outputs.general_targets) }}
+    uses: ./.github/workflows/claude_issue_triage.yml
+    with:
+      repository: ${{ matrix.repository }}
+      head_sha: ${{ matrix.head_sha }}
+      debug_pipeline_ref: ${{ github.head_ref || github.ref_name }}
+      issue_number: ${{ matrix.issue_number }}
+      already_handled_marker: "<!-- claude-mention:${{ matrix.instructions_hash }} -->"
+      claude_step_name: Respond to @claude Mention (general issue)
+      # No required_marker - a general issue has no prior report whose
+      # outcome would gate this, unlike auto_verify's use of this same
+      # reusable workflow in rocm_infra_monitor.yml.
+      #
+      # Lighter than respond_to_mention's budget: there's no mandatory
+      # reproduce/apply/revert cycle here, only whatever build/test
+      # INSTRUCTIONS itself calls for (see SKILL.md) - but still generous
+      # enough to allow one if asked.
+      job_timeout_minutes: 60
+      claude_timeout_minutes: 55
+      max_turns: 60
+      allowed_tools: "Skill,Bash(gh issue comment *),Bash(gh api *),Bash(gh search prs *),Bash(gh pr view *),Bash(gh pr diff *),Bash(gh run view *),Bash(git log *),Bash(git show *),Bash(git diff *),Bash(git blame *),Bash(docker exec rocmless-debug *),Bash(build_tools/rocm/*),Bash(bazel *),Bash(gdb *),Bash(objdump *),Bash(grep *),Bash(cat *),Bash(timeout *),Read,Grep,Glob,Write,Edit"
+      # Keyed by comment_id, same convention as respond_to_mention -
+      # apply_patch_and_open_pr below computes this exact same name
+      # independently to find it.
+      artifact_name: "mention-patch-${{ matrix.comment_id }}"
+      prompt: |
+        CI REPO (for the issue / where the PR goes): ROCm/xla
+        ISSUE NUMBER (an ordinary issue, not one of the nightly monitor's
+        per-failure issues - read its title, body, and every comment for
+        context before doing anything else; post a new comment with your
+        findings - never edit the issue body or an existing comment): ${{ matrix.issue_number }}
+        INSTRUCTIONS (a human wrote this verbatim in a new comment
+        starting with "@claude" on that issue - follow it literally, it
+        governs what you do): ${{ matrix.instructions }}
+        INSTRUCTIONS HASH (use literally in the Step 0/4 marker, don't
+        recompute it): ${{ matrix.instructions_hash }}
+
+        A human added the instructions above by posting a new comment on
+        an ordinary issue, asking you to do something - answer a
+        question, investigate something in the code or its history,
+        build/run/debug something, or make a code change, depending on
+        what the instructions actually say. Run the /respond-to-issue
+        skill, using the values above as its arguments: CI repo, issue
+        number, instructions, instructions hash, in that order. The
+        skill self-caps its own non-build decision-making at 30 minutes -
+        time spent on an actual build/test (if asked for) doesn't count
+        against that, but the whole run still has to fit this step's own
+        timeout. It is responsible for posting its findings as a new
+        comment on the issue via `gh issue comment`. It never commits,
+        pushes, or opens a PR itself - if it ends up with a code change,
+        it only writes out a patch file plus a PR title/body for a later,
+        deterministic workflow step to apply and turn into a draft PR.
+        Never edit the issue body, and do not post anything to GitHub
+        yourself outside of what the skill does.
+    secrets: inherit
+
+  apply_patch_and_open_pr:
+    name: "Apply fix: issue #${{ matrix.issue_number }}"
+    needs:
+      [collect_mention_targets, respond_to_mention, respond_to_issue_mention]
+    if: ${{ !cancelled() && needs.collect_mention_targets.result == 'success' && needs.collect_mention_targets.outputs.mention_targets != '[]' }}
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.collect_mention_targets.outputs.mention_targets) }}
+    uses: ./.github/workflows/claude_apply_patch.yml
+    with:
+      repository: ${{ matrix.repository }}
+      head_sha: ${{ matrix.head_sha }}
+      issue_number: ${{ matrix.issue_number }}
+      artifact_name: "mention-patch-${{ matrix.comment_id }}"
+      commenter_login: ${{ matrix.commenter_login }}
+    secrets: inherit

@@ -17,6 +17,7 @@ contain fork-specific commits. This separation ensures the `merge-upstream` API
 - [Scaling Book](#scaling-book)
 - [Dashboards](#dashboards)
 - [Workflows](#workflows)
+  - [Responding to `@claude` Mentions (Any Issue or PR)](#responding-to-claude-mentions-any-issue-or-pr)
 
 ## XLA Branches for JAX
 
@@ -25,6 +26,7 @@ For supported ROCm versions and GFX targets per release, see the [AMD ROCm compa
 | JAX Release | XLA Branch | JAX Branch |
 |-------------|------------|------------|
 | jax-ml/jax:main | [`openxla/xla:main`](https://github.com/openxla/xla) | [`jax-ml/jax:main`](https://github.com/jax-ml/jax) |
+| jax-v0.12.1 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.12.1`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.12.1) | [`rocm-jaxlib-v0.12.1`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.12.1) |
 | jax-v0.12.0 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.12.0`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.12.0) | [`rocm-jaxlib-v0.12.0`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.12.0) |
 | jax-v0.11.2 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.11.2`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.11.2) | [`rocm-jaxlib-v0.11.2`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.11.2) |
 | jax-v0.11.1 (rocm-pjrt-plugin) | [`rocm-jaxlib-v0.11.1`](https://github.com/ROCm/xla/tree/rocm-jaxlib-v0.11.1) | [`rocm-jaxlib-v0.11.1`](https://github.com/ROCm/jax/tree/rocm-jaxlib-v0.11.1) |
@@ -77,19 +79,6 @@ Bazel picks the TheRock tarball from these flags, which the `main` CI jobs all p
 
 - **Keep `ROCM_PATH` empty, and don't pass `--rocm_path` to `build/build.py`.** A non-empty `ROCM_PATH` takes priority over `ROCM_DISTRO_URL`, so Bazel would use a local ROCm install instead of the tarball.
 - TheRock 10.0.0 is also XLA's default hermetic ROCm (`rocm_latest_multiarch` in [`third_party/gpus/rocm/rocm_redist.bzl`](https://github.com/openxla/xla/blob/main/third_party/gpus/rocm/rocm_redist.bzl)); the two `ROCM_DISTRO_*` flags pin it explicitly.
-- To build against a TheRock nightly, set `ROCM_DISTRO_HASH=no_hash` (which skips the checksum) and point `ROCM_DISTRO_URL` at that nightly's tarball. The nightly URL differs between release lines and is subject to change, so check the `therock_nightly` entries in [`rocm_xla_ci_nightly.yml`](.github/workflows/rocm_xla_ci_nightly.yml) and [`rocm_xla_ci_jax.yml`](.github/workflows/rocm_xla_ci_jax.yml) for the current ones. At the time of writing:
-  - **10.1:** `https://rocm.nightlies.amd.com/tarball-multi-arch/therock-dist-linux-multiarch-<version>.tar.gz`, with the version index at `https://rocm.nightlies.amd.com/whl-multi-arch/`.
-  - **10.2:** `https://nightly.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-<version>.tar.gz`, with the version index at `https://nightly.repo.amd.com/rocm/whl-next/`.
-
-  To print the latest `<version>`, pass the line's version index and number, for example for 10.2:
-
-  ```bash
-  GPU_TARGET=device-all THEROCK_INDEX_URL=https://nightly.repo.amd.com/rocm/whl-next/ ROCM_SDK_VERSION=10.2 \
-    bash build_tools/rocm/detect-therock-version.sh
-  ```
-
-- CI runs the XLA unit tests with [`build_tools/rocm/run_xla_ci_build.sh`](https://github.com/openxla/xla/blob/main/build_tools/rocm/run_xla_ci_build.sh) from `openxla/xla`, and builds and tests JAX with [`ci/run_bazel_test_rocm_rbe.sh`](https://github.com/jax-ml/jax/blob/main/ci/run_bazel_test_rocm_rbe.sh) from `jax-ml/jax`, both with these flags on top of the ROCm RBE configs. See [`rocm_xla_ci_nightly.yml`](.github/workflows/rocm_xla_ci_nightly.yml) and [`rocm_xla_ci_jax.yml`](.github/workflows/rocm_xla_ci_jax.yml) for the exact commands.
-
 
 ### Building `jax-ml/jax:main` against `openxla/xla:main`
 
@@ -133,6 +122,38 @@ Notes:
     - Multiple targets can be passed comma-separated. `--rocm_amdgpu_targets` alone does not reach Bazel's ROCm setup, because `build/rocm/rocm.bazelrc` sets `TF_ROCM_AMDGPU_TARGETS` to 27 architectures with `--repo_env`, which makes the build much slower and the wheels much larger.
 - The `--wheels=jax,jaxlib,jax-rocm-plugin,jax-rocm-pjrt` list produces all four required wheels in `dist/`; `pip install dist/*.whl` installs the matching set. Built against TheRock 10.0.0, the ROCm wheels are named `jax_rocm10_plugin` and `jax_rocm10_pjrt`.
 - The last command should print `[RocmDevice(id=0), ...]`. Without the `LD_LIBRARY_PATH` step, JAX prints a plugin error (`librocprofiler-sdk.so.1: cannot open shared object file`) and falls back to `[CpuDevice(id=0)]`. Set `LD_LIBRARY_PATH` again in every new shell, and rebuild after a `bazel clean --expunge`, which deletes the extracted libraries.
+
+### Building JAX/XLA (jaxlib+plugin+pjrt) with debug symbols
+
+To build the jaxlib, ROCm plugin, and PJRT wheels with debug symbols, add JAX's `debug_symbols` config to the `build/build.py` command above:
+
+```bash
+--bazel_options=--config=debug_symbols
+```
+
+To debug only the PJRT plugin (`xla_rocm_plugin.so`) on top of an installed regular build, pass `--wheels=jax-rocm-pjrt` instead of the full list, then reinstall that wheel with `--force-reinstall`, since its version doesn't change:
+
+```bash
+pip install --force-reinstall dist/jax_rocm10_pjrt-*.whl
+```
+
+Notes:
+
+- `debug_symbols` is defined in JAX's [`.bazelrc`](https://github.com/jax-ml/jax/blob/main/.bazelrc). It keeps the optimized `-c opt` build, compiles the files under `xla/pjrt` and `xla/python` with `-g3`, and passes `--strip=never`. Most of those files end up in jaxlib and the PJRT plugin. The ROCm plugin wheel is mostly JAX's own GPU kernels under `jaxlib/gpu`, which the pattern doesn't cover, so it gets little debug info by default. [jax-ml/jax#42612](https://github.com/jax-ml/jax/pull/42612) adds the same option to the nightly and continuous workflows, to build debug-symbol variants of the ROCm plugin and PJRT wheels.
+- Everything else, such as XLA's GPU compiler and runtime under `xla/service/gpu` and `xla/backends/gpu`, and JAX's own C++ under `jaxlib/`, still shows only function names. To get file and line numbers there too, add another `--per_file_copt` with the directories you need, quoted because of the `|`:
+
+  ```bash
+  '--bazel_options=--per_file_copt=xla/backends/gpu|xla/service/gpu|xla/stream_executor|jaxlib/@-g'
+  ```
+
+  Each directory makes the build slower and the wheels larger, so this example uses `-g`, which leaves out the macro information that `-g3` adds.
+- To check the PJRT plugin, run `file` on it. A debug build reports `with debug_info, not stripped`, while a regular build reports only `not stripped`:
+
+  ```bash
+  cd /tmp && file "$(python3 -c "import pathlib, jax_plugins.xla_rocm10 as p; print(pathlib.Path(p.__file__).with_name('xla_rocm_plugin.so'))")"
+  ```
+
+- The rocmless image has no `gdb`, but the TheRock tarball ships `rocgdb`, ROCm's GDB-based debugger, and Bazel extracts it with the rest of ROCm. Run your program under `"${ROCM_DIST}/bin/rocgdb" --args python3 ...`, with `ROCM_DIST` set as in the build commands above. Where ROCm is installed under `/opt/rocm`, use `/opt/rocm/bin/rocgdb`.
 
 
 <details>
@@ -184,7 +205,7 @@ Performance and regression micro-benchmarks for AMD GPUs (ROCm). See [`perf_tool
 | Tool | Purpose |
 |------|---------|
 | [`perf_tools/rocm_latency_check_tool`](perf_tools/rocm_latency_check_tool) | HIP-runtime-only micro-benchmark measuring end-to-end per-request dispatch latency (H2D → compute → D2D → compute → D2H) and comparing it across ROCm versions. Reports a latency percentile histogram plus QPS and can append version-stamped rows to a CSV for regression tracking. |
-| [`perf_tools/hlo_eval_tools`](perf_tools/hlo_eval_tools) | Per-module HLO micro-benchmarks built on `multihost_hlo_runner`. Replays the pre-optimization HLO dumps (training and inference) from real JAX models one module at a time to measure each submodule's cost on XLA, and appends the timings to a CSV for regression tracking across ROCm/XLA versions. Covers models across four categories: LLM, vision, multimodal, and science. |
+| [`perf_tools/hlo_eval_tools`](perf_tools/hlo_eval_tools) | Per-module HLO micro-benchmarks built on `multihost_hlo_runner`. Replays the pre-optimization HLO dumps (training and inference) from real JAX models one module at a time to measure each submodule's cost on XLA, and appends the timings to a CSV for regression tracking across ROCm/XLA versions. Covers models across four categories: LLM, vision, multimodal, and science. Includes `bisect_run.sh`, a `git bisect run` script that takes a module the suite flagged and finds the XLA commit behind the regression (or behind a crash, with `--mode status`). |
 
 ## Scaling Book
 
@@ -208,7 +229,7 @@ things and share nothing but a layout:
 
 | | [ci-metrics](https://rocm.github.io/xla/ci-metrics/) | [perf-metrics](https://rocm.github.io/xla/perf-metrics/) |
 |---|---|---|
-| **Question** | How long does CI take to answer a pull request? | How fast does the top of tree openxla/main runs 1gpu training and inference on collected hlo dumps? Secondly how fast `rocm_latency_check_tool` runs with the latest theRock nightly |
+| **Question** | How long does CI take to answer a pull request? | How fast does the top of tree openxla/main runs 1gpu training and inference on collected hlo dumps? Secondly how fast `rocm_latency_check_tool` runs on each theRock stack, at 1, 2 and 4 GPUs |
 | **Measures** | time to signal, queue wait, pass rate, suite size, per lane | HLO module execution time and HIP latency, per ROCm stack |
 | **Source** | the GitHub Actions API and job logs, per PR head commit | [`perf_tools/`](perf_tools/) replayed on a gfx950 |
 | **A point is** | one **day**, pooled from overlapping nightly snapshots | one **run**, against one pinned `openxla/xla` commit |
@@ -234,7 +255,7 @@ GitHub Actions workflows and PR labels that drive automation in this fork.
 | `sync_upstream.yml`                | Every 3h (weekdays), daily (weekends)                                                      | Syncs `main` with `openxla/xla:main` via the GitHub merge-upstream API                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `claude_auto_review.yml`           | Every PR opened against a branch that has `pr_event_dispatch.yml`                          | Automatically runs Claude-Opus-5.5 powered code review on every pull request                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `rocm_xla_ci_nightly.yml`          | Daily at 3:47 AM UTC with sanitizers and every 6 hours full unit test suite of XLA and JAX | Runs the latest XLA (openxla/xla) unit test suite, the TSAN and ASAN sanitizer builds (`rocm_xla_ci_sanitizers.yml`) and the latest JAX (jax-ml/jax) unit tests (`rocm_xla_ci_jax.yml`), each against the TheRock 10.0.0 release tarball and the latest TheRock nightly tarball (the XLA tests track the [10.2 nightlies](https://nightly.repo.amd.com/rocm/whl-next/rocm-sdk-devel/), the sanitizer and JAX jobs the [10.1 nightlies](https://rocm.nightlies.amd.com/whl-multi-arch/rocm-sdk-devel/)) |
-| `rocm_infra_monitor.yml`           | Every 1h (also `workflow_dispatch`, with an optional `run_id` input to replay one specific monitored run on demand) | Monitors `rocm_xla_ci_nightly.yml` and the sanitizer/JAX jobs it triggers for build, test, config and infra failures. Each failure signature not already analyzed gets a comment on a single long-lived tracking issue (created once, reused thereafter) and automatically triggers a Claude Code debug run on real GPU hardware; a recurrence of an already-analyzed signature is skipped entirely (no new comment, no new debug run) - see [Nightly Failure Debugging (Claude)](#nightly-failure-debugging-claude) below. |
+| `rocm_infra_monitor.yml`           | Every 1h (also `workflow_dispatch`, with an optional `run_id` input to replay one specific monitored run on demand) | Monitors `rocm_xla_ci_nightly.yml` and the sanitizer/JAX jobs it triggers for build, test, config and infra failures. Each failure signature not already analyzed gets its own dedicated GitHub issue (found-or-created per signature, so a recurrence reuses the existing open issue) and automatically triggers a Claude Code debug run on real GPU hardware; a recurrence of an already-analyzed signature is skipped entirely (no new issue, no new debug run) - see [Nightly Failure Debugging (Claude)](#nightly-failure-debugging-claude) below. |
 | `rocm_xla_jax_metrics_nightly.yml` | Daily at 3:47 AM UTC                                                                       | Analyzes 1 day window of PRs submitted to upstream openxla/xla and jax-ml/jax. Collects CI latency, time to signal, mean and p90 values for ROCm and vendor CI actions. Dumps markdown report at [ci-metrics-report](https://github.com/ROCm/xla/blob/ci-metrics-reports/reports) and data at [ci-metrics-data](https://github.com/ROCm/xla/tree/ci-metrics-data/data)                                                                                                                                 |
 | `rocm_xla_perf_nightly.yml`        | Daily at 2:00 AM UTC                                                                       | Runs on upstream openxla/xla hlo_eval_tools on 1 gpu for the collected inference and training hlo workloads and rocm_latency_check_tools on 1, 2 and 4 gpus on theRock 10.0 10.1 and 10.2 (rc). Perf data is pushed to [perf-metrics-data](https://github.com/ROCm/xla/tree/perf-metrics-data/data)                                                                                                                                                                                                    |
 | `scaling_book_pages.yml`           | Push to `rocm-dev-infra` when `scaling_book/` changes                                      | Builds the scaling book from `scaling_book/` and deploys to GitHub Pages at [rocm.github.io/xla/scaling-book](https://rocm.github.io/xla/scaling-book/)                                                                                                                                                                                                                                                                                                                                                |
@@ -254,11 +275,27 @@ PRs opened against branches in the `ROCm/xla` fork can opt-in to additional auto
 
 `rocm_infra_monitor.yml` watches `rocm_xla_ci_nightly.yml` and the sanitizer/JAX jobs it calls. Every hour it checks for monitored runs that finished since its own last successful run, and for every build/test/step failure it finds:
 
-1. **Skips it if it's already been analyzed.** Every failure is identified by a `job/step` signature. If that exact signature already has a debug report comment on the tracking issue, the whole thing is a no-op: no new comment, no new debug run - a long-standing, already-understood failure doesn't keep adding noise every time it recurs.
-2. **Otherwise, reports it.** A single, long-lived GitHub issue titled "ROCm CI Nightly Failures Detected" (label `rocm-infra-error`) is created once and reused forever after - every new (not-yet-analyzed) failure signature is appended to it as its own comment, never a new issue, so the issue is a running history of distinct failures rather than every recurrence of them.
+1. **Skips it if it's already been analyzed.** Every failure is identified by a `job/step` signature. If that exact signature already has an open, debugged issue, the whole thing is a no-op: no new issue, no new debug run - a long-standing, already-understood failure doesn't keep adding noise every time it recurs.
+2. **Otherwise, reports it.** A dedicated GitHub issue (title `Nightly CI Failure: <job> / <step>`, label `rocm-infra-error`) is found-or-created per failure signature - a recurrence of a signature with an existing open issue reuses it instead of opening a duplicate, so each issue is the single running history of one distinct failure.
 3. **Debugs it, once per failure signature.** A "debug" job is queued (as a matrix entry of the same workflow run - see `build_tools/rocm/collect_claude_debug_targets.sh`) on the `build-only-xla` runner (the GPU runner pool can't reach the LLM gateway) inside the `rocmless` container, checking out the *exact* commit the failing job actually tested (parsed from that job's own log, not the triggering run's metadata - see `build_tools/rocm/get_checkout_source.sh`, since the monitored jobs test `openxla/xla@main` while the run that triggers them lives in `ROCm/xla`), and runs the [`debug-nightly-failure`](.claude/skills/debug-nightly-failure/SKILL.md) Claude Code skill against it.
-4. **Triages and estimates, fast - and checks again for a race.** As its own first step, the skill re-checks the tracking issue for an existing report on this signature (defense in depth against a race between two monitor runs) and posts just a reference to it if found. Otherwise it classifies the failure into `nightly-build-failure`, `nightly-test-failure`, `nightly-config-failure`, or `nightly-infra-failure`, applies the corresponding label, and posts a preliminary comment with that category and an explicitly-caveated "possible root cause" guess. This whole triage/analysis phase (including checking whether a later upstream commit already fixed it, and a quick code read) is hard-capped at 5 minutes.
+4. **Triages and estimates, fast - and checks again for a race.** As its own first step, the skill re-checks the issue's comments for an existing report on this signature (defense in depth against a race between two monitor runs) and does nothing further if found. Otherwise it classifies the failure into `nightly-build-failure`, `nightly-test-failure`, `nightly-config-failure`, or `nightly-infra-failure`, applies the corresponding label, and posts a preliminary triage comment with that category and an explicitly-caveated "possible root cause" guess. This whole triage/analysis phase (including checking whether a later upstream commit already fixed it, and a quick code read) is hard-capped at 5 minutes.
 5. **Reproduces only if there's good reason to and time allows.** Building/testing afterward doesn't count against that 5-minute cap, but a full RBE reproduction (narrowed to the single failing target - never the whole `//xla/...` sweep the original CI step used) with `gdb`/VLOG/kernel-disassembly debugging is optional and only attempted when the skill is confident it'll finish in time; otherwise it reports a quick estimate instead.
-6. **Reports the outcome** as one final comment on the tracking issue, quoting the detection comment it addresses: an already-fixed-upstream commit, a verified fix (confirmed by re-running the target), an unverified "possible fix" estimate, or a detailed analysis if it couldn't resolve anything. It never pushes a branch, opens a PR, or edits anything outside that one issue.
+6. **Reports the outcome** as a final, separate comment: an already-fixed-upstream commit, a verified fix (confirmed by re-running the target), an unverified "possible fix" estimate, or a detailed analysis if it couldn't resolve anything, with a RESOLVED banner at the top of that comment for the first two. It never pushes a branch, opens a PR, or edits the issue body - new comments are the only thing it ever posts, except for one title edit: the issue is created with a generic `Nightly CI Failure: <job> / <step>` placeholder title, which gets rewritten here into a one-line summary of what actually broke (e.g. "HSA frame-buffer vs. HIP VRAM size mismatch on gfx950 (...)") now that there's something more specific to say - safe to do freely, since every lookup that re-identifies the issue (dedup, catch-up, `@claude` follow-ups) keys off the `<!-- rocm-nightly-failure:... -->` marker in its body, never the title.
+
+A human (or, automatically, an `auto_verify` follow-up job for every "possible fix" report) can ask Claude to act further on a failure by posting a new comment starting with `@claude <instructions>` on its issue - verify the proposed fix, dig deeper, try a different approach, or devise a new solution. This triggers the [`respond-to-mention`](.claude/skills/respond-to-mention/SKILL.md) skill, which reproduces the original failure under heavy repetition, applies/reverts any fix to confirm causality, and posts its findings as a new comment; a verified fix is handed off as a patch file for a separate, deterministic job to apply, open as a draft PR, and post the PR link back as its own follow-up comment (Claude never pushes or opens the PR itself).
 
 To test the whole pipeline against one specific monitored run instead of waiting for the hourly scan, dispatch it manually with that run's ID: `gh workflow run rocm_infra_monitor.yml --repo ROCm/xla -f run_id=<run-id>`.
+
+### Responding to `@claude` Mentions (Any Issue or PR)
+
+Posting a new comment that starts with `@claude <instructions>` triggers an automated Claude Code run on **any** issue or pull request in `ROCm/xla` - not just the nightly monitor's own per-failure issues above. GitHub delivers PR conversation-tab comments as the same `issue_comment` event as issue comments, so this works identically on both. Only comments from users with write/triage access to the repo (`OWNER`/`MEMBER`/`COLLABORATOR`) are honored; `rocm_infra_agent.yml` picks these up both on the triggering `issue_comment` event and, as a fallback, on an hourly scheduled scan.
+
+`build_tools/rocm/collect_claude_mention_targets.sh` classifies each `@claude`-triggered comment by the issue/PR it's on and dispatches to the matching skill:
+- A per-failure issue (label + title shape + a recoverable failing-job URL) dispatches to [`respond-to-mention`](.claude/skills/respond-to-mention/SKILL.md), as described above.
+- Anything else - an ordinary issue or a PR - dispatches to [`respond-to-issue`](.claude/skills/respond-to-issue/SKILL.md), which reads the title, body, and every existing comment for context, then does whatever's literally asked: answer a question, investigate the code or its history, build/run/debug something with the same `rocmless`/`bazel`/`gdb` toolchain used for nightly debugging, or make a code change. It never edits the issue/PR body or pushes/opens a PR itself; a code change is only ever handed off as a patch file plus a PR title/body for a separate, deterministic workflow step to turn into a draft PR, and its report states plainly whether the change was actually built/tested.
+
+**Example:** on issue [#1551](https://github.com/ROCm/xla/issues/1551) ("TSan races in RecoverExp2Pattern static init..."), a maintainer asked:
+
+> @claude try again to create the PR with the above fix
+
+Claude re-verified the proposed fix (reproducing the TSAN race, applying the change, confirming it went away, then reverting to confirm it came back), and handed off a patch; the workflow's follow-up job opened draft PR [#1557](https://github.com/ROCm/xla/pull/1557) with the fix shortly after.
