@@ -245,6 +245,73 @@ TEST(RocmCollectorTest, MultipleActivitiesPerCorrelationIdAllExported) {
   EXPECT_TRUE(seen_names.contains("kernel_c"));
 }
 
+// A copy between GPUs exports on its row's GPU as MemcpyP2P, with the other
+// GPU as dest. Every copy API reaches the collector as MemcpyOther.
+TEST(RocmCollectorTest, PeerCopyExportsOnSourceGpuWithDestination) {
+  RocmTraceCollectorOptions options;
+  options.max_callback_api_events = 100;
+  options.max_activity_api_events = 100;
+  options.max_annotation_strings = 100;
+  options.num_gpus = 2;
+
+  constexpr uint64_t kStartWallTimeNs = 1000;
+  constexpr uint64_t kStartGpuTimeNs = 2000;
+  RocmTraceCollectorImpl collector(options, kStartWallTimeNs, kStartGpuTimeNs);
+
+  constexpr uint64_t kCorrelationId = 11;
+  RocmTracerEvent api_event;
+  api_event.type = RocmTracerEventType::MemcpyOther;
+  api_event.source = RocmTracerEventSource::ApiCallback;
+  api_event.domain = RocmTracerEventDomain::HIP_API;
+  api_event.name = "hipMemcpyDtoDAsync";
+  api_event.correlation_id = kCorrelationId;
+  api_event.thread_id = 999;
+  collector.AddEvent(std::move(api_event), /*is_auxiliary=*/false);
+
+  RocmTracerEvent activity_event;
+  activity_event.type = RocmTracerEventType::MemcpyP2P;
+  activity_event.source = RocmTracerEventSource::Activity;
+  activity_event.domain = RocmTracerEventDomain::HIP_OPS;
+  activity_event.name = "MemcpyP2P";
+  activity_event.correlation_id = kCorrelationId;
+  activity_event.start_time_ns = 3000;
+  activity_event.end_time_ns = 4000;
+  activity_event.device_id = 0;
+  activity_event.stream_id = 123;
+  activity_event.memcpy_info = MemcpyDetails{};
+  activity_event.memcpy_info.num_bytes = 64 << 20;
+  activity_event.memcpy_info.destination = 1;
+  collector.AddEvent(std::move(activity_event), /*is_auxiliary=*/false);
+
+  collector.Flush();
+  tensorflow::profiler::XSpace space;
+  collector.Export(&space);
+
+  const auto* gpu_plane =
+      FindOrAddMutablePlaneWithName(&space, "/device:GPU:0");
+  ASSERT_NE(gpu_plane, nullptr);
+  int peer_copies = 0;
+  std::string memcpy_details;
+  for (const auto& line : gpu_plane->lines()) {
+    for (const auto& event : line.events()) {
+      if (gpu_plane->event_metadata().at(event.metadata_id()).name() !=
+          "MemcpyP2P") {
+        continue;
+      }
+      ++peer_copies;
+      for (const auto& stat : event.stats()) {
+        if (gpu_plane->stat_metadata().at(stat.metadata_id()).name() ==
+            "memcpy_details") {
+          memcpy_details =
+              gpu_plane->stat_metadata().at(stat.ref_value()).name();
+        }
+      }
+    }
+  }
+  EXPECT_EQ(peer_copies, 1);
+  EXPECT_TRUE(absl::StrContains(memcpy_details, "dest:1")) << memcpy_details;
+}
+
 // ---------------------------------------------------------------------------
 // ROCTX marker (Generic event) handling.
 //

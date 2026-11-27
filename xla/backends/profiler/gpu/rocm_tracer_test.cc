@@ -55,6 +55,7 @@ namespace {
 
 using ::testing::AllOf;
 using ::testing::Each;
+using ::testing::Field;
 using ::testing::IsEmpty;
 using ::testing::Not;
 using tsl::profiler::XSpace;
@@ -962,6 +963,17 @@ class ActivityCapturingCollector : public RocmTraceCollector {
     return ids;
   }
 
+  std::vector<RocmTracerEvent> Rows(RocmTracerEventType type) {
+    absl::MutexLock lock(&mu_);
+    std::vector<RocmTracerEvent> rows;
+    for (const RocmTracerEvent& event : events_) {
+      if (event.type == type) {
+        rows.push_back(event);
+      }
+    }
+    return rows;
+  }
+
  private:
   static RocmTraceCollectorOptions MakeCollectorOptions() {
     RocmTraceCollectorOptions o;
@@ -1027,6 +1039,69 @@ TEST(RocmTracerTest, RowsAreNumberedByHipDevice) {
   }
   ASSERT_EQ(hipHostFree(host), hipSuccess);
   ASSERT_EQ(hipSetDevice(0), hipSuccess);
+}
+
+// XLA issues a copy between GPUs on the source GPU's stream. Its row goes on
+// the source GPU, with the destination GPU as dest, as CUPTI's MemcpyP2P does.
+TEST(RocmTracerTest, PeerCopyRowGoesOnTheSourceGpu) {
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  int device_count = 0;
+  ASSERT_EQ(hipGetDeviceCount(&device_count), hipSuccess);
+  if (device_count < 2) {
+    GTEST_SKIP() << "Needs 2 HIP devices";
+  }
+  hipDeviceProp_t props0, props1;
+  ASSERT_EQ(hipGetDeviceProperties(&props0, 0), hipSuccess);
+  ASSERT_EQ(hipGetDeviceProperties(&props1, 1), hipSuccess);
+  if (props0.pciDomainID == props1.pciDomainID &&
+      props0.pciBusID == props1.pciBusID &&
+      props0.pciDeviceID == props1.pciDeviceID) {
+    GTEST_SKIP() << "HIP devices 0 and 1 are partitions of one GPU";
+  }
+  int can_access = 0;
+  ASSERT_EQ(hipDeviceCanAccessPeer(&can_access, 0, 1), hipSuccess);
+  if (!can_access) {
+    GTEST_SKIP() << "HIP device 0 can't access device 1";
+  }
+  ASSERT_EQ(hipSetDevice(0), hipSuccess);
+  const hipError_t enabled = hipDeviceEnablePeerAccess(1, 0);
+  if (enabled == hipErrorPeerAccessAlreadyEnabled) {
+    (void)hipGetLastError();
+  } else {
+    ASSERT_EQ(enabled, hipSuccess);
+  }
+  // Above ROC_P2P_SDMA_SIZE, so HIP copies with a DMA engine, which the SDK
+  // records.
+  constexpr size_t kBytes = 64 << 20;
+  void* src = nullptr;
+  void* dst = nullptr;
+  ASSERT_EQ(hipMalloc(&src, kBytes), hipSuccess);
+  ASSERT_EQ(hipSetDevice(1), hipSuccess);
+  ASSERT_EQ(hipMalloc(&dst, kBytes), hipSuccess);
+  ASSERT_EQ(hipSetDevice(0), hipSuccess);
+  hipStream_t stream = nullptr;
+  ASSERT_EQ(hipStreamCreate(&stream), hipSuccess);
+  ActivityCapturingCollector collector(RocmTracer::GetTimestamp());
+  ASSERT_OK(tracer.Enable(&collector));
+
+  // EXPECT, not ASSERT, until Disable(): returning early would leave the
+  // tracer enabled with a dangling collector.
+  EXPECT_EQ(hipMemcpyDtoDAsync(dst, src, kBytes, stream), hipSuccess);
+  EXPECT_EQ(hipStreamSynchronize(stream), hipSuccess);
+  FlushUntilRow(tracer, collector, RocmTracerEventType::MemcpyP2P);
+  tracer.Disable();
+  ASSERT_EQ(hipStreamDestroy(stream), hipSuccess);
+  ASSERT_EQ(hipFree(src), hipSuccess);
+  ASSERT_EQ(hipFree(dst), hipSuccess);
+
+  EXPECT_THAT(
+      collector.Rows(RocmTracerEventType::MemcpyP2P),
+      AllOf(Not(IsEmpty()),
+            Each(AllOf(Field("device_id", &RocmTracerEvent::device_id, 0u),
+                       Field("name", &RocmTracerEvent::name, "MemcpyP2P"),
+                       Field("memcpy_info", &RocmTracerEvent::memcpy_info,
+                             Field("destination", &MemcpyDetails::destination,
+                                   1u))))));
 }
 
 }  // namespace
