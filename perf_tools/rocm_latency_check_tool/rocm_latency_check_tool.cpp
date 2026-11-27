@@ -219,22 +219,17 @@ struct BenchControl {
 };
 
 struct BenchmarkStats {
-  struct Samples {
-    std::vector<int64_t> request_us;
-    std::vector<int64_t> sync_us;
-  };
-  Samples samples;
+  std::vector<int64_t> latencies_us;
   mutable std::mutex mu;
 
-  void update(int64_t latency_us, int64_t sync_us) {
+  void update(int64_t latency_us) {
     std::lock_guard<std::mutex> guard(mu);
-    samples.request_us.push_back(latency_us);
-    samples.sync_us.push_back(sync_us);
+    latencies_us.push_back(latency_us);
   }
 
-  Samples snapshot() const {
+  std::vector<int64_t> snapshot() const {
     std::lock_guard<std::mutex> guard(mu);
-    return samples;
+    return latencies_us;
   }
 
   // Single computed summary shared by the console report and the CSV writer so
@@ -245,7 +240,6 @@ struct BenchmarkStats {
     double qps = 0.0;
     int64_t min_us = 0, max_us = 0;
     double mean_us = 0.0, stddev_us = 0.0;
-    double sync_p99_us = 0.0;
     double p50_us = 0.0, p75_us = 0.0, p95_us = 0.0;
     double p98_us = 0.0, p99_us = 0.0, p999_us = 0.0;
   };
@@ -261,12 +255,10 @@ struct BenchmarkStats {
     return lower + (pos - std::floor(pos)) * (upper - lower);
   }
 
-  static StatRow compute(Samples samples, double wall_elapsed_ms) {
-    auto& sorted = samples.request_us;
+  static StatRow compute(const std::vector<int64_t>& data, double wall_elapsed_ms) {
+    std::vector<int64_t> sorted(data);
     std::sort(sorted.begin(), sorted.end());
     StatRow r;
-    std::sort(samples.sync_us.begin(), samples.sync_us.end());
-    r.sync_p99_us = getValue(samples.sync_us, 0.99);
     r.count = sorted.size();
     if (!sorted.empty()) {
       r.min_us = sorted.front();
@@ -294,7 +286,9 @@ struct BenchmarkStats {
     return r;
   }
 
-  static void printReport(const char* title, const StatRow& r) {
+  static void printReport(const char* title, const std::vector<int64_t>& data,
+                           double wall_elapsed_ms) {
+    const StatRow r = compute(data, wall_elapsed_ms);
 
     std::printf("\n");
     std::printf("%.64s ", title);
@@ -312,7 +306,6 @@ struct BenchmarkStats {
     std::printf("              98%% <= %.2f\n", r.p98_us);
     std::printf("              99%% <= %.2f\n", r.p99_us);
     std::printf("            99.9%% <= %.2f\n", r.p999_us);
-    std::printf("      sync_p99_us = %.2f\n", r.sync_p99_us);
     std::printf("-- Throughput\n");
     std::printf("       wall_time_s = %.4f\n", r.wall_sec);
     std::printf("       total_iters = %zu\n", r.count);
@@ -679,31 +672,19 @@ class Consumer {
             prep->bytesD2H, stream));
       }
 
-      const auto sync_start = std::chrono::high_resolution_clock::now();
       HIP_CHECK(hipStreamSynchronize(stream));
 
       auto wall_end = std::chrono::high_resolution_clock::now();
       const int64_t latency_us =
           std::chrono::duration_cast<std::chrono::microseconds>(wall_end - wall_start).count();
 
-      const auto sync_us =
-          std::chrono::duration_cast<std::chrono::microseconds>(wall_end - sync_start).count();
-      global_stats_->update(latency_us, sync_us);
+      global_stats_->update(latency_us);
       completed_.fetch_add(1, std::memory_order_relaxed);
 
       pool_->Return(slot.index);
-
-      // Worker-local counters; read only after the consumer threads join.
-      slow_requests_ += latency_us > 10000;
-      slow_sync_majority_ += (latency_us > 10000 && sync_us > latency_us / 2);
-      slow_sync_over_10ms_ += (latency_us > 10000 && sync_us > 10000);
     }
 
   }
-
-  int64_t slow_requests() const { return slow_requests_; }
-  int64_t slow_sync_majority() const { return slow_sync_majority_; }
-  int64_t slow_sync_over_10ms() const { return slow_sync_over_10ms_; }
 
   int completed() const { return completed_.load(std::memory_order_relaxed); }
 
@@ -715,9 +696,6 @@ class Consumer {
   const PinnedBuffer& hA_;
   const PinnedBuffer& hB_;
   const PinnedBuffer& hExtraH2D_;
-  int64_t slow_requests_ = 0;
-  int64_t slow_sync_majority_ = 0;
-  int64_t slow_sync_over_10ms_ = 0;
   std::atomic<int> completed_{0};
 };
 
@@ -1241,13 +1219,13 @@ int main(int argc, char** argv) {
 
     auto now = std::chrono::high_resolution_clock::now();
     const double wall_ms = std::chrono::duration<double, std::milli>(now - wall_start).count();
-    const auto stats = BenchmarkStats::compute(global_stats.snapshot(), wall_ms);
+    auto snap = global_stats.snapshot();
 
     char title[128];
     std::snprintf(title, sizeof(title), "[%ds / %ds] Benchmark Statistics",
                   elapsed_sec, g_cfg.duration_sec);
-    BenchmarkStats::printReport(title, stats);
-    csv_writer.writeRow("interval", elapsed_sec, stats);
+    BenchmarkStats::printReport(title, snap, wall_ms);
+    csv_writer.writeRow("interval", elapsed_sec, BenchmarkStats::compute(snap, wall_ms));
   }
 
   bench_ctrl.stop();
@@ -1273,19 +1251,9 @@ int main(int argc, char** argv) {
                 i, consumers[i]->completed());
   }
 
-  int64_t slow = 0, sync_majority = 0, sync_over_10ms = 0;
-  for (const auto& consumer : consumers) {
-    slow += consumer->slow_requests();
-    sync_majority += consumer->slow_sync_majority();
-    sync_over_10ms += consumer->slow_sync_over_10ms();
-  }
-  std::cout << "Final stream sync timing: requests_over_10ms=" << slow
-            << " sync_over_half_of_slow=" << sync_majority
-            << " sync_over_10ms_of_slow=" << sync_over_10ms << '\n';
-
-  const auto final_stats = BenchmarkStats::compute(global_stats.snapshot(), wall_ms);
-  BenchmarkStats::printReport("Final Benchmark Statistics", final_stats);
-  csv_writer.writeRow("final", g_cfg.duration_sec, final_stats);
+  auto final_snap = global_stats.snapshot();
+  BenchmarkStats::printReport("Final Benchmark Statistics", final_snap, wall_ms);
+  csv_writer.writeRow("final", g_cfg.duration_sec, BenchmarkStats::compute(final_snap, wall_ms));
 
   for (auto* prep : prep_cache) {
     cleanup_slot(prep);
