@@ -285,7 +285,7 @@ write the files:
    [WIP] <one-line summary of the fix>
    EOF
    cat > /tmp/claude_pr_body.txt <<'EOF'
-   <openxla/xla's own PR template, filled in - see shape below>
+   <written with the xla-pr-description skill - see below>
    EOF
    ```
    The workflow treats **the mere existence of a non-empty
@@ -298,44 +298,29 @@ write the files:
    no patch will reach `apply_patch_and_open_pr`, so mention that
    explicitly rather than letting the report imply a PR is coming.
 
-   PR body shape - fill in `openxla/xla`'s own pull request template with
-   real, specific content under every heading it asks for, never leaving
-   one of its placeholder prompts in place and never substituting a
-   different shape of your own. Read the template itself rather than
-   recalling it from memory - it can change upstream, and a stale copy in
-   this skill would silently drift from it:
-   ```
-   cat .github/pull_request_template.md
-   ```
-   (present at `REPOSITORY@HEAD_SHA`, which is almost always `openxla/xla`;
-   if it's missing - a different `REPOSITORY`, or a `HEAD_SHA` old enough to
-   predate the template - fetch it directly instead:
-   `gh api repos/openxla/xla/contents/.github/pull_request_template.md
-   --jq '.content' | base64 -d`).
+   PR body - write it with the `xla-pr-description` skill: invoke it with
+   the Skill tool (if that fails, Read
+   `.claude/skills/xla-pr-description/SKILL.md`), and follow its Gather
+   and Rules sections. Don't restate its rules here, so the two can't
+   drift. Overrides for this setting:
+   - The change is the uncommitted `git diff` you just captured, not a
+     branch against a merge base.
+   - The issue and its comments are the conversation: take the problem,
+     the failing test and the root cause from there. Nobody can answer a
+     question here, so leave out anything you can't back with what you
+     found instead of asking.
+   - Skip its Output section: write the body to `/tmp/claude_pr_body.txt`
+     (not `/tmp/pr_desc.md`), and don't touch the clipboard or the PR.
+   - A fix that makes an existing test pass adds no tests, so the test
+     sections are usually dropped; the closing line below names the
+     target instead.
 
-   **Keep every section short - one or two sentences, not paragraphs.**
-   This is a PR description a reviewer skims to decide whether to look
-   closer, not a lab notebook: no tables, no flag-by-flag command dumps, no
-   restating the whole investigation. That detail already lives in the
-   issue the closing line below links back to.
-
-   Two things the template itself doesn't spell out, so apply them
-   yourself: for its "Kind of Contribution" section, pick exactly the one
-   that applies and delete the rest (its own instruction, easy to skip by
-   accident) rather than leaving all the options listed; and omit its
-   "Benchmark" section entirely unless the kind is a Performance
-   Improvement - it doesn't apply otherwise, the same way a human filling
-   this out by hand would leave it out rather than writing "N/A". For
-   "Unit Tests"/"Execution Tests" specifically, name the target and the
-   one-line result (e.g. "`//xla/service:foo_test`, red before the fix,
-   green after, red again on revert") - not the full command or every flag
-   used. After the template's own sections, add one closing line
-   disclosing how this was produced and verified, with a link back to the
-   issue:
+   After the template's sections, add one closing line saying how the fix
+   was verified, with a link back to the issue:
    ```
-   Automatically verified by reproducing the original failure under heavy
-   repetition, applying this fix (green), and reverting it (red again) to
-   confirm causality - see https://github.com/<CI_REPO>/issues/<ISSUE_NUMBER>.
+   Automatically verified with `<test target>`: reproduced the failure under
+   heavy repetition, green with this fix, red again on revert - see
+   https://github.com/<CI_REPO>/issues/<ISSUE_NUMBER>.
    ```
 3. **The workflow applies this patch directly on top of `REPOSITORY@HEAD_SHA`
    itself** - the exact commit this very skill run just verified the fix

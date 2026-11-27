@@ -71,6 +71,7 @@ on:
       - "build_tools/rocm/collect_claude_debug_targets.sh"
       - ".claude/skills/debug-nightly-failure/SKILL.md"
       - ".claude/skills/respond-to-mention/SKILL.md"
+      - ".claude/skills/xla-pr-description/SKILL.md"
 
 jobs:
   monitor:
