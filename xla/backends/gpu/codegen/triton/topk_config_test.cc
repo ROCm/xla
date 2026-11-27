@@ -200,6 +200,7 @@ TEST(TopKKernelConfigTest, Mi350ChunksOfLargeKLeaveAbout4096Candidates) {
   expect_chunks(Spec(16, 1 << 18, 128), 8192, 4096);
   // Chunks of 2048 at least, one per program.
   expect_chunks(Spec(8, 1 << 15, 128), 2048, 2048);
+  expect_chunks(Spec(8, 1 << 17, 32), 2048, 2048);
   // Chunks longer than 64 x block_k would select by k rounds, so the merge
   // grows.
   expect_chunks(Spec(16, 1 << 20, 128), 8192, 16384);
@@ -219,9 +220,10 @@ TEST(TopKKernelConfigTest, Mi350ChunksOfSmallKFillTheDevice) {
     EXPECT_TRUE(config.has_value());
     return config.has_value() ? config->block_n : 0;
   };
-  // 512 chunk programs of 16384.
+  // 512 chunk programs of 16384, and exactly one per CU.
   EXPECT_EQ(chunk(Spec(64, 1 << 17, 8)), 16384);
   EXPECT_EQ(chunk(Spec(256, 1 << 15, 16)), 16384);
+  EXPECT_EQ(chunk(Spec(128, 1 << 15, 16)), 16384);
   // Too few rows for longer chunks than 4096.
   EXPECT_EQ(chunk(Spec(16, 1 << 15, 8)), 4096);
   EXPECT_EQ(chunk(Spec(1, 1 << 20, 16)), 4096);

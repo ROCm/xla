@@ -93,11 +93,17 @@ int64_t NextPowerOfTwo(int64_t x) {
   return static_cast<int64_t>(absl::bit_ceil(static_cast<uint64_t>(x)));
 }
 
+// The routing and the chunk lengths in this file were measured on MI350
+// (gfx950, also MI355X). Other devices take the Triton TopK path only when it
+// is forced, with chunks from 4096 up.
 bool IsMi350(const se::DeviceDescription& device) {
   const se::RocmComputeCapability* rocm =
       device.gpu_compute_capability().rocm_compute_capability();
   return rocm != nullptr && rocm->gfx9_mi350();
 }
+
+// The longest row of `block_k` >= 32 keys that takes the bitonic selection.
+int64_t MaxBitonicRowLength(int64_t block_k) { return 64 * block_k; }
 
 // MI350 (gfx950): the chunk length of rows too long for one program, measured
 // with one chunk per program on random data for rows of 2^15 to 2^22
@@ -107,9 +113,10 @@ int64_t GetChunkLengthOnMi350(const TopKKernelSpec& spec,
                               const se::DeviceDescription& device) {
   constexpr int64_t kMaxChunk = 16384;
   constexpr int64_t kTargetMergeKeys = 4096;
+  // Up to this many elements in all rows, the merge takes most of the time.
+  constexpr int64_t kFewRowsElements = int64_t{1} << 23;
   const int64_t block_k = NextPowerOfTwo(spec.k);
-  // The longest row that the bitonic selection takes (see WithSelection).
-  const int64_t max_bitonic_n = 64 * block_k;
+  const int64_t max_bitonic_n = MaxBitonicRowLength(block_k);
   if (block_k >= 32) {
     // The merge is fastest with rows of about 4096 candidates, as long as the
     // chunks keep the bitonic selection.
@@ -120,7 +127,7 @@ int64_t GetChunkLengthOnMi350(const TopKKernelSpec& spec,
     // time: chunks of 16384 when its rows would fill a program, otherwise the
     // chunks from 4096 up.
     const int64_t merge_n = NextPowerOfTwo(CeilOfRatio(spec.n, chunk) * spec.k);
-    if (spec.batch * spec.n <= (int64_t{1} << 23) && merge_n > max_bitonic_n) {
+    if (spec.batch * spec.n <= kFewRowsElements && merge_n > max_bitonic_n) {
       return merge_n >= kMaxChunk ? kMaxChunk : kTargetKeysPerProgram;
     }
     return chunk;
@@ -281,8 +288,9 @@ std::optional<TopKKernelConfig> GetBlockConfig(
 // k rounds at both ends.
 TopKKernelConfig WithSelection(int64_t k, TopKKernelConfig config) {
   const int64_t block_k = NextPowerOfTwo(k);
-  const bool bitonic = (block_k >= 32 && config.block_n <= 64 * block_k) ||
-                       (block_k == 16 && config.block_n <= 64);
+  const bool bitonic =
+      (block_k >= 32 && config.block_n <= MaxBitonicRowLength(block_k)) ||
+      (block_k == 16 && config.block_n <= 64);
   config.selection = bitonic ? TopKSelection::kBitonic : TopKSelection::kRounds;
   return config;
 }
