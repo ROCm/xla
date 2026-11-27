@@ -15,9 +15,6 @@ limitations under the License.
 
 #include "xla/backends/profiler/gpu/rocm_tracer.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -27,6 +24,8 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/log.h"
@@ -40,19 +39,24 @@ limitations under the License.
 #include "absl/time/time.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/include/rocprofiler-sdk-roctx/roctx.h"
+#include "rocm/include/rocprofiler-sdk/buffer.h"
 #include "rocm/include/rocprofiler-sdk/callback_tracing.h"
 #include "rocm/include/rocprofiler-sdk/context.h"
 #include "rocm/include/rocprofiler-sdk/fwd.h"
 #include "rocm/include/rocprofiler-sdk/marker.h"
-#include "tsl/profiler/protobuf/xplane.pb.h"
 #include "xla/backends/profiler/gpu/rocm_collector.h"
 #include "xla/backends/profiler/gpu/rocm_tracer_utils.h"
 #include "xla/tsl/platform/env_time.h"
+#include "tsl/profiler/protobuf/xplane.pb.h"
 
 namespace xla {
 namespace profiler {
 namespace {
 
+using ::testing::AllOf;
+using ::testing::Each;
+using ::testing::IsEmpty;
+using ::testing::Not;
 using tsl::profiler::XSpace;
 
 // Minimal mock collector implementation based on RocmTraceCollectorImpl.
@@ -112,6 +116,10 @@ TEST(RocmTracerTest, GpuAgentDataMatchesHipDeviceProperties) {
   RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
   const auto& agents = tracer.GpuAgents();
   ASSERT_GT(agents.size(), 0u);
+  // Every HIP device found its agent by PCI address.
+  int count = 0;
+  ASSERT_EQ(hipGetDeviceCount(&count), hipSuccess);
+  EXPECT_EQ(agents.size(), static_cast<size_t>(count));
 
   hipDeviceProp_t props;
   ASSERT_EQ(hipGetDeviceProperties(&props, 0), hipSuccess);
@@ -921,6 +929,104 @@ TEST(RocmTracerTest, GetCurrentRoctxLabelViewIsValidUntilNextRoctxCall) {
       << "Stack must be empty after pop";
 
   tracer.Disable();
+}
+
+// Keeps the kernel and copy rows that start at or after `since_ns`. Rows of
+// earlier sessions can still arrive (AIPROFSDK-1162), and
+// MarkerCapturingCollector drops all rows that aren't markers.
+class ActivityCapturingCollector : public RocmTraceCollector {
+ public:
+  explicit ActivityCapturingCollector(uint64_t since_ns)
+      : RocmTraceCollector(MakeCollectorOptions()), since_ns_(since_ns) {}
+
+  void AddEvent(RocmTracerEvent&& event, bool) override {
+    if (event.source != RocmTracerEventSource::Activity ||
+        event.start_time_ns < since_ns_) {
+      return;
+    }
+    absl::MutexLock lock(&mu_);
+    events_.push_back(std::move(event));
+  }
+  void OnEventsDropped(const std::string&, uint64_t) override {}
+  void Flush() override {}
+  void Export(tsl::profiler::XSpace*) override {}
+
+  std::vector<uint32_t> DeviceIds(RocmTracerEventType type) {
+    absl::MutexLock lock(&mu_);
+    std::vector<uint32_t> ids;
+    for (const RocmTracerEvent& event : events_) {
+      if (event.type == type) {
+        ids.push_back(event.device_id);
+      }
+    }
+    return ids;
+  }
+
+ private:
+  static RocmTraceCollectorOptions MakeCollectorOptions() {
+    RocmTraceCollectorOptions o;
+    o.max_callback_api_events = 1024;
+    o.max_activity_api_events = 1024;
+    o.max_annotation_strings = 1024;
+    o.num_gpus = 1;
+    return o;
+  }
+  const uint64_t since_ns_;
+  absl::Mutex mu_;
+  std::vector<RocmTracerEvent> events_ ABSL_GUARDED_BY(mu_);
+};
+
+// Flushes the SDK buffer until `collector` holds a row of `type`, for up to
+// 10 s. A record that reaches the buffer after Disable() is lost.
+void FlushUntilRow(RocmTracer& tracer, ActivityCapturingCollector& collector,
+                   RocmTracerEventType type) {
+  const absl::Time deadline = absl::Now() + absl::Seconds(10);
+  while (collector.DeviceIds(type).empty() && absl::Now() < deadline) {
+    rocprofiler_flush_buffer(tracer.buffer_);
+  }
+}
+
+// Rows carry the HIP device number, whatever the visibility masks do.
+TEST(RocmTracerTest, RowsAreNumberedByHipDevice) {
+  RocmTracer& tracer = RocmTracer::GetRocmTracerSingleton();
+  int device_count = 0;
+  ASSERT_EQ(hipGetDeviceCount(&device_count), hipSuccess);
+  // Large enough that HIP copies with a DMA engine, which the SDK records.
+  constexpr size_t kBytes = 8 << 20;
+  void* host = nullptr;
+  ASSERT_EQ(hipHostMalloc(&host, kBytes, hipHostMallocDefault), hipSuccess);
+
+  for (int k = 0; k < device_count; ++k) {
+    const uint32_t hip_device = k;
+    ASSERT_EQ(hipSetDevice(k), hipSuccess);
+    void* buffer = nullptr;
+    ASSERT_EQ(hipMalloc(&buffer, kBytes), hipSuccess);
+    ActivityCapturingCollector collector(RocmTracer::GetTimestamp());
+    ASSERT_OK(tracer.Enable(&collector));
+
+    // EXPECT, not ASSERT, until Disable(): returning early would leave the
+    // tracer enabled with a dangling collector.
+    // HIP fills device memory with a kernel.
+    EXPECT_EQ(hipMemsetAsync(buffer, 0, kBytes, /*stream=*/nullptr),
+              hipSuccess);
+    EXPECT_EQ(hipMemcpyAsync(host, buffer, kBytes, hipMemcpyDeviceToHost,
+                             /*stream=*/nullptr),
+              hipSuccess);
+    EXPECT_EQ(hipDeviceSynchronize(), hipSuccess);
+    FlushUntilRow(tracer, collector, RocmTracerEventType::Kernel);
+    FlushUntilRow(tracer, collector, RocmTracerEventType::MemcpyD2H);
+    tracer.Disable();
+    ASSERT_EQ(hipFree(buffer), hipSuccess);
+
+    EXPECT_THAT(collector.DeviceIds(RocmTracerEventType::Kernel),
+                AllOf(Not(IsEmpty()), Each(hip_device)))
+        << "memset on HIP device " << k;
+    EXPECT_THAT(collector.DeviceIds(RocmTracerEventType::MemcpyD2H),
+                AllOf(Not(IsEmpty()), Each(hip_device)))
+        << "copy from HIP device " << k;
+  }
+  ASSERT_EQ(hipHostFree(host), hipSuccess);
+  ASSERT_EQ(hipSetDevice(0), hipSuccess);
 }
 
 }  // namespace
