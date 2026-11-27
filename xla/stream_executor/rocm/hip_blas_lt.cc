@@ -82,7 +82,7 @@ using ::xla::complex128;
 using ::xla::complex64;
 
 // hipBLASLt is built against libstdc++, but XLA may be built against libc++.
-// Two hipblaslt_ext functions take std::vector arguments, so their mangled
+// Three hipblaslt_ext functions take std::vector arguments, so their mangled
 // names contain the standard library's namespace and do not link across the
 // two libraries: libc++ names std::__1::vector, libstdc++ std::vector. Call
 // them through their libstdc++ names instead, passing a Vector (below) where
@@ -224,6 +224,18 @@ GetAllAlgosFn GetAllAlgos __asm__(
 static_assert(std::is_same_v<decltype(static_cast<GetAllAlgosHeaderFn*>(
                                  &hipblaslt_ext::getAllAlgos)),
                              GetAllAlgosHeaderFn*>);
+
+// hipblaslt_ext::getAlgosFromIndex.
+using GetAlgosFromIndexHeaderFn = hipblasStatus_t(
+    hipblasLtHandle_t handle, std::vector<int>& algo_index,
+    std::vector<hipblasLtMatmulHeuristicResult_t>& heuristic_results);
+using GetAlgosFromIndexFn = WithVectors<GetAlgosFromIndexHeaderFn>::type;
+GetAlgosFromIndexFn GetAlgosFromIndex __asm__(
+    "_ZN13hipblaslt_ext17getAlgosFromIndexEPvRSt6vectorIiSaIiEERS1_I33_"
+    "hipblasLtMatmulHeuristicResult_tSaIS5_EE");
+static_assert(std::is_same_v<decltype(static_cast<GetAlgosFromIndexHeaderFn*>(
+                                 &hipblaslt_ext::getAlgosFromIndex)),
+                             GetAlgosFromIndexHeaderFn*>);
 
 // The labels encode int64_t as 'l' (long).
 static_assert(std::is_same_v<int64_t, long>);
@@ -512,8 +524,8 @@ auto BlasLt::RegularMatmulPlan::GetAllSupportedAlgorithms(
   ABSL_ASSIGN_OR_RETURN(
       auto op_b, GetAttr<hipblasOperation_t>(op_desc_.get(),
                                              HIPBLASLT_MATMUL_DESC_TRANSB));
-  std::vector<hipblasLtMatmulHeuristicResult_t> all;
-  SE_HIPBLAS_RETURN_IF_ERROR(hipblaslt_ext::getAllAlgos(
+  hipblaslt_libstdcxx::Vector<hipblasLtMatmulHeuristicResult_t> all;
+  SE_HIPBLAS_RETURN_IF_ERROR(hipblaslt_libstdcxx::GetAllAlgos(
       blas_lt_.handle_.get(), hipblaslt_ext::GemmType::HIPBLASLT_GEMM, op_a,
       op_b, a_desc_.type(), b_desc_.type(), c_desc_.type(), d_desc_.type(),
       op_desc_.compute_type(), all));
@@ -585,15 +597,16 @@ BlasLt::RegularMatmulPlan::GetMatmulAlgorithm(
   }
   std::unique_ptr<ActivateContext> activation = blas_lt_.executor_->Activate();
   ABSL_RETURN_IF_ERROR(SetDummyPointersForAlgorithmQuery());
-  std::vector<int> indices = {hipblaslt->solution_index};
-  std::vector<hipblasLtMatmulHeuristicResult_t> results;
-  if (hipblaslt_ext::getAlgosFromIndex(blas_lt_.handle_.get(), indices,
-                                       results) != HIPBLAS_STATUS_SUCCESS ||
-      results.empty()) {
+  hipblaslt_libstdcxx::Vector<int> indices(1, hipblaslt->solution_index);
+  hipblaslt_libstdcxx::Vector<hipblasLtMatmulHeuristicResult_t> results;
+  if (hipblaslt_libstdcxx::GetAlgosFromIndex(blas_lt_.handle_.get(), indices,
+                                             results) !=
+          HIPBLAS_STATUS_SUCCESS ||
+      results.size() == 0) {
     return absl::NotFoundError(absl::StrFormat("hipBLASLt has no solution %d",
                                                hipblaslt->solution_index));
   }
-  hipblasLtMatmulAlgo_t algo = results.front().algo;
+  hipblasLtMatmulAlgo_t algo = results[0].algo;
   size_t workspace_size = 0;
   if (hipblaslt_ext::matmulIsAlgoSupported(
           blas_lt_.handle_.get(), op_desc_.get(), &alpha_[0], a_desc_.get(),
