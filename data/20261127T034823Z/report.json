@@ -1,0 +1,2065 @@
+{
+  "arrivals": [
+    {
+      "am_do": 8,
+      "am_hour": "00",
+      "am_nv": 8,
+      "pm_do": 23,
+      "pm_hour": "12",
+      "pm_nv": 24
+    },
+    {
+      "am_do": 12,
+      "am_hour": "01",
+      "am_nv": 2,
+      "pm_do": 38,
+      "pm_hour": "13",
+      "pm_nv": 28
+    },
+    {
+      "am_do": 20,
+      "am_hour": "02",
+      "am_nv": 20,
+      "pm_do": 27,
+      "pm_hour": "14",
+      "pm_nv": 26
+    },
+    {
+      "am_do": 41,
+      "am_hour": "03",
+      "am_nv": 38,
+      "pm_do": 16,
+      "pm_hour": "15",
+      "pm_nv": 16
+    },
+    {
+      "am_do": 39,
+      "am_hour": "04",
+      "am_nv": 36,
+      "pm_do": 22,
+      "pm_hour": "16",
+      "pm_nv": 12
+    },
+    {
+      "am_do": 35,
+      "am_hour": "05",
+      "am_nv": 34,
+      "pm_do": 4,
+      "pm_hour": "17",
+      "pm_nv": 4
+    },
+    {
+      "am_do": 50,
+      "am_hour": "06",
+      "am_nv": 48,
+      "pm_do": 4,
+      "pm_hour": "18",
+      "pm_nv": 4
+    },
+    {
+      "am_do": 86,
+      "am_hour": "07",
+      "am_nv": 76,
+      "pm_do": 18,
+      "pm_hour": "19",
+      "pm_nv": 8
+    },
+    {
+      "am_do": 76,
+      "am_hour": "08",
+      "am_nv": 72,
+      "pm_do": 2,
+      "pm_hour": "20",
+      "pm_nv": 2
+    },
+    {
+      "am_do": 59,
+      "am_hour": "09",
+      "am_nv": 58,
+      "pm_do": 2,
+      "pm_hour": "21",
+      "pm_nv": 2
+    },
+    {
+      "am_do": 33,
+      "am_hour": "10",
+      "am_nv": 24,
+      "pm_do": 21,
+      "pm_hour": "22",
+      "pm_nv": 12
+    },
+    {
+      "am_do": 13,
+      "am_hour": "11",
+      "am_nv": 14,
+      "pm_do": 8,
+      "pm_hour": "23",
+      "pm_nv": 8
+    }
+  ],
+  "arrivals_hi": 86,
+  "arrivals_lo": 2,
+  "ask_coverage": [
+    {
+      "clauses": [
+        {
+          "kind": " (XLA jobs)",
+          "nv": 586,
+          "rocm": 600,
+          "up": null
+        },
+        {
+          "kind": " (JAX jobs)",
+          "nv": 154,
+          "rocm": 144,
+          "up": null
+        }
+      ],
+      "repo": "openxla/xla"
+    },
+    {
+      "clauses": [
+        {
+          "kind": " presubmit",
+          "nv": 150,
+          "rocm": 144,
+          "up": null
+        }
+      ],
+      "repo": "jax-ml/jax"
+    }
+  ],
+  "baseline_label": null,
+  "changes": null,
+  "generated": "2026-11-27 03:50 UTC",
+  "infra": {
+    "base_do_gpus": null,
+    "base_do_nodes": null,
+    "labels_seen": 6
+  },
+  "nominal_hours": "00, 01, 11, 17, 18, 20, 21, 23",
+  "nv_peak_hours": "03, 04, 05, 06, 07, 08, 09, 13",
+  "nv_pools": [
+    {
+      "job_type": "build wheels",
+      "jobs": 78,
+      "label": "linux-x86-n4-16",
+      "over": 0,
+      "p50": "1s",
+      "p90": "5s",
+      "p99": "5s",
+      "repo": "jax-ml/jax",
+      "seen": "11-26 to 11-26"
+    },
+    {
+      "job_type": "test, build_jaxlib=false",
+      "jobs": 39,
+      "label": "linux-x86-n4-16",
+      "over": 0,
+      "p50": "1s",
+      "p90": "5s",
+      "p99": "6s",
+      "repo": "jax-ml/jax",
+      "seen": "11-26 to 11-26"
+    },
+    {
+      "job_type": "test, build_jaxlib=true",
+      "jobs": 39,
+      "label": "linux-x86-n4-16",
+      "over": 0,
+      "p50": "1s",
+      "p90": "5s",
+      "p99": "6s",
+      "repo": "jax-ml/jax",
+      "seen": "11-26 to 11-26"
+    },
+    {
+      "job_type": "XLA job",
+      "jobs": 210,
+      "label": "linux-x86-n4-16",
+      "over": 0,
+      "p50": "6s",
+      "p90": "16s",
+      "p99": "2m16s",
+      "repo": "openxla/xla",
+      "seen": "11-25 to 11-26"
+    },
+    {
+      "job_type": "JAX job",
+      "jobs": 210,
+      "label": "linux-x86-n4-16",
+      "over": 0,
+      "p50": "6s",
+      "p90": "16s",
+      "p99": "3m13s",
+      "repo": "openxla/xla",
+      "seen": "11-25 to 11-26"
+    }
+  ],
+  "peak_hours": "03, 04, 05, 06, 07, 08, 09, 13",
+  "phase_keys": [
+    "superseded",
+    "upstream",
+    "queue",
+    "setup",
+    "docker",
+    "env",
+    "test",
+    "close",
+    "gaps"
+  ],
+  "phase_labels": [
+    "Superseded runs + re-run delay",
+    "Waiting on earlier jobs",
+    "Queue for a runner",
+    "Runner set-up",
+    "Docker pull + container start",
+    "Checkout, env, wheels",
+    "Test execution",
+    "Uploads, docker stop, job close",
+    "Runner teardown + completion report"
+  ],
+  "pool_components": [
+    {
+      "component": "Queue (OpenXLA pool)",
+      "nominal_p50": "14s",
+      "nominal_p90": "41s",
+      "peak_p50": "13s",
+      "peak_p90": "37s"
+    },
+    {
+      "component": "Queue (JAX pool)",
+      "nominal_p50": "1m29s",
+      "nominal_p90": "1m29s",
+      "peak_p50": "1m29s",
+      "peak_p90": "1m33s"
+    },
+    {
+      "component": "Set-up (runner, docker, checkout, env) (OpenXLA pool)",
+      "nominal_p50": "32s",
+      "nominal_p90": "3m57s",
+      "peak_p50": "30s",
+      "peak_p90": "3m55s"
+    },
+    {
+      "component": "Set-up (runner, docker, checkout, env) (JAX pool)",
+      "nominal_p50": "1m12s",
+      "nominal_p90": "1m12s",
+      "peak_p50": "1m14s",
+      "peak_p90": "1m15s"
+    },
+    {
+      "component": "Test execution (OpenXLA pool)",
+      "nominal_p50": "10m30s",
+      "nominal_p90": "15m52s",
+      "peak_p50": "9m56s",
+      "peak_p90": "15m39s"
+    },
+    {
+      "component": "Test execution (JAX pool)",
+      "nominal_p50": "42m06s",
+      "nominal_p90": "42m06s",
+      "peak_p50": "59m52s",
+      "peak_p90": "64m30s"
+    }
+  ],
+  "pool_verdicts": [
+    {
+      "kind": "flat",
+      "nominal": "14s",
+      "peak": "13s",
+      "pool": "OpenXLA",
+      "tail": {
+        "nominal": "41s",
+        "peak": "37s"
+      }
+    },
+    {
+      "kind": "flat",
+      "nominal": "1m29s",
+      "peak": "1m29s",
+      "pool": "JAX",
+      "tail": {
+        "nominal": "1m29s",
+        "peak": "1m33s"
+      }
+    }
+  ],
+  "rbe": [
+    {
+      "cpath_p50": "0s",
+      "cpath_p90": "0s",
+      "ratio": "n/a",
+      "sampled": 90,
+      "set": "OpenXLA ROCm presubmit, XLA job (`single_gpu`)",
+      "wall_p50": "2m25s",
+      "wall_p90": "2m40s"
+    },
+    {
+      "cpath_p50": "6m55s",
+      "cpath_p90": "7m43s",
+      "ratio": "2x",
+      "sampled": 90,
+      "set": "OpenXLA ROCm presubmit, JAX job",
+      "wall_p50": "11m17s",
+      "wall_p90": "18m22s"
+    },
+    {
+      "cpath_p50": "3m37s",
+      "cpath_p90": "6m30s",
+      "ratio": "2x",
+      "sampled": 90,
+      "set": "OpenXLA NV presubmit, XLA T4 job (Google RBE)",
+      "wall_p50": "8m21s",
+      "wall_p90": "14m56s"
+    },
+    {
+      "cpath_p50": "10s",
+      "cpath_p90": "6m46s",
+      "ratio": "12x",
+      "sampled": 78,
+      "set": "JAX ROCm presubmit",
+      "wall_p50": "1m51s",
+      "wall_p90": "8m43s"
+    },
+    {
+      "cpath_p50": "3m56s",
+      "cpath_p90": "5m34s",
+      "ratio": "2x",
+      "sampled": 76,
+      "set": "JAX NV presubmit (Google RBE)",
+      "wall_p50": "8m07s",
+      "wall_p90": "10m41s"
+    }
+  ],
+  "repos": [
+    {
+      "band_hours": [
+        {
+          "commits": "14 / 14",
+          "exec": "15m03s / 18m58s",
+          "hours": "00:00-03:00 (nominal)",
+          "queue": "39s / 9s",
+          "test": "11m54s / 18m08s",
+          "tts": "16m49s / 19m59s"
+        },
+        {
+          "commits": "31 / 32",
+          "exec": "17m54s / 15m17s",
+          "hours": "03:00-06:00 (peak)",
+          "queue": "40s / 15s",
+          "test": "15m29s / 13m49s",
+          "tts": "20m03s / 18m23s"
+        },
+        {
+          "commits": "43 / 42",
+          "exec": "19m00s / 19m47s",
+          "hours": "06:00-09:00 (peak)",
+          "queue": "34s / 1m08s",
+          "test": "17m17s / 19m08s",
+          "tts": "20m25s / 26m47s"
+        },
+        {
+          "commits": "32 / 32",
+          "exec": "16m36s / 16m12s",
+          "hours": "09:00-12:00",
+          "queue": "40s / 16s",
+          "test": "13m15s / 15m54s",
+          "tts": "18m06s / 18m01s"
+        },
+        {
+          "commits": "26 / 26",
+          "exec": "13m47s / 14m55s",
+          "hours": "12:00-15:00",
+          "queue": "41s / 8s",
+          "test": "12m44s / 13m51s",
+          "tts": "14m48s / 17m02s"
+        },
+        {
+          "commits": "11 / 11",
+          "exec": "17m37s / 16m02s",
+          "hours": "15:00-18:00",
+          "queue": "36s / 46s",
+          "test": "13m41s / 15m43s",
+          "tts": "18m50s / 18m06s"
+        },
+        {
+          "commits": "6 / 6",
+          "exec": "17m08s / 14m31s",
+          "hours": "18:00-21:00 (nominal)",
+          "queue": "40s / 6s",
+          "test": "13m52s / 13m57s",
+          "tts": "16m34s / 16m20s"
+        },
+        {
+          "commits": "8 / 8",
+          "exec": "18m03s / 19m20s",
+          "hours": "21:00-24:00 (nominal)",
+          "queue": "41s / 7s",
+          "test": "16m21s / 17m59s",
+          "tts": "19m22s / 20m40s"
+        }
+      ],
+      "band_rows": [
+        {
+          "lane": "ROCm",
+          "metric": "Time to signal (per commit)",
+          "n": "105 / 18",
+          "nominal_p50": {
+            "mark": "win",
+            "text": "13m11s"
+          },
+          "nominal_p90": {
+            "mark": "win",
+            "text": "19m15s"
+          },
+          "peak_p50": {
+            "mark": "win",
+            "text": "12m56s"
+          },
+          "peak_p90": {
+            "mark": "win",
+            "text": "19m56s"
+          }
+        },
+        {
+          "lane": "NV",
+          "metric": "Time to signal (per commit)",
+          "n": "105 / 18",
+          "nominal_p50": "16m50s",
+          "nominal_p90": "24m37s",
+          "peak_p50": "13m08s",
+          "peak_p90": "20m17s"
+        },
+        {
+          "lane": "ROCm",
+          "metric": "Queue wait (every lane job)",
+          "n": "208 / 36",
+          "nominal_p50": "14s",
+          "nominal_p90": "41s",
+          "peak_p50": "13s",
+          "peak_p90": "37s"
+        },
+        {
+          "lane": "NV",
+          "metric": "Queue wait (every lane job)",
+          "n": "212 / 36",
+          "nominal_p50": "6s",
+          "nominal_p90": "6s",
+          "peak_p50": "6s",
+          "peak_p90": "28s"
+        },
+        {
+          "lane": "ROCm",
+          "metric": "Job execution, XLA job",
+          "n": "102 / 17",
+          "nominal_p50": {
+            "mark": "win",
+            "text": "12m21s"
+          },
+          "nominal_p90": {
+            "mark": "win",
+            "text": "17m02s"
+          },
+          "peak_p50": {
+            "mark": "win",
+            "text": "12m03s"
+          },
+          "peak_p90": {
+            "mark": "win",
+            "text": "18m08s"
+          }
+        },
+        {
+          "lane": "NV",
+          "metric": "Job execution, XLA job",
+          "n": "105 / 18",
+          "nominal_p50": "16m44s",
+          "nominal_p90": "24m30s",
+          "peak_p50": "13m01s",
+          "peak_p90": "19m53s"
+        },
+        {
+          "lane": "ROCm",
+          "metric": "Test step, XLA job",
+          "n": "102 / 17",
+          "nominal_p50": {
+            "mark": "win",
+            "text": "9m33s"
+          },
+          "nominal_p90": {
+            "mark": "win",
+            "text": "13m28s"
+          },
+          "peak_p50": {
+            "mark": "win",
+            "text": "8m33s"
+          },
+          "peak_p90": {
+            "mark": "win",
+            "text": "14m33s"
+          }
+        },
+        {
+          "lane": "NV",
+          "metric": "Test step, XLA job",
+          "n": "105 / 18",
+          "nominal_p50": "16m25s",
+          "nominal_p90": "22m42s",
+          "peak_p50": "11m58s",
+          "peak_p90": "19m09s"
+        },
+        {
+          "lane": "ROCm",
+          "metric": "Job execution, JAX job",
+          "n": "101 / 18",
+          "nominal_p50": "11m46s",
+          "nominal_p90": "18m46s",
+          "peak_p50": "11m43s",
+          "peak_p90": "18m43s"
+        },
+        {
+          "lane": "NV",
+          "metric": "Job execution, JAX job",
+          "n": "107 / 18",
+          "nominal_p50": "9m12s",
+          "nominal_p90": "12m07s",
+          "peak_p50": "8m30s",
+          "peak_p90": "11m17s"
+        },
+        {
+          "lane": "ROCm",
+          "metric": "Test step, JAX job",
+          "n": "101 / 18",
+          "nominal_p50": "11m18s",
+          "nominal_p90": "18m19s",
+          "peak_p50": "11m21s",
+          "peak_p90": "18m22s"
+        },
+        {
+          "lane": "NV",
+          "metric": "Test step, JAX job",
+          "n": "107 / 18",
+          "nominal_p50": "8m02s",
+          "nominal_p90": "10m00s",
+          "peak_p50": "7m06s",
+          "peak_p90": "9m46s"
+        }
+      ],
+      "compare": {
+        "comparable": true,
+        "nv": 586,
+        "per_test": {
+          "direction": "faster",
+          "factor": "1.28"
+        },
+        "rocm": 600,
+        "share": "102"
+      },
+      "coverage_clauses": [
+        {
+          "label": "OpenXLA (XLA jobs)",
+          "nv": 586,
+          "per_test": {
+            "direction": "faster",
+            "factor": "1.28"
+          },
+          "rocm": 600,
+          "share": "102"
+        },
+        {
+          "label": "OpenXLA (JAX jobs)",
+          "nv": 154,
+          "per_test": {
+            "direction": "slower",
+            "factor": "1.55"
+          },
+          "rocm": 144,
+          "share": "94"
+        }
+      ],
+      "coverage_rows": [
+        {
+          "family": "OpenXLA (XLA jobs)",
+          "lane": "ROCm",
+          "p50": "11m19s",
+          "per_test": {
+            "mark": "win",
+            "text": "1.13s"
+          },
+          "sampled": 4,
+          "suite": "600 (428 + 172)"
+        },
+        {
+          "family": "OpenXLA (XLA jobs)",
+          "lane": "NV/CUDA",
+          "p50": "14m11s",
+          "per_test": "1.45s",
+          "sampled": 9,
+          "suite": "586"
+        },
+        {
+          "family": "OpenXLA (JAX jobs)",
+          "lane": "ROCm",
+          "p50": "12m49s",
+          "per_test": "5.34s",
+          "sampled": 35,
+          "suite": "144"
+        },
+        {
+          "family": "OpenXLA (JAX jobs)",
+          "lane": "NV/CUDA",
+          "p50": "8m50s",
+          "per_test": "3.44s",
+          "sampled": 30,
+          "suite": "154"
+        }
+      ],
+      "extra_metrics": [],
+      "has_families": true,
+      "jobs_nv": 2,
+      "jobs_rocm": 2,
+      "label": "OpenXLA",
+      "metrics": {
+        "nightly_bazel": {
+          "do": "42m27s  (n=8)",
+          "rbe": "8m00s  (n=16)"
+        },
+        "nightly_pytest": {
+          "do": "100m26s  (n=7)"
+        },
+        "queue_nominal": {
+          "do": "41s  (n=40)",
+          "nv": "6s  (n=40)"
+        },
+        "queue_peak": {
+          "do": "36s  (n=255)",
+          "nv": "22s  (n=258)"
+        },
+        "tts_nominal": {
+          "do": "19m15s  (n=18)",
+          "nv": "24m37s  (n=18)",
+          "rbe": "16m17s  (n=35)"
+        },
+        "tts_peak": {
+          "do": "19m56s  (n=105)",
+          "nv": "20m17s  (n=105)",
+          "rbe": "15m42s  (n=203)"
+        }
+      },
+      "nightly": [],
+      "nv_commits": 171,
+      "phase_lanes": [
+        {
+          "approval": {
+            "max": "-42m39s",
+            "median": "-44m38s",
+            "n": 2,
+            "other": "NV"
+          },
+          "lane": "ROCm",
+          "rerun": 0,
+          "signalled": 171,
+          "superseded": 4,
+          "unsignalled": 59
+        },
+        {
+          "approval": {
+            "max": "-42m39s",
+            "median": "-44m38s",
+            "n": 2,
+            "other": "ROCm"
+          },
+          "lane": "NV",
+          "rerun": 0,
+          "signalled": 171,
+          "superseded": 4,
+          "unsignalled": 59
+        }
+      ],
+      "phase_slowest": [
+        {
+          "family": "XLA jobs (last on 5/18)",
+          "lane_signal": "20m59s",
+          "line_item": "ROCm Time to signal presubmit (DO)",
+          "n": 18,
+          "phases": {
+            "close": "3s",
+            "docker": "10s",
+            "env": "3m20s",
+            "gaps": "3s",
+            "queue": "21s",
+            "setup": "1s",
+            "superseded": "0s",
+            "test": {
+              "mark": "dominant",
+              "text": "15m02s"
+            },
+            "upstream": "16s"
+          },
+          "total": "19m17s"
+        },
+        {
+          "family": "JAX jobs (last on 13/18)",
+          "lane_signal": "20m59s",
+          "line_item": "ROCm Time to signal presubmit (DO)",
+          "n": 18,
+          "phases": {
+            "close": "4s",
+            "docker": "10s",
+            "env": "8s",
+            "gaps": "3s",
+            "queue": "20s",
+            "setup": "1s",
+            "superseded": "0s",
+            "test": {
+              "mark": "dominant",
+              "text": "18m28s"
+            },
+            "upstream": "16s"
+          },
+          "total": "19m31s"
+        },
+        {
+          "family": "XLA jobs (last on 17/18)",
+          "lane_signal": "26m21s",
+          "line_item": "NV Time to signal presubmit (NV)",
+          "n": 18,
+          "phases": {
+            "close": "0s",
+            "docker": "34s",
+            "env": "6s",
+            "gaps": "4s",
+            "queue": "1m06s",
+            "setup": "2s",
+            "superseded": "0s",
+            "test": {
+              "mark": "dominant",
+              "text": "24m18s"
+            },
+            "upstream": "2s"
+          },
+          "total": "26m13s"
+        },
+        {
+          "family": "JAX jobs (last on 1/18)",
+          "lane_signal": "26m21s",
+          "line_item": "NV Time to signal presubmit (NV)",
+          "n": 18,
+          "phases": {
+            "close": "1s",
+            "docker": "1m26s",
+            "env": "12s",
+            "gaps": "4s",
+            "queue": "54s",
+            "setup": "3s",
+            "superseded": "0s",
+            "test": {
+              "mark": "dominant",
+              "text": "10m14s"
+            },
+            "upstream": "2s"
+          },
+          "total": "12m55s"
+        }
+      ],
+      "phase_typical": [
+        {
+          "family": "XLA jobs (last on 18/35)",
+          "lane_signal": "12m42s",
+          "line_item": "ROCm Time to signal presubmit (DO)",
+          "n": 35,
+          "phases": {
+            "close": "3s",
+            "docker": "10s",
+            "env": "3m09s",
+            "gaps": "3s",
+            "queue": "19s",
+            "setup": "1s",
+            "superseded": "0s",
+            "test": {
+              "mark": "dominant",
+              "text": "8m10s"
+            },
+            "upstream": "16s"
+          },
+          "total": "12m12s"
+        },
+        {
+          "family": "JAX jobs (last on 17/35)",
+          "lane_signal": "12m42s",
+          "line_item": "ROCm Time to signal presubmit (DO)",
+          "n": 35,
+          "phases": {
+            "close": "4s",
+            "docker": "9s",
+            "env": "8s",
+            "gaps": "3s",
+            "queue": "17s",
+            "setup": "1s",
+            "superseded": "0s",
+            "test": {
+              "mark": "dominant",
+              "text": "10m50s"
+            },
+            "upstream": "16s"
+          },
+          "total": "11m48s"
+        },
+        {
+          "family": "XLA jobs (last on 34/35)",
+          "lane_signal": "13m05s",
+          "line_item": "NV Time to signal presubmit (NV)",
+          "n": 35,
+          "phases": {
+            "close": "1s",
+            "docker": "29s",
+            "env": "6s",
+            "gaps": "4s",
+            "queue": "9s",
+            "setup": "2s",
+            "superseded": "0s",
+            "test": {
+              "mark": "dominant",
+              "text": "11m58s"
+            },
+            "upstream": "2s"
+          },
+          "total": "12m51s"
+        },
+        {
+          "family": "JAX jobs (last on 1/35)",
+          "lane_signal": "13m05s",
+          "line_item": "NV Time to signal presubmit (NV)",
+          "n": 35,
+          "phases": {
+            "close": "1s",
+            "docker": "56s",
+            "env": "11s",
+            "gaps": "4s",
+            "queue": "19s",
+            "setup": "2s",
+            "superseded": "0s",
+            "test": {
+              "mark": "dominant",
+              "text": "7m35s"
+            },
+            "upstream": "2s"
+          },
+          "total": "9m11s"
+        }
+      ],
+      "repo": "openxla/xla",
+      "rocm_commits": 171,
+      "same_commit": {
+        "largest_gap": [
+          {
+            "nv": "5m47s",
+            "pr": null,
+            "ratio": "3.1x",
+            "rocm": "17m43s",
+            "sha": "74ffca25e2",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "16m50s"
+              },
+              {
+                "phase": "waiting on earlier jobs",
+                "value": "17s"
+              }
+            ]
+          },
+          {
+            "nv": "4m11s",
+            "pr": null,
+            "ratio": "2.7x",
+            "rocm": "11m23s",
+            "sha": "b02909dd50",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "10m35s"
+              },
+              {
+                "phase": "waiting on earlier jobs",
+                "value": "15s"
+              }
+            ]
+          },
+          {
+            "nv": "4m20s",
+            "pr": 54006,
+            "ratio": "2.6x",
+            "rocm": "11m18s",
+            "sha": "746fe09f14",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "10m25s"
+              },
+              {
+                "phase": "waiting on earlier jobs",
+                "value": "15s"
+              }
+            ]
+          },
+          {
+            "nv": "5m46s",
+            "pr": null,
+            "ratio": "2.1x",
+            "rocm": "12m20s",
+            "sha": "9f26fac29d",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "11m25s"
+              },
+              {
+                "phase": "queue for a runner",
+                "value": "17s"
+              }
+            ]
+          },
+          {
+            "nv": "6m36s",
+            "pr": null,
+            "ratio": "2.1x",
+            "rocm": "13m41s",
+            "sha": "07c2ee7efc",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "12m23s"
+              },
+              {
+                "phase": "queue for a runner",
+                "value": "25s"
+              }
+            ]
+          },
+          {
+            "nv": "5m31s",
+            "pr": null,
+            "ratio": "2.0x",
+            "rocm": "11m04s",
+            "sha": "006c1b175a",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "10m13s"
+              },
+              {
+                "phase": "waiting on earlier jobs",
+                "value": "15s"
+              }
+            ]
+          },
+          {
+            "nv": "6m20s",
+            "pr": null,
+            "ratio": "1.9x",
+            "rocm": "12m11s",
+            "sha": "04fbdc2023",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "11m19s"
+              },
+              {
+                "phase": "waiting on earlier jobs",
+                "value": "15s"
+              }
+            ]
+          },
+          {
+            "nv": "6m21s",
+            "pr": null,
+            "ratio": "1.9x",
+            "rocm": "11m59s",
+            "sha": "26a712e5c7",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "11m13s"
+              },
+              {
+                "phase": "waiting on earlier jobs",
+                "value": "15s"
+              }
+            ]
+          },
+          {
+            "nv": "7m44s",
+            "pr": null,
+            "ratio": "1.7x",
+            "rocm": "13m21s",
+            "sha": "72010cdfa9",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "8m39s"
+              },
+              {
+                "phase": "checkout, env, wheels",
+                "value": "3m57s"
+              }
+            ]
+          },
+          {
+            "nv": "6m49s",
+            "pr": null,
+            "ratio": "1.7x",
+            "rocm": "11m32s",
+            "sha": "6acd871daf",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "9m59s"
+              },
+              {
+                "phase": "queue for a runner",
+                "value": "41s"
+              }
+            ]
+          }
+        ],
+        "matched": [
+          {
+            "commits": 161,
+            "job_type": "XLA job",
+            "p50": "8m27s / 12m19s",
+            "p90": "13m41s / 18m51s",
+            "p99": "16m34s / 31m20s",
+            "ratio": "0.62x",
+            "tail": "15m25s / 17m09s"
+          },
+          {
+            "commits": 155,
+            "job_type": "JAX job",
+            "p50": "11m18s / 7m20s",
+            "p90": "18m24s / 10m10s",
+            "p99": "20m43s / 14m51s",
+            "ratio": "1.47x",
+            "tail": "19m17s / 9m44s"
+          }
+        ],
+        "n_both": 161,
+        "n_failed": 9,
+        "outliers": {
+          "nv": {
+            "nv_p50": "25m38s",
+            "other_slow": 5,
+            "other_slow_pct": "28",
+            "prs": 18,
+            "queue": "15s",
+            "ratio": "0.71x",
+            "rocm_p50": "17m30s",
+            "teardown": "3s",
+            "test": "14m39s"
+          },
+          "rocm": {
+            "nv_p50": "18m39s",
+            "other_slow": 5,
+            "other_slow_pct": "29",
+            "prs": 17,
+            "queue": "19s",
+            "ratio": "1.10x",
+            "rocm_p50": "20m26s",
+            "teardown": "3s",
+            "test": "19m02s"
+          }
+        },
+        "ratio": {
+          "faster": 99,
+          "faster_pct": "61",
+          "p10": "0.68x",
+          "p50": "0.94x",
+          "p90": "1.26x",
+          "p99": "2.65x"
+        }
+      },
+      "tail_rows": [
+        {
+          "job_type": "*commit time to signal*",
+          "lane": "ROCm",
+          "n": 171,
+          "p50": "12m50s",
+          "p90": "19m49s",
+          "p95": "20m23s",
+          "p99": "21m53s"
+        },
+        {
+          "job_type": "JAX job",
+          "lane": "ROCm",
+          "n": 165,
+          "p50": "11m36s",
+          "p90": "18m37s",
+          "p95": "19m37s",
+          "p99": "21m12s"
+        },
+        {
+          "job_type": "XLA job",
+          "lane": "ROCm",
+          "n": 171,
+          "p50": "11m38s",
+          "p90": "17m28s",
+          "p95": "18m50s",
+          "p99": "20m15s"
+        },
+        {
+          "job_type": "*commit time to signal*",
+          "lane": "NV",
+          "n": 171,
+          "p50": "13m03s",
+          "p90": "19m59s",
+          "p95": "25m38s",
+          "p99": "31m50s"
+        },
+        {
+          "job_type": "JAX job",
+          "lane": "NV",
+          "n": 171,
+          "p50": "8m30s",
+          "p90": "12m02s",
+          "p95": "13m02s",
+          "p99": "16m37s"
+        },
+        {
+          "job_type": "XLA job",
+          "lane": "NV",
+          "n": 171,
+          "p50": "12m56s",
+          "p90": "19m30s",
+          "p95": "22m34s",
+          "p99": "31m39s"
+        }
+      ],
+      "vs_nv": {
+        "exe50": {
+          "nv": "9m16s",
+          "rocm": "11m37s"
+        },
+        "exe90": {
+          "nv": "17m27s",
+          "rocm": "17m56s"
+        },
+        "q50": {
+          "nv": "6s",
+          "rocm": "13s"
+        },
+        "tts50": {
+          "nv": "13m03s",
+          "rocm": {
+            "mark": "win",
+            "text": "12m50s"
+          }
+        },
+        "tts90": {
+          "nv": "19m59s",
+          "rocm": {
+            "mark": "win",
+            "text": "19m49s"
+          }
+        }
+      }
+    },
+    {
+      "band_hours": [
+        {
+          "commits": "0 / 0",
+          "exec": "n/a / n/a",
+          "hours": "00:00-03:00 (nominal)",
+          "queue": "n/a / n/a",
+          "test": "n/a / n/a",
+          "tts": "n/a / n/a"
+        },
+        {
+          "commits": "7 / 7",
+          "exec": "10m43s / 10m44s",
+          "hours": "03:00-06:00 (peak)",
+          "queue": "42s / 2s",
+          "test": "8m57s / 10m11s",
+          "tts": "11m34s / 11m03s"
+        },
+        {
+          "commits": "24 / 23",
+          "exec": "8m49s / 12m10s",
+          "hours": "06:00-09:00 (peak)",
+          "queue": "19s / 5s",
+          "test": "8m27s / 10m23s",
+          "tts": "9m19s / 13m13s"
+        },
+        {
+          "commits": "4 / 4",
+          "exec": "3m43s / 16m46s",
+          "hours": "09:00-12:00",
+          "queue": "41s / 5s",
+          "test": "2m04s / 15m34s",
+          "tts": "4m27s / 21m24s"
+        },
+        {
+          "commits": "4 / 4",
+          "exec": "10m11s / 11m30s",
+          "hours": "12:00-15:00",
+          "queue": "44s / 5s",
+          "test": "9m48s / 10m57s",
+          "tts": "8m59s / 12m51s"
+        },
+        {
+          "commits": "0 / 0",
+          "exec": "n/a / n/a",
+          "hours": "15:00-18:00",
+          "queue": "n/a / n/a",
+          "test": "n/a / n/a",
+          "tts": "n/a / n/a"
+        },
+        {
+          "commits": "0 / 0",
+          "exec": "n/a / n/a",
+          "hours": "18:00-21:00 (nominal)",
+          "queue": "n/a / n/a",
+          "test": "n/a / n/a",
+          "tts": "n/a / n/a"
+        },
+        {
+          "commits": "0 / 0",
+          "exec": "n/a / n/a",
+          "hours": "21:00-24:00 (nominal)",
+          "queue": "n/a / n/a",
+          "test": "n/a / n/a",
+          "tts": "n/a / n/a"
+        }
+      ],
+      "band_rows": [
+        {
+          "lane": "ROCm",
+          "metric": "Time to signal (per commit)",
+          "n": "33 / 1",
+          "nominal_p50": {
+            "mark": "win",
+            "text": "4m28s"
+          },
+          "nominal_p90": {
+            "mark": "win",
+            "text": "4m28s"
+          },
+          "peak_p50": {
+            "mark": "win",
+            "text": "4m11s"
+          },
+          "peak_p90": {
+            "mark": "win",
+            "text": "10m34s"
+          }
+        },
+        {
+          "lane": "NV",
+          "metric": "Time to signal (per commit)",
+          "n": "32 / 1",
+          "nominal_p50": "25m50s",
+          "nominal_p90": "25m50s",
+          "peak_p50": "10m02s",
+          "peak_p90": "12m58s"
+        },
+        {
+          "lane": "ROCm",
+          "metric": "Queue wait (every lane job)",
+          "n": "99 / 3",
+          "nominal_p50": "41s",
+          "nominal_p90": "41s",
+          "peak_p50": "13s",
+          "peak_p90": "40s"
+        },
+        {
+          "lane": "NV",
+          "metric": "Queue wait (every lane job)",
+          "n": "130 / 4",
+          "nominal_p50": "1s",
+          "nominal_p90": "4s",
+          "peak_p50": "1s",
+          "peak_p90": "5s"
+        },
+        {
+          "lane": "ROCm",
+          "metric": "Job execution, tests, jaxlib from PyPI",
+          "n": "33 / 1",
+          "nominal_p50": {
+            "mark": "win",
+            "text": "3m09s"
+          },
+          "nominal_p90": {
+            "mark": "win",
+            "text": "3m09s"
+          },
+          "peak_p50": {
+            "mark": "win",
+            "text": "1m55s"
+          },
+          "peak_p90": {
+            "mark": "win",
+            "text": "6m56s"
+          }
+        },
+        {
+          "lane": "NV",
+          "metric": "Job execution, tests, jaxlib from PyPI",
+          "n": "32 / 1",
+          "nominal_p50": "12m54s",
+          "nominal_p90": "12m54s",
+          "peak_p50": "9m24s",
+          "peak_p90": "12m56s"
+        },
+        {
+          "lane": "ROCm",
+          "metric": "Test step, tests, jaxlib from PyPI",
+          "n": "33 / 1",
+          "nominal_p50": {
+            "mark": "win",
+            "text": "1m17s"
+          },
+          "nominal_p90": {
+            "mark": "win",
+            "text": "1m17s"
+          },
+          "peak_p50": {
+            "mark": "win",
+            "text": "1m19s"
+          },
+          "peak_p90": {
+            "mark": "win",
+            "text": "6m33s"
+          }
+        },
+        {
+          "lane": "NV",
+          "metric": "Test step, tests, jaxlib from PyPI",
+          "n": "32 / 1",
+          "nominal_p50": "11m39s",
+          "nominal_p90": "11m39s",
+          "peak_p50": "8m22s",
+          "peak_p90": "11m19s"
+        },
+        {
+          "lane": "ROCm",
+          "metric": "Job execution, tests, jaxlib built from source",
+          "n": "33 / 1",
+          "nominal_p50": {
+            "mark": "win",
+            "text": "3m46s"
+          },
+          "nominal_p90": {
+            "mark": "win",
+            "text": "3m46s"
+          },
+          "peak_p50": {
+            "mark": "win",
+            "text": "2m40s"
+          },
+          "peak_p90": {
+            "mark": "win",
+            "text": "10m17s"
+          }
+        },
+        {
+          "lane": "NV",
+          "metric": "Job execution, tests, jaxlib built from source",
+          "n": "32 / 1",
+          "nominal_p50": "25m48s",
+          "nominal_p90": "25m48s",
+          "peak_p50": "8m58s",
+          "peak_p90": "10m46s"
+        },
+        {
+          "lane": "ROCm",
+          "metric": "Test step, tests, jaxlib built from source",
+          "n": "33 / 1",
+          "nominal_p50": {
+            "mark": "win",
+            "text": "1m59s"
+          },
+          "nominal_p90": {
+            "mark": "win",
+            "text": "1m59s"
+          },
+          "peak_p50": {
+            "mark": "win",
+            "text": "2m12s"
+          },
+          "peak_p90": {
+            "mark": "win",
+            "text": "8m59s"
+          }
+        },
+        {
+          "lane": "NV",
+          "metric": "Test step, tests, jaxlib built from source",
+          "n": "32 / 1",
+          "nominal_p50": "24m41s",
+          "nominal_p90": "24m41s",
+          "peak_p50": "6m40s",
+          "peak_p90": "10m02s"
+        }
+      ],
+      "compare": {
+        "comparable": true,
+        "nv": 150,
+        "per_test": {
+          "direction": "faster",
+          "factor": "1.30"
+        },
+        "rocm": 144,
+        "share": "96"
+      },
+      "coverage_clauses": [
+        {
+          "label": "JAX",
+          "nv": 150,
+          "per_test": {
+            "direction": "faster",
+            "factor": "1.30"
+          },
+          "rocm": 144,
+          "share": "96"
+        }
+      ],
+      "coverage_rows": [
+        {
+          "family": "JAX",
+          "lane": "ROCm",
+          "p50": "8m32s",
+          "per_test": {
+            "mark": "win",
+            "text": "3.56s"
+          },
+          "sampled": 10,
+          "suite": "144"
+        },
+        {
+          "family": "JAX",
+          "lane": "NV/CUDA",
+          "p50": "11m34s",
+          "per_test": "4.62s",
+          "sampled": 12,
+          "suite": "150"
+        }
+      ],
+      "extra_metrics": [
+        {
+          "do": "pending: not a GitHub Actions workflow, needs definition (owner: user)",
+          "metric": "Jax-lab complete run (minutes)",
+          "nv": null,
+          "rbe": "n/a"
+        }
+      ],
+      "has_families": false,
+      "jobs_nv": 4,
+      "jobs_rocm": 3,
+      "label": "JAX",
+      "metrics": {
+        "nightly_bazel": {
+          "do": "42m27s  (n=8)",
+          "rbe": "8m00s  (n=16)"
+        },
+        "nightly_pytest": {
+          "do": "100m26s  (n=7)"
+        },
+        "queue_nominal": {
+          "do": "1m11s  (n=13)",
+          "nv": "4s  (n=4)"
+        },
+        "queue_peak": {
+          "do": "59s  (n=169)",
+          "nv": "5s  (n=132)"
+        },
+        "tts_nominal": {
+          "do": "4m28s  (n=1)",
+          "nv": "25m50s  (n=1)",
+          "rbe": "1m54s  (n=3)"
+        },
+        "tts_peak": {
+          "do": "10m34s  (n=33)",
+          "nv": "12m58s  (n=32)",
+          "rbe": "8m25s  (n=99)"
+        }
+      },
+      "nightly": [
+        "wheel_tests_continuous.yml",
+        "wheel_tests_nightly_release.yml"
+      ],
+      "nv_commits": 38,
+      "phase_lanes": [
+        {
+          "approval": null,
+          "lane": "ROCm",
+          "rerun": 0,
+          "signalled": 39,
+          "superseded": 0,
+          "unsignalled": 0
+        },
+        {
+          "approval": null,
+          "lane": "NV",
+          "rerun": 0,
+          "signalled": 38,
+          "superseded": 0,
+          "unsignalled": 1
+        }
+      ],
+      "phase_slowest": [
+        {
+          "family": "all jobs",
+          "lane_signal": {
+            "mark": "pending",
+            "text": "\u2014"
+          },
+          "line_item": "ROCm Time to signal presubmit (DO)",
+          "n": 4,
+          "phases": {
+            "close": "2s",
+            "docker": "1m15s",
+            "env": "6s",
+            "gaps": "4s",
+            "queue": "35s",
+            "setup": "1s",
+            "superseded": "0s",
+            "test": {
+              "mark": "dominant",
+              "text": "9m16s"
+            },
+            "upstream": "1s"
+          },
+          "total": "11m18s"
+        },
+        {
+          "family": "all jobs",
+          "lane_signal": {
+            "mark": "pending",
+            "text": "\u2014"
+          },
+          "line_item": "NV Time to signal presubmit (NV)",
+          "n": 4,
+          "phases": {
+            "close": "6s",
+            "docker": "28s",
+            "env": "7s",
+            "gaps": "3s",
+            "queue": "2s",
+            "setup": "2s",
+            "superseded": "0s",
+            "test": {
+              "mark": "dominant",
+              "text": "16m02s"
+            },
+            "upstream": "1s"
+          },
+          "total": "16m52s"
+        }
+      ],
+      "phase_typical": [
+        {
+          "family": "all jobs",
+          "lane_signal": {
+            "mark": "pending",
+            "text": "\u2014"
+          },
+          "line_item": "ROCm Time to signal presubmit (DO)",
+          "n": 7,
+          "phases": {
+            "close": "1s",
+            "docker": "1m27s",
+            "env": "7s",
+            "gaps": "2s",
+            "queue": "33s",
+            "setup": "1s",
+            "superseded": "0s",
+            "test": {
+              "mark": "dominant",
+              "text": "1m57s"
+            },
+            "upstream": "1s"
+          },
+          "total": "4m09s"
+        },
+        {
+          "family": "all jobs",
+          "lane_signal": {
+            "mark": "pending",
+            "text": "\u2014"
+          },
+          "line_item": "NV Time to signal presubmit (NV)",
+          "n": 8,
+          "phases": {
+            "close": "5s",
+            "docker": "1m03s",
+            "env": "5s",
+            "gaps": "4s",
+            "queue": "2s",
+            "setup": "2s",
+            "superseded": "0s",
+            "test": {
+              "mark": "dominant",
+              "text": "8m46s"
+            },
+            "upstream": "1s"
+          },
+          "total": "10m07s"
+        }
+      ],
+      "repo": "jax-ml/jax",
+      "rocm_commits": 39,
+      "same_commit": {
+        "largest_gap": [
+          {
+            "nv": "10m53s",
+            "pr": 42833,
+            "ratio": "1.1x",
+            "rocm": "11m33s",
+            "sha": "020ab0e08f",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "9m01s"
+              },
+              {
+                "phase": "docker pull + container start",
+                "value": "1m37s"
+              }
+            ]
+          },
+          {
+            "nv": "10m11s",
+            "pr": null,
+            "ratio": "1.0x",
+            "rocm": "10m39s",
+            "sha": "05977c538f",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "8m36s"
+              },
+              {
+                "phase": "docker pull + container start",
+                "value": "1m37s"
+              }
+            ]
+          },
+          {
+            "nv": "10m38s",
+            "pr": 42906,
+            "ratio": "1.0x",
+            "rocm": "11m06s",
+            "sha": "6131b41f08",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "8m35s"
+              },
+              {
+                "phase": "docker pull + container start",
+                "value": "1m37s"
+              }
+            ]
+          },
+          {
+            "nv": "9m55s",
+            "pr": null,
+            "ratio": "1.0x",
+            "rocm": "10m13s",
+            "sha": "a42f547a2d",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "9m36s"
+              },
+              {
+                "phase": "queue for a runner",
+                "value": "18s"
+              }
+            ]
+          },
+          {
+            "nv": "11m17s",
+            "pr": null,
+            "ratio": "1.0x",
+            "rocm": "11m36s",
+            "sha": "dcea7cebe9",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "9m05s"
+              },
+              {
+                "phase": "docker pull + container start",
+                "value": "1m36s"
+              }
+            ]
+          },
+          {
+            "nv": "10m10s",
+            "pr": null,
+            "ratio": "0.9x",
+            "rocm": "9m18s",
+            "sha": "dc9ccbdc4a",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "8m49s"
+              },
+              {
+                "phase": "queue for a runner",
+                "value": "11s"
+              }
+            ]
+          },
+          {
+            "nv": "9m50s",
+            "pr": null,
+            "ratio": "0.9x",
+            "rocm": "8m55s",
+            "sha": "d772731300",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "8m22s"
+              },
+              {
+                "phase": "queue for a runner",
+                "value": "11s"
+              }
+            ]
+          },
+          {
+            "nv": "11m25s",
+            "pr": null,
+            "ratio": "0.8x",
+            "rocm": "9m13s",
+            "sha": "ea13a751eb",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "8m39s"
+              },
+              {
+                "phase": "queue for a runner",
+                "value": "10s"
+              }
+            ]
+          },
+          {
+            "nv": "13m54s",
+            "pr": 42432,
+            "ratio": "0.8x",
+            "rocm": "10m57s",
+            "sha": "6c320597e5",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "10m21s"
+              },
+              {
+                "phase": "queue for a runner",
+                "value": "17s"
+              }
+            ]
+          },
+          {
+            "nv": "12m09s",
+            "pr": null,
+            "ratio": "0.8x",
+            "rocm": "9m20s",
+            "sha": "fd66a9942b",
+            "where": [
+              {
+                "phase": "test execution",
+                "value": "8m49s"
+              },
+              {
+                "phase": "queue for a runner",
+                "value": "11s"
+              }
+            ]
+          }
+        ],
+        "matched": [
+          {
+            "commits": 36,
+            "job_type": "tests, jaxlib from PyPI",
+            "p50": "1m20s / 8m18s",
+            "p90": "5m28s / 11m34s",
+            "p99": "9m03s / 13m20s",
+            "ratio": "0.16x",
+            "tail": "8m00s / 13m02s"
+          },
+          {
+            "commits": 36,
+            "job_type": "tests, jaxlib built from source",
+            "p50": "2m10s / 6m48s",
+            "p90": "9m03s / 10m09s",
+            "p99": "10m05s / 19m50s",
+            "ratio": "0.34x",
+            "tail": "9m34s / 9m36s"
+          }
+        ],
+        "n_both": 36,
+        "n_failed": 2,
+        "outliers": {
+          "nv": {
+            "nv_p50": "13m59s",
+            "other_slow": 1,
+            "other_slow_pct": "25",
+            "prs": 4,
+            "queue": "21s",
+            "ratio": "0.69x",
+            "rocm_p50": "9m30s",
+            "teardown": "3s",
+            "test": "7m33s"
+          },
+          "rocm": {
+            "nv_p50": "11m05s",
+            "other_slow": 1,
+            "other_slow_pct": "25",
+            "prs": 4,
+            "queue": "35s",
+            "ratio": "1.04x",
+            "rocm_p50": "11m20s",
+            "teardown": "4s",
+            "test": "9m16s"
+          }
+        },
+        "ratio": {
+          "faster": 31,
+          "faster_pct": "86",
+          "p10": "0.27x",
+          "p50": "0.40x",
+          "p90": "1.03x",
+          "p99": "1.06x"
+        }
+      },
+      "tail_rows": [
+        {
+          "job_type": "*commit time to signal*",
+          "lane": "ROCm",
+          "n": 39,
+          "p50": "4m12s",
+          "p90": "10m43s",
+          "p95": "11m09s",
+          "p99": "11m35s"
+        },
+        {
+          "job_type": "blocking gate (1 test)",
+          "lane": "ROCm",
+          "n": 39,
+          "p50": "2m30s",
+          "p90": "3m42s",
+          "p95": "4m20s",
+          "p99": "4m39s"
+        },
+        {
+          "job_type": "test, build_jaxlib=false",
+          "lane": "ROCm",
+          "n": 39,
+          "p50": "1m58s",
+          "p90": "7m50s",
+          "p95": "8m21s",
+          "p99": "9m24s"
+        },
+        {
+          "job_type": "test, build_jaxlib=wheel",
+          "lane": "ROCm",
+          "n": 39,
+          "p50": "3m32s",
+          "p90": "10m22s",
+          "p95": "10m40s",
+          "p99": "10m54s"
+        },
+        {
+          "job_type": "*commit time to signal*",
+          "lane": "NV",
+          "n": 38,
+          "p50": "10m10s",
+          "p90": "13m23s",
+          "p95": "13m56s",
+          "p99": "21m29s"
+        },
+        {
+          "job_type": "build wheels",
+          "lane": "NV",
+          "n": 76,
+          "p50": "4m14s",
+          "p90": "6m26s",
+          "p95": "7m10s",
+          "p99": "12m46s"
+        },
+        {
+          "job_type": "test, build_jaxlib=false",
+          "lane": "NV",
+          "n": 38,
+          "p50": "9m24s",
+          "p90": "13m04s",
+          "p95": "13m38s",
+          "p99": "13m57s"
+        },
+        {
+          "job_type": "test, build_jaxlib=true",
+          "lane": "NV",
+          "n": 38,
+          "p50": "9m17s",
+          "p90": "10m55s",
+          "p95": "11m30s",
+          "p99": "20m46s"
+        }
+      ],
+      "vs_nv": {
+        "exe50": {
+          "nv": "6m50s",
+          "rocm": {
+            "mark": "win",
+            "text": "2m37s"
+          }
+        },
+        "exe90": {
+          "nv": "10m40s",
+          "rocm": {
+            "mark": "win",
+            "text": "8m51s"
+          }
+        },
+        "q50": {
+          "nv": "1s",
+          "rocm": "14s"
+        },
+        "tts50": {
+          "nv": "10m10s",
+          "rocm": {
+            "mark": "win",
+            "text": "4m12s"
+          }
+        },
+        "tts90": {
+          "nv": "13m23s",
+          "rocm": {
+            "mark": "win",
+            "text": "10m43s"
+          }
+        }
+      }
+    }
+  ],
+  "scale_sets": [
+    {
+      "gpus": "1",
+      "jobs": 414,
+      "label": "amd-do-linux-xla-gpu-gfx950-dpx-1",
+      "max": "1m24s",
+      "p50": "12s",
+      "p90": "39s",
+      "p99": "46s"
+    },
+    {
+      "gpus": "1",
+      "jobs": 169,
+      "label": "amd-do-linux-jax-bzl-gpu-gfx950-1",
+      "max": "1m13s",
+      "p50": "15s",
+      "p90": "43s",
+      "p99": "1m00s"
+    },
+    {
+      "gpus": "0 (CPU)",
+      "jobs": 50,
+      "label": "amd-do-linux.jax.cpu",
+      "max": "1m18s",
+      "p50": "56s",
+      "p90": "1m04s",
+      "p99": "1m12s"
+    },
+    {
+      "gpus": "8",
+      "jobs": 8,
+      "label": "amd-do-linux.jax.gpu.gfx950.8",
+      "max": "52s",
+      "p50": "26s",
+      "p90": "44s",
+      "p99": "51s"
+    },
+    {
+      "gpus": "4",
+      "jobs": 8,
+      "label": "amd-do-linux.jax.gpu.gfx950.4",
+      "max": "40s",
+      "p50": "24s",
+      "p90": "39s",
+      "p99": "40s"
+    },
+    {
+      "gpus": "1",
+      "jobs": 8,
+      "label": "amd-do-linux.jax.gpu.gfx950.1",
+      "max": "1m34s",
+      "p50": "1m29s",
+      "p90": "1m32s",
+      "p99": "1m34s"
+    }
+  ],
+  "shared_peak_hours": 8,
+  "span": "1 day",
+  "swing": "43.0",
+  "teardown": [
+    {
+      "jobs": 337,
+      "label": "amd-do-linux-xla-gpu-gfx950-dpx-1",
+      "over": 0,
+      "p50": "3s",
+      "p90": "4s",
+      "p99": "5s",
+      "worst": "6s"
+    },
+    {
+      "jobs": 169,
+      "label": "amd-do-linux-jax-bzl-gpu-gfx950-1",
+      "over": 0,
+      "p50": "3s",
+      "p90": "4s",
+      "p99": "5s",
+      "worst": "5s"
+    },
+    {
+      "jobs": 50,
+      "label": "amd-do-linux.jax.cpu",
+      "over": 0,
+      "p50": "4s",
+      "p90": "6s",
+      "p99": "12s",
+      "worst": "18s"
+    },
+    {
+      "jobs": 7,
+      "label": "amd-do-linux.jax.gpu.gfx950.8",
+      "over": 0,
+      "p50": "3s",
+      "p90": "4s",
+      "p99": "4s",
+      "worst": "4s"
+    },
+    {
+      "jobs": 7,
+      "label": "amd-do-linux.jax.gpu.gfx950.4",
+      "over": 0,
+      "p50": "4s",
+      "p90": "4s",
+      "p99": "5s",
+      "worst": "5s"
+    },
+    {
+      "jobs": 7,
+      "label": "amd-do-linux.jax.gpu.gfx950.1",
+      "over": 0,
+      "p50": "1s",
+      "p90": "2s",
+      "p99": "2s",
+      "worst": "2s"
+    }
+  ],
+  "window": "2026-11-26 03:48 to 2026-11-27 03:48 UTC"
+}
