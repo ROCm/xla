@@ -67,7 +67,7 @@ jobs:
         --config=rocm_ci_hermetic
         --config=rocm_rbe_dev
         --remote_upload_local_results=false
-        --repo_env=GLOBAL_SYMBOLS_TO_VERSION=""
+        --repo_env=GLOBAL_SYMBOLS_TO_VERSION=
         --@rules_ml_toolchain//common:dynamic_sanitizer_runtime
         --local_test_jobs=8
         --strategy=TestRunner=local
