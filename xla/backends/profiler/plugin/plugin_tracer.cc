@@ -178,6 +178,8 @@ absl::Status PluginTracer::CollectData(XSpace* space) {
       XPlane* plane = space->add_planes();
       plane->Swap(&tpu_plane);
     }
+    space->mutable_errors()->MergeFrom(xspace.errors());
+    space->mutable_warnings()->MergeFrom(xspace.warnings());
   }
   return absl::OkStatus();
 }
@@ -259,6 +261,8 @@ absl::Status PluginTracer::Serialize(std::any data,
         tensorflow::profiler::XPlane* plane = space->add_planes();
         plane->Swap(&tpu_plane);
       }
+      space->mutable_errors()->MergeFrom(plugin_space.errors());
+      space->mutable_warnings()->MergeFrom(plugin_space.warnings());
     } else {
       return absl::InternalError(
           "Failed to parse XSpace from plugin serialized bytes");
