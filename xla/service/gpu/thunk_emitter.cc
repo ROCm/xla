@@ -1673,29 +1673,33 @@ Future<ThunkSequence> ThunkEmitter::EmitTritonTopK(
       ir_emitter_context_->gpu_device_info();
   ABSL_ASSIGN_OR_RETURN(TopKKernelSpec spec, GetTopKKernelSpec(*instr));
   ABSL_RETURN_IF_ERROR(CheckTopKKernelLimits(spec));
+  // TopkSpecializer sized the scratch output for the chunks it chose, so the
+  // chunks follow the scratch.
+  const Shape& shape = instr->shape();
+  int64_t scratch_elements = 0;
+  if (shape.tuple_shapes().size() == 3 &&
+      shape.tuple_shapes(2).element_type() == U64 &&
+      shape.tuple_shapes(2).dimensions().size() == 1 &&
+      shape.tuple_shapes(2).dimensions(0) > 0) {
+    scratch_elements = shape.tuple_shapes(2).dimensions(0);
+  } else if (shape.tuple_shapes().size() != 2) {
+    return absl::InternalError(absl::StrCat(
+        "Triton TopK ", instr->name(),
+        " needs (values, indices) and, for chunked rows, a non-empty u64 "
+        "scratch output, but has shape ",
+        shape.ToString()));
+  }
   std::optional<TopKKernelConfig> config =
-      GetTopKKernelConfig(spec, gpu_device_info);
+      GetTopKKernelConfigForScratch(spec, scratch_elements, gpu_device_info);
   if (!config.has_value()) {
     return absl::InternalError(absl::StrCat(
-        "No Triton TopK kernel config for ", spec.ToString(), " on ",
-        gpu_device_info.name(), "; TopkSpecializer should not have routed ",
-        instr->name(), " to Triton."));
+        "No Triton TopK kernel config for ", spec.ToString(), " with shape ",
+        shape.ToString(), " on ", gpu_device_info.name(),
+        "; TopkSpecializer should not have routed ", instr->name(),
+        " to Triton."));
   }
   VLOG(1) << "Emitting Triton TopK for " << instr->name() << ": "
           << spec.ToString() << ", " << config->ToString();
-
-  const int64_t scratch_elements = GetTopKScratchElements(spec, *config);
-  const int64_t num_outputs = instr->shape().tuple_shapes().size();
-  if (scratch_elements == 0
-          ? num_outputs != 2
-          : num_outputs != 3 ||
-                instr->shape().tuple_shapes(2) !=
-                    ShapeUtil::MakeShape(U64, {scratch_elements})) {
-    return absl::InternalError(absl::StrCat(
-        "Triton TopK ", instr->name(), " with ", config->ToString(),
-        " needs a u64[", scratch_elements, "] scratch output only for ",
-        "chunked rows, but has shape ", instr->shape().ToString()));
-  }
 
   ABSL_ASSIGN_OR_RETURN(emitters::KernelArguments kernel_arguments,
                         emitters::KernelArguments::Create(

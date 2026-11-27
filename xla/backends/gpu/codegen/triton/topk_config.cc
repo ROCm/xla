@@ -93,6 +93,54 @@ int64_t NextPowerOfTwo(int64_t x) {
   return static_cast<int64_t>(absl::bit_ceil(static_cast<uint64_t>(x)));
 }
 
+bool IsMi350(const se::DeviceDescription& device) {
+  const se::RocmComputeCapability* rocm =
+      device.gpu_compute_capability().rocm_compute_capability();
+  return rocm != nullptr && rocm->gfx9_mi350();
+}
+
+// MI350 (gfx950): the chunk length of rows too long for one program, measured
+// with one chunk per program on random data for rows of 2^15 to 2^22
+// elements, batches of 1 to 1024 and k of 1 to 128. Each chunk leaves k
+// candidates, which a merge program per row selects from.
+int64_t GetChunkLengthOnMi350(const TopKKernelSpec& spec,
+                              const se::DeviceDescription& device) {
+  constexpr int64_t kMaxChunk = 16384;
+  constexpr int64_t kTargetMergeKeys = 4096;
+  const int64_t block_k = NextPowerOfTwo(spec.k);
+  // The longest row that the bitonic selection takes (see WithSelection).
+  const int64_t max_bitonic_n = 64 * block_k;
+  if (block_k >= 32) {
+    // The merge is fastest with rows of about 4096 candidates, as long as the
+    // chunks keep the bitonic selection.
+    const int64_t chunk = std::clamp(
+        NextPowerOfTwo(CeilOfRatio(spec.n * spec.k, kTargetMergeKeys)),
+        int64_t{2048}, max_bitonic_n);
+    // With few rows, a merge past the bitonic selection takes most of the
+    // time: chunks of 16384 when its rows would fill a program, otherwise the
+    // chunks from 4096 up.
+    const int64_t merge_n = NextPowerOfTwo(CeilOfRatio(spec.n, chunk) * spec.k);
+    if (spec.batch * spec.n <= (int64_t{1} << 23) && merge_n > max_bitonic_n) {
+      return merge_n >= kMaxChunk ? kMaxChunk : kTargetKeysPerProgram;
+    }
+    return chunk;
+  }
+  // Below k = 8 the merge is too short to be worth shrinking.
+  if (spec.k < 8) {
+    return kTargetKeysPerProgram;
+  }
+  // Longer chunks shrink the merge as long as the chunk programs fill the
+  // device. Rows that are not a multiple of the chunk are slower with long
+  // chunks.
+  int64_t chunk = kMaxChunk;
+  while (chunk > kTargetKeysPerProgram &&
+         (spec.batch * CeilOfRatio(spec.n, chunk) < device.core_count() ||
+          spec.n % chunk != 0)) {
+    chunk /= 2;
+  }
+  return chunk;
+}
+
 }  // namespace
 
 std::string TopKKernelSpec::ToString() const {
@@ -184,9 +232,11 @@ absl::Status CheckTopKKernelLimits(const TopKKernelSpec& spec) {
 namespace {
 
 // The configuration of a kernel over `num_rows` rows of `block_n` positions,
-// or nullopt if a row does not fit one program on `device`.
+// with programs of about `target_keys_per_program` keys, or nullopt if a row
+// does not fit one program on `device`.
 std::optional<TopKKernelConfig> GetBlockConfig(
-    int64_t num_rows, int64_t block_n, const se::DeviceDescription& device) {
+    int64_t num_rows, int64_t block_n, const se::DeviceDescription& device,
+    int64_t target_keys_per_program = kTargetKeysPerProgram) {
   const int64_t wave_size = device.threads_per_warp();
   if (wave_size <= 0) {
     return std::nullopt;
@@ -199,7 +249,7 @@ std::optional<TopKKernelConfig> GetBlockConfig(
 
   TopKKernelConfig config;
   config.block_n = block_n;
-  config.rows_per_program = std::clamp(kTargetKeysPerProgram / config.block_n,
+  config.rows_per_program = std::clamp(target_keys_per_program / config.block_n,
                                        int64_t{1}, NextPowerOfTwo(num_rows));
   const int64_t keys_per_program = config.rows_per_program * config.block_n;
   config.num_warps =
@@ -237,6 +287,24 @@ TopKKernelConfig WithSelection(int64_t k, TopKKernelConfig config) {
   return config;
 }
 
+// The kChunk configuration of `spec` with one chunk of `chunk` elements per
+// program, or nullopt if it or its merge step does not fit `device`.
+std::optional<TopKKernelConfig> GetChunkConfig(
+    const TopKKernelSpec& spec, int64_t chunk,
+    const se::DeviceDescription& device) {
+  const int64_t num_chunks = CeilOfRatio(spec.n, chunk);
+  std::optional<TopKKernelConfig> config =
+      GetBlockConfig(spec.batch * num_chunks, chunk, device, chunk);
+  if (!config.has_value()) {
+    return std::nullopt;
+  }
+  config->num_chunks = num_chunks;
+  if (!GetTopKMergeConfig(spec, *config, device).has_value()) {
+    return std::nullopt;
+  }
+  return WithSelection(spec.k, *config);
+}
+
 }  // namespace
 
 std::optional<TopKKernelConfig> GetTopKKernelConfig(
@@ -246,18 +314,22 @@ std::optional<TopKKernelConfig> GetTopKKernelConfig(
           GetBlockConfig(spec.batch, block_n, device)) {
     return WithSelection(spec.k, *single);
   }
-  // Rows too long for one program are split into chunks. Longer chunks leave
-  // fewer candidates for the merge step, whose row must fit one program.
-  for (int64_t chunk = kTargetKeysPerProgram; chunk < block_n; chunk *= 2) {
-    const int64_t num_chunks = CeilOfRatio(spec.n, chunk);
-    std::optional<TopKKernelConfig> config =
-        GetBlockConfig(spec.batch * num_chunks, chunk, device);
-    if (!config.has_value()) {
-      continue;
+  // Rows too long for one program are split into chunks.
+  if (IsMi350(device)) {
+    const int64_t chunk = GetChunkLengthOnMi350(spec, device);
+    if (chunk < block_n) {
+      if (std::optional<TopKKernelConfig> config =
+              GetChunkConfig(spec, chunk, device)) {
+        return config;
+      }
     }
-    config->num_chunks = num_chunks;
-    if (GetTopKMergeConfig(spec, *config, device).has_value()) {
-      return WithSelection(spec.k, *config);
+  }
+  // Longer chunks leave fewer candidates for the merge step, whose row must
+  // fit one program.
+  for (int64_t chunk = kTargetKeysPerProgram; chunk < block_n; chunk *= 2) {
+    if (std::optional<TopKKernelConfig> config =
+            GetChunkConfig(spec, chunk, device)) {
+      return config;
     }
   }
   return std::nullopt;
@@ -289,12 +361,38 @@ int64_t GetTopKScratchElements(const TopKKernelSpec& spec,
   return config.num_chunks > 1 ? spec.batch * config.num_chunks * spec.k : 0;
 }
 
+std::optional<TopKKernelConfig> GetTopKKernelConfigForScratch(
+    const TopKKernelSpec& spec, int64_t scratch_elements,
+    const se::DeviceDescription& device) {
+  if (scratch_elements == 0) {
+    std::optional<TopKKernelConfig> single =
+        GetBlockConfig(spec.batch, NextPowerOfTwo(spec.n), device);
+    if (!single.has_value()) {
+      return std::nullopt;
+    }
+    return WithSelection(spec.k, *single);
+  }
+  if (scratch_elements % (spec.batch * spec.k) != 0) {
+    return std::nullopt;
+  }
+  const int64_t num_chunks = scratch_elements / (spec.batch * spec.k);
+  if (num_chunks <= 1) {
+    return std::nullopt;
+  }
+  // Chunk lengths are powers of two, and only one of them splits a row into
+  // `num_chunks` chunks.
+  const int64_t chunk = NextPowerOfTwo(CeilOfRatio(spec.n, num_chunks));
+  // Each chunk keeps its k largest keys.
+  if (CeilOfRatio(spec.n, chunk) != num_chunks ||
+      chunk < NextPowerOfTwo(spec.k)) {
+    return std::nullopt;
+  }
+  return GetChunkConfig(spec, chunk, device);
+}
+
 bool IsTritonTopKFaster(const TopKKernelSpec& spec,
                         const se::DeviceDescription& device) {
-  const se::RocmComputeCapability* rocm =
-      device.gpu_compute_capability().rocm_compute_capability();
-  return rocm != nullptr && rocm->gfx9_mi350() &&
-         IsTritonTopKFasterOnMi350(spec);
+  return IsMi350(device) && IsTritonTopKFasterOnMi350(spec);
 }
 
 bool IsTritonTopK(const HloCustomCallInstruction& topk) {

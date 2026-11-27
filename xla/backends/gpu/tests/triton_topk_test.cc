@@ -167,6 +167,15 @@ class TritonTopKTest : public HloPjRtGpuTestBase {
     return executable;
   }
 
+  // Compiles `hlo` as an optimized module, without the HLO passes.
+  absl::StatusOr<std::unique_ptr<OpaqueExecutable>> CompileOptimized(
+      absl::string_view hlo) {
+    ABSL_ASSIGN_OR_RETURN(
+        std::unique_ptr<HloModule> module,
+        ParseAndReturnVerifiedModule(hlo, GetModuleConfigForTest()));
+    return CreateExecutable(std::move(module), /*run_hlo_passes=*/false);
+  }
+
   absl::StatusOr<Literal> Run(OpaqueExecutable* executable,
                               absl::Span<const Literal* const> arguments) {
     return test_runner().ExecuteWithExecutable(executable, arguments);
@@ -279,8 +288,9 @@ struct GridCase {
 };
 
 std::vector<GridCase> GridCases() {
-  // Rows longer than 16384 are split into chunks: a partial tail chunk,
-  // a tail of one element, 16 chunks, and chunks grown to 8192 for k = 128.
+  // Rows longer than 16384 are split into chunks. On MI350: a partial tail
+  // chunk, a tail of one element, 16 or 32 chunks, and chunks grown to 16384
+  // for k = 128.
   const std::vector<std::pair<int64_t, int64_t>> batch_and_n = {
       {0, 7},     {0, 1000},  {0, 16384},  {3, 64},   {129, 33},
       {17, 1024}, {5, 4096},  {2, 16384},  {1000, 8}, {0, 20000},
@@ -298,7 +308,7 @@ std::vector<GridCase> GridCases() {
     // bitonic selections over 8192 keys in one program and in a merge.
     cases.push_back({type, {2, 1 << 24, 16}});
     cases.push_back({type, {2, 8192, 128}});
-    cases.push_back({type, {1, 1 << 18, 128}});
+    cases.push_back({type, {1, 1 << 19, 128}});
     // No kernel config fits, so the forced TopK keeps the default path.
     cases.push_back({type, {2, 1 << 24, 128}});
   }
@@ -525,6 +535,57 @@ INSTANTIATE_TEST_SUITE_P(TritonTopKCommandBuffer, TritonTopKCommandBufferTest,
                                                info.param.n, "_k",
                                                info.param.k);
                          });
+
+// ---- Optimized HLO with a Triton TopK custom call --------------------------
+
+// A stable f32 TopK as TopkSpecializer leaves it for the Triton kernels, with
+// `scratch` as a third output ("" for none).
+std::string TritonTopKCustomCallHlo(const TopKShape& shape,
+                                    absl::string_view scratch) {
+  return absl::Substitute(R"hlo(
+    HloModule triton_topk
+    ENTRY main {
+      x = f32[$0,$1] parameter(0)
+      t = (f32[$0,$2], s32[$0,$2]$3) custom-call(x),
+          custom_call_target="__gpu$$TopK", api_version=API_VERSION_TYPED_FFI,
+          backend_config={is_stable = true, order = "TOTAL", impl = "triton"}
+      v = f32[$0,$2] get-tuple-element(t), index=0
+      i = s32[$0,$2] get-tuple-element(t), index=1
+      ROOT r = (f32[$0,$2], s32[$0,$2]) tuple(v, i)
+    })hlo",
+                          shape.batch, shape.n, shape.k,
+                          scratch.empty() ? "" : absl::StrCat(", ", scratch));
+}
+
+// The kernels take the chunks that the scratch output was sized for, here 10
+// chunks of 2048 per row, whatever GetTopKKernelConfig chooses now.
+TEST_F(TritonTopKTest, OptimizedHloKeepsTheChunksOfItsScratch) {
+  const TopKShape shape{2, 20000, 16};
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<OpaqueExecutable> triton,
+      CompileOptimized(TritonTopKCustomCallHlo(
+          shape, absl::StrCat("u64[", shape.batch * 10 * shape.k, "]"))));
+  const std::string hlo = TopKHlo(F32, shape, "TOTAL", /*stable=*/true);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> default_path,
+                       Compile(hlo, ConfigWithTritonTopK(false)));
+  ASSERT_OK_AND_ASSIGN(std::vector<Literal> args, FakeArguments(hlo));
+  ASSERT_OK_AND_ASSIGN(Literal expected,
+                       Run(default_path.get(), Pointers(args)));
+  ASSERT_OK_AND_ASSIGN(Literal actual, Run(triton.get(), Pointers(args)));
+  EXPECT_TRUE(LiteralTestUtil::Equal(expected, actual));
+}
+
+// A row that fits one program has no scratch output; an empty one is rejected
+// rather than passed to the single kernel.
+TEST_F(TritonTopKTest, OptimizedHloWithAnEmptyScratchIsRejected) {
+  const TopKShape shape{8, 1000, 6};
+  ASSERT_OK(CompileOptimized(TritonTopKCustomCallHlo(shape, "")).status());
+  absl::StatusOr<std::unique_ptr<OpaqueExecutable>> empty_scratch =
+      CompileOptimized(TritonTopKCustomCallHlo(shape, "u64[0]"));
+  ASSERT_FALSE(empty_scratch.ok());
+  EXPECT_THAT(empty_scratch.status().message(),
+              ::testing::HasSubstr("non-empty u64 scratch output"));
+}
 
 // ---- Special-value inputs --------------------------------------------------
 

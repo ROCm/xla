@@ -133,7 +133,7 @@ TEST(TopKKernelConfigTest, RowLimitDependsOnTheWaveSize) {
                               : std::nullopt;
   };
   EXPECT_THAT(num_chunks(Spec(8, 16384, 64), mi350), Optional(1));
-  EXPECT_THAT(num_chunks(Spec(8, 32768, 64), mi350), Optional(8));
+  EXPECT_THAT(num_chunks(Spec(8, 32768, 64), mi350), Optional(16));
   EXPECT_THAT(num_chunks(Spec(8, 8192, 64), rx7900), Optional(1));
   EXPECT_THAT(num_chunks(Spec(8, 16384, 64), rx7900), Optional(4));
 }
@@ -182,14 +182,82 @@ TEST(TopKKernelConfigTest, LongRowsAreSplitIntoChunks) {
   EXPECT_EQ(merge_config->num_programs, 1);
 }
 
+TEST(TopKKernelConfigTest, Mi350ChunksOfLargeKLeaveAbout4096Candidates) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  auto expect_chunks = [&](const TopKKernelSpec& spec, int64_t block_n,
+                           int64_t merge_block_n) {
+    SCOPED_TRACE(spec.ToString());
+    std::optional<TopKKernelConfig> config = GetTopKKernelConfig(spec, mi350);
+    ASSERT_TRUE(config.has_value());
+    EXPECT_EQ(config->block_n, block_n);
+    EXPECT_EQ(config->rows_per_program, 1);
+    std::optional<TopKKernelConfig> merge_config =
+        GetTopKMergeConfig(spec, *config, mi350);
+    ASSERT_TRUE(merge_config.has_value());
+    EXPECT_EQ(merge_config->block_n, merge_block_n);
+  };
+  expect_chunks(Spec(16, 1 << 17, 128), 4096, 4096);
+  expect_chunks(Spec(16, 1 << 18, 128), 8192, 4096);
+  // Chunks of 2048 at least, one per program.
+  expect_chunks(Spec(8, 1 << 15, 128), 2048, 2048);
+  // Chunks longer than 64 x block_k would select by k rounds, so the merge
+  // grows.
+  expect_chunks(Spec(16, 1 << 20, 128), 8192, 16384);
+  expect_chunks(Spec(16, 1 << 20, 64), 4096, 16384);
+  // With few rows, the merge keeps the bitonic selection instead, or the
+  // chunks start from 4096 if the merge would not fill a program.
+  expect_chunks(Spec(1, 1 << 20, 128), 16384, 8192);
+  expect_chunks(Spec(8, 1 << 20, 64), 16384, 4096);
+  expect_chunks(Spec(1, 1 << 19, 40), 4096, 8192);
+}
+
+TEST(TopKKernelConfigTest, Mi350ChunksOfSmallKFillTheDevice) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  ASSERT_EQ(mi350.core_count(), 256);
+  auto chunk = [&](const TopKKernelSpec& spec) {
+    std::optional<TopKKernelConfig> config = GetTopKKernelConfig(spec, mi350);
+    EXPECT_TRUE(config.has_value());
+    return config.has_value() ? config->block_n : 0;
+  };
+  // 512 chunk programs of 16384.
+  EXPECT_EQ(chunk(Spec(64, 1 << 17, 8)), 16384);
+  EXPECT_EQ(chunk(Spec(256, 1 << 15, 16)), 16384);
+  // Too few rows for longer chunks than 4096.
+  EXPECT_EQ(chunk(Spec(16, 1 << 15, 8)), 4096);
+  EXPECT_EQ(chunk(Spec(1, 1 << 20, 16)), 4096);
+  // Rows that are not a multiple of the longer chunks.
+  EXPECT_EQ(chunk(Spec(64, 262145, 16)), 4096);
+  // Below k = 8.
+  EXPECT_EQ(chunk(Spec(64, 1 << 17, 4)), 4096);
+}
+
+TEST(TopKKernelConfigTest, Mi350ChunksGrowWhenTheMergeDoesNotFit) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  // 1024 chunks of 4096 would leave 65536 candidates of k = 64.
+  std::optional<TopKKernelConfig> config =
+      GetTopKKernelConfig(Spec(4, 1 << 22, 64), mi350);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_EQ(config->block_n, 16384);
+  EXPECT_EQ(config->num_chunks, 256);
+}
+
+TEST(TopKKernelConfigTest, OtherDevicesTakeChunksFrom4096) {
+  std::optional<TopKKernelConfig> config = GetTopKKernelConfig(
+      Spec(64, 1 << 17, 8), TestGpuDeviceInfo::AMDMI300DeviceInfo());
+  ASSERT_TRUE(config.has_value());
+  EXPECT_EQ(config->block_n, 4096);
+  EXPECT_EQ(config->num_chunks, 32);
+}
+
 TEST(TopKKernelConfigTest, ChunksGrowUntilTheMergeFits) {
   se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
-  // 4096 chunks of 4096 leave 32768 candidates, more than one program takes.
-  std::optional<TopKKernelConfig> config =
-      GetTopKKernelConfig(Spec(1, 1 << 24, 8), mi350);
+  // 2048 chunks of 4096 leave 16384 candidates, more than an MI300 program
+  // takes.
+  std::optional<TopKKernelConfig> config = GetTopKKernelConfig(
+      Spec(1, 1 << 23, 8), TestGpuDeviceInfo::AMDMI300DeviceInfo());
   ASSERT_TRUE(config.has_value());
   EXPECT_EQ(config->block_n, 8192);
-  EXPECT_EQ(config->num_chunks, 2048);
+  EXPECT_EQ(config->num_chunks, 1024);
   // Even the longest chunk leaves too many candidates of k = 128.
   EXPECT_FALSE(GetTopKKernelConfig(Spec(1, 1 << 24, 128), mi350).has_value());
   EXPECT_FALSE(GetTopKKernelConfig(Spec(2, 1 << 24, 128), mi350).has_value());
@@ -209,6 +277,46 @@ TEST(TopKKernelConfigTest, SingleKernelHasNoMergeOrScratch) {
   EXPECT_EQ(config->num_chunks, 1);
   EXPECT_EQ(GetTopKScratchElements(spec, *config), 0);
   EXPECT_FALSE(GetTopKMergeConfig(spec, *config, mi350).has_value());
+}
+
+TEST(TopKKernelConfigTest, ScratchKeepsTheChunksItWasSizedFor) {
+  se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  for (const TopKKernelSpec& spec :
+       {Spec(8, 16384, 64), Spec(8, 32768, 64), Spec(64, 262145, 16),
+        Spec(1, 1 << 20, 128), Spec(4, 1 << 22, 64)}) {
+    SCOPED_TRACE(spec.ToString());
+    std::optional<TopKKernelConfig> config = GetTopKKernelConfig(spec, mi350);
+    ASSERT_TRUE(config.has_value());
+    std::optional<TopKKernelConfig> from_scratch =
+        GetTopKKernelConfigForScratch(
+            spec, GetTopKScratchElements(spec, *config), mi350);
+    ASSERT_TRUE(from_scratch.has_value());
+    EXPECT_EQ(from_scratch->block_n, config->block_n);
+    EXPECT_EQ(from_scratch->num_chunks, config->num_chunks);
+    EXPECT_EQ(from_scratch->rows_per_program, config->rows_per_program);
+    EXPECT_EQ(from_scratch->num_warps, config->num_warps);
+    EXPECT_EQ(from_scratch->selection, config->selection);
+  }
+  // A module compiled for 8 chunks of 4096 keeps them.
+  const TopKKernelSpec spec = Spec(8, 32768, 64);
+  std::optional<TopKKernelConfig> config =
+      GetTopKKernelConfigForScratch(spec, 8 * 8 * 64, mi350);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_EQ(config->block_n, 4096);
+  EXPECT_EQ(config->num_chunks, 8);
+  // No chunk length splits a row of 32768 into 3 chunks.
+  EXPECT_FALSE(
+      GetTopKKernelConfigForScratch(spec, 8 * 3 * 64, mi350).has_value());
+  EXPECT_FALSE(
+      GetTopKKernelConfigForScratch(spec, 8 * 8 * 64 + 1, mi350).has_value());
+  // A row of 32768 needs chunks.
+  EXPECT_FALSE(GetTopKKernelConfigForScratch(spec, 0, mi350).has_value());
+  // Chunks hold at least k keys: 16 chunks of 64 for k = 64, but not 32 of 32.
+  const TopKKernelSpec short_row = Spec(1, 1024, 64);
+  EXPECT_TRUE(
+      GetTopKKernelConfigForScratch(short_row, 16 * 64, mi350).has_value());
+  EXPECT_FALSE(
+      GetTopKKernelConfigForScratch(short_row, 32 * 64, mi350).has_value());
 }
 
 TEST(TopKKernelConfigTest, SelectionDependsOnKAndTheRowLength) {

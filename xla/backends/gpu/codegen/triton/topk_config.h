@@ -101,10 +101,12 @@ absl::StatusOr<TopKKernelSpec> GetTopKKernelSpec(
 absl::Status CheckTopKKernelLimits(const TopKKernelSpec& spec);
 
 // Picks the configuration of the first kernel for `spec` on `device`: kSingle
-// if a row fits one program, otherwise kChunk (`num_chunks` > 1) with a merge
-// step that fits one program per row. Returns nullopt if neither fits the
-// device. Register use is an estimate and LDS use an upper bound; the compiled
-// kernels are checked again by the emitter.
+// if a row fits one program, otherwise kChunk (`num_chunks` > 1, one chunk per
+// program) with a merge step that fits one program per row. The chunk length
+// follows measurements on MI350; other devices take the shortest chunk from
+// 4096 up whose merge fits. Returns nullopt if neither fits the device.
+// Register use is an estimate and LDS use an upper bound; the compiled kernels
+// are checked again by the emitter.
 std::optional<TopKKernelConfig> GetTopKKernelConfig(
     const TopKKernelSpec& spec, const se::DeviceDescription& device);
 
@@ -121,6 +123,16 @@ std::optional<TopKKernelConfig> GetTopKMergeConfig(
 // `config`; 0 if the TopK needs no scratch.
 int64_t GetTopKScratchElements(const TopKKernelSpec& spec,
                                const TopKKernelConfig& config);
+
+// The configuration of the first kernel of a __gpu$TopK custom call for `spec`
+// with a u64[`scratch_elements`] scratch output (0 if it has none): the chunks
+// that the scratch was sized for when the custom call was made, so a compiled
+// HLO module keeps its chunks if the choice in GetTopKKernelConfig changes.
+// Returns nullopt if the scratch matches no chunk length of at least k keys or
+// the configuration does not fit `device`.
+std::optional<TopKKernelConfig> GetTopKKernelConfigForScratch(
+    const TopKKernelSpec& spec, int64_t scratch_elements,
+    const se::DeviceDescription& device);
 
 // Returns true if the Triton kernels were measured faster than the default
 // TopK path for `spec` on `device`. Only MI350 has been measured; other devices
