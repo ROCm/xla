@@ -63,6 +63,7 @@ on:
       - ".github/workflows/claude_apply_patch.yml"
       - "build_tools/rocm/collect_claude_mention_targets.sh"
       - ".claude/skills/respond-to-mention/SKILL.md"
+      - ".claude/skills/xla-pr-description/SKILL.md"
       - ".claude/skills/respond-to-issue/SKILL.md"
   issue_comment:
     types: [created]

@@ -251,8 +251,15 @@ jobs:
           }
           echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
 
-          TITLE_ENC=$(jq -rn --arg s "$(head -1 /tmp/claude_pr_title.txt)" '$s|@uri')
-          BODY_ENC=$(jq -rn --arg s "$(cat /tmp/claude_pr_body.txt)" '$s|@uri')
+          # For upstream, drop the ROCm-only bits: the "[WIP] " title prefix
+          # (meant for the ROCm draft) and the skills' closing line, which
+          # links to a ROCm/xla issue and describes the bot's own process.
+          UPSTREAM_TITLE=$(head -1 /tmp/claude_pr_title.txt | sed 's/^\[WIP\] *//')
+          UPSTREAM_BODY=$(awk -v RS= -v ORS='\n\n' \
+            '!/^(Automatically verified|Verified by running|Not built or tested)/' \
+            /tmp/claude_pr_body.txt)
+          TITLE_ENC=$(jq -rn --arg s "$UPSTREAM_TITLE" '$s|@uri')
+          BODY_ENC=$(jq -rn --arg s "$UPSTREAM_BODY" '$s|@uri')
           echo "compare_url=https://github.com/openxla/xla/compare/main...ROCm:${BRANCH}?quick_pull=1&title=${TITLE_ENC}&body=${BODY_ENC}" >> "$GITHUB_OUTPUT"
           echo "commit_identity=${LOGIN:-github-actions[bot]}" >> "$GITHUB_OUTPUT"
 
