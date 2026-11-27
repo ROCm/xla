@@ -147,6 +147,7 @@ jobs:
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             --config=rocm_ci_hermetic \
+            --config=rocm_rbe \
             --config=rocm_rbe_dynamic \
             --config=ci_single_gpu \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="${DOCKER_IMAGE}" \
@@ -170,6 +171,7 @@ jobs:
         run: |
           build_tools/rocm/run_xla_ci_build.sh \
             --config=rocm_ci_hermetic \
+            --config=rocm_rbe \
             --config=rocm_rbe_dynamic \
             --config=ci_rocm_cpu \
             --local_test_jobs=200 \
