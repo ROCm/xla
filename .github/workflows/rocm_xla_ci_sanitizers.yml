@@ -67,7 +67,6 @@ jobs:
         --config=rocm_ci_hermetic
         --config=rocm_rbe_dev
         --remote_upload_local_results=false
-        --features=tsan
         --repo_env=GLOBAL_SYMBOLS_TO_VERSION=
         --@rules_ml_toolchain//common:dynamic_sanitizer_runtime
         --local_test_jobs=8
@@ -93,6 +92,7 @@ jobs:
           - name: "tsan"
             configs:
               - "--config=tsan"
+              - "--features=tsan"
     container:
       image: ${{ needs.rocm-config.outputs.docker-image }}
 
