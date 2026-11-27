@@ -2086,7 +2086,9 @@ message DebugOptions {
   optional bool xla_gpu_experimental_enable_raft_u64_radix = 584;
 
   // If true, on ROCm, TopkSpecializer routes a TopK to the Triton TopK kernels
-  // where they were measured faster than the default path on the GPU.
+  // where they were measured faster than the default path. Only MI350 (gfx950)
+  // has measurements so far; on other GPUs no TopK is routed unless
+  // xla_gpu_experimental_force_triton_topk is set.
   optional bool xla_gpu_experimental_enable_triton_topk = 587;
 
   // Test only. With xla_gpu_experimental_enable_triton_topk, routes every TopK

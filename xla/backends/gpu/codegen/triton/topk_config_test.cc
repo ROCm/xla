@@ -338,6 +338,31 @@ TEST(TopKKernelConfigTest, SelectionDependsOnKAndTheRowLength) {
   EXPECT_EQ(selection(Spec(8, 8193, 128)), TopKSelection::kRounds);
 }
 
+TEST(TopKKernelConfigTest, OnlyMi350UsesTheBitonicSelection) {
+  const se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
+  const se::DeviceDescription mi300 = TestGpuDeviceInfo::AMDMI300DeviceInfo();
+  const se::DeviceDescription rx7900 = TestGpuDeviceInfo::AMDRX7900DeviceInfo();
+  // One program, and chunks with a merge.
+  for (const TopKKernelSpec& spec : {Spec(8, 4096, 33), Spec(2, 1 << 15, 64)}) {
+    SCOPED_TRACE(spec.ToString());
+    for (const se::DeviceDescription* device : {&mi350, &mi300, &rx7900}) {
+      SCOPED_TRACE(device->name());
+      const TopKSelection expected =
+          device == &mi350 ? TopKSelection::kBitonic : TopKSelection::kRounds;
+      std::optional<TopKKernelConfig> config =
+          GetTopKKernelConfig(spec, *device);
+      ASSERT_TRUE(config.has_value());
+      EXPECT_EQ(config->selection, expected);
+      if (config->num_chunks > 1) {
+        std::optional<TopKKernelConfig> merge =
+            GetTopKMergeConfig(spec, *config, *device);
+        ASSERT_TRUE(merge.has_value());
+        EXPECT_EQ(merge->selection, expected);
+      }
+    }
+  }
+}
+
 TEST(TopKKernelConfigTest, ChunkAndMergeChooseTheirSelectionsApart) {
   se::DeviceDescription mi350 = TestGpuDeviceInfo::AMDMI350DeviceInfo();
   // Chunks of 4096 for k = 9, and a merge of 5 * 9 candidates.

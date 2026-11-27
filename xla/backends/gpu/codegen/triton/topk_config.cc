@@ -93,9 +93,9 @@ int64_t NextPowerOfTwo(int64_t x) {
   return static_cast<int64_t>(absl::bit_ceil(static_cast<uint64_t>(x)));
 }
 
-// The routing and the chunk lengths in this file were measured on MI350
-// (gfx950, also MI355X). Other devices take the Triton TopK path only when it
-// is forced, with chunks from 4096 up.
+// The routing, the chunk lengths and the selection in this file were measured
+// on MI350 (gfx950, also MI355X). Other devices take the Triton TopK path only
+// when it is forced, with chunks from 4096 up and the k rounds.
 bool IsMi350(const se::DeviceDescription& device) {
   const se::RocmComputeCapability* rocm =
       device.gpu_compute_capability().rocm_compute_capability();
@@ -285,12 +285,14 @@ std::optional<TopKKernelConfig> GetBlockConfig(
 // The k rounds grow with `k`; the bitonic selection pads `k` to a power of two
 // and grows faster with `block_n`. The thresholds come from MI350 measurements:
 // in each range of `k` below, the bitonic selection is at least as fast as the
-// k rounds at both ends.
-TopKKernelConfig WithSelection(int64_t k, TopKKernelConfig config) {
+// k rounds at both ends. Other devices use the k rounds.
+TopKKernelConfig WithSelection(int64_t k, TopKKernelConfig config,
+                               const se::DeviceDescription& device) {
   const int64_t block_k = NextPowerOfTwo(k);
   const bool bitonic =
-      (block_k >= 32 && config.block_n <= MaxBitonicRowLength(block_k)) ||
-      (block_k == 16 && config.block_n <= 64);
+      IsMi350(device) &&
+      ((block_k >= 32 && config.block_n <= MaxBitonicRowLength(block_k)) ||
+       (block_k == 16 && config.block_n <= 64));
   config.selection = bitonic ? TopKSelection::kBitonic : TopKSelection::kRounds;
   return config;
 }
@@ -310,7 +312,7 @@ std::optional<TopKKernelConfig> GetChunkConfig(
   if (!GetTopKMergeConfig(spec, *config, device).has_value()) {
     return std::nullopt;
   }
-  return WithSelection(spec.k, *config);
+  return WithSelection(spec.k, *config, device);
 }
 
 }  // namespace
@@ -320,7 +322,7 @@ std::optional<TopKKernelConfig> GetTopKKernelConfig(
   const int64_t block_n = NextPowerOfTwo(spec.n);
   if (std::optional<TopKKernelConfig> single =
           GetBlockConfig(spec.batch, block_n, device)) {
-    return WithSelection(spec.k, *single);
+    return WithSelection(spec.k, *single, device);
   }
   // Rows too long for one program are split into chunks.
   if (IsMi350(device)) {
@@ -361,7 +363,7 @@ std::optional<TopKKernelConfig> GetTopKMergeConfig(
   if (!merge.has_value()) {
     return std::nullopt;
   }
-  return WithSelection(spec.k, *merge);
+  return WithSelection(spec.k, *merge, device);
 }
 
 int64_t GetTopKScratchElements(const TopKKernelSpec& spec,
@@ -378,7 +380,7 @@ std::optional<TopKKernelConfig> GetTopKKernelConfigForScratch(
     if (!single.has_value()) {
       return std::nullopt;
     }
-    return WithSelection(spec.k, *single);
+    return WithSelection(spec.k, *single, device);
   }
   if (scratch_elements % (spec.batch * spec.k) != 0) {
     return std::nullopt;

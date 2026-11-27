@@ -4039,7 +4039,9 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
             &DebugOptions::set_xla_gpu_experimental_enable_triton_topk),
         debug_options->xla_gpu_experimental_enable_triton_topk(),
         "If true, on ROCm, routes TopKs to the Triton TopK kernels where they "
-        "were measured faster than the default path on the GPU."));
+        "were measured faster than the default path. Only MI350 (gfx950) has "
+        "measurements so far; on other GPUs no TopK is routed unless "
+        "xla_gpu_experimental_force_triton_topk is set."));
     flag_list->push_back(tsl::Flag(
         "xla_gpu_experimental_force_triton_topk",
         bool_setter_for(
