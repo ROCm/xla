@@ -324,8 +324,15 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
                  dst_gpu = HipDeviceOf(rec.dst_agent_id);
 
   // Assign device_id based on copy direction
-  if (trace_event->type == RocmTracerEventType::MemcpyH2D &&
-      dst_gpu != kNoGpu) {
+  if (src_gpu != kNoGpu && dst_gpu != kNoGpu && src_gpu != dst_gpu) {
+    // A copy between GPUs goes on the record's first GPU. For XLA's copies,
+    // issued on the source GPU's stream, that's the source, as in CUPTI's
+    // MemcpyP2P. The SDK's direction label can be wrong here.
+    trace_event->type = RocmTracerEventType::MemcpyP2P;
+    trace_event->name = "MemcpyP2P";
+    trace_event->device_id = src_gpu;
+  } else if (trace_event->type == RocmTracerEventType::MemcpyH2D &&
+             dst_gpu != kNoGpu) {
     trace_event->device_id = dst_gpu;  // Destination is GPU
   } else if (trace_event->type == RocmTracerEventType::MemcpyD2H &&
              src_gpu != kNoGpu) {
@@ -363,7 +370,10 @@ void RocmTracer::MemcpyEvent(const rocprofiler_record_header_t* hdr,
   trace_event->stream_id = rec.correlation_id.external.value;
   trace_event->memcpy_info = MemcpyDetails{
       .num_bytes = rec.bytes,
-      .destination = trace_event->device_id,  // As CUPTI does for copies.
+      // As CUPTI does: the other GPU for a peer copy, else the row's own.
+      .destination = trace_event->type == RocmTracerEventType::MemcpyP2P
+                         ? dst_gpu
+                         : trace_event->device_id,
       .async = false,
   };
 
