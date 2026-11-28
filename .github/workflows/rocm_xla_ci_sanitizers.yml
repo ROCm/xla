@@ -67,13 +67,14 @@ jobs:
         --config=rocm_ci_hermetic
         --config=rocm_rbe_dev
         --remote_upload_local_results=false
-        --dynamic_mode=off
-        --@rules_ml_toolchain//common:enable_xla_test_global_symbol_version=False
+        --repo_env=GLOBAL_SYMBOLS_TO_VERSION=
+        --@rules_ml_toolchain//common:dynamic_sanitizer_runtime
         --local_test_jobs=8
         --strategy=TestRunner=local
         --strategy=CppLink=local
         --test_sharding_strategy=disabled
-        --jobs=150
+        --test_timeout=1800
+        --jobs=100
         --nocache_test_results
         --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu
         --repo_env=TF_ROCM_RBE_MULTI_GPU_POOL=default
@@ -92,6 +93,7 @@ jobs:
           - name: "tsan"
             configs:
               - "--config=tsan"
+              - "--features=tsan"
     container:
       image: ${{ needs.rocm-config.outputs.docker-image }}
 
