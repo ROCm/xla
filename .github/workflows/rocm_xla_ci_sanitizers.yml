@@ -73,7 +73,8 @@ jobs:
         --strategy=TestRunner=local
         --strategy=CppLink=local
         --test_sharding_strategy=disabled
-        --jobs=150
+        --test_timeout=1800
+        --jobs=100
         --nocache_test_results
         --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL=linux_x64_gpu
         --repo_env=TF_ROCM_RBE_MULTI_GPU_POOL=default
